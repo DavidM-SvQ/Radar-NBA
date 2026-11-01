@@ -9,6 +9,7 @@ import type {
 } from '../types/nba';
 import { formatShortDate, formatSigned, normalizeSearchText } from '../utils/analytics';
 import { ColumnHelpHeader, MetricInfoTooltip } from './MetricUiHelpers';
+import { EntityBadge, PlayerAvatar, TeamLogo } from './NbaVisuals';
 
 interface SeasonMilestonesViewProps {
   data: MilestonesPayload | null;
@@ -37,8 +38,20 @@ export function SeasonMilestonesView({
     experienceMode === 'simple' ? 'basic' : 'all'
   );
   const [sgCategory, setSgCategory] = useState<'all' | 'player' | 'team'>('all');
+  const [sgSubGroup, setSgSubGroup] = useState<
+    'all' | 'scoring' | 'playmaking_reb' | 'defense' | 'impact'
+  >('all');
   const [leaderGroup, setLeaderGroup] = useState<
-    'all' | 'rebounding' | 'shooting_scoring' | 'playmaking_allaround' | 'advanced_hustle'
+    | 'all'
+    | 'shooting_scoring'
+    | 'rebounding'
+    | 'playmaking_allaround'
+    | 'defense_discipline'
+    | 'advanced_hustle'
+    | 'team_leaders'
+  >('all');
+  const [leaderStatMode, setLeaderStatMode] = useState<
+    'all' | 'averages' | 'totals'
   >('all');
   const [query, setQuery] = useState('');
 
@@ -52,6 +65,8 @@ export function SeasonMilestonesView({
     const records = data?.singleGameRecords ?? [];
     return records.filter((item) => {
       if (sgCategory !== 'all' && item.category !== sgCategory) return false;
+      if (sgSubGroup !== 'all' && item.subGroup && item.subGroup !== sgSubGroup)
+        return false;
       if (!qNorm) return true;
       const refPerf =
         compMode === 'same_opening' ? item.prev2026Opening : item.prev2026Full;
@@ -62,16 +77,24 @@ export function SeasonMilestonesView({
       );
       return hay.includes(qNorm);
     });
-  }, [data?.singleGameRecords, sgCategory, qNorm, compMode]);
+  }, [data?.singleGameRecords, sgCategory, sgSubGroup, qNorm, compMode]);
+
+  const baseSeasonLeaders = useMemo(() => {
+    const leaders = data?.seasonLeaders ?? [];
+    if (compMode === 'head_to_head') {
+      return leaders.filter((x) => !x.isCumulativeTotal);
+    }
+    if (leaderStatMode === 'averages') {
+      return leaders.filter((x) => !x.isCumulativeTotal);
+    }
+    if (leaderStatMode === 'totals') {
+      return leaders.filter((x) => Boolean(x.isCumulativeTotal));
+    }
+    return leaders;
+  }, [data?.seasonLeaders, compMode, leaderStatMode]);
 
   const filteredSeasonLeaders = useMemo(() => {
-    const leaders = data?.seasonLeaders ?? [];
-    const baseList =
-      compMode === 'head_to_head'
-        ? leaders.filter((x) => !x.isCumulativeTotal)
-        : leaders;
-
-    return baseList.filter((item) => {
+    return baseSeasonLeaders.filter((item) => {
       if (leaderGroup !== 'all' && item.group !== leaderGroup) return false;
       if (!qNorm) return true;
       const refHold =
@@ -83,7 +106,7 @@ export function SeasonMilestonesView({
       );
       return hay.includes(qNorm);
     });
-  }, [data?.seasonLeaders, leaderGroup, qNorm, compMode]);
+  }, [baseSeasonLeaders, leaderGroup, qNorm, compMode]);
 
   if (loading) {
     return (
@@ -166,6 +189,14 @@ export function SeasonMilestonesView({
       label: 'Marcador combinado medio por encuentro',
       cur: curGlobal.avgTotalGamePoints,
       prev: refGlobal.avgTotalGamePoints,
+      unit: 'PTS',
+      layer: 'basic',
+    },
+    {
+      id: 'margin',
+      label: 'Margen medio de victoria por partido NBA',
+      cur: curGlobal.avgMargin,
+      prev: refGlobal.avgMargin,
       unit: 'PTS',
       layer: 'basic',
     },
@@ -332,22 +363,32 @@ export function SeasonMilestonesView({
       <button
         type="button"
         onClick={() => onInspectEntity(entityType, perf.entityId)}
-        className="text-left group focus:outline-none"
+        className="flex items-center gap-2.5 text-left group focus:outline-none min-w-0"
       >
-        <div className="flex items-baseline gap-2">
-          <span
-            className={`font-mono tabular-nums font-bold text-base ${
-              highlightOrange ? 'text-orange-400' : 'text-slate-100'
-            }`}
-          >
-            {perf.value.toFixed(decimals)} {unit}
-          </span>
-          <span className="font-medium text-slate-100 group-hover:text-orange-300 transition-colors whitespace-nowrap">
-            {perf.entityName}
-          </span>
-        </div>
-        <div className="text-xs text-slate-400 whitespace-nowrap">
-          {perf.teamAbbr} · {perf.context} · {formatShortDate(perf.date)}
+        <EntityBadge
+          entityType={entityType}
+          entityId={perf.entityId}
+          name={perf.entityName}
+          teamAbbr={perf.teamAbbr}
+          showTeamBadge={entityType === 'player'}
+          size="sm"
+        />
+        <div className="min-w-0">
+          <div className="flex items-baseline gap-2">
+            <span
+              className={`font-mono tabular-nums font-bold text-base shrink-0 ${
+                highlightOrange ? 'text-orange-400' : 'text-slate-100'
+              }`}
+            >
+              {perf.value.toFixed(decimals)} {unit}
+            </span>
+            <span className="font-medium text-slate-100 group-hover:text-orange-300 transition-colors truncate">
+              {perf.entityName}
+            </span>
+          </div>
+          <div className="text-xs text-slate-400 truncate">
+            {perf.teamAbbr} · {perf.context} · {formatShortDate(perf.date)}
+          </div>
         </div>
       </button>
     );
@@ -365,22 +406,32 @@ export function SeasonMilestonesView({
       <button
         type="button"
         onClick={() => onInspectEntity(entityType, holder.entityId)}
-        className="text-left group focus:outline-none"
+        className="flex items-center gap-2.5 text-left group focus:outline-none min-w-0"
       >
-        <div className="flex items-baseline gap-2">
-          <span
-            className={`font-mono tabular-nums font-bold text-base ${
-              highlightOrange ? 'text-orange-400' : 'text-slate-100'
-            }`}
-          >
-            {holder.value.toFixed(decimals)} {unit}
-          </span>
-          <span className="font-medium text-slate-100 group-hover:text-orange-300 transition-colors whitespace-nowrap">
-            {holder.entityName}
-          </span>
-        </div>
-        <div className="text-xs text-slate-400 whitespace-nowrap">
-          {holder.teamAbbr} · {holder.secondaryLabel}
+        <EntityBadge
+          entityType={entityType}
+          entityId={holder.entityId}
+          name={holder.entityName}
+          teamAbbr={holder.teamAbbr}
+          showTeamBadge={entityType === 'player'}
+          size="sm"
+        />
+        <div className="min-w-0">
+          <div className="flex items-baseline gap-2">
+            <span
+              className={`font-mono tabular-nums font-bold text-base shrink-0 ${
+                highlightOrange ? 'text-orange-400' : 'text-slate-100'
+              }`}
+            >
+              {holder.value.toFixed(decimals)} {unit}
+            </span>
+            <span className="font-medium text-slate-100 group-hover:text-orange-300 transition-colors truncate">
+              {holder.entityName}
+            </span>
+          </div>
+          <div className="text-xs text-slate-400 truncate">
+            {holder.teamAbbr} · {holder.secondaryLabel}
+          </div>
         </div>
       </button>
     );
@@ -417,21 +468,34 @@ export function SeasonMilestonesView({
             <span className="truncate">Tope individual</span>
             <MetricInfoTooltip helpKey="singleGamePeak" align="right" />
           </div>
-          <p className="mt-1 text-xl sm:text-2xl font-semibold font-mono tabular-nums text-orange-400">
-            {maxPtsPlayer?.current2027?.value ?? '—'}
-            <span className="mx-1 text-slate-600 text-sm sm:text-base">/</span>
-            <span className="text-slate-200">
-              {(compMode === 'same_opening'
-                ? maxPtsPlayer?.prev2026Opening?.value
-                : maxPtsPlayer?.prev2026Full?.value) ?? '—'}
-            </span>
-          </p>
-          <p className="mt-1 text-[11px] sm:text-xs text-slate-400 truncate">
-            {maxPtsPlayer?.current2027?.entityName || '—'} ·{' '}
-            {(compMode === 'same_opening'
-              ? maxPtsPlayer?.prev2026Opening?.entityName
-              : maxPtsPlayer?.prev2026Full?.entityName) || '—'}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+            {maxPtsPlayer?.current2027 && (
+              <PlayerAvatar
+                playerId={maxPtsPlayer.current2027.entityId}
+                name={maxPtsPlayer.current2027.entityName}
+                teamAbbr={maxPtsPlayer.current2027.teamAbbr}
+                showTeamBadge
+                size="sm"
+              />
+            )}
+            <div className="min-w-0">
+              <p className="text-lg sm:text-xl font-semibold font-mono tabular-nums text-orange-400 leading-tight">
+                {maxPtsPlayer?.current2027?.value ?? '—'}
+                <span className="mx-1 text-slate-600 text-sm">/</span>
+                <span className="text-slate-200">
+                  {(compMode === 'same_opening'
+                    ? maxPtsPlayer?.prev2026Opening?.value
+                    : maxPtsPlayer?.prev2026Full?.value) ?? '—'}
+                </span>
+              </p>
+              <p className="mt-0.5 text-[11px] sm:text-xs text-slate-400 truncate">
+                {maxPtsPlayer?.current2027?.entityName || '—'} ·{' '}
+                {(compMode === 'same_opening'
+                  ? maxPtsPlayer?.prev2026Opening?.entityName
+                  : maxPtsPlayer?.prev2026Full?.entityName) || '—'}
+              </p>
+            </div>
+          </div>
         </div>
 
         <div className="p-3.5 sm:p-4">
@@ -439,21 +503,33 @@ export function SeasonMilestonesView({
             <span className="truncate">Tope equipo</span>
             <MetricInfoTooltip helpKey="singleGamePeak" />
           </div>
-          <p className="mt-1 text-xl sm:text-2xl font-semibold font-mono tabular-nums text-emerald-400">
-            {maxPtsTeam?.current2027?.value ?? '—'}
-            <span className="mx-1 text-slate-600 text-sm sm:text-base">/</span>
-            <span className="text-slate-200">
-              {(compMode === 'same_opening'
-                ? maxPtsTeam?.prev2026Opening?.value
-                : maxPtsTeam?.prev2026Full?.value) ?? '—'}
-            </span>
-          </p>
-          <p className="mt-1 text-[11px] sm:text-xs text-slate-400 truncate">
-            {maxPtsTeam?.current2027?.teamAbbr || '—'} vs{' '}
-            {(compMode === 'same_opening'
-              ? maxPtsTeam?.prev2026Opening?.teamAbbr
-              : maxPtsTeam?.prev2026Full?.teamAbbr) || '—'}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+            {maxPtsTeam?.current2027 && (
+              <TeamLogo
+                abbr={maxPtsTeam.current2027.teamAbbr}
+                teamId={maxPtsTeam.current2027.entityId}
+                size="sm"
+                framed
+              />
+            )}
+            <div className="min-w-0">
+              <p className="text-lg sm:text-xl font-semibold font-mono tabular-nums text-emerald-400 leading-tight">
+                {maxPtsTeam?.current2027?.value ?? '—'}
+                <span className="mx-1 text-slate-600 text-sm">/</span>
+                <span className="text-slate-200">
+                  {(compMode === 'same_opening'
+                    ? maxPtsTeam?.prev2026Opening?.value
+                    : maxPtsTeam?.prev2026Full?.value) ?? '—'}
+                </span>
+              </p>
+              <p className="mt-0.5 text-[11px] sm:text-xs text-slate-400 truncate">
+                {maxPtsTeam?.current2027?.teamAbbr || '—'} vs{' '}
+                {(compMode === 'same_opening'
+                  ? maxPtsTeam?.prev2026Opening?.teamAbbr
+                  : maxPtsTeam?.prev2026Full?.teamAbbr) || '—'}
+              </p>
+            </div>
+          </div>
         </div>
 
         <div className="p-3.5 sm:p-4">
@@ -821,33 +897,76 @@ export function SeasonMilestonesView({
 
       {/* BLOCK 2: Single-Game Records (Topes en un partido) */}
       <section className="space-y-3">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 sm:gap-3">
-          <div className="flex items-center gap-2">
-            <Flame className="w-4 h-4 text-orange-400 shrink-0" />
-            <h2 className="text-sm font-semibold text-slate-100">
-              02. Hitos Explosivos en un Único Partido (Topes de una Noche)
-            </h2>
+        <div className="flex flex-col gap-2.5">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2">
+              <Flame className="w-4 h-4 text-orange-400 shrink-0" />
+              <h2 className="text-sm font-semibold text-slate-100">
+                02. Hitos Explosivos en un Único Partido (Topes de una Noche ·{' '}
+                {filteredSingleGame.length})
+              </h2>
+            </div>
+
+            <div className="flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg self-start overflow-x-auto no-scrollbar max-w-full">
+              {(
+                [
+                  {
+                    id: 'all',
+                    label: `Todos (${data.singleGameRecords.length})`,
+                  },
+                  {
+                    id: 'player',
+                    label: `Jugadores (${
+                      data.singleGameRecords.filter((x) => x.category === 'player')
+                        .length
+                    })`,
+                  },
+                  {
+                    id: 'team',
+                    label: `Equipos (${
+                      data.singleGameRecords.filter((x) => x.category === 'team')
+                        .length
+                    })`,
+                  },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setSgCategory(opt.id)}
+                  className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+                    sgCategory === opt.id
+                      ? 'bg-orange-500 text-slate-950 font-semibold'
+                      : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg self-start overflow-x-auto no-scrollbar max-w-full">
             {(
               [
-                { id: 'all', label: 'Todos los topes' },
-                { id: 'player', label: 'Jugadores' },
-                { id: 'team', label: 'Equipos' },
+                { id: 'all', label: 'Todas las facetas' },
+                { id: 'scoring', label: 'Anotación y Tiro' },
+                { id: 'playmaking_reb', label: 'Rebote y Creación' },
+                { id: 'defense', label: 'Defensa y Cuidado' },
+                { id: 'impact', label: 'Impacto y Ritmo' },
               ] as const
-            ).map((opt) => (
+            ).map((sub) => (
               <button
-                key={opt.id}
+                key={sub.id}
                 type="button"
-                onClick={() => setSgCategory(opt.id)}
-                className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
-                  sgCategory === opt.id
-                    ? 'bg-orange-500 text-slate-950 font-semibold'
-                    : 'text-slate-300 hover:text-white'
+                onClick={() => setSgSubGroup(sub.id)}
+                className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+                  sgSubGroup === sub.id
+                    ? 'bg-[#1E293B] text-orange-400 font-semibold'
+                    : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                {opt.label}
+                {sub.label}
               </button>
             ))}
           </div>
@@ -864,8 +983,15 @@ export function SeasonMilestonesView({
               const curVal = rec.current2027?.value ?? 0;
               const prevVal = refPerf?.value ?? 0;
               const diff = curVal - prevVal;
-              const ratioPct =
-                prevVal > 0 ? Math.round((curVal / prevVal) * 100) : 0;
+              const ratioPct = rec.lowerIsBetter
+                ? curVal > 0
+                  ? Math.round((prevVal / curVal) * 100)
+                  : 0
+                : prevVal > 0
+                ? Math.round((curVal / prevVal) * 100)
+                : 0;
+              const isGoodDiff = rec.lowerIsBetter ? diff < 0 : diff > 0;
+              const isBadDiff = rec.lowerIsBetter ? diff > 0 : diff < 0;
 
               return (
                 <div key={rec.metricId} className="p-3.5 space-y-2.5">
@@ -893,9 +1019,9 @@ export function SeasonMilestonesView({
                         ) : (
                           <span
                             className={
-                              diff > 0
+                              isGoodDiff
                                 ? 'text-emerald-400 font-semibold'
-                                : diff < 0
+                                : isBadDiff
                                 ? 'text-rose-400'
                                 : 'text-slate-300'
                             }
@@ -1024,8 +1150,15 @@ export function SeasonMilestonesView({
                   const curVal = rec.current2027?.value ?? 0;
                   const prevVal = refPerf?.value ?? 0;
                   const diff = curVal - prevVal;
-                  const ratioPct =
-                    prevVal > 0 ? Math.round((curVal / prevVal) * 100) : 0;
+                  const ratioPct = rec.lowerIsBetter
+                    ? curVal > 0
+                      ? Math.round((prevVal / curVal) * 100)
+                      : 0
+                    : prevVal > 0
+                    ? Math.round((curVal / prevVal) * 100)
+                    : 0;
+                  const isGoodDiff = rec.lowerIsBetter ? diff < 0 : diff > 0;
+                  const isBadDiff = rec.lowerIsBetter ? diff > 0 : diff < 0;
 
                   return (
                     <tr key={rec.metricId} className="hover:bg-[#182338] transition-colors">
@@ -1040,6 +1173,7 @@ export function SeasonMilestonesView({
                         </div>
                         <div className="text-xs text-slate-400">
                           {rec.category === 'player' ? 'Hito individual' : 'Hito colectivo'}
+                          {rec.lowerIsBetter ? ' · Menor es mejor' : ''}
                         </div>
                       </td>
 
@@ -1087,9 +1221,9 @@ export function SeasonMilestonesView({
                           ) : (
                             <span
                               className={
-                                diff > 0
+                                isGoodDiff
                                   ? 'text-emerald-400 font-semibold'
-                                  : diff < 0
+                                  : isBadDiff
                                   ? 'text-rose-400 font-medium'
                                   : 'text-slate-300'
                               }
@@ -1109,31 +1243,100 @@ export function SeasonMilestonesView({
         </div>
       </section>
 
-      {/* BLOCK 3: Season Leaders (Basic, Offensive Rebounds, 3PM, TD3, Advanced, Zone & Hustle) */}
+      {/* BLOCK 3: Season Leaders (Basic, Rebounding, Playmaking, Defense/Hustle, Advanced/Zones & Team Leaders) */}
       <section className="space-y-3">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 sm:gap-3">
-          <div className="flex items-center gap-2">
-            <Trophy className="w-4 h-4 text-orange-400 shrink-0" />
-            <h2 className="text-sm font-semibold text-slate-100">
-              {experienceMode === 'simple'
-                ? '03. Líderes de la NBA en cada categoría'
-                : '03. Líderes de Temporada (Básicas, Avanzadas, Zona y Hustle)'}
-            </h2>
+        <div className="flex flex-col gap-2.5">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2">
+              <Trophy className="w-4 h-4 text-orange-400 shrink-0" />
+              <h2 className="text-sm font-semibold text-slate-100">
+                {experienceMode === 'simple'
+                  ? `03. Líderes de la NBA en cada categoría (${filteredSeasonLeaders.length})`
+                  : `03. Líderes de Temporada · Jugadores y Equipos (${filteredSeasonLeaders.length})`}
+              </h2>
+            </div>
+
+            {compMode !== 'head_to_head' && (
+              <div className="flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg self-start overflow-x-auto no-scrollbar max-w-full">
+                {(
+                  [
+                    { id: 'all', label: 'Promedios y Totales' },
+                    { id: 'averages', label: 'Solo Promedios / %' },
+                    { id: 'totals', label: 'Solo Totales Acumulados' },
+                  ] as const
+                ).map((mode) => (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    onClick={() => setLeaderStatMode(mode.id)}
+                    className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+                      leaderStatMode === mode.id
+                        ? 'bg-[#1E293B] text-orange-400 font-semibold'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {mode.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
             {(
               [
-                { id: 'all', label: 'Todos' },
-                { id: 'shooting_scoring', label: 'Triples y Anotación' },
-                { id: 'rebounding', label: 'Rebotes' },
-                { id: 'playmaking_allaround', label: 'Pases y Defensa' },
+                { id: 'all', label: `Todos (${baseSeasonLeaders.length})` },
+                {
+                  id: 'shooting_scoring',
+                  label: `Anotación y Tiro (${
+                    baseSeasonLeaders.filter((x) => x.group === 'shooting_scoring')
+                      .length
+                  })`,
+                },
+                {
+                  id: 'rebounding',
+                  label: `Rebotes (${
+                    baseSeasonLeaders.filter((x) => x.group === 'rebounding')
+                      .length
+                  })`,
+                },
+                {
+                  id: 'playmaking_allaround',
+                  label: `Creación y Todo-Terreno (${
+                    baseSeasonLeaders.filter(
+                      (x) => x.group === 'playmaking_allaround'
+                    ).length
+                  })`,
+                },
+                {
+                  id: 'defense_discipline',
+                  label: `Defensa y Hustle (${
+                    baseSeasonLeaders.filter(
+                      (x) => x.group === 'defense_discipline'
+                    ).length
+                  })`,
+                },
                 {
                   id: 'advanced_hustle',
                   label:
                     experienceMode === 'simple'
-                      ? 'Pintura y Esfuerzo'
-                      : 'Avanzadas y Hustle',
+                      ? `Pintura e Impacto (${
+                          baseSeasonLeaders.filter(
+                            (x) => x.group === 'advanced_hustle'
+                          ).length
+                        })`
+                      : `Avanzadas y Zonas (${
+                          baseSeasonLeaders.filter(
+                            (x) => x.group === 'advanced_hustle'
+                          ).length
+                        })`,
+                },
+                {
+                  id: 'team_leaders',
+                  label: `Equipos NBA (${
+                    baseSeasonLeaders.filter((x) => x.group === 'team_leaders')
+                      .length
+                  })`,
                 },
               ] as const
             ).map((g) => (

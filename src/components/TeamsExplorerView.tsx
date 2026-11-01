@@ -16,6 +16,7 @@ import {
   MetricInfoTooltip,
   NbaComparisonBar,
 } from './MetricUiHelpers';
+import { TeamLogo } from './NbaVisuals';
 
 interface TeamsExplorerViewProps {
   teams: TeamSummary[];
@@ -293,7 +294,8 @@ export function TeamsExplorerView({
             {teams.length}
           </p>
           <p className="mt-1 text-[11px] sm:text-xs text-slate-400 truncate">
-            Media: {benchmarks.team.avgPointsFor.mean.toFixed(1)} PTS/PJ
+            Media: {benchmarks.team.avgPointsFor.mean.toFixed(1)} PTS · Margen ±
+            {(benchmarks.team.differential.spreadMean ?? 4.8).toFixed(1)}
           </p>
         </div>
         <div className="p-3.5 sm:p-4">
@@ -305,16 +307,29 @@ export function TeamsExplorerView({
             </span>
             <MetricInfoTooltip helpKey="netRtg" align="right" />
           </div>
-          <p className="mt-1 text-base sm:text-lg font-semibold text-slate-100 truncate">
-            {summary?.bestNet?.name || '—'}
-          </p>
-          <p className="mt-1 text-[11px] sm:text-xs font-mono tabular-nums text-emerald-400 truncate">
-            {summary?.bestNet
-              ? experienceMode === 'simple'
-                ? `${formatSigned(summary.bestNet.differential)} PTS de ventaja`
-                : `${formatSigned(summary.bestNet.netRtg)} (Off ${summary.bestNet.offRtg.toFixed(1)})`
-              : '—'}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+            {summary?.bestNet && (
+              <TeamLogo
+                abbr={summary.bestNet.abbreviation}
+                teamId={summary.bestNet.id}
+                logoUrl={summary.bestNet.logoUrl}
+                size="sm"
+                framed
+              />
+            )}
+            <div className="min-w-0">
+              <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                {summary?.bestNet?.name || '—'}
+              </p>
+              <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-emerald-400 truncate">
+                {summary?.bestNet
+                  ? experienceMode === 'simple'
+                    ? `${formatSigned(summary.bestNet.differential)} PTS de ventaja`
+                    : `${formatSigned(summary.bestNet.netRtg)} (Off ${summary.bestNet.offRtg.toFixed(1)})`
+                  : '—'}
+              </p>
+            </div>
+          </div>
         </div>
         <div className="p-3.5 sm:p-4">
           <div className="flex items-center justify-between gap-1 text-xs text-slate-400">
@@ -325,16 +340,29 @@ export function TeamsExplorerView({
             </span>
             <MetricInfoTooltip helpKey="defRtg" />
           </div>
-          <p className="mt-1 text-base sm:text-lg font-semibold text-slate-100 truncate">
-            {summary?.bestDef?.name || '—'}
-          </p>
-          <p className="mt-1 text-[11px] sm:text-xs font-mono tabular-nums text-orange-400 truncate">
-            {summary?.bestDef
-              ? experienceMode === 'simple'
-                ? `Encaja ${summary.bestDef.avgPointsAgainst.toFixed(1)} PTS`
-                : `${summary.bestDef.defRtg.toFixed(1)} pts / 100 pos`
-              : '—'}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+            {summary?.bestDef && (
+              <TeamLogo
+                abbr={summary.bestDef.abbreviation}
+                teamId={summary.bestDef.id}
+                logoUrl={summary.bestDef.logoUrl}
+                size="sm"
+                framed
+              />
+            )}
+            <div className="min-w-0">
+              <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                {summary?.bestDef?.name || '—'}
+              </p>
+              <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-orange-400 truncate">
+                {summary?.bestDef
+                  ? experienceMode === 'simple'
+                    ? `Encaja ${summary.bestDef.avgPointsAgainst.toFixed(1)} PTS`
+                    : `${summary.bestDef.defRtg.toFixed(1)} pts / 100 pos`
+                  : '—'}
+              </p>
+            </div>
+          </div>
         </div>
         <div className="p-3.5 sm:p-4">
           <div className="flex items-center justify-between gap-1 text-xs text-slate-400">
@@ -345,14 +373,27 @@ export function TeamsExplorerView({
             </span>
             <MetricInfoTooltip helpKey="paceSimple" align="right" />
           </div>
-          <p className="mt-1 text-base sm:text-lg font-semibold text-slate-100 truncate">
-            {summary?.fastest?.name || '—'}
-          </p>
-          <p className="mt-1 text-[11px] sm:text-xs font-mono tabular-nums text-slate-300 truncate">
-            {summary?.fastest
-              ? `${summary.fastest.pace.toFixed(1)} pos / partido`
-              : '—'}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+            {summary?.fastest && (
+              <TeamLogo
+                abbr={summary.fastest.abbreviation}
+                teamId={summary.fastest.id}
+                logoUrl={summary.fastest.logoUrl}
+                size="sm"
+                framed
+              />
+            )}
+            <div className="min-w-0">
+              <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                {summary?.fastest?.name || '—'}
+              </p>
+              <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-slate-300 truncate">
+                {summary?.fastest
+                  ? `${summary.fastest.pace.toFixed(1)} pos / partido`
+                  : '—'}
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -486,7 +527,7 @@ export function TeamsExplorerView({
                     className="p-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-2.5"
                   >
                     <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-start gap-2 min-w-0">
+                      <div className="flex items-center gap-2.5 min-w-0">
                         <button
                           type="button"
                           aria-label="Alternar seguimiento"
@@ -502,6 +543,13 @@ export function TeamsExplorerView({
                             }`}
                           />
                         </button>
+                        <TeamLogo
+                          abbr={t.abbreviation}
+                          teamId={t.id}
+                          logoUrl={t.logoUrl}
+                          size="sm"
+                          framed
+                        />
                         <div className="min-w-0">
                           <div className="font-semibold text-sm text-slate-100 truncate">
                             {t.name}
@@ -856,12 +904,23 @@ export function TeamsExplorerView({
                       </button>
                     </td>
                     <td className="py-2.5 px-3">
-                      <div className="font-medium text-slate-100 whitespace-nowrap">
-                        {t.name}
-                      </div>
-                      <div className="text-xs text-slate-400 whitespace-nowrap">
-                        {t.abbreviation} · Conf. {t.conference} · Últ.10:{' '}
-                        {t.lastTenRecord}
+                      <div className="flex items-center gap-2.5">
+                        <TeamLogo
+                          abbr={t.abbreviation}
+                          teamId={t.id}
+                          logoUrl={t.logoUrl}
+                          size="sm"
+                          framed
+                        />
+                        <div>
+                          <div className="font-medium text-slate-100 whitespace-nowrap">
+                            {t.name}
+                          </div>
+                          <div className="text-xs text-slate-400 whitespace-nowrap">
+                            {t.abbreviation} · Conf. {t.conference} · Últ.10:{' '}
+                            {t.lastTenRecord}
+                          </div>
+                        </div>
                       </div>
                     </td>
 

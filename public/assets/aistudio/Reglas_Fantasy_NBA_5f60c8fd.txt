@@ -1,0 +1,66 @@
+================================================================================
+                REGLAMENTO OFICIAL Y NORMATIVA - LIGA FANTASY NBA
+================================================================================
+
+1. CONDICIONANTES DE LA LIGA Y ESTRUCTURA DE PLANTILLA
+--------------------------------------------------------------------------------
+* Límite de Plantilla: 
+  - Máximo de 12 jugadores bajo contrato por equipo.
+  - Distribución: 10 titulares activos (únicos que puntúan) y 2 reservas en banquillo.
+
+* Bloqueo Semanal Estricto (Lineup Lock):
+  - La alineación de 10 titulares se cierra antes del primer partido de la semana
+    (madrugada del lunes).
+  - La alineación queda completamente bloqueada sin posibilidad de cambios entre
+    semana una vez iniciado el primer encuentro.
+
+* Impacto de Bajas e Inactividad:
+  - No existen sustituciones automáticas entre semana.
+  - Si un titular no juega (OUT, DNP, descanso o suspensión), suma 0 FPTS en ese
+    partido.
+
+* Fórmula del Volumen Semanal:
+  - Puntos Esperados = Partidos Jugados en la Semana x Media FPTS/Partido
+
+
+2. SISTEMA EXACTO DE PUNTUACIÓN (FPTS)
+--------------------------------------------------------------------------------
+* Tiros de Campo:
+  - Tiro de campo anotado (FGM):           +2.0
+  - Tiro de campo fallado (FGMI):          -1.0
+
+* Tiros Libres:
+  - Tiro libre anotado (FTM):              +1.0
+  - Tiro libre fallado (FTMI):             -1.0
+
+* Triples:
+  - Triple anotado (3PM):                  +1.0
+    (* Un triple anotado suma +3.0 FPTS en total: +2.0 por FGM + 1.0 por 3PM)
+  - Triple fallado (3PMI):                 +0.5
+    (* Un triple fallado resta -0.5 FPTS en total: -1.0 por FGMI + 0.5 por 3PMI)
+
+* Rebotes:
+  - Rebote ofensivo (OREB):                +1.5
+  - Rebote defensivo (DREB):               +0.5
+
+* Juego de Pase y Defensa:
+  - Asistencia (AST):                      +1.5
+  - Robo de balón (STL):                   +2.5
+  - Tapón (BLK):                           +2.5
+
+* Penalizaciones:
+  - Pérdida de balón (TO):                 -2.0
+  - Expulsión del partido (EJ):            -5.0
+
+
+3. MERCADO, WAIVERS Y ALTAS/BAJAS
+--------------------------------------------------------------------------------
+* Límite Operativo:
+  - Ningún equipo puede superar el límite estricto de 12 jugadores activos.
+  - Para incorporar un Agente Libre o reclamar un jugador en Waivers, es obligatorio
+    soltar (drop) a un jugador de la plantilla activa si ya se alcanza el máximo.
+
+* Prioridad de Selección:
+  - Las reclamaciones de Waivers se resuelven por orden de prioridad asignado por
+    la liga tras la finalización de cada jornada o periodo de reclamo.
+================================================================================

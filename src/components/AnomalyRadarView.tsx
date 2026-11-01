@@ -8,13 +8,22 @@ import type {
 import { formatSigned, normalizeSearchText } from '../utils/analytics';
 import {
   describeZScoreHuman,
+  isAnomalyPositive,
   plainAnomalyExplanation,
   plainMetricName,
+  resolveSignalBenchmark,
+  type LeagueBenchmarks,
 } from '../utils/humanize';
-import { ColumnHelpHeader, MetricInfoTooltip } from './MetricUiHelpers';
+import {
+  ColumnHelpHeader,
+  MetricInfoTooltip,
+  NbaComparisonBar,
+} from './MetricUiHelpers';
+import { EntityBadge } from './NbaVisuals';
 
 interface AnomalyRadarViewProps {
   signals: AnomalySignal[];
+  benchmarks: LeagueBenchmarks;
   experienceMode: ExperienceMode;
   watchlistIds: Set<string>;
   onlyWatchlist: boolean;
@@ -28,6 +37,7 @@ type SortField = 'zScore' | 'pctDelta' | 'windowAvg' | 'baselineAvg';
 
 interface AnomalyBlockTableProps {
   rows: AnomalySignal[];
+  benchmarks: LeagueBenchmarks;
   experienceMode: ExperienceMode;
   windowSize: number;
   watchlistIds: Set<string>;
@@ -41,6 +51,7 @@ interface AnomalyBlockTableProps {
 
 function AnomalyBlockTable({
   rows,
+  benchmarks,
   experienceMode,
   windowSize,
   watchlistIds,
@@ -139,11 +150,11 @@ function AnomalyBlockTable({
           {sortedRows.map((sig) => {
             const wKey = `${sig.entityType}:${sig.entityId}`;
             const isWatched = watchlistIds.has(wKey);
-            const isInverseMetric = sig.metricKey === 'defRtg';
             const isUp = sig.absDelta >= 0;
-            const isGood = isInverseMetric ? !isUp : isUp;
+            const isGood = isAnomalyPositive(sig);
             const humanMag = describeZScoreHuman(sig.zScore, isGood);
             const plainExp = plainAnomalyExplanation(sig);
+            const benchInfo = resolveSignalBenchmark(sig, benchmarks);
 
             return (
               <div
@@ -152,7 +163,7 @@ function AnomalyBlockTable({
                 className="p-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-2.5"
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-start gap-2 min-w-0">
+                  <div className="flex items-center gap-2.5 min-w-0">
                     <button
                       type="button"
                       aria-label="Alternar seguimiento"
@@ -168,6 +179,14 @@ function AnomalyBlockTable({
                         }`}
                       />
                     </button>
+                    <EntityBadge
+                      entityType={sig.entityType}
+                      entityId={sig.entityId}
+                      name={sig.entityName}
+                      teamAbbr={sig.teamAbbr}
+                      showTeamBadge={sig.entityType === 'player'}
+                      size="sm"
+                    />
                     <div className="min-w-0">
                       <div className="font-semibold text-sm text-slate-100 truncate">
                         {sig.entityName}
@@ -228,6 +247,12 @@ function AnomalyBlockTable({
                     </div>
                   </div>
                 </div>
+
+                <NbaComparisonBar
+                  value={benchInfo.value}
+                  benchmark={benchInfo.benchmark}
+                  showValueLabel={benchInfo.showValueLabel}
+                />
 
                 <div className="text-xs leading-relaxed">
                   {experienceMode === 'simple' ? (
@@ -322,7 +347,14 @@ function AnomalyBlockTable({
                 onSort={() => handleSort('zScore')}
               />
             </th>
-            <th className="py-3 pl-3 pr-4 font-medium min-w-[260px]">
+            <th className="py-3 px-3 font-medium min-w-[220px]">
+              <ColumnHelpHeader
+                label="Estadística vs Media NBA"
+                helpKey="vsLeagueBar"
+                align="left"
+              />
+            </th>
+            <th className="py-3 pl-3 pr-4 font-medium min-w-[240px]">
               {experienceMode === 'simple'
                 ? 'Explicación en lenguaje claro'
                 : 'Lectura y dato a tener en cuenta'}
@@ -333,11 +365,11 @@ function AnomalyBlockTable({
           {sortedRows.map((sig) => {
             const wKey = `${sig.entityType}:${sig.entityId}`;
             const isWatched = watchlistIds.has(wKey);
-            const isInverseMetric = sig.metricKey === 'defRtg';
             const isUp = sig.absDelta >= 0;
-            const isGood = isInverseMetric ? !isUp : isUp;
+            const isGood = isAnomalyPositive(sig);
             const humanMag = describeZScoreHuman(sig.zScore, isGood);
             const plainExp = plainAnomalyExplanation(sig);
+            const benchInfo = resolveSignalBenchmark(sig, benchmarks);
 
             return (
               <tr
@@ -365,11 +397,23 @@ function AnomalyBlockTable({
                   </button>
                 </td>
                 <td className="py-2.5 px-3">
-                  <div className="font-medium text-slate-100 whitespace-nowrap">
-                    {sig.entityName}
-                  </div>
-                  <div className="text-xs text-slate-400 whitespace-nowrap">
-                    {sig.subtitle}
+                  <div className="flex items-center gap-2.5">
+                    <EntityBadge
+                      entityType={sig.entityType}
+                      entityId={sig.entityId}
+                      name={sig.entityName}
+                      teamAbbr={sig.teamAbbr}
+                      showTeamBadge={sig.entityType === 'player'}
+                      size="sm"
+                    />
+                    <div>
+                      <div className="font-medium text-slate-100 whitespace-nowrap">
+                        {sig.entityName}
+                      </div>
+                      <div className="text-xs text-slate-400 whitespace-nowrap">
+                        {sig.subtitle}
+                      </div>
+                    </div>
                   </div>
                 </td>
                 <td className="py-2.5 px-3">
@@ -435,6 +479,14 @@ function AnomalyBlockTable({
                     </div>
                   )}
                 </td>
+                <td className="py-2.5 px-3">
+                  <NbaComparisonBar
+                    value={benchInfo.value}
+                    benchmark={benchInfo.benchmark}
+                    compact
+                    showValueLabel={benchInfo.showValueLabel}
+                  />
+                </td>
                 <td className="py-2.5 pl-3 pr-4 max-w-md">
                   {experienceMode === 'simple' ? (
                     <>
@@ -477,6 +529,7 @@ function AnomalyBlockTable({
 
 export function AnomalyRadarView({
   signals,
+  benchmarks,
   experienceMode,
   watchlistIds,
   onlyWatchlist,
@@ -485,6 +538,9 @@ export function AnomalyRadarView({
   onResetThresholds,
   windowSize,
 }: AnomalyRadarViewProps) {
+  const [directionFilter, setDirectionFilter] = useState<
+    'all' | 'positive' | 'negative'
+  >('all');
   const [playerCategoryFilter, setPlayerCategoryFilter] = useState<
     'all' | Exclude<AnomalyCategory, 'team_shift'>
   >('all');
@@ -508,6 +564,10 @@ export function AnomalyRadarView({
     for (const s of signals) {
       const wKey = `${s.entityType}:${s.entityId}`;
       if (onlyWatchlist && !watchlistIds.has(wKey)) continue;
+      const positive = isAnomalyPositive(s);
+      if (directionFilter === 'positive' && !positive) continue;
+      if (directionFilter === 'negative' && positive) continue;
+
       if (q) {
         const hay = normalizeSearchText(
           `${s.entityName} ${s.teamAbbr} ${s.metricLabel} ${s.categoryLabel} ${s.contextNote}`
@@ -534,6 +594,7 @@ export function AnomalyRadarView({
     signals,
     watchlistIds,
     onlyWatchlist,
+    directionFilter,
     query,
     playerCategoryFilter,
     teamMetricFilter,
@@ -542,16 +603,8 @@ export function AnomalyRadarView({
   const statsSummary = useMemo(() => {
     const allPlayers = signals.filter((s) => s.entityType === 'player');
     const allTeams = signals.filter((s) => s.entityType === 'team');
-    const surges = allPlayers.filter(
-      (s) =>
-        s.category === 'surge' ||
-        (s.category === 'advanced_shift' && s.absDelta > 0)
-    ).length;
-    const slumps = allPlayers.filter(
-      (s) =>
-        s.category === 'slump' ||
-        (s.category === 'advanced_shift' && s.absDelta < 0)
-    ).length;
+    const surges = signals.filter((s) => isAnomalyPositive(s)).length;
+    const slumps = signals.filter((s) => !isAnomalyPositive(s)).length;
     const topSignal = signals[0];
     return {
       playerCount: allPlayers.length,
@@ -675,36 +728,83 @@ export function AnomalyRadarView({
             </span>
             <MetricInfoTooltip helpKey="zScore" align="right" />
           </div>
-          <p className="mt-1 text-base sm:text-lg font-semibold text-slate-100 truncate">
-            {statsSummary.topSignal ? statsSummary.topSignal.entityName : '—'}
-          </p>
-          <p className="mt-1 text-[11px] sm:text-xs font-mono tabular-nums text-orange-400 truncate">
-            {statsSummary.topSignal
-              ? experienceMode === 'simple'
-                ? `${topHuman?.label} · ${formatSigned(
-                    statsSummary.topSignal.pctDelta,
-                    0,
-                    '%'
-                  )}`
-                : `${statsSummary.topSignal.metricLabel} · Z ${formatSigned(
-                    statsSummary.topSignal.zScore
-                  )}σ`
-              : 'Sin señales con filtro actual'}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+            {statsSummary.topSignal && (
+              <EntityBadge
+                entityType={statsSummary.topSignal.entityType}
+                entityId={statsSummary.topSignal.entityId}
+                name={statsSummary.topSignal.entityName}
+                teamAbbr={statsSummary.topSignal.teamAbbr}
+                showTeamBadge={statsSummary.topSignal.entityType === 'player'}
+                size="sm"
+              />
+            )}
+            <div className="min-w-0">
+              <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                {statsSummary.topSignal ? statsSummary.topSignal.entityName : '—'}
+              </p>
+              <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-orange-400 truncate">
+                {statsSummary.topSignal
+                  ? experienceMode === 'simple'
+                    ? `${topHuman?.label} · ${formatSigned(
+                        statsSummary.topSignal.pctDelta,
+                        0,
+                        '%'
+                      )}`
+                    : `${statsSummary.topSignal.metricLabel} · Z ${formatSigned(
+                        statsSummary.topSignal.zScore
+                      )}σ`
+                  : 'Sin señales con filtro actual'}
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Global Search Filter for Both Blocks */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3">
-        <p className="text-xs text-slate-400">
-          <span className="sm:hidden">
-            Toca cualquier tarjeta para abrir su ficha completa. Pulsa (i) para ver fórmulas.
+      {/* Global Sign Toggle + Search Filter for Both Blocks */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5 sm:gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-slate-400 whitespace-nowrap">
+            Signo de anomalía:
           </span>
-          <span className="hidden sm:inline">
-            Pulsa cualquier fila para ver la ficha completa y el termómetro frente a la media de la NBA. Pasa el ratón por (i) en las columnas para ayuda.
-          </span>
-        </p>
-        <div className="relative w-full sm:w-80 shrink-0">
+          <div className="inline-flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg">
+            <button
+              type="button"
+              onClick={() => setDirectionFilter('all')}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                directionFilter === 'all'
+                  ? 'bg-orange-500 text-slate-950 font-semibold'
+                  : 'text-slate-300 hover:text-white hover:bg-[#182338]'
+              }`}
+            >
+              Todas ({statsSummary.surges + statsSummary.slumps})
+            </button>
+            <button
+              type="button"
+              onClick={() => setDirectionFilter('positive')}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                directionFilter === 'positive'
+                  ? 'bg-emerald-500 text-slate-950 font-semibold'
+                  : 'text-slate-300 hover:text-white hover:bg-[#182338]'
+              }`}
+            >
+              ▲ Positivas ({statsSummary.surges})
+            </button>
+            <button
+              type="button"
+              onClick={() => setDirectionFilter('negative')}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                directionFilter === 'negative'
+                  ? 'bg-rose-500 text-slate-950 font-semibold'
+                  : 'text-slate-300 hover:text-white hover:bg-[#182338]'
+              }`}
+            >
+              ▼ Negativas ({statsSummary.slumps})
+            </button>
+          </div>
+        </div>
+
+        <div className="relative w-full md:w-80 shrink-0">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
@@ -755,6 +855,7 @@ export function AnomalyRadarView({
         <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
           <AnomalyBlockTable
             rows={playerSignals}
+            benchmarks={benchmarks}
             experienceMode={experienceMode}
             windowSize={windowSize}
             watchlistIds={watchlistIds}
@@ -764,6 +865,7 @@ export function AnomalyRadarView({
             emptyTitle="Sin cambios llamativos en jugadores para el filtro actual."
             emptySubtitle='Elige el modo rápido "Amplio (Ver más)" en la barra superior para detectar tendencias más suaves.'
             onResetThresholds={() => {
+              setDirectionFilter('all');
               setPlayerCategoryFilter('all');
               setQuery('');
               onResetThresholds();
@@ -811,6 +913,7 @@ export function AnomalyRadarView({
         <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
           <AnomalyBlockTable
             rows={teamSignals}
+            benchmarks={benchmarks}
             experienceMode={experienceMode}
             windowSize={windowSize}
             watchlistIds={watchlistIds}
@@ -820,6 +923,7 @@ export function AnomalyRadarView({
             emptyTitle="Sin cambios bruscos en equipos con el filtro actual."
             emptySubtitle='Prueba el botón rápido "Amplio (Ver más)" arriba o selecciona la muestra "Continuo" para contar con más partidos.'
             onResetThresholds={() => {
+              setDirectionFilter('all');
               setTeamMetricFilter('all');
               setQuery('');
               onResetThresholds();

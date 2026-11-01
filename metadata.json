@@ -1,6 +1,6 @@
 {
   "name": "RadarNBA",
-  "description": "Radar personal de jornadas, crónicas de scouting, anomalías estadísticas, rachas consecutivas y comparador entre tramos temporales para equipos y jugadores de la NBA.",
+  "description": "RadarNBA: Plataforma avanzada de scouting, crónicas de partidos, radar de anomalías, estadísticas oficiales boxscore y analítica NBA.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

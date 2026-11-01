@@ -2,23 +2,22 @@
 
 @theme {
   --font-display: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 :root {
-  --background: #0b1120;
-  --surface: #131c2e;
+  --background: #0B1120;
+  --surface: #131C2E;
   --surface-hover: #182338;
-  --border: #1e293b;
-  --primary: #f97316;
+  --border: #1E293B;
   color-scheme: dark;
 }
 
 body {
   font-family: var(--font-sans);
   background-color: var(--background);
-  color: #f1f5f9;
+  color: #F1F5F9;
   letter-spacing: 0.01em;
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior-y: none;
@@ -37,16 +36,11 @@ h4,
   font-variant-numeric: tabular-nums;
 }
 
-/* Safe area support for notched smartphones */
+/* Safe area support */
 .pb-safe {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-.mb-safe {
-  margin-bottom: env(safe-area-inset-bottom, 0px);
-}
-
-/* Hide scrollbars on horizontal mobile chip/tab strips while preserving touch swipe */
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
@@ -55,46 +49,39 @@ h4,
   display: none;
 }
 
-/* Prevent iOS Safari auto-zoom on form focus while keeping crisp desktop sizing */
-@media (max-width: 639px) {
-  input[type="text"],
-  input[type="search"],
-  input[type="date"],
-  select {
-    font-size: 16px !important;
-  }
+/* Minimalist dark-mode scrollbars: virtually invisible at rest, subtle slate thumb on active scroll */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.04) transparent;
 }
 
-/* Ergonomic touch range sliders on smartphones / coarse pointers */
-@media (pointer: coarse) {
-  input[type="range"] {
-    min-height: 36px;
-  }
-  input[type="range"]::-webkit-slider-thumb {
-    width: 22px;
-    height: 22px;
-  }
-  input[type="range"]::-moz-range-thumb {
-    width: 22px;
-    height: 22px;
-  }
+html[data-scrolling="true"],
+[data-scrolling="true"] {
+  scrollbar-color: rgba(148, 163, 184, 0.34) transparent;
 }
 
-/* Subtle dark scrollbars for high-density data tables on desktop */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
-::-webkit-scrollbar-track {
-  background: #0b1120;
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #283548;
-  border-radius: 3px;
+  background-color: rgba(148, 163, 184, 0.04);
+  border-radius: 9999px;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: #3b4c66;
+html[data-scrolling="true"] ::-webkit-scrollbar-thumb,
+[data-scrolling="true"]::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.34);
 }
+
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background-color: rgba(148, 163, 184, 0.52);
+}
+

@@ -30,6 +30,7 @@ import {
   type MetricBenchmark,
 } from '../utils/humanize';
 import { ColumnHelpHeader, MetricInfoTooltip } from './MetricUiHelpers';
+import { EntityBadge, PlayerAvatar, TeamLogo } from './NbaVisuals';
 
 interface RangeComparatorViewProps {
   players: PlayerSummary[];
@@ -39,6 +40,7 @@ interface RangeComparatorViewProps {
   onSwitchToAdvanced: () => void;
   initialEntityType?: 'player' | 'team';
   initialEntityId?: string;
+  onSelectionChange?: (entityType: 'player' | 'team', entityId: string) => void;
   onInspectEntity: (entityType: 'player' | 'team', entityId: string) => void;
   onAddExternalPlayer: (item: SearchPlayerResult) => Promise<PlayerSummary | null>;
 }
@@ -97,6 +99,7 @@ export function RangeComparatorView({
   onSwitchToAdvanced,
   initialEntityType = 'player',
   initialEntityId,
+  onSelectionChange,
   onInspectEntity,
   onAddExternalPlayer,
 }: RangeComparatorViewProps) {
@@ -200,10 +203,22 @@ export function RangeComparatorView({
   const activeTeam = useMemo(
     () =>
       entityType === 'team'
-        ? teams.find((t) => t.id === selectedId) || teams[0]
+        ? teams.find(
+            (t) =>
+              t.id === selectedId ||
+              t.abbreviation.toUpperCase() === selectedId.toUpperCase()
+          ) || teams[0]
         : undefined,
     [entityType, teams, selectedId]
   );
+
+  useEffect(() => {
+    const resolvedId =
+      entityType === 'player' ? activePlayer?.id : activeTeam?.id;
+    if (resolvedId && onSelectionChange) {
+      onSelectionChange(entityType, resolvedId);
+    }
+  }, [entityType, activePlayer?.id, activeTeam?.id, onSelectionChange]);
 
   const filteredLocalPlayers = useMemo(() => {
     const q = normalizeSearchText(searchQuery);
@@ -381,12 +396,32 @@ export function RangeComparatorView({
           <p className="text-xs text-slate-400 truncate">
             {experienceMode === 'simple' ? 'Jugador o equipo' : 'Sujeto comparado'}
           </p>
-          <p className="mt-1 text-base sm:text-lg font-semibold text-slate-100 truncate">
-            {comparison?.name || '—'}
-          </p>
-          <p className="mt-1 text-[11px] sm:text-xs text-slate-400 truncate">
-            {comparison?.subtitle || 'Selecciona jugador o equipo'}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+            {comparison && (
+              <EntityBadge
+                entityType={entityType}
+                entityId={comparison.id}
+                name={comparison.name}
+                teamAbbr={
+                  entityType === 'player'
+                    ? activePlayer?.teamAbbr
+                    : activeTeam?.abbreviation
+                }
+                headshotUrl={activePlayer?.headshotUrl}
+                logoUrl={activeTeam?.logoUrl}
+                showTeamBadge={entityType === 'player'}
+                size="sm"
+              />
+            )}
+            <div className="min-w-0">
+              <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                {comparison?.name || '—'}
+              </p>
+              <p className="mt-0.5 text-[11px] sm:text-xs text-slate-400 truncate">
+                {comparison?.subtitle || 'Selecciona jugador o equipo'}
+              </p>
+            </div>
+          </div>
         </div>
         <div className="p-3.5 sm:p-4">
           <div className="flex items-center justify-between gap-1 text-xs text-slate-400">
@@ -469,14 +504,34 @@ export function RangeComparatorView({
               <button
                 type="button"
                 onClick={() => setDropdownOpen((prev) => !prev)}
-                className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] focus:border-orange-500 rounded-lg text-slate-100 transition-colors"
+                className="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] focus:border-orange-500 rounded-lg text-slate-100 transition-colors"
               >
-                <span className="truncate">
-                  {entityType === 'player' && activePlayer
-                    ? `${activePlayer.name} · ${activePlayer.teamAbbr} (${activePlayer.games.length} PJ)`
-                    : entityType === 'team' && activeTeam
-                    ? `${activeTeam.name} · ${activeTeam.abbreviation} (${activeTeam.wins}-${activeTeam.losses})`
-                    : 'Seleccionar...'}
+                <span className="flex items-center gap-2 min-w-0">
+                  {entityType === 'player' && activePlayer && (
+                    <PlayerAvatar
+                      playerId={activePlayer.id}
+                      name={activePlayer.name}
+                      headshotUrl={activePlayer.headshotUrl}
+                      teamAbbr={activePlayer.teamAbbr}
+                      size="xs"
+                    />
+                  )}
+                  {entityType === 'team' && activeTeam && (
+                    <TeamLogo
+                      abbr={activeTeam.abbreviation}
+                      teamId={activeTeam.id}
+                      logoUrl={activeTeam.logoUrl}
+                      size="xs"
+                      framed
+                    />
+                  )}
+                  <span className="truncate">
+                    {entityType === 'player' && activePlayer
+                      ? `${activePlayer.name} · ${activePlayer.teamAbbr} (${activePlayer.games.length} PJ)`
+                      : entityType === 'team' && activeTeam
+                      ? `${activeTeam.name} · ${activeTeam.abbreviation} (${activeTeam.wins}-${activeTeam.losses})`
+                      : 'Seleccionar...'}
+                  </span>
                 </span>
                 <ChevronDown
                   className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${
@@ -535,11 +590,20 @@ export function RangeComparatorView({
                                   : 'text-slate-200 hover:bg-[#131C2E]'
                               }`}
                             >
-                              <div className="truncate">
-                                <span>{p.name}</span>
-                                <span className="text-slate-400 ml-1.5">
-                                  · {p.teamAbbr} · {p.position}
-                                </span>
+                              <div className="flex items-center gap-2 min-w-0">
+                                <PlayerAvatar
+                                  playerId={p.id}
+                                  name={p.name}
+                                  headshotUrl={p.headshotUrl}
+                                  teamAbbr={p.teamAbbr}
+                                  size="xs"
+                                />
+                                <div className="truncate">
+                                  <span>{p.name}</span>
+                                  <span className="text-slate-400 ml-1.5">
+                                    · {p.teamAbbr} · {p.position}
+                                  </span>
+                                </div>
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0">
                                 <span className="font-mono text-[11px] text-slate-400">
@@ -579,10 +643,18 @@ export function RangeComparatorView({
                                 }}
                                 className="w-full px-3 py-2 text-left text-xs flex items-center justify-between gap-2 text-slate-200 hover:bg-[#182338] transition-colors"
                               >
-                                <span className="truncate">
-                                  {rp.name}{' '}
-                                  <span className="text-slate-400">
-                                    · {rp.teamAbbr} · {rp.position}
+                                <span className="flex items-center gap-2 min-w-0">
+                                  <PlayerAvatar
+                                    playerId={rp.id}
+                                    name={rp.name}
+                                    teamAbbr={rp.teamAbbr}
+                                    size="xs"
+                                  />
+                                  <span className="truncate">
+                                    {rp.name}{' '}
+                                    <span className="text-slate-400">
+                                      · {rp.teamAbbr} · {rp.position}
+                                    </span>
                                   </span>
                                 </span>
                                 <span className="inline-flex items-center gap-1 text-[11px] text-orange-400 shrink-0">
@@ -620,10 +692,19 @@ export function RangeComparatorView({
                                   : 'text-slate-200 hover:bg-[#131C2E]'
                               }`}
                             >
-                              <span className="truncate">
-                                {t.name}{' '}
-                                <span className="text-slate-400">
-                                  · {t.abbreviation} · Conf. {t.conference}
+                              <span className="flex items-center gap-2 min-w-0">
+                                <TeamLogo
+                                  abbr={t.abbreviation}
+                                  teamId={t.id}
+                                  logoUrl={t.logoUrl}
+                                  size="xs"
+                                  framed
+                                />
+                                <span className="truncate">
+                                  {t.name}{' '}
+                                  <span className="text-slate-400">
+                                    · {t.abbreviation} · Conf. {t.conference}
+                                  </span>
                                 </span>
                               </span>
                               <div className="flex items-center gap-1.5 shrink-0">
@@ -978,171 +1059,182 @@ export function RangeComparatorView({
             </div>
 
             {/* Desktop Full Comparison Table (md+) */}
-            <div className="hidden md:block overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
-                  <th className="py-3 pl-4 pr-3 font-medium">
-                    <ColumnHelpHeader
-                      label="Apartado estadístico"
-                      align="left"
-                      customHelp={{
-                        title: 'Qué estamos comparando',
-                        simpleDesc:
-                          'Cada fila enfrenta el promedio del jugador o equipo en el Tramo A frente al Tramo B y muestra su nivel frente a la media NBA.',
-                        calculation:
-                          'Pasa el ratón por el icono (i) a la derecha de cada métrica para ver su significado y fórmula exacta.',
-                      }}
-                    />
-                  </th>
-                  <th className="py-3 px-3 font-medium text-right">
-                    <ColumnHelpHeader
-                      label={`Tramo A (${comparison.countA} PJ)`}
-                      customHelp={{
-                        title: 'Promedio en el Tramo A',
-                        simpleDesc:
-                          'Sus números medios durante el primer periodo seleccionado arriba (color naranja).',
-                        calculation:
-                          'Suma o agregación ponderada de las hojas de partido dentro del filtro del Tramo A dividida por sus PJ.',
-                      }}
-                    />
-                  </th>
-                  <th className="py-3 px-3 font-medium text-right">
-                    <ColumnHelpHeader
-                      label={`Tramo B (${comparison.countB} PJ)`}
-                      customHelp={{
-                        title: 'Promedio en el Tramo B',
-                        simpleDesc:
-                          'Sus números medios durante el periodo de referencia con el que comparas.',
-                        calculation:
-                          'Suma o agregación ponderada de las hojas de partido dentro del filtro del Tramo B dividida por sus PJ.',
-                      }}
-                    />
-                  </th>
-                  <th className="py-3 px-3 font-medium text-right">
-                    <ColumnHelpHeader
-                      label="Diferencia"
-                      helpKey="absDiff"
-                    />
-                  </th>
-                  <th className="py-3 px-3 font-medium text-right">
-                    <ColumnHelpHeader
-                      label={experienceMode === 'simple' ? 'Cambio %' : 'Variación %'}
-                      helpKey="pctDelta"
-                    />
-                  </th>
-                  <th className="py-3 pl-3 pr-4 font-medium w-56">
-                    <ColumnHelpHeader
-                      label="Impacto del cambio"
-                      align="left"
-                      customHelp={{
-                        title: 'Tamaño visual del cambio',
-                        simpleDesc:
-                          'Cuanto más larga es la barra verde o roja, mayor es el salto entre el Tramo A y el Tramo B.',
-                        calculation:
-                          'Longitud proporcional a |Variación %| × 2.2 (acotada al 100%); verde si mejora y rojo si empeora.',
-                      }}
-                    />
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#1E293B] text-sm">
-                {comparison.rows
-                  .filter((r) => metricLayer === 'all' || r.group === metricLayer)
-                  .map((r) => {
-                    const isGood = r.inverseGood ? r.absDiff <= 0 : r.absDiff >= 0;
-                    const barWidth = Math.min(100, Math.abs(r.pctDiff) * 2.2);
-                    const significant =
-                      Math.abs(r.pctDiff) >= 8 || Math.abs(r.absDiff) >= 2.5;
-                    const bench = getRowBenchmark(r.key);
-                    const evalLeague = bench
-                      ? evaluateVsLeague(r.rangeAValue, bench)
-                      : null;
+            <div className="hidden md:block overflow-hidden">
+              <table className="w-full table-fixed text-left border-collapse">
+                <colgroup>
+                  <col className="w-[32%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[16%]" />
+                </colgroup>
+                <thead>
+                  <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
+                    <th className="py-2 pl-4 pr-2 font-medium">
+                      <ColumnHelpHeader
+                        label="Apartado estadístico"
+                        align="left"
+                        customHelp={{
+                          title: 'Qué estamos comparando',
+                          simpleDesc:
+                            'Cada fila enfrenta el promedio del jugador o equipo en el Tramo A frente al Tramo B y muestra su nivel frente a la media NBA.',
+                          calculation:
+                            'Pasa el ratón por el icono (i) a la derecha de cada métrica para ver su significado y fórmula exacta.',
+                        }}
+                      />
+                    </th>
+                    <th className="py-2 px-2.5 font-medium text-right">
+                      <ColumnHelpHeader
+                        label={`Tramo A (${comparison.countA} PJ)`}
+                        customHelp={{
+                          title: 'Promedio en el Tramo A',
+                          simpleDesc:
+                            'Sus números medios durante el primer periodo seleccionado arriba (color naranja).',
+                          calculation:
+                            'Suma o agregación ponderada de las hojas de partido dentro del filtro del Tramo A dividida por sus PJ.',
+                        }}
+                      />
+                    </th>
+                    <th className="py-2 px-2.5 font-medium text-right">
+                      <ColumnHelpHeader
+                        label={`Tramo B (${comparison.countB} PJ)`}
+                        customHelp={{
+                          title: 'Promedio en el Tramo B',
+                          simpleDesc:
+                            'Sus números medios durante el periodo de referencia con el que comparas.',
+                          calculation:
+                            'Suma o agregación ponderada de las hojas de partido dentro del filtro del Tramo B dividida por sus PJ.',
+                        }}
+                      />
+                    </th>
+                    <th className="py-2 px-2.5 font-medium text-right">
+                      <ColumnHelpHeader
+                        label="Diferencia"
+                        helpKey="absDiff"
+                      />
+                    </th>
+                    <th className="py-2 px-2.5 font-medium text-right">
+                      <ColumnHelpHeader
+                        label={experienceMode === 'simple' ? 'Cambio %' : 'Variación %'}
+                        helpKey="pctDelta"
+                      />
+                    </th>
+                    <th className="py-2 pl-2.5 pr-4 font-medium">
+                      <ColumnHelpHeader
+                        label="Impacto"
+                        align="left"
+                        customHelp={{
+                          title: 'Tamaño visual del cambio',
+                          simpleDesc:
+                            'Cuanto más larga es la barra verde o roja, mayor es el salto entre el Tramo A y el Tramo B.',
+                          calculation:
+                            'Longitud proporcional a |Variación %| × 2.2 (acotada al 100%); verde si mejora y rojo si empeora.',
+                        }}
+                      />
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#1E293B] text-xs lg:text-sm">
+                  {comparison.rows
+                    .filter((r) => metricLayer === 'all' || r.group === metricLayer)
+                    .map((r) => {
+                      const isGood = r.inverseGood ? r.absDiff <= 0 : r.absDiff >= 0;
+                      const barWidth = Math.min(100, Math.abs(r.pctDiff) * 2.2);
+                      const significant =
+                        Math.abs(r.pctDiff) >= 8 || Math.abs(r.absDiff) >= 2.5;
+                      const bench = getRowBenchmark(r.key);
+                      const evalLeague = bench
+                        ? evaluateVsLeague(r.rangeAValue, bench)
+                        : null;
+                      const labelText =
+                        experienceMode === 'simple'
+                          ? SIMPLE_ROW_LABELS[r.key] || r.label
+                          : r.label;
 
-                    return (
-                      <tr key={r.key} className="hover:bg-[#182338] transition-colors">
-                        <td className="py-2.5 pl-4 pr-3 whitespace-nowrap">
-                          <div className="inline-flex items-center gap-1.5 font-medium text-slate-100">
-                            <span>
-                              {experienceMode === 'simple'
-                                ? SIMPLE_ROW_LABELS[r.key] || r.label
-                                : r.label}
-                            </span>
-                            <MetricInfoTooltip
-                              helpKey={r.key}
-                              fallbackTitle={r.label}
-                              align="left"
-                            />
-                          </div>
-                          <div className="text-[11px] text-slate-400">
-                            {evalLeague ? (
-                              <>
-                                <span className={evalLeague.textClass}>
-                                  {evalLeague.tierLabel}
-                                </span>
-                                <span> · Media NBA {evalLeague.avgFormatted}</span>
-                              </>
-                            ) : r.group === 'advanced' ? (
-                              'Avanzada / Eficiencia'
-                            ) : (
-                              'Estadística básica'
-                            )}
-                          </div>
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-orange-300 whitespace-nowrap">
-                          {r.rangeAValue.toFixed(1)}
-                          {r.unit === '%' ? '%' : ''}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap">
-                          {r.rangeBValue.toFixed(1)}
-                          {r.unit === '%' ? '%' : ''}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
-                          <span
-                            className={
-                              Math.abs(r.absDiff) < 0.1
-                                ? 'text-slate-400'
-                                : isGood
-                                ? 'text-emerald-400 font-medium'
-                                : 'text-rose-400 font-medium'
-                            }
-                          >
-                            {formatSigned(r.absDiff, 1, r.unit === '%' ? ' pp' : '')}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
-                          <span
-                            className={
-                              Math.abs(r.pctDiff) < 0.5
-                                ? 'text-slate-400'
-                                : isGood
-                                ? 'text-emerald-400'
-                                : 'text-rose-400'
-                            }
-                          >
-                            {r.absDiff > 0.05 ? '▲ ' : r.absDiff < -0.05 ? '▼ ' : ''}
-                            {formatSigned(r.pctDiff, 1, '%')}
-                          </span>
-                        </td>
-                        <td className="py-2.5 pl-3 pr-4">
-                          <div className="h-2 w-full bg-[#0B1120] rounded overflow-hidden">
-                            <div
-                              className={`h-full rounded transition-transform ${
-                                !significant
-                                  ? 'bg-slate-600'
+                      return (
+                        <tr key={r.key} className="hover:bg-[#182338] transition-colors">
+                          <td className="py-1.5 pl-4 pr-2">
+                            <div className="flex items-center gap-1.5 font-medium text-slate-100 min-w-0">
+                              <span className="truncate" title={labelText}>
+                                {labelText}
+                              </span>
+                              <MetricInfoTooltip
+                                helpKey={r.key}
+                                fallbackTitle={r.label}
+                                align="left"
+                                iconClassName="w-3.5 h-3.5 shrink-0"
+                              />
+                            </div>
+                            <div className="text-[11px] text-slate-400 truncate">
+                              {evalLeague ? (
+                                <>
+                                  <span className={evalLeague.textClass}>
+                                    {evalLeague.tierLabel}
+                                  </span>
+                                  <span> · Media NBA {evalLeague.avgFormatted}</span>
+                                </>
+                              ) : r.group === 'advanced' ? (
+                                'Avanzada / Eficiencia'
+                              ) : (
+                                'Estadística básica'
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-1.5 px-2.5 text-right font-mono tabular-nums font-semibold text-orange-300 whitespace-nowrap">
+                            {r.rangeAValue.toFixed(1)}
+                            {r.unit === '%' ? '%' : ''}
+                          </td>
+                          <td className="py-1.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap">
+                            {r.rangeBValue.toFixed(1)}
+                            {r.unit === '%' ? '%' : ''}
+                          </td>
+                          <td className="py-1.5 px-2.5 text-right font-mono tabular-nums whitespace-nowrap">
+                            <span
+                              className={
+                                Math.abs(r.absDiff) < 0.1
+                                  ? 'text-slate-400'
                                   : isGood
-                                  ? 'bg-emerald-500'
-                                  : 'bg-rose-500'
-                              }`}
-                              style={{ width: `${Math.max(4, barWidth)}%` }}
-                            />
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-              </tbody>
-            </table>
+                                  ? 'text-emerald-400 font-medium'
+                                  : 'text-rose-400 font-medium'
+                              }
+                            >
+                              {formatSigned(r.absDiff, 1, r.unit === '%' ? ' pp' : '')}
+                            </span>
+                          </td>
+                          <td className="py-1.5 px-2.5 text-right font-mono tabular-nums whitespace-nowrap">
+                            <span
+                              className={
+                                Math.abs(r.pctDiff) < 0.5
+                                  ? 'text-slate-400'
+                                  : isGood
+                                  ? 'text-emerald-400'
+                                  : 'text-rose-400'
+                              }
+                            >
+                              {r.absDiff > 0.05 ? '▲ ' : r.absDiff < -0.05 ? '▼ ' : ''}
+                              {formatSigned(r.pctDiff, 1, '%')}
+                            </span>
+                          </td>
+                          <td className="py-1.5 pl-2.5 pr-4">
+                            <div className="h-2 w-full bg-[#0B1120] rounded overflow-hidden">
+                              <div
+                                className={`h-full rounded transition-transform ${
+                                  !significant
+                                    ? 'bg-slate-600'
+                                    : isGood
+                                    ? 'bg-emerald-500'
+                                    : 'bg-rose-500'
+                                }`}
+                                style={{ width: `${Math.max(4, barWidth)}%` }}
+                              />
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
             </div>
           </>
         )}

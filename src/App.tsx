@@ -1,17 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   ArrowLeftRight,
   BookOpen,
   CalendarDays,
+  Check,
   ChevronDown,
   Compass,
   Flame,
   LayoutGrid,
+  Link2,
   Menu,
   RefreshCw,
   Shield,
   SlidersHorizontal,
+  Sparkles,
   Star,
   Swords,
   Trophy,
@@ -52,8 +55,21 @@ import { TeamsExplorerView } from './components/TeamsExplorerView';
 import { PlayersExplorerView } from './components/PlayersExplorerView';
 import { SeasonMilestonesView } from './components/SeasonMilestonesView';
 import { GlossaryView } from './components/GlossaryView';
+import { FantasyEspnAssistantView } from './components/FantasyEspnAssistantView';
 import { EntityInspectorDrawer } from './components/EntityInspectorDrawer';
 import { MetricInfoTooltip } from './components/MetricUiHelpers';
+import { TeamLogo } from './components/NbaVisuals';
+import {
+  parseRouteFromSearch,
+  readRadarHistoryMeta,
+  syncBrowserUrl,
+  type AppRouteState,
+  type FantasyUrlTab,
+} from './utils/urlRouting';
+import {
+  fetchBootstrapClient,
+  peekCachedBootstrapClient,
+} from './utils/bootstrapWireCodec';
 
 const STORAGE_THRESHOLDS_KEY = 'courtpulse_nba_thresholds_v1';
 const STORAGE_WATCHLIST_KEY = 'courtpulse_nba_watchlist_v2';
@@ -135,7 +151,18 @@ function loadSavedExperienceMode(): ExperienceMode {
 }
 
 export default function App() {
-  const [activeSection, setActiveSection] = useState<ActiveSection>('home');
+  const initialRoute = useMemo(
+    () =>
+      parseRouteFromSearch(
+        typeof window !== 'undefined' ? window.location.search : ''
+      ),
+    []
+  );
+  const routeRef = useRef<AppRouteState>(initialRoute);
+
+  const [activeSection, setActiveSection] = useState<ActiveSection>(
+    initialRoute.section
+  );
   const [experienceMode, setExperienceMode] = useState<ExperienceMode>(
     loadSavedExperienceMode
   );
@@ -164,22 +191,43 @@ export default function App() {
   const [milestonesLoading, setMilestonesLoading] = useState(false);
   const [milestonesError, setMilestonesError] = useState<string | null>(null);
   const [gamedayRefreshCounter, setGamedayRefreshCounter] = useState(0);
+  const [copiedLink, setCopiedLink] = useState(false);
 
-  // Inspector & Comparator routing state
+  // URL-synced Inspector, Jornadas, Comparator, Duel & Fantasy sub-routing state
   const [inspected, setInspected] = useState<{
     type: 'player' | 'team' | null;
     id: string | null;
-  }>({ type: null, id: null });
+  }>({
+    type: initialRoute.inspectedType,
+    id: initialRoute.inspectedId,
+  });
+
+  const [gamedayDateParam, setGamedayDateParam] = useState<string | null>(
+    initialRoute.gamedayDate
+  );
+  const [gamedayReportId, setGamedayReportId] = useState<string | null>(
+    initialRoute.gamedayReportId
+  );
 
   const [comparatorTarget, setComparatorTarget] = useState<{
     type: 'player' | 'team';
     id?: string;
-  }>({ type: 'player' });
+  }>({
+    type: initialRoute.comparatorType,
+    id: initialRoute.comparatorId || undefined,
+  });
 
   const [duelTarget, setDuelTarget] = useState<{
     playerAId?: string;
     playerBId?: string;
-  }>({});
+  }>({
+    playerAId: initialRoute.duelPlayerAId || undefined,
+    playerBId: initialRoute.duelPlayerBId || undefined,
+  });
+
+  const [fantasyTab, setFantasyTab] = useState<FantasyUrlTab>(
+    initialRoute.fantasyTab
+  );
 
   useEffect(() => {
     try {
@@ -216,17 +264,136 @@ export default function App() {
     }
   }, [experienceMode]);
 
+  useEffect(() => {
+    const timers = new Map<Element, number>();
+
+    const handleScrollActivity = (event: Event) => {
+      const rawTarget = event.target;
+      const targetEl =
+        rawTarget instanceof Element &&
+        rawTarget !== document.body &&
+        rawTarget !== document.documentElement
+          ? rawTarget
+          : document.documentElement;
+
+      targetEl.setAttribute('data-scrolling', 'true');
+      const prevTimer = timers.get(targetEl);
+      if (prevTimer !== undefined) {
+        window.clearTimeout(prevTimer);
+      }
+      const nextTimer = window.setTimeout(() => {
+        targetEl.removeAttribute('data-scrolling');
+        timers.delete(targetEl);
+      }, 850);
+      timers.set(targetEl, nextTimer);
+    };
+
+    window.addEventListener('scroll', handleScrollActivity, {
+      capture: true,
+      passive: true,
+    });
+    return () => {
+      window.removeEventListener('scroll', handleScrollActivity, true);
+      timers.forEach((timerId, el) => {
+        window.clearTimeout(timerId);
+        el.removeAttribute('data-scrolling');
+      });
+      timers.clear();
+    };
+  }, []);
+
+  const applyRouteState = useCallback((next: AppRouteState) => {
+    routeRef.current = next;
+    setActiveSection(next.section);
+    setInspected({ type: next.inspectedType, id: next.inspectedId });
+    setGamedayDateParam(next.gamedayDate);
+    setGamedayReportId(next.gamedayReportId);
+    setComparatorTarget({
+      type: next.comparatorType,
+      id: next.comparatorId || undefined,
+    });
+    setDuelTarget({
+      playerAId: next.duelPlayerAId || undefined,
+      playerBId: next.duelPlayerBId || undefined,
+    });
+    setFantasyTab(next.fantasyTab);
+  }, []);
+
+  const commitRoute = useCallback(
+    (
+      updater: (prev: AppRouteState) => AppRouteState,
+      mode: 'push' | 'replace',
+      openedOverlay: 'inspector' | 'game_report' | null = null
+    ) => {
+      const next = updater(routeRef.current);
+      applyRouteState(next);
+      syncBrowserUrl(next, mode, openedOverlay);
+    },
+    [applyRouteState]
+  );
+
+  // Sync Browser Back / Forward buttons (popstate)
+  useEffect(() => {
+    const handlePopState = () => {
+      setMobileMenuOpen(false);
+      const parsed = parseRouteFromSearch(window.location.search);
+      applyRouteState(parsed);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [applyRouteState]);
+
   const handleChangeExperienceMode = useCallback((mode: ExperienceMode) => {
     setExperienceMode(mode);
     setShowThresholdBar(mode === 'advanced');
   }, []);
 
-  const handleNavigateSection = useCallback((section: ActiveSection) => {
-    setActiveSection(section);
-    setMobileMenuOpen(false);
-    if (typeof window !== 'undefined' && window.innerWidth < 1024) {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+  const handleNavigateSection = useCallback(
+    (section: ActiveSection) => {
+      setMobileMenuOpen(false);
+      commitRoute(
+        (prev) => ({
+          ...prev,
+          section,
+          inspectedType: null,
+          inspectedId: null,
+          gamedayReportId: section === 'gameday' ? prev.gamedayReportId : null,
+        }),
+        'push',
+        null
+      );
+      if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    },
+    [commitRoute]
+  );
+
+  const importedDirectoryPlayersRef = useRef<Map<string, PlayerSummary>>(
+    new Map()
+  );
+
+  const applyBootstrapPayload = useCallback((payload: BootstrapPayload) => {
+    const basePlayers = payload.players || [];
+    const extraPlayers: PlayerSummary[] = [];
+    if (importedDirectoryPlayersRef.current.size > 0) {
+      const existingIds = new Set(basePlayers.map((p) => p.id));
+      for (const extra of importedDirectoryPlayersRef.current.values()) {
+        if (!existingIds.has(extra.id)) {
+          extraPlayers.push(extra);
+        }
+      }
     }
+
+    setTeams(payload.teams || []);
+    setPlayers(
+      extraPlayers.length > 0 ? [...extraPlayers, ...basePlayers] : basePlayers
+    );
+    setTotalLeaguePlayersAvailable(
+      payload.totalLeaguePlayersAvailable || basePlayers.length
+    );
+    setAllPlayersLoaded(Boolean(payload.allPlayersLoaded));
+    setScoreboard(payload.scoreboard || []);
   }, []);
 
   const fetchBootstrap = useCallback(
@@ -235,6 +402,18 @@ export default function App() {
       isManualRefresh = false,
       requestAllPlayers = false
     ) => {
+      setErrorMsg(null);
+
+      // Zero-latency switch when target season dataset is already in client memory
+      if (!isManualRefresh && !requestAllPlayers) {
+        const cached = peekCachedBootstrapClient(mode);
+        if (cached) {
+          applyBootstrapPayload(cached);
+          setLoading(false);
+          return;
+        }
+      }
+
       if (requestAllPlayers && !isManualRefresh) {
         setLoadingAllPlayers(true);
       } else if (isManualRefresh) {
@@ -242,25 +421,12 @@ export default function App() {
       } else {
         setLoading(true);
       }
-      setErrorMsg(null);
 
       try {
-        const params = new URLSearchParams({ seasonMode: mode });
-        if (requestAllPlayers) params.set('allPlayers', '1');
-        if (isManualRefresh) params.set('refresh', '1');
-
-        const res = await fetch(`/api/nba/bootstrap?${params.toString()}`);
-        if (!res.ok) {
-          throw new Error('Respuesta no válida del servidor de estadísticas.');
-        }
-        const payload = (await res.json()) as BootstrapPayload;
-        setTeams(payload.teams || []);
-        setPlayers(payload.players || []);
-        setTotalLeaguePlayersAvailable(
-          payload.totalLeaguePlayersAvailable || (payload.players || []).length
-        );
-        setAllPlayersLoaded(Boolean(payload.allPlayersLoaded));
-        setScoreboard(payload.scoreboard || []);
+        const payload = await fetchBootstrapClient(mode, {
+          forceRefresh: isManualRefresh,
+        });
+        applyBootstrapPayload(payload);
       } catch (err) {
         setErrorMsg(
           err instanceof Error
@@ -273,7 +439,7 @@ export default function App() {
         setLoadingAllPlayers(false);
       }
     },
-    []
+    [applyBootstrapPayload]
   );
 
   const fetchMilestones = useCallback(async (isManualRefresh = false) => {
@@ -335,59 +501,266 @@ export default function App() {
     });
   }, []);
 
-  const handleInspectEntity = useCallback(
-    (entityType: 'player' | 'team', entityId: string) => {
-      if (
-        entityType === 'player' &&
-        !players.some((p) => p.id === entityId)
-      ) {
-        void (async () => {
-          try {
-            const res = await fetch(
-              `/api/nba/player/${encodeURIComponent(entityId)}?seasonMode=continuous`
+  const ensurePlayerInMemory = useCallback(
+    async (playerId: string) => {
+      if (!playerId || players.some((p) => p.id === playerId)) return;
+      try {
+        const res = await fetch(
+          `/api/nba/player/${encodeURIComponent(playerId)}?seasonMode=continuous`
+        );
+        if (res.ok) {
+          const json = (await res.json()) as { player?: PlayerSummary };
+          if (json.player) {
+            importedDirectoryPlayersRef.current.set(json.player.id, json.player);
+            setPlayers((prev) =>
+              prev.some((p) => p.id === json.player!.id)
+                ? prev
+                : [json.player!, ...prev]
             );
-            if (res.ok) {
-              const json = (await res.json()) as { player?: PlayerSummary };
-              if (json.player) {
-                setPlayers((prev) =>
-                  prev.some((p) => p.id === json.player!.id)
-                    ? prev
-                    : [json.player!, ...prev]
-                );
-              }
-            }
-          } finally {
-            setInspected({ type: 'player', id: entityId });
           }
-        })();
-        return;
+        }
+      } catch {
+        // Ignore transient network errors; EntityInspectorDrawer also fetches its own dossier
       }
-      setInspected({ type: entityType, id: entityId });
     },
     [players]
   );
 
+  // Hydrate any external player IDs referenced in deep-linked URLs after initial bootstrap
+  useEffect(() => {
+    if (loading || players.length === 0) return;
+    const candidateIds = [
+      inspected.type === 'player' ? inspected.id : null,
+      duelTarget.playerAId,
+      duelTarget.playerBId,
+      comparatorTarget.type === 'player' ? comparatorTarget.id : null,
+    ].filter((x): x is string => Boolean(x));
+
+    for (const pid of candidateIds) {
+      if (!players.some((p) => p.id === pid)) {
+        void ensurePlayerInMemory(pid);
+      }
+    }
+  }, [
+    loading,
+    players,
+    inspected.type,
+    inspected.id,
+    duelTarget.playerAId,
+    duelTarget.playerBId,
+    comparatorTarget.type,
+    comparatorTarget.id,
+    ensurePlayerInMemory,
+  ]);
+
+  const handleInspectEntity = useCallback(
+    (entityType: 'player' | 'team', entityId: string) => {
+      const wasClosed = !routeRef.current.inspectedType;
+      if (entityType === 'player') {
+        void ensurePlayerInMemory(entityId);
+      }
+      commitRoute(
+        (prev) => ({
+          ...prev,
+          inspectedType: entityType,
+          inspectedId: entityId,
+        }),
+        'push',
+        wasClosed ? 'inspector' : null
+      );
+    },
+    [commitRoute, ensurePlayerInMemory]
+  );
+
+  const handleCloseInspector = useCallback(() => {
+    const meta = readRadarHistoryMeta();
+    if (meta.depth > 0 && meta.openedOverlay === 'inspector') {
+      window.history.back();
+      return;
+    }
+    commitRoute(
+      (prev) => ({
+        ...prev,
+        inspectedType: null,
+        inspectedId: null,
+      }),
+      meta.depth > 0 ? 'push' : 'replace',
+      null
+    );
+  }, [commitRoute]);
+
+  const handleGamedayDateChange = useCallback(
+    (date: string, mode: 'push' | 'replace') => {
+      commitRoute(
+        (prev) => ({
+          ...prev,
+          gamedayDate: date,
+          gamedayReportId:
+            prev.gamedayDate && prev.gamedayDate !== date
+              ? null
+              : prev.gamedayReportId,
+        }),
+        mode,
+        null
+      );
+    },
+    [commitRoute]
+  );
+
+  const handleGamedayReportChange = useCallback(
+    (eventId: string | null) => {
+      if (eventId) {
+        const wasClosed = !routeRef.current.gamedayReportId;
+        commitRoute(
+          (prev) => ({
+            ...prev,
+            gamedayReportId: eventId,
+          }),
+          'push',
+          wasClosed ? 'game_report' : null
+        );
+        return;
+      }
+
+      const meta = readRadarHistoryMeta();
+      if (
+        meta.depth > 0 &&
+        meta.openedOverlay === 'game_report' &&
+        !routeRef.current.inspectedType
+      ) {
+        window.history.back();
+        return;
+      }
+
+      commitRoute(
+        (prev) => ({
+          ...prev,
+          gamedayReportId: null,
+        }),
+        'replace',
+        null
+      );
+    },
+    [commitRoute]
+  );
+
   const handleOpenInComparator = useCallback(
     (entityType: 'player' | 'team', entityId: string) => {
-      setComparatorTarget({ type: entityType, id: entityId });
-      handleNavigateSection('comparator');
+      setMobileMenuOpen(false);
+      commitRoute(
+        (prev) => ({
+          ...prev,
+          section: 'comparator',
+          comparatorType: entityType,
+          comparatorId: entityId,
+          inspectedType: null,
+          inspectedId: null,
+        }),
+        'push',
+        null
+      );
     },
-    [handleNavigateSection]
+    [commitRoute]
+  );
+
+  const handleComparatorSelectionChange = useCallback(
+    (entityType: 'player' | 'team', entityId: string) => {
+      if (routeRef.current.section !== 'comparator') return;
+      if (
+        routeRef.current.comparatorType === entityType &&
+        routeRef.current.comparatorId === entityId
+      ) {
+        return;
+      }
+      commitRoute(
+        (prev) => ({
+          ...prev,
+          comparatorType: entityType,
+          comparatorId: entityId,
+        }),
+        'replace',
+        null
+      );
+    },
+    [commitRoute]
   );
 
   const handleOpenInDuel = useCallback(
     (playerId: string) => {
-      setDuelTarget((prev) => ({
-        playerAId: playerId,
-        playerBId:
-          prev.playerAId && prev.playerAId !== playerId
-            ? prev.playerAId
-            : prev.playerBId,
-      }));
-      handleNavigateSection('duel');
+      setMobileMenuOpen(false);
+      void ensurePlayerInMemory(playerId);
+      commitRoute(
+        (prev) => ({
+          ...prev,
+          section: 'duel',
+          duelPlayerAId: playerId,
+          duelPlayerBId:
+            prev.duelPlayerAId && prev.duelPlayerAId !== playerId
+              ? prev.duelPlayerAId
+              : prev.duelPlayerBId,
+          inspectedType: null,
+          inspectedId: null,
+          gamedayReportId: null,
+        }),
+        'push',
+        null
+      );
     },
-    [handleNavigateSection]
+    [commitRoute, ensurePlayerInMemory]
   );
+
+  const handleDuelPairChange = useCallback(
+    (playerAId: string, playerBId: string) => {
+      if (routeRef.current.section !== 'duel') return;
+      if (
+        routeRef.current.duelPlayerAId === playerAId &&
+        routeRef.current.duelPlayerBId === playerBId
+      ) {
+        return;
+      }
+      commitRoute(
+        (prev) => ({
+          ...prev,
+          duelPlayerAId: playerAId,
+          duelPlayerBId: playerBId,
+        }),
+        'replace',
+        null
+      );
+    },
+    [commitRoute]
+  );
+
+  const handleFantasyTabChange = useCallback(
+    (tab: FantasyUrlTab) => {
+      commitRoute(
+        (prev) => ({
+          ...prev,
+          fantasyTab: tab,
+        }),
+        'push',
+        null
+      );
+    },
+    [commitRoute]
+  );
+
+  const handleCopyShareUrl = useCallback(async () => {
+    if (typeof window === 'undefined') return;
+    const url = window.location.href;
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = url;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    setCopiedLink(true);
+    window.setTimeout(() => setCopiedLink(false), 2000);
+  }, []);
 
   const importExternalPlayer = useCallback(
     async (
@@ -397,7 +770,7 @@ export default function App() {
       const existing = players.find((p) => p.id === item.id);
       if (existing) {
         if (openInspectorAfter) {
-          setInspected({ type: 'player', id: existing.id });
+          handleInspectEntity('player', existing.id);
         }
         return existing;
       }
@@ -416,12 +789,13 @@ export default function App() {
         if (res.ok) {
           const json = (await res.json()) as { player?: PlayerSummary };
           if (json.player) {
+            importedDirectoryPlayersRef.current.set(json.player.id, json.player);
             setPlayers((prev) => {
               if (prev.some((p) => p.id === json.player!.id)) return prev;
               return [json.player!, ...prev];
             });
             if (openInspectorAfter) {
-              setInspected({ type: 'player', id: json.player.id });
+              handleInspectEntity('player', json.player.id);
             }
             return json.player;
           }
@@ -431,7 +805,7 @@ export default function App() {
         setAddingPlayerId(null);
       }
     },
-    [players, seasonMode]
+    [players, seasonMode, handleInspectEntity]
   );
 
   const handleAddExternalPlayer = useCallback(
@@ -530,6 +904,11 @@ export default function App() {
       icon: Users,
     },
     {
+      id: 'fantasy_espn',
+      label: 'Asistente Fantasy NBA',
+      icon: Sparkles,
+    },
+    {
       id: 'glossary',
       label: 'Glosario y Guía',
       icon: BookOpen,
@@ -596,7 +975,7 @@ export default function App() {
               <button
                 key={item.id}
                 type="button"
-                onClick={() => setActiveSection(item.id)}
+                onClick={() => handleNavigateSection(item.id)}
                 className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
                   active
                     ? 'bg-orange-500 text-slate-950 font-semibold'
@@ -642,8 +1021,12 @@ export default function App() {
                   key={g.id}
                   className="flex items-center justify-between text-xs py-1 border-b border-[#1E293B]/60 last:border-b-0"
                 >
-                  <span className="text-slate-300 font-medium whitespace-nowrap">
-                    {g.awayAbbr} @ {g.homeAbbr}
+                  <span className="inline-flex items-center gap-1.5 text-slate-300 font-medium whitespace-nowrap">
+                    <TeamLogo abbr={g.awayAbbr} size="xs" />
+                    <span>{g.awayAbbr}</span>
+                    <span className="text-slate-500">@</span>
+                    <TeamLogo abbr={g.homeAbbr} size="xs" />
+                    <span>{g.homeAbbr}</span>
                   </span>
                   <span className="font-mono tabular-nums text-slate-400 whitespace-nowrap">
                     {g.isCompleted || g.isLive
@@ -756,8 +1139,12 @@ export default function App() {
                       key={g.id}
                       className="flex items-center justify-between text-xs py-1 border-b border-[#1E293B]/60 last:border-b-0"
                     >
-                      <span className="text-slate-300 font-medium whitespace-nowrap">
-                        {g.awayAbbr} @ {g.homeAbbr}
+                      <span className="inline-flex items-center gap-1.5 text-slate-300 font-medium whitespace-nowrap">
+                        <TeamLogo abbr={g.awayAbbr} size="xs" />
+                        <span>{g.awayAbbr}</span>
+                        <span className="text-slate-500">@</span>
+                        <TeamLogo abbr={g.homeAbbr} size="xs" />
+                        <span>{g.homeAbbr}</span>
                       </span>
                       <span className="font-mono tabular-nums text-slate-400 whitespace-nowrap">
                         {g.isCompleted || g.isLive
@@ -830,6 +1217,27 @@ export default function App() {
 
             <button
               type="button"
+              onClick={() => void handleCopyShareUrl()}
+              aria-label="Copiar enlace directo de esta vista"
+              title="Copiar enlace directo de esta vista"
+              className={`inline-flex items-center justify-center gap-1.5 min-w-[38px] min-h-[36px] sm:min-w-0 px-2.5 sm:px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                copiedLink
+                  ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-300'
+                  : 'bg-[#131C2E] hover:bg-[#182338] border-[#1E293B] text-slate-300 hover:text-white'
+              }`}
+            >
+              {copiedLink ? (
+                <Check className="w-3.5 h-3.5 text-emerald-400" />
+              ) : (
+                <Link2 className="w-3.5 h-3.5 text-orange-400" />
+              )}
+              <span className="hidden md:inline">
+                {copiedLink ? 'Enlace copiado' : 'Enlace'}
+              </span>
+            </button>
+
+            <button
+              type="button"
               disabled={loading || refreshing || milestonesLoading}
               onClick={handleManualRefresh}
               aria-label="Actualizar datos"
@@ -851,6 +1259,7 @@ export default function App() {
           {/* Homogeneous Global Parameter & Threshold Strip (shown on rolling-window analytical views) */}
           {activeSection !== 'milestones' &&
             activeSection !== 'glossary' &&
+            activeSection !== 'fantasy_espn' &&
             activeSection !== 'duel' &&
             activeSection !== 'gameday' && (
             <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-2.5 sm:p-3.5 space-y-2.5 sm:space-y-3">
@@ -1200,6 +1609,15 @@ export default function App() {
 
           {activeSection === 'glossary' ? (
             <GlossaryView onNavigateSection={handleNavigateSection} />
+          ) : activeSection === 'fantasy_espn' ? (
+            <FantasyEspnAssistantView
+              players={players}
+              teams={teams}
+              onInspectEntity={handleInspectEntity}
+              onOpenInDuel={handleOpenInDuel}
+              initialTab={fantasyTab}
+              onTabChange={handleFantasyTabChange}
+            />
           ) : activeSection === 'gameday' ? (
             <GameDayAnalyzerView
               experienceMode={experienceMode}
@@ -1208,6 +1626,10 @@ export default function App() {
               onInspectEntity={handleInspectEntity}
               onOpenInDuel={handleOpenInDuel}
               externalRefreshCounter={gamedayRefreshCounter}
+              selectedDateParam={gamedayDateParam}
+              onChangeDateParam={handleGamedayDateChange}
+              selectedReportEventIdProp={gamedayReportId}
+              onChangeReportEventId={handleGamedayReportChange}
             />
           ) : activeSection === 'milestones' ? (
             <SeasonMilestonesView
@@ -1266,6 +1688,7 @@ export default function App() {
               {activeSection === 'anomalies' && (
                 <AnomalyRadarView
                   signals={anomalies}
+                  benchmarks={benchmarks}
                   experienceMode={experienceMode}
                   watchlistIds={watchlistIds}
                   onlyWatchlist={onlyWatchlist}
@@ -1315,6 +1738,7 @@ export default function App() {
                   onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
                   initialPlayerAId={duelTarget.playerAId}
                   initialPlayerBId={duelTarget.playerBId}
+                  onPairChange={handleDuelPairChange}
                   allPlayersLoaded={allPlayersLoaded}
                   loadingAllPlayers={loadingAllPlayers}
                   totalLeaguePlayersAvailable={totalLeaguePlayersAvailable}
@@ -1331,6 +1755,7 @@ export default function App() {
                   onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
                   initialEntityType={comparatorTarget.type}
                   initialEntityId={comparatorTarget.id}
+                  onSelectionChange={handleComparatorSelectionChange}
                   onInspectEntity={handleInspectEntity}
                   onAddExternalPlayer={handleAddPlayerForComparator}
                 />
@@ -1417,6 +1842,7 @@ export default function App() {
               activeSection === 'comparator' ||
               activeSection === 'milestones' ||
               activeSection === 'teams' ||
+              activeSection === 'fantasy_espn' ||
               activeSection === 'glossary';
             return (
               <button
@@ -1450,7 +1876,7 @@ export default function App() {
         windowSize={settings.windowSize}
         watchlistIds={watchlistIds}
         onToggleWatchlist={handleToggleWatchlist}
-        onClose={() => setInspected({ type: null, id: null })}
+        onClose={handleCloseInspector}
         onOpenInComparator={handleOpenInComparator}
         onOpenInDuel={handleOpenInDuel}
         onSelectRosterPlayer={handleAddExternalPlayer}

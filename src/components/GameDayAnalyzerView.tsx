@@ -32,6 +32,7 @@ import {
   renderHighlightedInline,
 } from './GameScoutingReportModal';
 import { ColumnHelpHeader, MetricInfoTooltip } from './MetricUiHelpers';
+import { PlayerAvatar, TeamLogo } from './NbaVisuals';
 
 interface GameDayAnalyzerViewProps {
   experienceMode: ExperienceMode;
@@ -40,6 +41,10 @@ interface GameDayAnalyzerViewProps {
   onInspectEntity: (entityType: 'player' | 'team', entityId: string) => void;
   onOpenInDuel: (playerId: string) => void;
   externalRefreshCounter: number;
+  selectedDateParam?: string | null;
+  onChangeDateParam?: (date: string, mode: 'push' | 'replace') => void;
+  selectedReportEventIdProp?: string | null;
+  onChangeReportEventId?: (eventId: string | null) => void;
 }
 
 const SHORT_WEEKDAYS_ES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
@@ -86,8 +91,14 @@ export function GameDayAnalyzerView({
   onInspectEntity,
   onOpenInDuel,
   externalRefreshCounter,
+  selectedDateParam,
+  onChangeDateParam,
+  selectedReportEventIdProp,
+  onChangeReportEventId,
 }: GameDayAnalyzerViewProps) {
-  const [selectedDate, setSelectedDate] = useState<string>('');
+  const [selectedDate, setSelectedDate] = useState<string>(
+    () => selectedDateParam || ''
+  );
   const [data, setData] = useState<GameDayPayload | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [switchingDate, setSwitchingDate] = useState<boolean>(false);
@@ -117,11 +128,28 @@ export function GameDayAnalyzerView({
   const [chronicleError, setChronicleError] = useState<string | null>(null);
   const [copiedChronicle, setCopiedChronicle] = useState<boolean>(false);
   const [selectedReportEventId, setSelectedReportEventId] = useState<string | null>(
-    null
+    () => selectedReportEventIdProp ?? null
+  );
+
+  const activeReportEventId =
+    selectedReportEventIdProp !== undefined
+      ? selectedReportEventIdProp
+      : selectedReportEventId;
+
+  const handleSetReportEventId = useCallback(
+    (nextEventId: string | null) => {
+      setSelectedReportEventId(nextEventId);
+      onChangeReportEventId?.(nextEventId);
+    },
+    [onChangeReportEventId]
   );
 
   const fetchGameDay = useCallback(
-    async (targetDate?: string, forceRefresh = false) => {
+    async (
+      targetDate?: string,
+      forceRefresh = false,
+      historyMode: 'push' | 'replace' | 'none' = 'none'
+    ) => {
       if (!data) {
         setLoading(true);
       } else {
@@ -143,6 +171,9 @@ export function GameDayAnalyzerView({
         const payload = (await res.json()) as GameDayPayload;
         setData(payload);
         setSelectedDate(payload.selectedDate);
+        if (historyMode !== 'none' && payload.selectedDate) {
+          onChangeDateParam?.(payload.selectedDate, historyMode);
+        }
       } catch (err) {
         setErrorMsg(
           err instanceof Error
@@ -154,7 +185,7 @@ export function GameDayAnalyzerView({
         setSwitchingDate(false);
       }
     },
-    [data]
+    [data, onChangeDateParam]
   );
 
   const fetchDailyChronicle = useCallback(
@@ -165,10 +196,15 @@ export function GameDayAnalyzerView({
       }
       setLoadingChronicle(true);
       setChronicleError(null);
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 24000);
       try {
         const params = new URLSearchParams({ date: targetDate });
         if (forceRefresh) params.set('refresh', '1');
-        const res = await fetch(`/api/nba/gameday/chronicle?${params.toString()}`);
+        const res = await fetch(
+          `/api/nba/gameday/chronicle?${params.toString()}`,
+          { signal: controller.signal }
+        );
         if (!res.ok) {
           throw new Error(
             'No se pudo redactar la crónica global de esta jornada.'
@@ -181,11 +217,12 @@ export function GameDayAnalyzerView({
         }));
       } catch (err) {
         setChronicleError(
-          err instanceof Error
+          err instanceof Error && err.name !== 'AbortError'
             ? err.message
-            : 'Error al consultar la crónica de la jornada.'
+            : 'La redacción de la crónica tardó más de lo previsto. Pulsa para reintentar.'
         );
       } finally {
+        window.clearTimeout(timeoutId);
         setLoadingChronicle(false);
       }
     },
@@ -252,13 +289,33 @@ export function GameDayAnalyzerView({
   }, [chronicleByDate, data?.selectedDate, selectedDate]);
 
   useEffect(() => {
-    void fetchGameDay(undefined, false);
+    void fetchGameDay(
+      selectedDateParam || undefined,
+      false,
+      selectedDateParam ? 'none' : 'replace'
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
+    if (
+      selectedDateParam &&
+      data &&
+      selectedDateParam !== data.selectedDate &&
+      !switchingDate
+    ) {
+      setSelectedDate(selectedDateParam);
+      setExpandedEventIds(new Set());
+      setChronicleOpen(false);
+      setChronicleError(null);
+      void fetchGameDay(selectedDateParam, false, 'none');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDateParam]);
+
+  useEffect(() => {
     if (externalRefreshCounter > 0) {
-      void fetchGameDay(selectedDate || undefined, true);
+      void fetchGameDay(selectedDate || undefined, true, 'none');
       if (chronicleOpen && selectedDate) {
         void fetchDailyChronicle(selectedDate, true);
       }
@@ -273,9 +330,10 @@ export function GameDayAnalyzerView({
       setExpandedEventIds(new Set());
       setChronicleOpen(false);
       setChronicleError(null);
-      void fetchGameDay(nextDate, false);
+      onChangeDateParam?.(nextDate, 'push');
+      void fetchGameDay(nextDate, false, 'none');
     },
-    [selectedDate, fetchGameDay]
+    [selectedDate, fetchGameDay, onChangeDateParam]
   );
 
   const toggleExpandMatchup = useCallback((eventId: string) => {
@@ -348,6 +406,38 @@ export function GameDayAnalyzerView({
     }
     return data.streakShifts;
   }, [data, streakFilter]);
+
+  const chronicleHighlightEntities = useMemo(() => {
+    if (!data) return [];
+    const set = new Set<string>();
+    if (data.mvpOfTheNight?.playerName) set.add(data.mvpOfTheNight.playerName);
+    if (data.statementTeamWin?.teamName) set.add(data.statementTeamWin.teamName);
+    for (const p of data.idealFive) {
+      if (p.playerName) set.add(p.playerName);
+    }
+    for (const e of data.explosions) {
+      if (e.playerName) set.add(e.playerName);
+    }
+    for (const s of data.slumps) {
+      if (s.playerName) set.add(s.playerName);
+    }
+    for (const r of data.roleShifts) {
+      if (r.playerName) set.add(r.playerName);
+    }
+    for (const st of data.streakShifts) {
+      if (st.playerName) set.add(st.playerName);
+    }
+    for (const m of data.matchups) {
+      for (const side of [m.away, m.home]) {
+        if (side.name) set.add(side.name);
+        if (side.topPlayer?.playerName) set.add(side.topPlayer.playerName);
+        for (const rp of side.rotationPlayers) {
+          if (rp.playerName) set.add(rp.playerName);
+        }
+      }
+    }
+    return Array.from(set);
+  }, [data]);
 
   if (loading && !data) {
     return (
@@ -446,6 +536,12 @@ export function GameDayAnalyzerView({
               }`}
             />
           </button>
+          <PlayerAvatar
+            playerId={p.playerId}
+            name={p.playerName}
+            teamAbbr={p.teamAbbr}
+            size="xs"
+          />
           <div className="min-w-0">
             <p className="font-medium text-slate-100 truncate">{p.playerName}</p>
             <p className="text-[11px] text-slate-400 font-mono tabular-nums whitespace-nowrap">
@@ -497,6 +593,15 @@ export function GameDayAnalyzerView({
         : m.contextTone === 'emerald'
         ? 'text-emerald-400'
         : 'text-slate-400';
+
+    const matchHighlightEntities = [
+      m.away.name,
+      m.home.name,
+      m.away.shortName,
+      m.home.shortName,
+      ...m.away.rotationPlayers.map((p) => p.playerName),
+      ...m.home.rotationPlayers.map((p) => p.playerName),
+    ].filter((x): x is string => Boolean(x));
 
     return (
       <article
@@ -571,6 +676,12 @@ export function GameDayAnalyzerView({
                         }`}
                       />
                     </button>
+                    <TeamLogo
+                      abbr={side.abbr}
+                      teamId={side.teamId}
+                      size="sm"
+                      framed
+                    />
                     <div className="text-left min-w-0">
                       <div className="flex items-center gap-2 min-w-0">
                         <span
@@ -646,11 +757,19 @@ export function GameDayAnalyzerView({
                     }}
                     className="flex items-center justify-between gap-2 text-left hover:text-orange-300 transition-colors min-w-0"
                   >
-                    <span className="truncate font-medium text-slate-200">
-                      <span className="font-mono text-slate-400 mr-1.5">
-                        {tp.teamAbbr}
+                    <span className="flex items-center gap-2 min-w-0">
+                      <PlayerAvatar
+                        playerId={tp.playerId}
+                        name={tp.playerName}
+                        teamAbbr={tp.teamAbbr}
+                        size="xs"
+                      />
+                      <span className="truncate font-medium text-slate-200">
+                        <span className="font-mono text-slate-400 mr-1.5">
+                          {tp.teamAbbr}
+                        </span>
+                        {tp.playerName}
                       </span>
-                      {tp.playerName}
                     </span>
                     <span className="font-mono tabular-nums text-slate-300 whitespace-nowrap shrink-0">
                       {tp.points}P · {tp.rebounds}R · {tp.assists}A
@@ -686,7 +805,9 @@ export function GameDayAnalyzerView({
                   <span className="font-mono text-orange-400 shrink-0 mt-0.5">
                     {idx + 1}.
                   </span>
-                  <span>{sentence}</span>
+                  <span>
+                    {renderHighlightedInline(sentence, matchHighlightEntities)}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -698,7 +819,7 @@ export function GameDayAnalyzerView({
           <div className="grid grid-cols-2 divide-x divide-[#1E293B]">
             <button
               type="button"
-              onClick={() => setSelectedReportEventId(m.eventId)}
+              onClick={() => handleSetReportEventId(m.eventId)}
               className="min-h-[44px] px-3 py-2 flex items-center justify-center gap-1.5 text-xs font-semibold text-orange-400 hover:bg-[#182338] active:bg-[#182338] transition-colors whitespace-nowrap"
             >
               <FileText className="w-3.5 h-3.5 shrink-0" />
@@ -734,9 +855,12 @@ export function GameDayAnalyzerView({
                     <button
                       type="button"
                       onClick={() => onInspectEntity('team', side.teamId)}
-                      className="font-semibold hover:text-orange-300 transition-colors"
+                      className="inline-flex items-center gap-2 font-semibold hover:text-orange-300 transition-colors min-w-0"
                     >
-                      {side.name} ({side.score})
+                      <TeamLogo abbr={side.abbr} teamId={side.teamId} size="xs" />
+                      <span className="truncate">
+                        {side.name} ({side.score})
+                      </span>
                     </button>
                     <span className="font-mono tabular-nums text-slate-400">
                       {experienceMode === 'advanced'
@@ -925,16 +1049,29 @@ export function GameDayAnalyzerView({
             <span className="truncate">MVP de la noche</span>
             <MetricInfoTooltip helpKey="gamedayMvp" />
           </div>
-          <p className="mt-1 text-base sm:text-lg font-semibold text-slate-100 truncate">
-            {data.mvpOfTheNight ? data.mvpOfTheNight.playerName : '—'}
-          </p>
-          <p className="mt-1 text-[11px] sm:text-xs font-mono tabular-nums text-orange-400 truncate">
-            {data.mvpOfTheNight
-              ? `${data.mvpOfTheNight.points}P · ${data.mvpOfTheNight.rebounds}R · ${
-                  data.mvpOfTheNight.assists
-                }A · GmSc ${data.mvpOfTheNight.gameScore.toFixed(1)}`
-              : 'Sin registros'}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+            {data.mvpOfTheNight && (
+              <PlayerAvatar
+                playerId={data.mvpOfTheNight.playerId}
+                name={data.mvpOfTheNight.playerName}
+                teamAbbr={data.mvpOfTheNight.teamAbbr}
+                showTeamBadge
+                size="sm"
+              />
+            )}
+            <div className="min-w-0">
+              <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                {data.mvpOfTheNight ? data.mvpOfTheNight.playerName : '—'}
+              </p>
+              <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-orange-400 truncate">
+                {data.mvpOfTheNight
+                  ? `${data.mvpOfTheNight.points}P · ${data.mvpOfTheNight.rebounds}R · ${
+                      data.mvpOfTheNight.assists
+                    }A · GmSc ${data.mvpOfTheNight.gameScore.toFixed(1)}`
+                  : 'Sin registros'}
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* KPI 3: Mayor Explosión Individual */}
@@ -953,17 +1090,30 @@ export function GameDayAnalyzerView({
             <span className="truncate">Mayor explosión vs media</span>
             <MetricInfoTooltip helpKey="gamedaySingleZ" />
           </div>
-          <p className="mt-1 text-base sm:text-lg font-semibold text-slate-100 truncate">
-            {data.topExplosion ? data.topExplosion.playerName : '—'}
-          </p>
-          <p className="mt-1 text-[11px] sm:text-xs font-mono tabular-nums text-emerald-400 truncate">
-            {data.topExplosion
-              ? `▲ ${data.topExplosion.points} PTS (${formatSigned(
-                  data.topExplosion.ptsDelta,
-                  1
-                )} vs ${data.topExplosion.ptsAvg.toFixed(1)})`
-              : 'Sin explosiones atípicas'}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+            {data.topExplosion && (
+              <PlayerAvatar
+                playerId={data.topExplosion.playerId}
+                name={data.topExplosion.playerName}
+                teamAbbr={data.topExplosion.teamAbbr}
+                showTeamBadge
+                size="sm"
+              />
+            )}
+            <div className="min-w-0">
+              <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                {data.topExplosion ? data.topExplosion.playerName : '—'}
+              </p>
+              <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-emerald-400 truncate">
+                {data.topExplosion
+                  ? `▲ ${data.topExplosion.points} PTS (${formatSigned(
+                      data.topExplosion.ptsDelta,
+                      1
+                    )} vs ${data.topExplosion.ptsAvg.toFixed(1)})`
+                  : 'Sin explosiones atípicas'}
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* KPI 4: Golpe en la Mesa Colectivo */}
@@ -982,20 +1132,32 @@ export function GameDayAnalyzerView({
             <span className="truncate">Golpe en la mesa</span>
             <MetricInfoTooltip helpKey="gamedayTeamStatement" />
           </div>
-          <p className="mt-1 text-base sm:text-lg font-semibold text-slate-100 truncate">
-            {data.statementTeamWin ? data.statementTeamWin.teamName : '—'}
-          </p>
-          <p className="mt-1 text-[11px] sm:text-xs font-mono tabular-nums text-slate-300 truncate">
-            {data.statementTeamWin
-              ? experienceMode === 'advanced'
-                ? data.statementTeamWin.summaryAdvanced
-                : `${
-                    data.statementTeamWin.isHome ? 'vs' : '@'
-                  } ${data.statementTeamWin.opponentAbbr} (${
-                    data.statementTeamWin.scoreDisplay
-                  } · +${data.statementTeamWin.margin})`
-              : '—'}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+            {data.statementTeamWin && (
+              <TeamLogo
+                abbr={data.statementTeamWin.teamAbbr}
+                teamId={data.statementTeamWin.teamId}
+                size="sm"
+                framed
+              />
+            )}
+            <div className="min-w-0">
+              <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                {data.statementTeamWin ? data.statementTeamWin.teamName : '—'}
+              </p>
+              <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-slate-300 truncate">
+                {data.statementTeamWin
+                  ? experienceMode === 'advanced'
+                    ? data.statementTeamWin.summaryAdvanced
+                    : `${
+                        data.statementTeamWin.isHome ? 'vs' : '@'
+                      } ${data.statementTeamWin.opponentAbbr} (${
+                        data.statementTeamWin.scoreDisplay
+                      } · +${data.statementTeamWin.margin})`
+                  : '—'}
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1159,8 +1321,11 @@ export function GameDayAnalyzerView({
                         {ch.headline}
                       </h3>
 
-                      <p className="text-sm sm:text-base text-slate-200 font-medium leading-relaxed max-w-4xl">
-                        {renderHighlightedInline(ch.lead)}
+                      <p className="text-sm sm:text-base text-slate-200 font-medium leading-relaxed w-full text-justify hyphens-auto">
+                        {renderHighlightedInline(
+                          ch.lead,
+                          chronicleHighlightEntities
+                        )}
                       </p>
 
                       {/* Quick Section Jump Index */}
@@ -1224,6 +1389,7 @@ export function GameDayAnalyzerView({
                           </h4>
                           {renderEditorialParagraphs(sec.body, {
                             dropCap: idx === 0,
+                            highlightEntities: chronicleHighlightEntities,
                           })}
                         </div>
 
@@ -1249,19 +1415,27 @@ export function GameDayAnalyzerView({
                                   }
                                   className="w-full py-2 first:pt-0 last:pb-0 flex items-center justify-between gap-2 text-left hover:text-orange-300 transition-colors"
                                 >
-                                  <div className="min-w-0">
-                                    <p className="text-xs font-semibold text-slate-100 truncate">
-                                      <span className="font-mono text-orange-400 mr-1.5">
-                                        {pIdx + 1}.
-                                      </span>
-                                      {p.playerName}{' '}
-                                      <span className="font-mono font-normal text-slate-400">
-                                        ({p.teamAbbr})
-                                      </span>
-                                    </p>
-                                    <p className="font-mono tabular-nums text-[11px] text-slate-400">
-                                      {p.points}P · {p.rebounds}R · {p.assists}A
-                                    </p>
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <PlayerAvatar
+                                      playerId={p.playerId}
+                                      name={p.playerName}
+                                      teamAbbr={p.teamAbbr}
+                                      size="xs"
+                                    />
+                                    <div className="min-w-0">
+                                      <p className="text-xs font-semibold text-slate-100 truncate">
+                                        <span className="font-mono text-orange-400 mr-1">
+                                          {pIdx + 1}.
+                                        </span>
+                                        {p.playerName}{' '}
+                                        <span className="font-mono font-normal text-slate-400">
+                                          ({p.teamAbbr})
+                                        </span>
+                                      </p>
+                                      <p className="font-mono tabular-nums text-[11px] text-slate-400">
+                                        {p.points}P · {p.rebounds}R · {p.assists}A
+                                      </p>
+                                    </div>
                                   </div>
                                   <span className="font-mono tabular-nums text-xs font-semibold text-orange-300 shrink-0">
                                     {p.gameScore.toFixed(1)}
@@ -1286,7 +1460,9 @@ export function GameDayAnalyzerView({
                         <h4 className="font-display text-base sm:text-lg font-bold text-slate-100">
                           Pizarras
                         </h4>
-                        {renderEditorialParagraphs(ch.pizarrasSection)}
+                        {renderEditorialParagraphs(ch.pizarrasSection, {
+                          highlightEntities: chronicleHighlightEntities,
+                        })}
                       </div>
 
                       <aside className="lg:col-span-4 bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 space-y-3">
@@ -1307,17 +1483,24 @@ export function GameDayAnalyzerView({
                               onClick={() => setSelectedReportEventId(m.eventId)}
                               className="w-full py-2.5 first:pt-0 last:pb-0 flex items-center justify-between gap-2 text-left hover:text-orange-300 transition-colors"
                             >
-                              <div className="min-w-0">
-                                <p className="text-xs font-semibold text-slate-100 truncate">
-                                  <span className="font-mono text-orange-400 mr-1">
-                                    {winner.abbr}
-                                  </span>
-                                  {winner.score}-{loser.score} vs {loser.abbr}
-                                </p>
-                                <p className="font-mono tabular-nums text-[11px] text-slate-400">
-                                  OffRtg {winner.offRtg.toFixed(1)} ·{' '}
-                                  {winner.efgPct.toFixed(1)}% eFG · {winner.fg3m} T3
-                                </p>
+                              <div className="flex items-center gap-2 min-w-0">
+                                <TeamLogo
+                                  abbr={winner.abbr}
+                                  teamId={winner.teamId}
+                                  size="xs"
+                                />
+                                <div className="min-w-0">
+                                  <p className="text-xs font-semibold text-slate-100 truncate">
+                                    <span className="font-mono text-orange-400 mr-1">
+                                      {winner.abbr}
+                                    </span>
+                                    {winner.score}-{loser.score} vs {loser.abbr}
+                                  </p>
+                                  <p className="font-mono tabular-nums text-[11px] text-slate-400">
+                                    OffRtg {winner.offRtg.toFixed(1)} ·{' '}
+                                    {winner.efgPct.toFixed(1)}% eFG · {winner.fg3m} T3
+                                  </p>
+                                </div>
                               </div>
                               <span className="text-[11px] text-orange-400 font-medium shrink-0">
                                 Informe →
@@ -1340,7 +1523,9 @@ export function GameDayAnalyzerView({
                         <h4 className="font-display text-base sm:text-lg font-bold text-slate-100">
                           Hitos
                         </h4>
-                        {renderEditorialParagraphs(ch.hitosSection)}
+                        {renderEditorialParagraphs(ch.hitosSection, {
+                          highlightEntities: chronicleHighlightEntities,
+                        })}
                       </div>
 
                       <aside className="lg:col-span-4 bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 space-y-3">
@@ -1363,16 +1548,24 @@ export function GameDayAnalyzerView({
                               }
                               className="w-full py-2 first:pt-0 flex items-center justify-between gap-2 text-left hover:text-orange-300 transition-colors"
                             >
-                              <div className="min-w-0">
-                                <p className="font-semibold text-slate-100 truncate">
-                                  {exp.playerName}{' '}
-                                  <span className="font-mono font-normal text-slate-400">
-                                    ({exp.teamAbbr})
-                                  </span>
-                                </p>
-                                <p className="text-[11px] text-slate-400 truncate">
-                                  Explosión · Media {exp.ptsAvg.toFixed(1)} PTS
-                                </p>
+                              <div className="flex items-center gap-2 min-w-0">
+                                <PlayerAvatar
+                                  playerId={exp.playerId}
+                                  name={exp.playerName}
+                                  teamAbbr={exp.teamAbbr}
+                                  size="xs"
+                                />
+                                <div className="min-w-0">
+                                  <p className="font-semibold text-slate-100 truncate">
+                                    {exp.playerName}{' '}
+                                    <span className="font-mono font-normal text-slate-400">
+                                      ({exp.teamAbbr})
+                                    </span>
+                                  </p>
+                                  <p className="text-[11px] text-slate-400 truncate">
+                                    Explosión · Media {exp.ptsAvg.toFixed(1)} PTS
+                                  </p>
+                                </div>
                               </div>
                               <span className="font-mono tabular-nums font-semibold text-emerald-400 shrink-0">
                                 {exp.points} PTS (+{exp.ptsDelta.toFixed(1)})
@@ -1389,16 +1582,24 @@ export function GameDayAnalyzerView({
                               }
                               className="w-full py-2 last:pb-0 flex items-center justify-between gap-2 text-left hover:text-orange-300 transition-colors"
                             >
-                              <div className="min-w-0">
-                                <p className="font-semibold text-slate-100 truncate">
-                                  {st.playerName}{' '}
-                                  <span className="font-mono font-normal text-slate-400">
-                                    ({st.teamAbbr})
-                                  </span>
-                                </p>
-                                <p className="text-[11px] text-slate-400 truncate">
-                                  {st.thresholdLabel}
-                                </p>
+                              <div className="flex items-center gap-2 min-w-0">
+                                <PlayerAvatar
+                                  playerId={st.playerId}
+                                  name={st.playerName}
+                                  teamAbbr={st.teamAbbr}
+                                  size="xs"
+                                />
+                                <div className="min-w-0">
+                                  <p className="font-semibold text-slate-100 truncate">
+                                    {st.playerName}{' '}
+                                    <span className="font-mono font-normal text-slate-400">
+                                      ({st.teamAbbr})
+                                    </span>
+                                  </p>
+                                  <p className="text-[11px] text-slate-400 truncate">
+                                    {st.thresholdLabel}
+                                  </p>
+                                </div>
                               </div>
                               <span
                                 className={`font-mono tabular-nums text-[11px] font-semibold shrink-0 ${
@@ -1429,7 +1630,9 @@ export function GameDayAnalyzerView({
                         <h4 className="font-display text-base sm:text-lg font-bold text-slate-100">
                           Españoles
                         </h4>
-                        {renderEditorialParagraphs(ch.espanolesSection)}
+                        {renderEditorialParagraphs(ch.espanolesSection, {
+                          highlightEntities: chronicleHighlightEntities,
+                        })}
                       </div>
 
                       <aside className="lg:col-span-4 bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 space-y-2">
@@ -1454,9 +1657,12 @@ export function GameDayAnalyzerView({
                               {items.map((itemText, idx) => (
                                 <div
                                   key={idx}
-                                  className="p-2.5 rounded-lg border border-[#1E293B] bg-[#0B1120] text-xs font-mono tabular-nums text-slate-200 leading-relaxed"
+                                  className="p-2.5 rounded-lg border border-[#1E293B] bg-[#0B1120] text-xs tabular-nums text-slate-200 leading-relaxed"
                                 >
-                                  {renderHighlightedInline(itemText)}
+                                  {renderHighlightedInline(
+                                    itemText,
+                                    chronicleHighlightEntities
+                                  )}
                                 </div>
                               ))}
                             </div>
@@ -1494,8 +1700,11 @@ export function GameDayAnalyzerView({
                                   {item.title}
                                 </h5>
                               </div>
-                              <p className="text-xs sm:text-[13px] text-slate-300 leading-relaxed">
-                                {renderHighlightedInline(item.detail)}
+                              <p className="text-xs sm:text-[13px] text-slate-300 leading-relaxed text-justify hyphens-auto">
+                                {renderHighlightedInline(
+                                  item.detail,
+                                  chronicleHighlightEntities
+                                )}
                               </p>
                             </div>
                           ))}
@@ -1587,18 +1796,28 @@ export function GameDayAnalyzerView({
                 >
                   <div>
                     <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="font-mono text-[11px] text-orange-400 font-semibold">
-                          #{idx + 1}{' '}
-                          {idx === 0 ? '· MVP de la Noche' : '· Quinteto Ideal'}
-                        </p>
-                        <p className="mt-0.5 text-sm font-semibold text-slate-100 truncate">
-                          {p.playerName}
-                        </p>
-                        <p className="text-xs text-slate-400 truncate">
-                          {p.teamAbbr} · {p.position} ·{' '}
-                          {p.isHome ? 'vs' : '@'} {p.opponentAbbr} ({p.result})
-                        </p>
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <PlayerAvatar
+                          playerId={p.playerId}
+                          name={p.playerName}
+                          teamAbbr={p.teamAbbr}
+                          showTeamBadge
+                          size="md"
+                          accentTone={idx === 0 ? 'orange' : 'default'}
+                        />
+                        <div className="min-w-0">
+                          <p className="font-mono text-[11px] text-orange-400 font-semibold truncate">
+                            #{idx + 1}{' '}
+                            {idx === 0 ? '· MVP Noche' : '· Quinteto'}
+                          </p>
+                          <p className="mt-0.5 text-sm font-semibold text-slate-100 truncate">
+                            {p.playerName}
+                          </p>
+                          <p className="text-xs text-slate-400 truncate">
+                            {p.teamAbbr} · {p.position} ·{' '}
+                            {p.isHome ? 'vs' : '@'} {p.opponentAbbr} ({p.result})
+                          </p>
+                        </div>
                       </div>
                       <button
                         type="button"
@@ -1786,36 +2005,45 @@ export function GameDayAnalyzerView({
                         className="p-3.5 sm:px-4 sm:py-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-1.5"
                       >
                         <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="font-semibold text-sm text-slate-100 truncate">
-                                {item.playerName}
-                              </span>
-                              <button
-                                type="button"
-                                aria-label="Alternar favorito"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onToggleWatchlist(`player:${item.playerId}`);
-                                }}
-                                className="p-1 -m-1 text-slate-500 hover:text-orange-400 shrink-0"
-                              >
-                                <Star
-                                  className={`w-3.5 h-3.5 ${
-                                    watched
-                                      ? 'fill-orange-400 text-orange-400'
-                                      : ''
-                                  }`}
-                                />
-                              </button>
-                            </div>
-                            <div className="text-xs text-slate-400">
-                              {item.teamAbbr} · {item.position} ·{' '}
-                              {item.isHome ? 'vs' : '@'} {item.opponentAbbr} (
-                              {item.result}) ·{' '}
-                              <span className="text-emerald-400 font-medium">
-                                {item.driverTag}
-                              </span>
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <PlayerAvatar
+                              playerId={item.playerId}
+                              name={item.playerName}
+                              teamAbbr={item.teamAbbr}
+                              showTeamBadge
+                              size="sm"
+                            />
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-sm text-slate-100 truncate">
+                                  {item.playerName}
+                                </span>
+                                <button
+                                  type="button"
+                                  aria-label="Alternar favorito"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onToggleWatchlist(`player:${item.playerId}`);
+                                  }}
+                                  className="p-1 -m-1 text-slate-500 hover:text-orange-400 shrink-0"
+                                >
+                                  <Star
+                                    className={`w-3.5 h-3.5 ${
+                                      watched
+                                        ? 'fill-orange-400 text-orange-400'
+                                        : ''
+                                    }`}
+                                  />
+                                </button>
+                              </div>
+                              <div className="text-xs text-slate-400">
+                                {item.teamAbbr} · {item.position} ·{' '}
+                                {item.isHome ? 'vs' : '@'} {item.opponentAbbr} (
+                                {item.result}) ·{' '}
+                                <span className="text-emerald-400 font-medium">
+                                  {item.driverTag}
+                                </span>
+                              </div>
                             </div>
                           </div>
 
@@ -1876,36 +2104,45 @@ export function GameDayAnalyzerView({
                         className="p-3.5 sm:px-4 sm:py-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-1.5"
                       >
                         <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="font-semibold text-sm text-slate-100 truncate">
-                                {item.playerName}
-                              </span>
-                              <button
-                                type="button"
-                                aria-label="Alternar favorito"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onToggleWatchlist(`player:${item.playerId}`);
-                                }}
-                                className="p-1 -m-1 text-slate-500 hover:text-orange-400 shrink-0"
-                              >
-                                <Star
-                                  className={`w-3.5 h-3.5 ${
-                                    watched
-                                      ? 'fill-orange-400 text-orange-400'
-                                      : ''
-                                  }`}
-                                />
-                              </button>
-                            </div>
-                            <div className="text-xs text-slate-400">
-                              {item.teamAbbr} · {item.position} ·{' '}
-                              {item.isHome ? 'vs' : '@'} {item.opponentAbbr} (
-                              {item.result}) ·{' '}
-                              <span className="text-rose-400 font-medium">
-                                {item.driverTag}
-                              </span>
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <PlayerAvatar
+                              playerId={item.playerId}
+                              name={item.playerName}
+                              teamAbbr={item.teamAbbr}
+                              showTeamBadge
+                              size="sm"
+                            />
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-sm text-slate-100 truncate">
+                                  {item.playerName}
+                                </span>
+                                <button
+                                  type="button"
+                                  aria-label="Alternar favorito"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onToggleWatchlist(`player:${item.playerId}`);
+                                  }}
+                                  className="p-1 -m-1 text-slate-500 hover:text-orange-400 shrink-0"
+                                >
+                                  <Star
+                                    className={`w-3.5 h-3.5 ${
+                                      watched
+                                        ? 'fill-orange-400 text-orange-400'
+                                        : ''
+                                    }`}
+                                  />
+                                </button>
+                              </div>
+                              <div className="text-xs text-slate-400">
+                                {item.teamAbbr} · {item.position} ·{' '}
+                                {item.isHome ? 'vs' : '@'} {item.opponentAbbr} (
+                                {item.result}) ·{' '}
+                                <span className="text-rose-400 font-medium">
+                                  {item.driverTag}
+                                </span>
+                              </div>
                             </div>
                           </div>
 
@@ -1969,14 +2206,23 @@ export function GameDayAnalyzerView({
                         className="p-3.5 space-y-1.5 active:bg-[#182338] cursor-pointer transition-colors"
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="text-sm font-semibold text-slate-100 truncate">
-                              {r.playerName}
-                            </p>
-                            <p className="text-xs text-slate-400">
-                              {r.teamAbbr} · {r.position} ·{' '}
-                              {r.isHome ? 'vs' : '@'} {r.opponentAbbr}
-                            </p>
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <PlayerAvatar
+                              playerId={r.playerId}
+                              name={r.playerName}
+                              teamAbbr={r.teamAbbr}
+                              showTeamBadge
+                              size="sm"
+                            />
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-slate-100 truncate">
+                                {r.playerName}
+                              </p>
+                              <p className="text-xs text-slate-400">
+                                {r.teamAbbr} · {r.position} ·{' '}
+                                {r.isHome ? 'vs' : '@'} {r.opponentAbbr}
+                              </p>
+                            </div>
                           </div>
                           <div className="text-right font-mono tabular-nums shrink-0">
                             <p className="text-sm font-bold text-emerald-400">
@@ -2034,12 +2280,23 @@ export function GameDayAnalyzerView({
                             className="hover:bg-[#182338] cursor-pointer transition-colors"
                           >
                             <td className="py-3 pl-4 pr-3">
-                              <div className="font-medium text-slate-100 whitespace-nowrap">
-                                {r.playerName}
-                              </div>
-                              <div className="text-xs text-slate-400 whitespace-nowrap">
-                                {r.teamAbbr} · {r.isHome ? 'vs' : '@'}{' '}
-                                {r.opponentAbbr} ({r.result})
+                              <div className="flex items-center gap-2.5">
+                                <PlayerAvatar
+                                  playerId={r.playerId}
+                                  name={r.playerName}
+                                  teamAbbr={r.teamAbbr}
+                                  showTeamBadge
+                                  size="sm"
+                                />
+                                <div>
+                                  <div className="font-medium text-slate-100 whitespace-nowrap">
+                                    {r.playerName}
+                                  </div>
+                                  <div className="text-xs text-slate-400 whitespace-nowrap">
+                                    {r.teamAbbr} · {r.isHome ? 'vs' : '@'}{' '}
+                                    {r.opponentAbbr} ({r.result})
+                                  </div>
+                                </div>
                               </div>
                             </td>
                             <td className="py-3 px-3 text-right font-mono tabular-nums whitespace-nowrap">
@@ -2142,32 +2399,41 @@ export function GameDayAnalyzerView({
                       onClick={() => onInspectEntity('player', st.playerId)}
                       className="p-3.5 sm:px-4 sm:py-3 flex items-center justify-between gap-3 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors"
                     >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="font-semibold text-sm text-slate-100 truncate">
-                            {st.playerName}
-                          </span>
-                          <span className="text-xs text-slate-400 whitespace-nowrap">
-                            {st.teamAbbr} · {st.isHome ? 'vs' : '@'}{' '}
-                            {st.opponentAbbr}
-                          </span>
-                        </div>
-                        <div className="mt-0.5 text-xs flex flex-wrap items-center gap-x-1.5">
-                          <span
-                            className={`font-semibold ${
-                              isBroken ? 'text-rose-400' : 'text-emerald-400'
-                            }`}
-                          >
-                            {isBroken
-                              ? `▼ Racha rota (${st.thresholdLabel})`
-                              : `▲ Racha activa (${st.thresholdLabel})`}
-                          </span>
-                          <span className="text-slate-600" aria-hidden="true">
-                            ·
-                          </span>
-                          <span className="text-slate-300 font-mono tabular-nums">
-                            {st.nightValueDisplay}
-                          </span>
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <PlayerAvatar
+                          playerId={st.playerId}
+                          name={st.playerName}
+                          teamAbbr={st.teamAbbr}
+                          showTeamBadge
+                          size="sm"
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-semibold text-sm text-slate-100 truncate">
+                              {st.playerName}
+                            </span>
+                            <span className="text-xs text-slate-400 whitespace-nowrap">
+                              {st.teamAbbr} · {st.isHome ? 'vs' : '@'}{' '}
+                              {st.opponentAbbr}
+                            </span>
+                          </div>
+                          <div className="mt-0.5 text-xs flex flex-wrap items-center gap-x-1.5">
+                            <span
+                              className={`font-semibold ${
+                                isBroken ? 'text-rose-400' : 'text-emerald-400'
+                              }`}
+                            >
+                              {isBroken
+                                ? `▼ Racha rota (${st.thresholdLabel})`
+                                : `▲ Racha activa (${st.thresholdLabel})`}
+                            </span>
+                            <span className="text-slate-600" aria-hidden="true">
+                              ·
+                            </span>
+                            <span className="text-slate-300 font-mono tabular-nums">
+                              {st.nightValueDisplay}
+                            </span>
+                          </div>
                         </div>
                       </div>
 
@@ -2196,9 +2462,9 @@ export function GameDayAnalyzerView({
 
       {/* FULL PASO B + NBA.COM GAME BOOK SCOUTING REPORT MODAL */}
       <GameScoutingReportModal
-        eventId={selectedReportEventId}
+        eventId={activeReportEventId}
         experienceMode={experienceMode}
-        onClose={() => setSelectedReportEventId(null)}
+        onClose={() => handleSetReportEventId(null)}
         onInspectEntity={onInspectEntity}
         onOpenInDuel={onOpenInDuel}
       />

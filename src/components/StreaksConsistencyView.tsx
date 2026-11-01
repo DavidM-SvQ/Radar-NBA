@@ -5,6 +5,7 @@ import {
   Search,
   SlidersHorizontal,
   Star,
+  TrendingUp,
   Users,
 } from 'lucide-react';
 import type {
@@ -16,6 +17,8 @@ import type {
 } from '../types/nba';
 import { formatShortDate, mean, normalizeSearchText } from '../utils/analytics';
 import { ColumnHelpHeader, MetricInfoTooltip } from './MetricUiHelpers';
+import { EntityBadge, PlayerAvatar } from './NbaVisuals';
+import { PlayerStreakHistoryChart } from './PlayerStreakHistoryChart';
 
 interface StreaksConsistencyViewProps {
   players: PlayerSummary[];
@@ -33,10 +36,10 @@ interface StreaksConsistencyViewProps {
   onLoadAllPlayers?: () => void;
 }
 
-type SubTab = 'streaks' | 'consistency';
+type SubTab = 'streaks' | 'consistency' | 'history';
 type StreakEvalMode = 'custom' | 'auto';
 type StreakSpanMode = 'active' | 'best';
-type ThresholdOperator = 'gt' | 'gte';
+type ThresholdOperator = 'gt' | 'gte' | 'lte' | 'lt';
 type CustomStreakSort = 'count' | 'streakAvg' | 'seasonAvg';
 type ConsistencySort =
   | 'consistencyScore'
@@ -44,9 +47,16 @@ type ConsistencySort =
   | 'ptsStdDev'
   | 'hitRate20Pts';
 
+type StreakMetricGroup =
+  | 'basic_counting'
+  | 'shooting_vol'
+  | 'combos_milestones'
+  | 'shooting_eff'
+  | 'ratios_per36';
+
 interface StreakMetricOption {
   id: string;
-  group: 'ratios' | 'counting';
+  group: StreakMetricGroup;
   shortLabel: string;
   label: string;
   helpKey: string;
@@ -54,6 +64,8 @@ interface StreakMetricOption {
   max: number;
   step: number;
   defaultThreshold: number;
+  defaultOperator?: ThresholdOperator;
+  lowerIsBetter?: boolean;
   unit: string;
   decimals: number;
   gameDecimals: number;
@@ -62,18 +74,527 @@ interface StreakMetricOption {
   getValue: (g: PlayerGameLog) => number;
 }
 
+const STREAK_METRIC_GROUPS: Array<{
+  id: StreakMetricGroup;
+  label: string;
+  shortType: string;
+}> = [
+  {
+    id: 'basic_counting',
+    label: '1. Estadísticas básicas por partido',
+    shortType: 'Acumulado',
+  },
+  {
+    id: 'shooting_vol',
+    label: '2. Volumen de tiro y conversión',
+    shortType: 'Volumen',
+  },
+  {
+    id: 'combos_milestones',
+    label: '3. Combinadas e hitos (PRA, DD2, TD3)',
+    shortType: 'Combinada',
+  },
+  {
+    id: 'shooting_eff',
+    label: '4. Porcentajes y eficiencia de tiro',
+    shortType: 'Eficiencia %',
+  },
+  {
+    id: 'ratios_per36',
+    label: '5. Ratios de creación, ritmo /36m y valoración',
+    shortType: 'Ratio',
+  },
+];
+
+function countDoubleDigitStats(g: PlayerGameLog): number {
+  let hits = 0;
+  if (g.points >= 10) hits += 1;
+  if (g.rebounds >= 10) hits += 1;
+  if (g.assists >= 10) hits += 1;
+  if (g.steals >= 10) hits += 1;
+  if (g.blocks >= 10) hits += 1;
+  return hits;
+}
+
+function evalThresholdOp(
+  val: number,
+  op: ThresholdOperator,
+  target: number
+): boolean {
+  if (op === 'gt') return val > target;
+  if (op === 'gte') return val >= target;
+  if (op === 'lte') return val <= target;
+  return val < target;
+}
+
+function getOperatorSymbol(op: ThresholdOperator): string {
+  if (op === 'gt') return '>';
+  if (op === 'gte') return '≥';
+  if (op === 'lte') return '≤';
+  return '<';
+}
+
 const STREAK_METRIC_OPTIONS: StreakMetricOption[] = [
-  // Grupo 1: Ratios y Eficiencia
+  // 1. Estadísticas básicas por partido (12)
+  {
+    id: 'points',
+    group: 'basic_counting',
+    shortLabel: 'PTS',
+    label: 'PTS · Puntos anotados',
+    helpKey: 'ptsBase',
+    min: 5,
+    max: 50,
+    step: 1,
+    defaultThreshold: 20,
+    defaultOperator: 'gte',
+    unit: ' PTS',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.points,
+  },
+  {
+    id: 'rebounds',
+    group: 'basic_counting',
+    shortLabel: 'REB',
+    label: 'REB · Rebotes totales',
+    helpKey: 'rebBase',
+    min: 2,
+    max: 20,
+    step: 1,
+    defaultThreshold: 8,
+    defaultOperator: 'gte',
+    unit: ' REB',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.rebounds,
+  },
+  {
+    id: 'dreb',
+    group: 'basic_counting',
+    shortLabel: 'DR',
+    label: 'DR · Rebotes defensivos',
+    helpKey: 'drebBase',
+    min: 2,
+    max: 16,
+    step: 1,
+    defaultThreshold: 6,
+    defaultOperator: 'gte',
+    unit: ' DR',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.dreb,
+  },
+  {
+    id: 'oreb',
+    group: 'basic_counting',
+    shortLabel: 'OR',
+    label: 'OR · Rebotes ofensivos',
+    helpKey: 'orebBase',
+    min: 1,
+    max: 9,
+    step: 1,
+    defaultThreshold: 3,
+    defaultOperator: 'gte',
+    unit: ' OR',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.oreb,
+  },
+  {
+    id: 'assists',
+    group: 'basic_counting',
+    shortLabel: 'AST',
+    label: 'AST · Asistencias',
+    helpKey: 'astBase',
+    min: 2,
+    max: 16,
+    step: 1,
+    defaultThreshold: 7,
+    defaultOperator: 'gte',
+    unit: ' AST',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.assists,
+  },
+  {
+    id: 'steals',
+    group: 'basic_counting',
+    shortLabel: 'ROB',
+    label: 'ROB · Robos de balón',
+    helpKey: 'steals',
+    min: 1,
+    max: 6,
+    step: 1,
+    defaultThreshold: 2,
+    defaultOperator: 'gte',
+    unit: ' ROB',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.steals,
+  },
+  {
+    id: 'blocks',
+    group: 'basic_counting',
+    shortLabel: 'TAP',
+    label: 'TAP · Tapones',
+    helpKey: 'blocks',
+    min: 1,
+    max: 6,
+    step: 1,
+    defaultThreshold: 2,
+    defaultOperator: 'gte',
+    unit: ' TAP',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.blocks,
+  },
+  {
+    id: 'stocks',
+    group: 'basic_counting',
+    shortLabel: 'STK',
+    label: 'STK · Robos + Tapones (Stocks)',
+    helpKey: 'stocksBase',
+    min: 1,
+    max: 8,
+    step: 1,
+    defaultThreshold: 3,
+    defaultOperator: 'gte',
+    unit: ' STK',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.stocks,
+  },
+  {
+    id: 'turnovers',
+    group: 'basic_counting',
+    shortLabel: 'PER',
+    label: 'PER · Pérdidas de balón',
+    helpKey: 'tov',
+    min: 0,
+    max: 9,
+    step: 1,
+    defaultThreshold: 2,
+    defaultOperator: 'lte',
+    lowerIsBetter: true,
+    unit: ' PER',
+    decimals: 1,
+    gameDecimals: 0,
+    qualificationNote:
+      'Exige ≥15 MIN (usa ≤ para seguridad o ≥ para exceso de pérdidas)',
+    qualifies: (g) => g.minutes >= 15,
+    getValue: (g) => g.turnovers,
+  },
+  {
+    id: 'fouls',
+    group: 'basic_counting',
+    shortLabel: 'FP',
+    label: 'FP · Faltas personales cometidas',
+    helpKey: 'personalFouls',
+    min: 0,
+    max: 6,
+    step: 1,
+    defaultThreshold: 2,
+    defaultOperator: 'lte',
+    lowerIsBetter: true,
+    unit: ' FP',
+    decimals: 1,
+    gameDecimals: 0,
+    qualificationNote:
+      'Exige ≥15 MIN (usa ≤ para disciplina o ≥ para problemas de faltas)',
+    qualifies: (g) => g.minutes >= 15,
+    getValue: (g) => g.fouls,
+  },
+  {
+    id: 'plusMinus',
+    group: 'basic_counting',
+    shortLabel: '+/-',
+    label: '+/- · Impacto Más / Menos en pista',
+    helpKey: 'plusMinusBase',
+    min: -15,
+    max: 25,
+    step: 1,
+    defaultThreshold: 5,
+    defaultOperator: 'gte',
+    unit: '',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.plusMinus,
+  },
+  {
+    id: 'minutes',
+    group: 'basic_counting',
+    shortLabel: 'MIN',
+    label: 'MIN · Minutos jugados',
+    helpKey: 'minBase',
+    min: 15,
+    max: 44,
+    step: 1,
+    defaultThreshold: 34,
+    defaultOperator: 'gte',
+    unit: ' MIN',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.minutes,
+  },
+
+  // 2. Volumen de tiro y conversión (9)
+  {
+    id: 'fg3m',
+    group: 'shooting_vol',
+    shortLabel: '3PM',
+    label: '3PM · Triples anotados',
+    helpKey: 'fg3m',
+    min: 1,
+    max: 10,
+    step: 1,
+    defaultThreshold: 3,
+    defaultOperator: 'gte',
+    unit: ' 3PM',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.fg3m,
+  },
+  {
+    id: 'fg3a',
+    group: 'shooting_vol',
+    shortLabel: '3PA',
+    label: '3PA · Triples intentados',
+    helpKey: 'fg3a',
+    min: 2,
+    max: 16,
+    step: 1,
+    defaultThreshold: 7,
+    defaultOperator: 'gte',
+    unit: ' 3PA',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.fg3a,
+  },
+  {
+    id: 'fgm',
+    group: 'shooting_vol',
+    shortLabel: 'TCM',
+    label: 'TCM · Tiros de campo anotados',
+    helpKey: 'fgmMade',
+    min: 3,
+    max: 18,
+    step: 1,
+    defaultThreshold: 8,
+    defaultOperator: 'gte',
+    unit: ' TCM',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.fgm,
+  },
+  {
+    id: 'fga',
+    group: 'shooting_vol',
+    shortLabel: 'TCI',
+    label: 'TCI · Tiros de campo intentados',
+    helpKey: 'fga',
+    min: 6,
+    max: 30,
+    step: 1,
+    defaultThreshold: 16,
+    defaultOperator: 'gte',
+    unit: ' TCI',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.fga,
+  },
+  {
+    id: 'fg2m',
+    group: 'shooting_vol',
+    shortLabel: 'T2M',
+    label: 'T2M · Tiros de 2 puntos anotados',
+    helpKey: 'fg2m',
+    min: 2,
+    max: 15,
+    step: 1,
+    defaultThreshold: 6,
+    defaultOperator: 'gte',
+    unit: ' T2M',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => Math.max(0, g.fgm - g.fg3m),
+  },
+  {
+    id: 'fg2a',
+    group: 'shooting_vol',
+    shortLabel: 'T2I',
+    label: 'T2I · Tiros de 2 puntos intentados',
+    helpKey: 'fg2a',
+    min: 4,
+    max: 24,
+    step: 1,
+    defaultThreshold: 10,
+    defaultOperator: 'gte',
+    unit: ' T2I',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => Math.max(0, g.fga - g.fg3a),
+  },
+  {
+    id: 'ftm',
+    group: 'shooting_vol',
+    shortLabel: 'TLM',
+    label: 'TLM · Tiros libres anotados',
+    helpKey: 'ftmMade',
+    min: 2,
+    max: 16,
+    step: 1,
+    defaultThreshold: 6,
+    defaultOperator: 'gte',
+    unit: ' TLM',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.ftm,
+  },
+  {
+    id: 'fta',
+    group: 'shooting_vol',
+    shortLabel: 'TLI',
+    label: 'TLI · Tiros libres intentados',
+    helpKey: 'fta',
+    min: 2,
+    max: 18,
+    step: 1,
+    defaultThreshold: 7,
+    defaultOperator: 'gte',
+    unit: ' TLI',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.fta,
+  },
+  {
+    id: 'tsa',
+    group: 'shooting_vol',
+    shortLabel: 'TSA',
+    label: 'TSA · Posesiones de tiro lanzadas (FGA + 0.44×FTA)',
+    helpKey: 'tsaVolume',
+    min: 8,
+    max: 34,
+    step: 1,
+    defaultThreshold: 18,
+    defaultOperator: 'gte',
+    unit: ' TSA',
+    decimals: 1,
+    gameDecimals: 1,
+    getValue: (g) => g.fga + 0.44 * g.fta,
+  },
+
+  // 3. Combinadas e hitos (6)
+  {
+    id: 'pra',
+    group: 'combos_milestones',
+    shortLabel: 'PRA',
+    label: 'PRA · Puntos + Rebotes + Asistencias',
+    helpKey: 'pra',
+    min: 15,
+    max: 65,
+    step: 1,
+    defaultThreshold: 32,
+    defaultOperator: 'gte',
+    unit: ' PRA',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.pra,
+  },
+  {
+    id: 'ptsReb',
+    group: 'combos_milestones',
+    shortLabel: 'PTS+REB',
+    label: 'PTS+REB · Puntos + Rebotes',
+    helpKey: 'prCombo',
+    min: 12,
+    max: 55,
+    step: 1,
+    defaultThreshold: 26,
+    defaultOperator: 'gte',
+    unit: ' P+R',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.points + g.rebounds,
+  },
+  {
+    id: 'ptsAst',
+    group: 'combos_milestones',
+    shortLabel: 'PTS+AST',
+    label: 'PTS+AST · Puntos + Asistencias',
+    helpKey: 'paCombo',
+    min: 12,
+    max: 55,
+    step: 1,
+    defaultThreshold: 26,
+    defaultOperator: 'gte',
+    unit: ' P+A',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.points + g.assists,
+  },
+  {
+    id: 'rebAst',
+    group: 'combos_milestones',
+    shortLabel: 'REB+AST',
+    label: 'REB+AST · Rebotes + Asistencias',
+    helpKey: 'raCombo',
+    min: 6,
+    max: 28,
+    step: 1,
+    defaultThreshold: 12,
+    defaultOperator: 'gte',
+    unit: ' R+A',
+    decimals: 1,
+    gameDecimals: 0,
+    getValue: (g) => g.rebounds + g.assists,
+  },
+  {
+    id: 'doubleDouble',
+    group: 'combos_milestones',
+    shortLabel: 'DD2',
+    label: 'DD2 · Doble-Doble logrado en el partido',
+    helpKey: 'doubleDoubles',
+    min: 1,
+    max: 1,
+    step: 1,
+    defaultThreshold: 1,
+    defaultOperator: 'gte',
+    unit: ' DD2',
+    decimals: 2,
+    gameDecimals: 0,
+    qualificationNote: '1 = logró Doble-Doble (≥10 en 2 categorías), 0 = no',
+    getValue: (g) => (countDoubleDigitStats(g) >= 2 ? 1 : 0),
+  },
+  {
+    id: 'tripleDouble',
+    group: 'combos_milestones',
+    shortLabel: 'TD3',
+    label: 'TD3 · Triple-Doble logrado en el partido',
+    helpKey: 'tripleDoubles',
+    min: 1,
+    max: 1,
+    step: 1,
+    defaultThreshold: 1,
+    defaultOperator: 'gte',
+    unit: ' TD3',
+    decimals: 2,
+    gameDecimals: 0,
+    qualificationNote: '1 = logró Triple-Doble (≥10 en 3 categorías), 0 = no',
+    getValue: (g) => (countDoubleDigitStats(g) >= 3 ? 1 : 0),
+  },
+
+  // 4. Porcentajes y eficiencia de tiro (9)
   {
     id: 'tsPct',
-    group: 'ratios',
+    group: 'shooting_eff',
     shortLabel: 'TS%',
     label: 'TS% · Acierto Real (True Shooting %)',
     helpKey: 'tsPct',
-    min: 45,
+    min: 40,
     max: 80,
     step: 1,
     defaultThreshold: 60,
+    defaultOperator: 'gt',
     unit: '%',
     decimals: 1,
     gameDecimals: 1,
@@ -83,14 +604,15 @@ const STREAK_METRIC_OPTIONS: StreakMetricOption[] = [
   },
   {
     id: 'efgPct',
-    group: 'ratios',
+    group: 'shooting_eff',
     shortLabel: 'eFG%',
     label: 'eFG% · Tiro de Campo Efectivo',
     helpKey: 'efgPct',
-    min: 40,
+    min: 35,
     max: 80,
     step: 1,
     defaultThreshold: 58,
+    defaultOperator: 'gt',
     unit: '%',
     decimals: 1,
     gameDecimals: 1,
@@ -100,14 +622,15 @@ const STREAK_METRIC_OPTIONS: StreakMetricOption[] = [
   },
   {
     id: 'fgPct',
-    group: 'ratios',
+    group: 'shooting_eff',
     shortLabel: 'TC%',
     label: 'TC% · % Tiros de Campo',
     helpKey: 'fgPct',
-    min: 35,
+    min: 30,
     max: 75,
     step: 1,
     defaultThreshold: 50,
+    defaultOperator: 'gte',
     unit: '%',
     decimals: 1,
     gameDecimals: 1,
@@ -116,15 +639,37 @@ const STREAK_METRIC_OPTIONS: StreakMetricOption[] = [
     getValue: (g) => g.fgPct,
   },
   {
+    id: 'fg2Pct',
+    group: 'shooting_eff',
+    shortLabel: 'T2%',
+    label: 'T2% · % Acierto en Tiros de 2 puntos',
+    helpKey: 'fg2Pct',
+    min: 35,
+    max: 80,
+    step: 1,
+    defaultThreshold: 58,
+    defaultOperator: 'gte',
+    unit: '%',
+    decimals: 1,
+    gameDecimals: 1,
+    qualificationNote: 'Exige ≥4 tiros de 2 intentados en el partido',
+    qualifies: (g) => g.fga - g.fg3a >= 4,
+    getValue: (g) => {
+      const fg2a = g.fga - g.fg3a;
+      return fg2a > 0 ? ((g.fgm - g.fg3m) / fg2a) * 100 : 0;
+    },
+  },
+  {
     id: 'fg3Pct',
-    group: 'ratios',
+    group: 'shooting_eff',
     shortLabel: '3P%',
     label: '3P% · % Acierto en Triples',
     helpKey: 'fg3Pct',
-    min: 25,
+    min: 20,
     max: 70,
     step: 1,
     defaultThreshold: 40,
+    defaultOperator: 'gte',
     unit: '%',
     decimals: 1,
     gameDecimals: 1,
@@ -134,14 +679,15 @@ const STREAK_METRIC_OPTIONS: StreakMetricOption[] = [
   },
   {
     id: 'ftPct',
-    group: 'ratios',
+    group: 'shooting_eff',
     shortLabel: 'TL%',
     label: 'TL% · % Tiros Libres',
     helpKey: 'ftPct',
-    min: 60,
+    min: 50,
     max: 100,
     step: 1,
     defaultThreshold: 85,
+    defaultOperator: 'gte',
     unit: '%',
     decimals: 1,
     gameDecimals: 1,
@@ -150,15 +696,72 @@ const STREAK_METRIC_OPTIONS: StreakMetricOption[] = [
     getValue: (g) => g.ftPct,
   },
   {
+    id: 'ptsPerShot',
+    group: 'shooting_eff',
+    shortLabel: 'PTS/TCI',
+    label: 'PTS/TCI · Puntos por Tiro de Campo Intentado',
+    helpKey: 'ptsPerShot',
+    min: 0.9,
+    max: 1.9,
+    step: 0.05,
+    defaultThreshold: 1.35,
+    defaultOperator: 'gte',
+    unit: '',
+    decimals: 2,
+    gameDecimals: 2,
+    qualificationNote: 'Exige ≥5 tiros de campo intentados en el partido',
+    qualifies: (g) => g.fga >= 5,
+    getValue: (g) => (g.fga > 0 ? g.points / g.fga : 0),
+  },
+  {
+    id: 'threeRate',
+    group: 'shooting_eff',
+    shortLabel: '3PAr',
+    label: '3PAr · % Volumen de Triples (3PA / FGA)',
+    helpKey: 'threeRatio',
+    min: 15,
+    max: 85,
+    step: 1,
+    defaultThreshold: 50,
+    defaultOperator: 'gte',
+    unit: '%',
+    decimals: 1,
+    gameDecimals: 1,
+    qualificationNote: 'Exige ≥5 tiros de campo intentados en el partido',
+    qualifies: (g) => g.fga >= 5,
+    getValue: (g) => (g.fga > 0 ? (g.fg3a / g.fga) * 100 : 0),
+  },
+  {
+    id: 'ftRate',
+    group: 'shooting_eff',
+    shortLabel: 'FTr',
+    label: 'FTr · Ratio de Tiros Libres (FTA / FGA)',
+    helpKey: 'ftr',
+    min: 10,
+    max: 80,
+    step: 1,
+    defaultThreshold: 35,
+    defaultOperator: 'gte',
+    unit: '%',
+    decimals: 1,
+    gameDecimals: 1,
+    qualificationNote: 'Exige ≥5 tiros de campo intentados en el partido',
+    qualifies: (g) => g.fga >= 5,
+    getValue: (g) => (g.fga > 0 ? (g.fta / g.fga) * 100 : 0),
+  },
+
+  // 5. Ratios de creación, ritmo por 36m y valoración (13)
+  {
     id: 'astTo',
-    group: 'ratios',
+    group: 'ratios_per36',
     shortLabel: 'AST/PER',
-    label: 'AST/PER · Ratio Asistencias por Pérdida',
+    label: 'AST/PER · Asistencias/Pérdidas (Ratio creación/seguridad)',
     helpKey: 'astTo',
-    min: 1,
-    max: 8,
+    min: 0.5,
+    max: 10,
     step: 0.5,
     defaultThreshold: 3,
+    defaultOperator: 'gte',
     unit: 'x',
     decimals: 2,
     gameDecimals: 1,
@@ -167,66 +770,76 @@ const STREAK_METRIC_OPTIONS: StreakMetricOption[] = [
     getValue: (g) => (g.turnovers === 0 ? g.assists : g.assists / g.turnovers),
   },
   {
-    id: 'ptsPerMin',
-    group: 'ratios',
-    shortLabel: 'PTS/MIN',
-    label: 'PTS/MIN · Ratio Puntos por Minuto',
-    helpKey: 'ptsPerMin',
-    min: 0.4,
-    max: 1.4,
-    step: 0.05,
-    defaultThreshold: 0.75,
-    unit: '',
-    decimals: 2,
-    gameDecimals: 2,
-    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
-    qualifies: (g) => g.minutes >= 12,
-    getValue: (g) => (g.minutes > 0 ? g.points / g.minutes : 0),
-  },
-  {
-    id: 'rebPer36',
-    group: 'ratios',
-    shortLabel: 'REB/36',
-    label: 'REB/36 · Ratio Rebotes por 36 min',
-    helpKey: 'rebPer36',
-    min: 4,
-    max: 20,
-    step: 0.5,
-    defaultThreshold: 10,
-    unit: '',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
-    qualifies: (g) => g.minutes >= 12,
-    getValue: (g) => (g.minutes > 0 ? (g.rebounds / g.minutes) * 36 : 0),
-  },
-  {
-    id: 'astPer36',
-    group: 'ratios',
-    shortLabel: 'AST/36',
-    label: 'AST/36 · Ratio Asistencias por 36 min',
-    helpKey: 'astPer36',
+    id: 'tovPctEst',
+    group: 'ratios_per36',
+    shortLabel: 'TOV%',
+    label: 'TOV% · % Pérdidas sobre posesiones jugadas',
+    helpKey: 'tovRatioEst',
     min: 3,
-    max: 15,
-    step: 0.5,
-    defaultThreshold: 8,
-    unit: '',
+    max: 30,
+    step: 1,
+    defaultThreshold: 10,
+    defaultOperator: 'lte',
+    lowerIsBetter: true,
+    unit: '%',
+    decimals: 1,
+    gameDecimals: 1,
+    qualificationNote:
+      'Exige ≥6 posesiones usadas (usa ≤ para seguridad o ≥ para exceso)',
+    qualifies: (g) => g.fga + 0.44 * g.fta + g.turnovers >= 6,
+    getValue: (g) => {
+      const denom = g.fga + 0.44 * g.fta + g.turnovers;
+      return denom > 0 ? (g.turnovers / denom) * 100 : 0;
+    },
+  },
+  {
+    id: 'astRatioEst',
+    group: 'ratios_per36',
+    shortLabel: 'AST Ratio',
+    label: 'AST Ratio · % Posesiones que acaban en asistencia',
+    helpKey: 'astRatio',
+    min: 8,
+    max: 50,
+    step: 1,
+    defaultThreshold: 25,
+    defaultOperator: 'gte',
+    unit: '%',
     decimals: 1,
     gameDecimals: 1,
     qualificationNote: 'Exige ≥12 minutos jugados en el partido',
     qualifies: (g) => g.minutes >= 12,
-    getValue: (g) => (g.minutes > 0 ? (g.assists / g.minutes) * 36 : 0),
+    getValue: (g) => {
+      const denom = g.fga + 0.44 * g.fta + g.assists + g.turnovers;
+      return denom > 0 ? (g.assists / denom) * 100 : 0;
+    },
+  },
+  {
+    id: 'gameScore',
+    group: 'ratios_per36',
+    shortLabel: 'GmSc',
+    label: 'GmSc · Valoración Game Score (Hollinger)',
+    helpKey: 'gmSc',
+    min: 5,
+    max: 42,
+    step: 1,
+    defaultThreshold: 20,
+    defaultOperator: 'gte',
+    unit: '',
+    decimals: 1,
+    gameDecimals: 1,
+    getValue: (g) => g.gameScore,
   },
   {
     id: 'usgEst',
-    group: 'ratios',
+    group: 'ratios_per36',
     shortLabel: 'USG%',
     label: 'USG% · Ratio de Uso Ofensivo',
     helpKey: 'usgPct',
-    min: 15,
-    max: 42,
+    min: 12,
+    max: 44,
     step: 1,
     defaultThreshold: 28,
+    defaultOperator: 'gte',
     unit: '%',
     decimals: 1,
     gameDecimals: 1,
@@ -235,199 +848,164 @@ const STREAK_METRIC_OPTIONS: StreakMetricOption[] = [
     getValue: (g) => g.usgEst,
   },
   {
-    id: 'gameScore',
-    group: 'ratios',
-    shortLabel: 'GmSc',
-    label: 'GmSc · Valoración Game Score',
-    helpKey: 'gmSc',
-    min: 10,
-    max: 40,
+    id: 'ptsPerMin',
+    group: 'ratios_per36',
+    shortLabel: 'PTS/MIN',
+    label: 'PTS/MIN · Ratio Puntos por Minuto',
+    helpKey: 'ptsPerMin',
+    min: 0.35,
+    max: 1.4,
+    step: 0.05,
+    defaultThreshold: 0.75,
+    defaultOperator: 'gte',
+    unit: '',
+    decimals: 2,
+    gameDecimals: 2,
+    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
+    qualifies: (g) => g.minutes >= 12,
+    getValue: (g) => (g.minutes > 0 ? g.points / g.minutes : 0),
+  },
+  {
+    id: 'ptsPer36',
+    group: 'ratios_per36',
+    shortLabel: 'PTS/36',
+    label: 'PTS/36 · Puntos por 36 minutos',
+    helpKey: 'ptsPer36',
+    min: 12,
+    max: 44,
     step: 1,
-    defaultThreshold: 20,
+    defaultThreshold: 26,
+    defaultOperator: 'gte',
     unit: '',
     decimals: 1,
     gameDecimals: 1,
-    getValue: (g) => g.gameScore,
-  },
-  // Grupo 2: Estadísticas por Partido
-  {
-    id: 'points',
-    group: 'counting',
-    shortLabel: 'PTS',
-    label: 'PTS · Puntos anotados',
-    helpKey: 'ptsBase',
-    min: 8,
-    max: 45,
-    step: 1,
-    defaultThreshold: 20,
-    unit: ' PTS',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.points,
+    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
+    qualifies: (g) => g.minutes >= 12,
+    getValue: (g) => (g.minutes > 0 ? (g.points / g.minutes) * 36 : 0),
   },
   {
-    id: 'rebounds',
-    group: 'counting',
-    shortLabel: 'REB',
-    label: 'REB · Rebotes totales',
-    helpKey: 'rebBase',
-    min: 3,
-    max: 18,
-    step: 1,
-    defaultThreshold: 8,
-    unit: ' REB',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.rebounds,
-  },
-  {
-    id: 'oreb',
-    group: 'counting',
-    shortLabel: 'OR',
-    label: 'OR · Rebotes ofensivos',
-    helpKey: 'orebBase',
-    min: 1,
-    max: 8,
-    step: 1,
-    defaultThreshold: 3,
-    unit: ' OR',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.oreb,
-  },
-  {
-    id: 'assists',
-    group: 'counting',
-    shortLabel: 'AST',
-    label: 'AST · Asistencias',
-    helpKey: 'astBase',
-    min: 3,
-    max: 15,
-    step: 1,
-    defaultThreshold: 7,
-    unit: ' AST',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.assists,
-  },
-  {
-    id: 'fg3m',
-    group: 'counting',
-    shortLabel: '3PM',
-    label: '3PM · Triples anotados',
-    helpKey: 'fg3m',
-    min: 1,
-    max: 9,
-    step: 1,
-    defaultThreshold: 3,
-    unit: ' 3PM',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.fg3m,
-  },
-  {
-    id: 'pra',
-    group: 'counting',
-    shortLabel: 'PRA',
-    label: 'PRA · Puntos + Rebotes + Asistencias',
-    helpKey: 'pra',
-    min: 15,
-    max: 60,
-    step: 1,
-    defaultThreshold: 32,
-    unit: ' PRA',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.pra,
-  },
-  {
-    id: 'stocks',
-    group: 'counting',
-    shortLabel: 'STK',
-    label: 'STK · Robos + Tapones (Stocks)',
-    helpKey: 'stocksBase',
-    min: 1,
-    max: 6,
-    step: 1,
-    defaultThreshold: 2,
-    unit: ' STK',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.stocks,
-  },
-  {
-    id: 'steals',
-    group: 'counting',
-    shortLabel: 'ROB',
-    label: 'ROB · Robos de balón',
-    helpKey: 'steals',
-    min: 1,
-    max: 5,
-    step: 1,
-    defaultThreshold: 2,
-    unit: ' ROB',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.steals,
-  },
-  {
-    id: 'blocks',
-    group: 'counting',
-    shortLabel: 'TAP',
-    label: 'TAP · Tapones',
-    helpKey: 'blocks',
-    min: 1,
-    max: 5,
-    step: 1,
-    defaultThreshold: 2,
-    unit: ' TAP',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.blocks,
-  },
-  {
-    id: 'plusMinus',
-    group: 'counting',
-    shortLabel: '+/-',
-    label: '+/- · Impacto Más / Menos en pista',
-    helpKey: 'plusMinusBase',
-    min: -5,
-    max: 20,
-    step: 1,
-    defaultThreshold: 5,
+    id: 'rebPer36',
+    group: 'ratios_per36',
+    shortLabel: 'REB/36',
+    label: 'REB/36 · Rebotes totales por 36 minutos',
+    helpKey: 'rebPer36',
+    min: 4,
+    max: 22,
+    step: 0.5,
+    defaultThreshold: 11,
+    defaultOperator: 'gte',
     unit: '',
     decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.plusMinus,
+    gameDecimals: 1,
+    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
+    qualifies: (g) => g.minutes >= 12,
+    getValue: (g) => (g.minutes > 0 ? (g.rebounds / g.minutes) * 36 : 0),
   },
   {
-    id: 'minutes',
-    group: 'counting',
-    shortLabel: 'MIN',
-    label: 'MIN · Minutos jugados',
-    helpKey: 'minBase',
-    min: 20,
-    max: 42,
-    step: 1,
-    defaultThreshold: 34,
-    unit: ' MIN',
+    id: 'drebPer36',
+    group: 'ratios_per36',
+    shortLabel: 'DR/36',
+    label: 'DR/36 · Rebotes defensivos por 36 minutos',
+    helpKey: 'drebPer36',
+    min: 3,
+    max: 16,
+    step: 0.5,
+    defaultThreshold: 8.5,
+    defaultOperator: 'gte',
+    unit: '',
     decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.minutes,
+    gameDecimals: 1,
+    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
+    qualifies: (g) => g.minutes >= 12,
+    getValue: (g) => (g.minutes > 0 ? (g.dreb / g.minutes) * 36 : 0),
+  },
+  {
+    id: 'orebPer36',
+    group: 'ratios_per36',
+    shortLabel: 'OR/36',
+    label: 'OR/36 · Rebotes ofensivos por 36 minutos',
+    helpKey: 'orebPer36',
+    min: 1,
+    max: 10,
+    step: 0.5,
+    defaultThreshold: 3.5,
+    defaultOperator: 'gte',
+    unit: '',
+    decimals: 1,
+    gameDecimals: 1,
+    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
+    qualifies: (g) => g.minutes >= 12,
+    getValue: (g) => (g.minutes > 0 ? (g.oreb / g.minutes) * 36 : 0),
+  },
+  {
+    id: 'astPer36',
+    group: 'ratios_per36',
+    shortLabel: 'AST/36',
+    label: 'AST/36 · Asistencias por 36 minutos',
+    helpKey: 'astPer36',
+    min: 3,
+    max: 16,
+    step: 0.5,
+    defaultThreshold: 8,
+    defaultOperator: 'gte',
+    unit: '',
+    decimals: 1,
+    gameDecimals: 1,
+    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
+    qualifies: (g) => g.minutes >= 12,
+    getValue: (g) => (g.minutes > 0 ? (g.assists / g.minutes) * 36 : 0),
+  },
+  {
+    id: 'stocksPer36',
+    group: 'ratios_per36',
+    shortLabel: 'STK/36',
+    label: 'STK/36 · Robos + Tapones por 36 minutos',
+    helpKey: 'stocksPer36',
+    min: 1,
+    max: 8,
+    step: 0.5,
+    defaultThreshold: 3,
+    defaultOperator: 'gte',
+    unit: '',
+    decimals: 1,
+    gameDecimals: 1,
+    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
+    qualifies: (g) => g.minutes >= 12,
+    getValue: (g) => (g.minutes > 0 ? (g.stocks / g.minutes) * 36 : 0),
+  },
+  {
+    id: 'praPer36',
+    group: 'ratios_per36',
+    shortLabel: 'PRA/36',
+    label: 'PRA/36 · Puntos + Rebotes + Asistencias por 36m',
+    helpKey: 'praPer36',
+    min: 20,
+    max: 65,
+    step: 1,
+    defaultThreshold: 38,
+    defaultOperator: 'gte',
+    unit: '',
+    decimals: 1,
+    gameDecimals: 1,
+    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
+    qualifies: (g) => g.minutes >= 12,
+    getValue: (g) => (g.minutes > 0 ? (g.pra / g.minutes) * 36 : 0),
   },
 ];
 
 const QUICK_RATIO_CHIPS = [
-  'tsPct',
-  'efgPct',
-  'fg3Pct',
-  'astTo',
-  'ptsPerMin',
-  'gameScore',
   'points',
-  'pra',
+  'rebounds',
+  'dreb',
   'assists',
   'fg3m',
+  'turnovers',
+  'astTo',
+  'pra',
+  'tsPct',
+  'fg3Pct',
+  'stocks',
+  'gameScore',
 ];
 
 function formatMetricNumber(
@@ -522,6 +1100,9 @@ export function StreaksConsistencyView({
   const [customScrollTop, setCustomScrollTop] = useState<number>(0);
   const [mobileCustomScrollTop, setMobileCustomScrollTop] = useState<number>(0);
   const [mobileSlidersOpen, setMobileSlidersOpen] = useState<boolean>(true);
+  const [historyPlayerId, setHistoryPlayerId] = useState<string | null>(null);
+  const [showInlineHistoryChart, setShowInlineHistoryChart] =
+    useState<boolean>(true);
 
 
   const activeMetric = useMemo(
@@ -534,7 +1115,7 @@ export function StreaksConsistencyView({
   const secondaryMetric = useMemo(
     () =>
       STREAK_METRIC_OPTIONS.find((m) => m.id === secondaryMetricId) ||
-      STREAK_METRIC_OPTIONS[11],
+      STREAK_METRIC_OPTIONS[0],
     [secondaryMetricId]
   );
 
@@ -543,6 +1124,9 @@ export function StreaksConsistencyView({
     setSelectedMetricId(metricId);
     if (found) {
       setThresholdValue(found.defaultThreshold);
+      if (found.defaultOperator) {
+        setOperator(found.defaultOperator);
+      }
     }
   };
 
@@ -551,6 +1135,9 @@ export function StreaksConsistencyView({
     setSecondaryMetricId(metricId);
     if (found) {
       setSecondaryThresholdValue(found.defaultThreshold);
+      if (found.defaultOperator) {
+        setSecondaryOperator(found.defaultOperator);
+      }
     }
   };
 
@@ -558,14 +1145,18 @@ export function StreaksConsistencyView({
     const pQualifies = activeMetric.qualifies ? activeMetric.qualifies(g) : true;
     if (!pQualifies) return false;
     const pVal = activeMetric.getValue(g);
-    const pPasses = operator === 'gt' ? pVal > thresholdValue : pVal >= thresholdValue;
+    const pPasses = evalThresholdOp(pVal, operator, thresholdValue);
     if (!pPasses) return false;
 
     if (useSecondaryCondition) {
       const sQualifies = secondaryMetric.qualifies ? secondaryMetric.qualifies(g) : true;
       if (!sQualifies) return false;
       const sVal = secondaryMetric.getValue(g);
-      const sPasses = secondaryOperator === 'gt' ? sVal > secondaryThresholdValue : sVal >= secondaryThresholdValue;
+      const sPasses = evalThresholdOp(
+        sVal,
+        secondaryOperator,
+        secondaryThresholdValue
+      );
       if (!sPasses) return false;
     }
 
@@ -633,7 +1224,7 @@ export function StreaksConsistencyView({
       out.push({
         playerId: player.id,
         playerName: player.name,
-        teamAbbr: player.teamAbbr,
+        teamAbbr: latest.teamAbbr || player.teamAbbr,
         position: player.position || '—',
         gamesPlayed: player.games.length,
         count,
@@ -768,12 +1359,24 @@ export function StreaksConsistencyView({
     }
   };
 
-  const operatorSymbol = operator === 'gt' ? '>' : '≥';
+  const operatorSymbol = getOperatorSymbol(operator);
+  const secondaryOperatorSymbol = getOperatorSymbol(secondaryOperator);
   const formattedThreshold = formatMetricNumber(
     thresholdValue,
     activeMetric.step < 1 ? (activeMetric.step < 0.1 ? 2 : 1) : 0,
     activeMetric.unit
   );
+  const isUpperDirection = operator === 'gt' || operator === 'gte';
+  const conditionToneClass = activeMetric.lowerIsBetter
+    ? isUpperDirection
+      ? 'text-rose-400'
+      : 'text-emerald-400'
+    : isUpperDirection
+    ? 'text-emerald-400'
+    : 'text-amber-400';
+  const activeGroupMeta =
+    STREAK_METRIC_GROUPS.find((g) => g.id === activeMetric.group) ||
+    STREAK_METRIC_GROUPS[0];
 
   return (
     <div className="space-y-5">
@@ -814,34 +1417,57 @@ export function StreaksConsistencyView({
             <MetricInfoTooltip helpKey="consecutiveStreak" align="right" />
           </div>
           {subTab === 'streaks' && streakEvalMode === 'custom' ? (
-            <>
-              <p className="mt-1 text-base sm:text-lg font-semibold text-slate-100 truncate">
-                {topCustomRow ? topCustomRow.playerName : 'Sin coincidencias'}
-              </p>
-              <p className="mt-1 text-[11px] sm:text-xs font-mono tabular-nums text-emerald-400 truncate">
-                {topCustomRow
-                  ? `${topCustomRow.count} PJ · Media ${formatMetricNumber(
-                      topCustomRow.streakAvg,
-                      activeMetric.decimals,
-                      activeMetric.unit
-                    )}`
-                  : 'Baja el umbral o PJ'}
-              </p>
-            </>
+            <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+              {topCustomRow && (
+                <PlayerAvatar
+                  playerId={topCustomRow.playerId}
+                  name={topCustomRow.playerName}
+                  teamAbbr={topCustomRow.teamAbbr}
+                  showTeamBadge
+                  size="sm"
+                />
+              )}
+              <div className="min-w-0">
+                <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                  {topCustomRow ? topCustomRow.playerName : 'Sin coincidencias'}
+                </p>
+                <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-emerald-400 truncate">
+                  {topCustomRow
+                    ? `${topCustomRow.count} PJ · Media ${formatMetricNumber(
+                        topCustomRow.streakAvg,
+                        activeMetric.decimals,
+                        activeMetric.unit
+                      )}`
+                    : 'Baja el umbral o PJ'}
+                </p>
+              </div>
+            </div>
           ) : (
-            <>
-              <p className="mt-1 text-base sm:text-lg font-semibold text-slate-100 truncate">
-                {topStreak ? topStreak.entityName : '—'}
-              </p>
-              <p className="mt-1 text-[11px] sm:text-xs font-mono tabular-nums text-emerald-400 truncate">
-                {topStreak
-                  ? `${topStreak.count} PJ · ${humanThresholdLabel(
-                      topStreak,
-                      experienceMode
-                    )}`
-                  : '—'}
-              </p>
-            </>
+            <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+              {topStreak && (
+                <EntityBadge
+                  entityType={topStreak.entityType}
+                  entityId={topStreak.entityId}
+                  name={topStreak.entityName}
+                  teamAbbr={topStreak.teamAbbr}
+                  showTeamBadge={topStreak.entityType === 'player'}
+                  size="sm"
+                />
+              )}
+              <div className="min-w-0">
+                <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                  {topStreak ? topStreak.entityName : '—'}
+                </p>
+                <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-emerald-400 truncate">
+                  {topStreak
+                    ? `${topStreak.count} PJ · ${humanThresholdLabel(
+                        topStreak,
+                        experienceMode
+                      )}`
+                    : '—'}
+                </p>
+              </div>
+            </div>
           )}
         </div>
 
@@ -850,14 +1476,27 @@ export function StreaksConsistencyView({
             <span className="truncate">Más fiable (Reloj suizo)</span>
             <MetricInfoTooltip helpKey="consistencyScore" />
           </div>
-          <p className="mt-1 text-base sm:text-lg font-semibold text-slate-100 truncate">
-            {mostConsistent ? mostConsistent.entityName : '—'}
-          </p>
-          <p className="mt-1 text-[11px] sm:text-xs font-mono tabular-nums text-orange-400 truncate">
-            {mostConsistent
-              ? `Nota ${mostConsistent.consistencyScore}/100 · ${mostConsistent.ptsFloor}-${mostConsistent.ptsCeiling} PTS`
-              : '—'}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+            {mostConsistent && (
+              <PlayerAvatar
+                playerId={mostConsistent.entityId}
+                name={mostConsistent.entityName}
+                teamAbbr={mostConsistent.teamAbbr}
+                showTeamBadge
+                size="sm"
+              />
+            )}
+            <div className="min-w-0">
+              <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                {mostConsistent ? mostConsistent.entityName : '—'}
+              </p>
+              <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-orange-400 truncate">
+                {mostConsistent
+                  ? `Nota ${mostConsistent.consistencyScore}/100 · ${mostConsistent.ptsFloor}-${mostConsistent.ptsCeiling} PTS`
+                  : '—'}
+              </p>
+            </div>
+          </div>
         </div>
 
         <div className="p-3.5 sm:p-4">
@@ -865,14 +1504,27 @@ export function StreaksConsistencyView({
             <span className="truncate">Más impredecible</span>
             <MetricInfoTooltip helpKey="floorCeiling" align="right" />
           </div>
-          <p className="mt-1 text-base sm:text-lg font-semibold text-slate-100 truncate">
-            {mostVolatile ? mostVolatile.entityName : '—'}
-          </p>
-          <p className="mt-1 text-[11px] sm:text-xs font-mono tabular-nums text-amber-400 truncate">
-            {mostVolatile
-              ? `Nota ${mostVolatile.consistencyScore}/100 · ${mostVolatile.ptsFloor}-${mostVolatile.ptsCeiling} PTS`
-              : '—'}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+            {mostVolatile && (
+              <PlayerAvatar
+                playerId={mostVolatile.entityId}
+                name={mostVolatile.entityName}
+                teamAbbr={mostVolatile.teamAbbr}
+                showTeamBadge
+                size="sm"
+              />
+            )}
+            <div className="min-w-0">
+              <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                {mostVolatile ? mostVolatile.entityName : '—'}
+              </p>
+              <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-amber-400 truncate">
+                {mostVolatile
+                  ? `Nota ${mostVolatile.consistencyScore}/100 · ${mostVolatile.ptsFloor}-${mostVolatile.ptsCeiling} PTS`
+                  : '—'}
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -908,7 +1560,34 @@ export function StreaksConsistencyView({
                 ? `Más regulares (${consistencyRows.length})`
                 : `Índice consistencia (${consistencyRows.length})`}
             </button>
+            <button
+              type="button"
+              onClick={() => setSubTab('history')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                subTab === 'history'
+                  ? 'bg-orange-500 text-slate-950 font-semibold'
+                  : 'text-slate-300 hover:text-white hover:bg-[#182338]'
+              }`}
+            >
+              <TrendingUp className="w-3.5 h-3.5" />
+              <span>Historial de rachas (10 PJ)</span>
+            </button>
           </div>
+
+          {subTab !== 'history' && (
+            <button
+              type="button"
+              onClick={() => setShowInlineHistoryChart((v) => !v)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                showInlineHistoryChart
+                  ? 'bg-[#182338] border-orange-500/40 text-orange-300'
+                  : 'bg-[#131C2E] border-[#1E293B] text-slate-300 hover:text-white'
+              }`}
+            >
+              <TrendingUp className="w-3.5 h-3.5 text-orange-400" />
+              <span>{showInlineHistoryChart ? 'Ocultar curva 10 PJ' : 'Mostrar curva 10 PJ'}</span>
+            </button>
+          )}
 
           {subTab === 'streaks' && (
             <div className="flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
@@ -1074,42 +1753,42 @@ export function StreaksConsistencyView({
                     onChange={(e) => handleSelectSecondaryMetric(e.target.value)}
                     className="w-full px-3 py-1.5 text-xs bg-[#131C2E] border border-[#1E293B] rounded-lg text-slate-100 focus:outline-none focus:border-orange-500"
                   >
-                    <optgroup label="Ratios">
-                      {STREAK_METRIC_OPTIONS.filter((m) => m.group === 'ratios').map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="Estadísticas">
-                      {STREAK_METRIC_OPTIONS.filter((m) => m.group === 'counting').map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </optgroup>
+                    {STREAK_METRIC_GROUPS.map((grp) => (
+                      <optgroup key={grp.id} label={grp.label}>
+                        {STREAK_METRIC_OPTIONS.filter(
+                          (m) => m.group === grp.id
+                        ).map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
                   </select>
                 </div>
-                <div className="lg:col-span-7 flex items-center gap-3">
+                <div className="lg:col-span-7 flex items-center gap-2.5 sm:gap-3">
                   <div className="inline-flex items-center p-0.5 bg-[#131C2E] border border-[#1E293B] rounded-md shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => setSecondaryOperator('gt')}
-                      className={`px-2 py-0.5 text-[11px] rounded transition-colors ${
-                        secondaryOperator === 'gt' ? 'bg-orange-500 text-slate-950 font-semibold' : 'text-slate-400'
-                      }`}
-                    >
-                      &gt;
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSecondaryOperator('gte')}
-                      className={`px-2 py-0.5 text-[11px] rounded transition-colors ${
-                        secondaryOperator === 'gte' ? 'bg-orange-500 text-slate-950 font-semibold' : 'text-slate-400'
-                      }`}
-                    >
-                      ≥
-                    </button>
+                    {(
+                      [
+                        { id: 'gt', label: '>' },
+                        { id: 'gte', label: '≥' },
+                        { id: 'lte', label: '≤' },
+                        { id: 'lt', label: '<' },
+                      ] as const
+                    ).map((opBtn) => (
+                      <button
+                        key={opBtn.id}
+                        type="button"
+                        onClick={() => setSecondaryOperator(opBtn.id)}
+                        className={`px-2 py-0.5 text-[11px] font-mono rounded transition-colors ${
+                          secondaryOperator === opBtn.id
+                            ? 'bg-orange-500 text-slate-950 font-semibold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        {opBtn.label}
+                      </button>
+                    ))}
                   </div>
                   <input
                     type="range"
@@ -1121,8 +1800,16 @@ export function StreaksConsistencyView({
                     className="w-full accent-orange-500 cursor-pointer"
                   />
                   <span className="font-mono tabular-nums text-xs font-semibold text-orange-400 shrink-0 w-24 text-right">
-                    {secondaryOperator === 'gt' ? '>' : '≥'}{' '}
-                    {formatMetricNumber(secondaryThresholdValue, secondaryMetric.step < 1 ? 1 : 0, secondaryMetric.unit)}
+                    {secondaryOperatorSymbol}{' '}
+                    {formatMetricNumber(
+                      secondaryThresholdValue,
+                      secondaryMetric.step < 1
+                        ? secondaryMetric.step < 0.1
+                          ? 2
+                          : 1
+                        : 0,
+                      secondaryMetric.unit
+                    )}
                   </span>
                 </div>
               </div>
@@ -1196,14 +1883,16 @@ export function StreaksConsistencyView({
             <div className="lg:col-span-4 space-y-1.5">
               <div className="flex items-center justify-between gap-2 text-xs text-slate-300">
                 <span className="inline-flex items-center gap-1.5 font-medium">
-                  <span>Ratio o estadística a evaluar</span>
+                  <span>
+                    Ratio o estadística a evaluar ({STREAK_METRIC_OPTIONS.length})
+                  </span>
                   <MetricInfoTooltip
                     helpKey={activeMetric.helpKey}
                     align="left"
                   />
                 </span>
                 <span className="text-[11px] font-mono text-orange-400">
-                  {activeMetric.group === 'ratios' ? 'Ratio / %' : 'Acumulado'}
+                  {activeGroupMeta.shortType}
                 </span>
               </div>
               <select
@@ -1211,61 +1900,54 @@ export function StreaksConsistencyView({
                 onChange={(e) => handleSelectMetric(e.target.value)}
                 className="w-full px-3 py-2 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 focus:outline-none focus:border-orange-500 transition-colors"
               >
-                <optgroup label="Ratios y Eficiencia por partido">
-                  {STREAK_METRIC_OPTIONS.filter(
-                    (m) => m.group === 'ratios'
-                  ).map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.label}
-                    </option>
-                  ))}
-                </optgroup>
-                <optgroup label="Estadísticas por partido">
-                  {STREAK_METRIC_OPTIONS.filter(
-                    (m) => m.group === 'counting'
-                  ).map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.label}
-                    </option>
-                  ))}
-                </optgroup>
+                {STREAK_METRIC_GROUPS.map((grp) => (
+                  <optgroup key={grp.id} label={grp.label}>
+                    {STREAK_METRIC_OPTIONS.filter(
+                      (m) => m.group === grp.id
+                    ).map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
               </select>
             </div>
 
-            {/* Control 2: Quantity Slider (X) + Operator (> X / >= X) */}
+            {/* Control 2: Quantity Slider (X) + Operator (>, >=, <=, <) */}
             <div className="lg:col-span-5 space-y-1.5">
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                 <div className="inline-flex items-center gap-2">
                   <span className="text-slate-300 font-medium inline-flex items-center gap-1">
-                    <span>Cantidad por partido</span>
+                    <span>Cantidad</span>
                     <MetricInfoTooltip
                       helpKey={activeMetric.helpKey}
                       align="left"
                     />
                   </span>
                   <div className="inline-flex items-center p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-md">
-                    <button
-                      type="button"
-                      onClick={() => setOperator('gt')}
-                      className={`px-2 py-0.5 text-[11px] rounded transition-colors whitespace-nowrap ${
-                        operator === 'gt'
-                          ? 'bg-orange-500 text-slate-950 font-semibold'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      Más de (&gt;)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setOperator('gte')}
-                      className={`px-2 py-0.5 text-[11px] rounded transition-colors whitespace-nowrap ${
-                        operator === 'gte'
-                          ? 'bg-orange-500 text-slate-950 font-semibold'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      Al menos (≥)
-                    </button>
+                    {(
+                      [
+                        { id: 'gt', label: '>', title: 'Más de (>)' },
+                        { id: 'gte', label: '≥', title: 'Al menos (≥)' },
+                        { id: 'lte', label: '≤', title: 'Como mucho (≤)' },
+                        { id: 'lt', label: '<', title: 'Menos de (<)' },
+                      ] as const
+                    ).map((opBtn) => (
+                      <button
+                        key={opBtn.id}
+                        type="button"
+                        title={opBtn.title}
+                        onClick={() => setOperator(opBtn.id)}
+                        className={`px-2 py-0.5 text-[11px] font-mono rounded transition-colors whitespace-nowrap ${
+                          operator === opBtn.id
+                            ? 'bg-orange-500 text-slate-950 font-semibold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        {opBtn.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
@@ -1342,7 +2024,20 @@ export function StreaksConsistencyView({
         </div>
       )}
 
+      {/* Historial de Rachas (10-Game Progression Line Chart) */}
+      {(subTab === 'history' || showInlineHistoryChart) && (
+        <PlayerStreakHistoryChart
+          players={players}
+          selectedPlayerId={
+            historyPlayerId || topCustomRow?.playerId || players[0]?.id || null
+          }
+          onSelectPlayerId={(pid) => setHistoryPlayerId(pid)}
+          onInspectPlayer={(pid) => onInspectEntity('player', pid)}
+        />
+      )}
+
       {/* Row 3: Homogeneous Data Grid */}
+      {subTab !== 'history' && (
       <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
         {subTab === 'streaks' ? (
           streakEvalMode === 'custom' ? (
@@ -1416,7 +2111,7 @@ export function StreaksConsistencyView({
                           className="px-3.5 py-2.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors flex flex-col justify-between overflow-hidden"
                         >
                           <div className="flex items-start justify-between gap-2">
-                            <div className="flex items-start gap-2 min-w-0">
+                            <div className="flex items-center gap-2 min-w-0">
                               <button
                                 type="button"
                                 aria-label="Alternar seguimiento"
@@ -1434,6 +2129,13 @@ export function StreaksConsistencyView({
                                   }`}
                                 />
                               </button>
+                              <PlayerAvatar
+                                playerId={row.playerId}
+                                name={row.playerName}
+                                teamAbbr={row.teamAbbr}
+                                showTeamBadge
+                                size="sm"
+                              />
                               <div className="min-w-0">
                                 <div className="font-semibold text-sm text-slate-100 truncate">
                                   {row.playerName}
@@ -1592,19 +2294,33 @@ export function StreaksConsistencyView({
                               />
                             </button>
                           </td>
-                          <td className="py-2.5 px-3">
-                            <div className="font-medium text-slate-100 whitespace-nowrap">
-                              {row.playerName}
-                            </div>
-                            <div className="text-xs text-slate-400 whitespace-nowrap">
-                              {row.teamAbbr} · {row.position} · {row.gamesPlayed}{' '}
-                              PJ
+                          <td className="py-2 px-3">
+                            <div className="flex items-center gap-2.5">
+                              <PlayerAvatar
+                                playerId={row.playerId}
+                                name={row.playerName}
+                                teamAbbr={row.teamAbbr}
+                                showTeamBadge
+                                size="sm"
+                              />
+                              <div>
+                                <div className="font-medium text-slate-100 whitespace-nowrap leading-tight">
+                                  {row.playerName}
+                                </div>
+                                <div className="text-xs text-slate-400 whitespace-nowrap leading-tight mt-0.5">
+                                  {row.teamAbbr} · {row.position} · {row.gamesPlayed}{' '}
+                                  PJ
+                                </div>
+                              </div>
                             </div>
                           </td>
                           <td className="py-2.5 px-3">
-                            <div className="inline-flex items-center gap-1.5 text-emerald-400 font-medium whitespace-nowrap">
+                            <div
+                              className={`inline-flex items-center gap-1.5 ${conditionToneClass} font-medium whitespace-nowrap`}
+                            >
                               <span>
-                                ▲ {activeMetric.shortLabel} {operatorSymbol}{' '}
+                                {isUpperDirection ? '▲' : '▼'}{' '}
+                                {activeMetric.shortLabel} {operatorSymbol}{' '}
                                 {formattedThreshold}
                               </span>
                               <MetricInfoTooltip
@@ -1646,18 +2362,34 @@ export function StreaksConsistencyView({
                             )}
                           </td>
                           <td className="py-2.5 pl-3 pr-4 text-right font-mono tabular-nums text-xs text-slate-300 whitespace-nowrap">
-                            <span>
-                              {formatMetricNumber(
-                                row.lastGameVal,
-                                activeMetric.gameDecimals,
-                                activeMetric.unit === '%' ? '%' : ''
-                              )}
-                            </span>
-                            <span className="text-slate-500">
-                              {' · '}
-                              {row.lastIsHome ? 'vs' : '@'} {row.lastOpponent} (
-                              {formatShortDate(row.lastGameDate)})
-                            </span>
+                            <div className="inline-flex items-center justify-end gap-2">
+                              <div>
+                                <span>
+                                  {formatMetricNumber(
+                                    row.lastGameVal,
+                                    activeMetric.gameDecimals,
+                                    activeMetric.unit === '%' ? '%' : ''
+                                  )}
+                                </span>
+                                <span className="text-slate-500">
+                                  {' · '}
+                                  {row.lastIsHome ? 'vs' : '@'} {row.lastOpponent} (
+                                  {formatShortDate(row.lastGameDate)})
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                title="Ver evolución últimos 10 partidos en el gráfico"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setHistoryPlayerId(row.playerId);
+                                  setShowInlineHistoryChart(true);
+                                }}
+                                className="px-2 py-1 rounded bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/50 text-[11px] font-sans font-medium text-orange-300 hover:text-orange-200 transition-colors"
+                              >
+                                10 PJ
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1698,7 +2430,7 @@ export function StreaksConsistencyView({
                       className="p-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-2"
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-start gap-2 min-w-0">
+                        <div className="flex items-center gap-2.5 min-w-0">
                           <button
                             type="button"
                             aria-label="Alternar seguimiento"
@@ -1714,6 +2446,14 @@ export function StreaksConsistencyView({
                               }`}
                             />
                           </button>
+                          <EntityBadge
+                            entityType={st.entityType}
+                            entityId={st.entityId}
+                            name={st.entityName}
+                            teamAbbr={st.teamAbbr}
+                            showTeamBadge={st.entityType === 'player'}
+                            size="sm"
+                          />
                           <div className="min-w-0">
                             <div className="font-semibold text-sm text-slate-100 truncate">
                               {st.entityName}
@@ -1830,11 +2570,23 @@ export function StreaksConsistencyView({
                           </button>
                         </td>
                         <td className="py-2.5 px-3">
-                          <div className="font-medium text-slate-100 whitespace-nowrap">
-                            {st.entityName}
-                          </div>
-                          <div className="text-xs text-slate-400 whitespace-nowrap">
-                            {st.subtitle}
+                          <div className="flex items-center gap-2.5">
+                            <EntityBadge
+                              entityType={st.entityType}
+                              entityId={st.entityId}
+                              name={st.entityName}
+                              teamAbbr={st.teamAbbr}
+                              showTeamBadge={st.entityType === 'player'}
+                              size="sm"
+                            />
+                            <div>
+                              <div className="font-medium text-slate-100 whitespace-nowrap">
+                                {st.entityName}
+                              </div>
+                              <div className="text-xs text-slate-400 whitespace-nowrap">
+                                {st.subtitle}
+                              </div>
+                            </div>
                           </div>
                         </td>
                         <td className="py-2.5 px-3">
@@ -1927,7 +2679,7 @@ export function StreaksConsistencyView({
                       className="p-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-2.5"
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-start gap-2 min-w-0">
+                        <div className="flex items-center gap-2.5 min-w-0">
                           <button
                             type="button"
                             aria-label="Alternar seguimiento"
@@ -1943,6 +2695,13 @@ export function StreaksConsistencyView({
                               }`}
                             />
                           </button>
+                          <PlayerAvatar
+                            playerId={row.entityId}
+                            name={row.entityName}
+                            teamAbbr={row.teamAbbr}
+                            showTeamBadge
+                            size="sm"
+                          />
                           <div className="min-w-0">
                             <div className="font-semibold text-sm text-slate-100 truncate">
                               {row.entityName}
@@ -2100,12 +2859,23 @@ export function StreaksConsistencyView({
                         </button>
                       </td>
                       <td className="py-2.5 px-3">
-                        <div className="font-medium text-slate-100 whitespace-nowrap">
-                          {row.entityName}
-                        </div>
-                        <div className="text-xs text-slate-400 whitespace-nowrap">
-                          {row.teamAbbr} · {row.position} · {row.gamesPlayed} PJ ·{' '}
-                          {row.minutesAvg} MIN
+                        <div className="flex items-center gap-2.5">
+                          <PlayerAvatar
+                            playerId={row.entityId}
+                            name={row.entityName}
+                            teamAbbr={row.teamAbbr}
+                            showTeamBadge
+                            size="sm"
+                          />
+                          <div>
+                            <div className="font-medium text-slate-100 whitespace-nowrap">
+                              {row.entityName}
+                            </div>
+                            <div className="text-xs text-slate-400 whitespace-nowrap">
+                              {row.teamAbbr} · {row.position} · {row.gamesPlayed} PJ ·{' '}
+                              {row.minutesAvg} MIN
+                            </div>
+                          </div>
                         </div>
                       </td>
                       <td className="py-2.5 px-3">
@@ -2136,18 +2906,33 @@ export function StreaksConsistencyView({
                         {row.ptsFloor.toFixed(0)} – {row.ptsCeiling.toFixed(0)}{' '}
                         PTS
                       </td>
-                      <td className="py-2.5 pl-3 pr-4 text-right font-mono tabular-nums text-emerald-400 whitespace-nowrap">
-                        {row.hitRate20Pts}% de partidos
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
+                       <td className="py-2.5 pl-3 pr-4 text-right font-mono tabular-nums text-emerald-400 whitespace-nowrap">
+                         <div className="inline-flex items-center justify-end gap-2">
+                           <span>{row.hitRate20Pts}% de partidos</span>
+                           <button
+                             type="button"
+                             title="Ver evolución últimos 10 partidos en el gráfico"
+                             onClick={(e) => {
+                               e.stopPropagation();
+                               setHistoryPlayerId(row.entityId);
+                               setShowInlineHistoryChart(true);
+                             }}
+                             className="px-2 py-1 rounded bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/50 text-[11px] font-sans font-medium text-orange-300 hover:text-orange-200 transition-colors"
+                           >
+                             10 PJ
+                           </button>
+                         </div>
+                       </td>
+                     </tr>
+                   );
+                 })}
+               </tbody>
+             </table>
+             </div>
+           </>
+         )}
+       </div>
+       )}
+     </div>
+   );
+ }

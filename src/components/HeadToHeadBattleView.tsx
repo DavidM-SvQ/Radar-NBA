@@ -31,6 +31,7 @@ import {
   type LeagueBenchmarks,
 } from '../utils/humanize';
 import { ColumnHelpHeader, MetricInfoTooltip } from './MetricUiHelpers';
+import { PlayerAvatar } from './NbaVisuals';
 
 interface HeadToHeadBattleViewProps {
   players: PlayerSummary[];
@@ -47,6 +48,7 @@ interface HeadToHeadBattleViewProps {
   onSwitchToAdvanced: () => void;
   initialPlayerAId?: string;
   initialPlayerBId?: string;
+  onPairChange?: (playerAId: string, playerBId: string) => void;
   allPlayersLoaded: boolean;
   loadingAllPlayers: boolean;
   totalLeaguePlayersAvailable: number;
@@ -461,9 +463,6 @@ function BattleFighterSelector({
   );
 
   const isOrange = accentTone === 'orange';
-  const badgeClasses = isOrange
-    ? 'bg-orange-500/15 border-orange-500/40 text-orange-300'
-    : 'bg-sky-500/15 border-sky-400/40 text-sky-300';
   const labelTextClass = isOrange ? 'text-orange-400' : 'text-sky-400';
 
   return (
@@ -483,11 +482,15 @@ function BattleFighterSelector({
         }`}
       >
         <span className="flex items-center gap-2.5 min-w-0">
-          <span
-            className={`w-8 h-8 rounded-md border flex items-center justify-center font-mono text-xs font-bold shrink-0 ${badgeClasses}`}
-          >
-            {selectedPlayer?.teamAbbr || 'NBA'}
-          </span>
+          <PlayerAvatar
+            playerId={selectedPlayer?.id}
+            name={selectedPlayer?.name || 'NBA'}
+            headshotUrl={selectedPlayer?.headshotUrl}
+            teamAbbr={selectedPlayer?.teamAbbr}
+            showTeamBadge
+            size="sm"
+            accentTone={accentTone}
+          />
           <span className="min-w-0">
             <span className="block text-sm font-semibold text-slate-100 truncate">
               {selectedPlayer?.name || 'Seleccionar jugador'}
@@ -546,10 +549,19 @@ function BattleFighterSelector({
                       : 'text-slate-200'
                   }`}
                 >
-                  <span className="truncate">
-                    {p.name}{' '}
-                    <span className="text-slate-400 font-normal">
-                      · {p.teamAbbr} · {p.position}
+                  <span className="flex items-center gap-2 min-w-0">
+                    <PlayerAvatar
+                      playerId={p.id}
+                      name={p.name}
+                      headshotUrl={p.headshotUrl}
+                      teamAbbr={p.teamAbbr}
+                      size="xs"
+                    />
+                    <span className="truncate">
+                      {p.name}{' '}
+                      <span className="text-slate-400 font-normal">
+                        · {p.teamAbbr} · {p.position}
+                      </span>
                     </span>
                   </span>
                   <span className="flex items-center gap-1.5 shrink-0 font-mono text-[11px] text-slate-400">
@@ -593,10 +605,18 @@ function BattleFighterSelector({
                     }}
                     className="w-full min-h-[42px] px-3 py-2 text-left text-xs flex items-center justify-between gap-2 bg-[#131C2E]/60 hover:bg-[#182338] text-slate-200 transition-colors disabled:opacity-60"
                   >
-                    <span className="truncate">
-                      {r.name}{' '}
-                      <span className="text-slate-400">
-                        · {r.teamAbbr} · {r.position}
+                    <span className="flex items-center gap-2 min-w-0">
+                      <PlayerAvatar
+                        playerId={r.id}
+                        name={r.name}
+                        teamAbbr={r.teamAbbr}
+                        size="xs"
+                      />
+                      <span className="truncate">
+                        {r.name}{' '}
+                        <span className="text-slate-400">
+                          · {r.teamAbbr} · {r.position}
+                        </span>
                       </span>
                     </span>
                     <span className="inline-flex items-center gap-1 text-orange-400 font-medium whitespace-nowrap shrink-0">
@@ -639,6 +659,7 @@ export function HeadToHeadBattleView({
   onSwitchToAdvanced,
   initialPlayerAId,
   initialPlayerBId,
+  onPairChange,
   allPlayersLoaded,
   loadingAllPlayers,
   totalLeaguePlayersAvailable,
@@ -718,6 +739,12 @@ export function HeadToHeadBattleView({
     if (found && found.id !== playerA?.id) return found;
     return players.find((p) => p.id !== playerA?.id) || players[1] || players[0];
   }, [players, playerBId, playerA]);
+
+  useEffect(() => {
+    if (playerA?.id && playerB?.id && onPairChange) {
+      onPairChange(playerA.id, playerB.id);
+    }
+  }, [playerA?.id, playerB?.id, onPairChange]);
 
   // Curated 1-click marquee duels built dynamically from loaded NBA roster
   const quickMatchups = useMemo(() => {
@@ -1762,17 +1789,28 @@ export function HeadToHeadBattleView({
             {/* Mobile Fighter A */}
             <div className="p-3 space-y-2">
               <div className="flex items-start justify-between gap-1.5">
-                <div className="min-w-0">
-                  <div className="text-xs font-semibold text-orange-400 truncate">
-                    {playerA?.teamAbbr || '—'} · {playerA?.position || '—'}
+                <div className="flex items-center gap-2 min-w-0">
+                  <PlayerAvatar
+                    playerId={playerA?.id}
+                    name={playerA?.name || '—'}
+                    headshotUrl={playerA?.headshotUrl}
+                    teamAbbr={playerA?.teamAbbr}
+                    showTeamBadge
+                    size="sm"
+                    accentTone="orange"
+                  />
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold text-orange-400 truncate">
+                      {playerA?.teamAbbr || '—'} · {playerA?.position || '—'}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => playerA && onInspectEntity('player', playerA.id)}
+                      className="text-sm font-bold text-slate-100 hover:text-orange-300 text-left truncate block max-w-full"
+                    >
+                      {playerA?.name || '—'}
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => playerA && onInspectEntity('player', playerA.id)}
-                    className="text-sm font-bold text-slate-100 hover:text-orange-300 text-left truncate block max-w-full"
-                  >
-                    {playerA?.name || '—'}
-                  </button>
                 </div>
                 <div className="text-right shrink-0">
                   <div className="inline-flex items-center gap-1">
@@ -1793,17 +1831,28 @@ export function HeadToHeadBattleView({
             {/* Mobile Fighter B */}
             <div className="p-3 space-y-2">
               <div className="flex items-start justify-between gap-1.5">
-                <div className="min-w-0">
-                  <div className="text-xs font-semibold text-sky-400 truncate">
-                    {playerB?.teamAbbr || '—'} · {playerB?.position || '—'}
+                <div className="flex items-center gap-2 min-w-0">
+                  <PlayerAvatar
+                    playerId={playerB?.id}
+                    name={playerB?.name || '—'}
+                    headshotUrl={playerB?.headshotUrl}
+                    teamAbbr={playerB?.teamAbbr}
+                    showTeamBadge
+                    size="sm"
+                    accentTone="sky"
+                  />
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold text-sky-400 truncate">
+                      {playerB?.teamAbbr || '—'} · {playerB?.position || '—'}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => playerB && onInspectEntity('player', playerB.id)}
+                      className="text-sm font-bold text-slate-100 hover:text-sky-300 text-left truncate block max-w-full"
+                    >
+                      {playerB?.name || '—'}
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => playerB && onInspectEntity('player', playerB.id)}
-                    className="text-sm font-bold text-slate-100 hover:text-sky-300 text-left truncate block max-w-full"
-                  >
-                    {playerB?.name || '—'}
-                  </button>
                 </div>
                 <div className="text-right shrink-0">
                   <div className="inline-flex items-center gap-1">
@@ -1826,7 +1875,36 @@ export function HeadToHeadBattleView({
             {/* Desktop Left Column: Player A Battle Card (xl:col-span-3) */}
             <div className="hidden xl:flex xl:col-span-3 p-5 flex-col justify-between gap-5">
               <div className="space-y-4">
-                <div className="flex items-start justify-between gap-3">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <PlayerAvatar
+                      playerId={playerA?.id}
+                      name={playerA?.name || '—'}
+                      headshotUrl={playerA?.headshotUrl}
+                      teamAbbr={playerA?.teamAbbr}
+                      showTeamBadge
+                      size="lg"
+                      accentTone="orange"
+                    />
+                    <div className="text-right shrink-0">
+                      <div className="font-mono tabular-nums text-3xl font-bold text-orange-400 leading-none">
+                        {ovrA}
+                      </div>
+                      <div className="mt-1 inline-flex items-center justify-end gap-1 text-[11px] text-slate-400">
+                        <span>Valoración</span>
+                        <MetricInfoTooltip helpKey="duelRadarRating" align="left" />
+                      </div>
+                      <div className="mt-0.5 inline-flex items-center justify-end gap-1 text-[10px] font-mono tabular-nums text-slate-500">
+                        <span>6 ejes: {simpleAvgA}</span>
+                        <MetricInfoTooltip
+                          helpKey="duelSimpleAxisAvg"
+                          align="left"
+                          iconClassName="w-3 h-3"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="min-w-0">
                     <p className="text-xs font-semibold text-orange-400">
                       Esquina Naranja · {playerA?.teamAbbr}
@@ -1841,24 +1919,6 @@ export function HeadToHeadBattleView({
                           } · ${statsA.gamesCount} PJ`
                         : '—'}
                     </p>
-                  </div>
-
-                  <div className="text-right shrink-0">
-                    <div className="font-mono tabular-nums text-3xl font-bold text-orange-400 leading-none">
-                      {ovrA}
-                    </div>
-                    <div className="mt-1 inline-flex items-center justify-end gap-1 text-[11px] text-slate-400">
-                      <span>Valoración</span>
-                      <MetricInfoTooltip helpKey="duelRadarRating" align="left" />
-                    </div>
-                    <div className="mt-0.5 inline-flex items-center justify-end gap-1 text-[10px] font-mono tabular-nums text-slate-500">
-                      <span>6 ejes: {simpleAvgA}</span>
-                      <MetricInfoTooltip
-                        helpKey="duelSimpleAxisAvg"
-                        align="left"
-                        iconClassName="w-3 h-3"
-                      />
-                    </div>
                   </div>
                 </div>
 
@@ -2251,7 +2311,36 @@ export function HeadToHeadBattleView({
             {/* Desktop Right Column: Player B Battle Card (xl:col-span-3) */}
             <div className="hidden xl:flex xl:col-span-3 p-5 flex-col justify-between gap-5">
               <div className="space-y-4">
-                <div className="flex items-start justify-between gap-3">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <PlayerAvatar
+                      playerId={playerB?.id}
+                      name={playerB?.name || '—'}
+                      headshotUrl={playerB?.headshotUrl}
+                      teamAbbr={playerB?.teamAbbr}
+                      showTeamBadge
+                      size="lg"
+                      accentTone="sky"
+                    />
+                    <div className="text-right shrink-0">
+                      <div className="font-mono tabular-nums text-3xl font-bold text-sky-400 leading-none">
+                        {ovrB}
+                      </div>
+                      <div className="mt-1 inline-flex items-center justify-end gap-1 text-[11px] text-slate-400">
+                        <span>Valoración</span>
+                        <MetricInfoTooltip helpKey="duelRadarRating" align="right" />
+                      </div>
+                      <div className="mt-0.5 inline-flex items-center justify-end gap-1 text-[10px] font-mono tabular-nums text-slate-500">
+                        <span>6 ejes: {simpleAvgB}</span>
+                        <MetricInfoTooltip
+                          helpKey="duelSimpleAxisAvg"
+                          align="right"
+                          iconClassName="w-3 h-3"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="min-w-0">
                     <p className="text-xs font-semibold text-sky-400">
                       Esquina Azul · {playerB?.teamAbbr}
@@ -2266,24 +2355,6 @@ export function HeadToHeadBattleView({
                           } · ${statsB.gamesCount} PJ`
                         : '—'}
                     </p>
-                  </div>
-
-                  <div className="text-right shrink-0">
-                    <div className="font-mono tabular-nums text-3xl font-bold text-sky-400 leading-none">
-                      {ovrB}
-                    </div>
-                    <div className="mt-1 inline-flex items-center justify-end gap-1 text-[11px] text-slate-400">
-                      <span>Valoración</span>
-                      <MetricInfoTooltip helpKey="duelRadarRating" align="right" />
-                    </div>
-                    <div className="mt-0.5 inline-flex items-center justify-end gap-1 text-[10px] font-mono tabular-nums text-slate-500">
-                      <span>6 ejes: {simpleAvgB}</span>
-                      <MetricInfoTooltip
-                        helpKey="duelSimpleAxisAvg"
-                        align="right"
-                        iconClassName="w-3 h-3"
-                      />
-                    </div>
                   </div>
                 </div>
 
@@ -2466,6 +2537,14 @@ export function HeadToHeadBattleView({
           <div className="p-3.5 sm:p-4 bg-[#0F172A]/70 border-b border-[#1E293B] space-y-2">
             <div className="flex items-center justify-between gap-2 text-xs sm:text-sm">
               <div className="flex items-center gap-2 min-w-0">
+                <PlayerAvatar
+                  playerId={playerA?.id}
+                  name={playerA?.name || 'Jugador 1'}
+                  headshotUrl={playerA?.headshotUrl}
+                  teamAbbr={playerA?.teamAbbr}
+                  size="xs"
+                  accentTone="orange"
+                />
                 <span className="font-mono tabular-nums text-lg sm:text-xl font-bold text-orange-400">
                   {scoreboard.winsA}
                 </span>
@@ -2487,6 +2566,14 @@ export function HeadToHeadBattleView({
                 <span className="font-mono tabular-nums text-lg sm:text-xl font-bold text-sky-400">
                   {scoreboard.winsB}
                 </span>
+                <PlayerAvatar
+                  playerId={playerB?.id}
+                  name={playerB?.name || 'Jugador 2'}
+                  headshotUrl={playerB?.headshotUrl}
+                  teamAbbr={playerB?.teamAbbr}
+                  size="xs"
+                  accentTone="sky"
+                />
               </div>
             </div>
 
@@ -2624,15 +2711,27 @@ export function HeadToHeadBattleView({
               </div>
 
               {/* Desktop Symmetrical Tale-of-the-Tape Table (md+) */}
-              <div className="hidden md:block overflow-x-auto">
-                <table className="w-full text-left border-collapse">
+              <div className="hidden md:block overflow-hidden">
+                <table className="w-full table-fixed text-left border-collapse">
+                  <colgroup>
+                    <col className="w-[26%]" />
+                    <col className="w-[15%]" />
+                    <col className="w-[22%]" />
+                    <col className="w-[15%]" />
+                    <col className="w-[22%]" />
+                  </colgroup>
                   <thead>
                     <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
-                      <th className="py-2.5 pl-4 pr-3 font-medium">Categoría NBA</th>
-                      <th className="py-2.5 px-3 font-medium text-right text-orange-300 whitespace-nowrap">
+                      <th className="py-2 pl-4 pr-2 font-medium truncate">
+                        Categoría NBA
+                      </th>
+                      <th
+                        className="py-2 px-2.5 font-medium text-right text-orange-300 truncate"
+                        title={playerA?.name || 'Jugador 1'}
+                      >
                         {playerA?.name || 'Jugador 1'}
                       </th>
-                      <th className="py-2.5 px-4 font-medium text-center w-56">
+                      <th className="py-2 px-3 font-medium text-center">
                         <div className="inline-flex items-center justify-center">
                           <ColumnHelpHeader
                             label="Pulso directo"
@@ -2640,10 +2739,13 @@ export function HeadToHeadBattleView({
                           />
                         </div>
                       </th>
-                      <th className="py-2.5 px-3 font-medium text-left text-sky-300 whitespace-nowrap">
+                      <th
+                        className="py-2 px-2.5 font-medium text-left text-sky-300 truncate"
+                        title={playerB?.name || 'Jugador 2'}
+                      >
                         {playerB?.name || 'Jugador 2'}
                       </th>
-                      <th className="py-2.5 pl-3 pr-4 font-medium text-right">
+                      <th className="py-2 pl-2 pr-4 font-medium text-right">
                         <ColumnHelpHeader
                           label="Punto de categoría"
                           helpKey="duelCategoryScore"
@@ -2652,7 +2754,7 @@ export function HeadToHeadBattleView({
                       </th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#1E293B] text-sm">
+                  <tbody className="divide-y divide-[#1E293B] text-xs lg:text-sm">
                     {visibleCategories.map((row) => {
                       const rowTitle =
                         experienceMode === 'simple' ? row.simpleLabel : row.label;
@@ -2661,18 +2763,21 @@ export function HeadToHeadBattleView({
                           key={row.id}
                           className="hover:bg-[#182338] transition-colors"
                         >
-                          <td className="py-2.5 pl-4 pr-3">
-                            <span className="inline-flex items-center gap-1.5 font-medium text-slate-200 whitespace-nowrap">
-                              <span>{rowTitle}</span>
+                          <td className="py-1.5 pl-4 pr-2">
+                            <span className="flex items-center gap-1.5 font-medium text-slate-200 min-w-0">
+                              <span className="truncate" title={rowTitle}>
+                                {rowTitle}
+                              </span>
                               <MetricInfoTooltip
                                 helpKey={row.helpKey}
                                 align="left"
+                                iconClassName="w-3.5 h-3.5 shrink-0"
                               />
                             </span>
                           </td>
 
                           <td
-                            className={`py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap ${
+                            className={`py-1.5 px-2.5 text-right font-mono tabular-nums whitespace-nowrap ${
                               row.winner === 'A'
                                 ? 'text-orange-400 font-bold'
                                 : 'text-slate-300'
@@ -2687,8 +2792,8 @@ export function HeadToHeadBattleView({
                             )}
                           </td>
 
-                          <td className="py-2.5 px-4">
-                            <div className="h-2.5 w-full rounded-full bg-[#0B1120] border border-[#1E293B] overflow-hidden flex">
+                          <td className="py-1.5 px-3">
+                            <div className="h-2 w-full rounded-full bg-[#0B1120] border border-[#1E293B] overflow-hidden flex">
                               <div
                                 className={`h-full transition-all duration-150 ${
                                   row.winner === 'A'
@@ -2709,7 +2814,7 @@ export function HeadToHeadBattleView({
                           </td>
 
                           <td
-                            className={`py-2.5 px-3 text-left font-mono tabular-nums whitespace-nowrap ${
+                            className={`py-1.5 px-2.5 text-left font-mono tabular-nums whitespace-nowrap ${
                               row.winner === 'B'
                                 ? 'text-sky-400 font-bold'
                                 : 'text-slate-300'
@@ -2724,7 +2829,7 @@ export function HeadToHeadBattleView({
                             {row.winner === 'B' ? ' ★' : ''}
                           </td>
 
-                          <td className="py-2.5 pl-3 pr-4 text-right font-mono tabular-nums text-xs whitespace-nowrap">
+                          <td className="py-1.5 pl-2 pr-4 text-right font-mono tabular-nums text-xs truncate">
                             {row.winner === 'A' ? (
                               <span className="text-orange-400 font-semibold">
                                 +{row.advantageAbs.toFixed(row.decimals)}{' '}

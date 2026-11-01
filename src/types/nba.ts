@@ -16,6 +16,7 @@ export type ActiveSection =
   | 'comparator'
   | 'teams'
   | 'players'
+  | 'fantasy_espn'
   | 'glossary';
 
 export type MilestoneComparisonMode =
@@ -58,6 +59,8 @@ export interface PlayerGameLog {
   eventId: string;
   date: string; // ISO string or YYYY-MM-DD
   seasonLabel: string; // '2026-27' | '2025-26'
+  teamAbbr?: string;
+  teamId?: string;
   opponentAbbr: string;
   opponentName: string;
   isHome: boolean;
@@ -393,8 +396,10 @@ export interface SingleGameRecordItem {
   metricId: string;
   metricLabel: string;
   category: 'player' | 'team';
+  subGroup?: 'scoring' | 'playmaking_reb' | 'defense' | 'impact';
   unit: string;
   decimals?: number;
+  lowerIsBetter?: boolean;
   current2027: SingleGamePerformance | null;
   prev2026Full: SingleGamePerformance | null;
   prev2026Opening: SingleGamePerformance | null;
@@ -415,7 +420,9 @@ export interface SeasonLeaderMilestoneItem {
     | 'rebounding'
     | 'shooting_scoring'
     | 'playmaking_allaround'
-    | 'advanced_hustle';
+    | 'defense_discipline'
+    | 'advanced_hustle'
+    | 'team_leaders';
   entityType: 'player' | 'team';
   unit: string;
   decimals: number;
@@ -682,6 +689,12 @@ export interface GamePeriodScore {
   homeScore: number;
 }
 
+export interface PlayerSeasonHighEntry {
+  mode: 'sole' | 'tied';
+  prevBest: number | null;
+  gamesPlayed: number;
+}
+
 export interface GameBoxScorePlayerLine {
   playerId: string;
   name: string;
@@ -719,6 +732,7 @@ export interface GameBoxScorePlayerLine {
   ptsFastBreak?: number;
   doubleDouble: boolean;
   tripleDouble: boolean;
+  seasonHighs?: Record<string, PlayerSeasonHighEntry>;
 }
 
 export interface GameInactiveOrDnpItem {
@@ -726,11 +740,46 @@ export interface GameInactiveOrDnpItem {
   name: string;
   jersey: string;
   category: 'dnp_bench' | 'inactive' | 'rotation_absence' | 'in_game_setback';
+  statusType?:
+    | 'injury'
+    | 'rest'
+    | 'coach_decision'
+    | 'gleague'
+    | 'suspension_personal'
+    | 'foul_out'
+    | 'in_game_setback';
+  statusLabel?: string;
+  statusTone?: 'rose' | 'amber' | 'slate' | 'orange';
+  foulOutPeriod?: string;
+  foulOutClock?: string;
+  priorityRank?: number;
   note: string;
   ptsAvg?: number;
   minAvg?: number;
   reason?: string;
   isSpanish?: boolean;
+}
+
+export interface GameNextMatchInfo {
+  hasScheduledGame: boolean;
+  record: string;
+  conference: 'Este' | 'Oeste';
+  conferenceRank: number;
+  streakCode: string;
+  opponentAbbr: string;
+  opponentName: string;
+  opponentTeamId?: string;
+  isHome: boolean;
+  dateIso?: string;
+  dateFormatted: string;
+  timeFormatted: string;
+  arenaName: string;
+  arenaCity: string;
+  restDays?: number | null;
+  isBackToBackNext?: boolean;
+  fatigueShort?: string;
+  fatigueDetail?: string;
+  fatigueTone?: 'rose' | 'emerald' | 'slate';
 }
 
 export interface GamePodiumEntry {
@@ -799,6 +848,7 @@ export interface GameReportTeamSide {
   totals: GameTeamTotalsSummary;
   absencesAndDnp: GameInactiveOrDnpItem[];
   podium: GamePodiumEntry[];
+  nextGame: GameNextMatchInfo;
 }
 
 export interface GameTeamComparisonRow {
@@ -820,12 +870,34 @@ export interface GameLeaderComparisonRow {
   categoryLabel: string;
   helpKey?: string;
   awayPlayerId: string;
+  awayJersey?: string;
+  awayShortName?: string;
+  awayPlayerName?: string;
+  awayStatDisplay?: string;
   awayFormatted: string; // '#Dorsal I. Apellido (Dato)'
   awayValue: number;
+  awayAvg?: number;
+  awayDeltaVsAvg?: number;
+  awayDeltaDisplay?: string;
+  awayDeltaTone?: 'positive' | 'negative' | 'neutral';
   homePlayerId: string;
+  homeJersey?: string;
+  homeShortName?: string;
+  homePlayerName?: string;
+  homeStatDisplay?: string;
   homeFormatted: string; // '#Dorsal I. Apellido (Dato)'
   homeValue: number;
+  homeAvg?: number;
+  homeDeltaVsAvg?: number;
+  homeDeltaDisplay?: string;
+  homeDeltaTone?: 'positive' | 'negative' | 'neutral';
+  diffDisplay?: string;
+  lowerIsBetter?: boolean;
   betterSide: 'away' | 'home' | 'tie';
+  blockSection?: 'minutes_scoring' | 'playmaking_rebound' | 'efficiency_defense';
+  groupLabel?: string;
+  awayIsElite?: boolean;
+  homeIsElite?: boolean;
 }
 
 export interface GameOfficialReportData {
@@ -844,6 +916,8 @@ export interface GameOfficialReportData {
   decisivePeriodLabel: string;
   leadChanges: number | null;
   timesTied: number | null;
+  leagueAvgPace: number;
+  paceDiffVsLeague: number;
   periods: GamePeriodScore[];
   away: GameReportTeamSide;
   home: GameReportTeamSide;
@@ -889,4 +963,91 @@ export interface GameNarrativePayload {
   sources: GroundingSourceLink[];
 }
 
+export interface PlayerInspectorBenchmarkItem {
+  mean: number;
+  sd: number;
+  lowerIsBetter?: boolean;
+  decimals?: number;
+  suffix?: string;
+}
 
+export interface PlayerInspectorDossier {
+  player: PlayerSummary;
+  advanced2027?: PlayerAdvancedProfile;
+  advanced2026?: PlayerAdvancedProfile;
+  latestLeagueDate2027: string;
+  benchmarksByScope: {
+    continuous: Record<string, PlayerInspectorBenchmarkItem>;
+    s2027: Record<string, PlayerInspectorBenchmarkItem>;
+    s2026: Record<string, PlayerInspectorBenchmarkItem>;
+    sameDate2026: Record<string, PlayerInspectorBenchmarkItem>;
+  };
+}
+
+export type FantasyInjurySeverity =
+  | 'healthy'
+  | 'probable'
+  | 'questionable'
+  | 'doubtful'
+  | 'out'
+  | 'suspended';
+
+export interface FantasyTeamGameSlot {
+  gameId: string;
+  dateIso: string;
+  dayShortEs: string; // e.g. 'Lun 26'
+  opponentAbbr: string;
+  isHome: boolean;
+  isBackToBack: boolean;
+}
+
+export interface FantasyWeekWindow {
+  id: 'prev' | 'current' | 'next' | 'next2';
+  label: string; // e.g. 'Semana Actual' | 'Próxima Semana'
+  rangeLabel: string; // e.g. 'Lun 26 oct – Dom 1 nov'
+  startIso: string; // Monday YYYY-MM-DD
+  endIso: string; // Sunday YYYY-MM-DD
+  lockDeadlineLabel: string; // e.g. 'Lun 26 oct · 00:00h ESP (Cierre estricto)'
+  isLocked: boolean;
+  teamSchedules: Record<
+    string,
+    {
+      gamesCount: number;
+      b2bCount: number;
+      games: FantasyTeamGameSlot[];
+    }
+  >;
+}
+
+export interface FantasyPlayerInjuryAlert {
+  playerNameNorm: string;
+  displayName: string;
+  severity: FantasyInjurySeverity;
+  statusLabelEs: string;
+  detailEs: string;
+}
+
+export interface FantasyRosterContract {
+  playerId: string;
+  slot: 'starter' | 'bench';
+}
+
+export interface FantasyManualLeagueState {
+  updatedAt: number;
+  myTeamName: string;
+  roster: FantasyRosterContract[];
+  takenRivalIds: string[];
+  rivalRosters: Record<string, string[]>;
+  rivalTeamNames: Record<string, string>;
+}
+
+export interface FantasyNbaContextPayload {
+  generatedAt: string;
+  injuriesByNormName: Record<string, FantasyPlayerInjuryAlert>;
+  injuriesByPlayerId: Record<string, FantasyPlayerInjuryAlert>;
+  weeks: FantasyWeekWindow[];
+  defaultWeekId: 'current' | 'next';
+  savedState: FantasyManualLeagueState | null;
+}
+
+export type FantasyEspnSyncPayload = FantasyNbaContextPayload;

@@ -23,6 +23,7 @@ import {
   MetricInfoTooltip,
   NbaComparisonBar,
 } from './MetricUiHelpers';
+import { PlayerAvatar } from './NbaVisuals';
 
 interface PlayersExplorerViewProps {
   players: PlayerSummary[];
@@ -392,14 +393,28 @@ export function PlayersExplorerView({
             <span className="truncate">Máximo anotador</span>
             <MetricInfoTooltip helpKey="ptsBase" align="right" />
           </div>
-          <p className="mt-1 text-base sm:text-lg font-semibold text-slate-100 truncate">
-            {summary?.topScorer?.name || '—'}
-          </p>
-          <p className="mt-1 text-[11px] sm:text-xs font-mono tabular-nums text-orange-400 truncate">
-            {summary?.topScorer
-              ? `${summary.topScorer.ptsBase.toFixed(1)} PTS · Élite NBA`
-              : '—'}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+            {summary?.topScorer && (
+              <PlayerAvatar
+                playerId={summary.topScorer.id}
+                name={summary.topScorer.name}
+                headshotUrl={summary.topScorer.headshotUrl}
+                teamAbbr={summary.topScorer.teamAbbr}
+                showTeamBadge
+                size="sm"
+              />
+            )}
+            <div className="min-w-0">
+              <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                {summary?.topScorer?.name || '—'}
+              </p>
+              <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-orange-400 truncate">
+                {summary?.topScorer
+                  ? `${summary.topScorer.ptsBase.toFixed(1)} PTS · Élite NBA`
+                  : '—'}
+              </p>
+            </div>
+          </div>
         </div>
 
         <div className="p-3.5 sm:p-4">
@@ -411,16 +426,30 @@ export function PlayersExplorerView({
             </span>
             <MetricInfoTooltip helpKey="usgPct" />
           </div>
-          <p className="mt-1 text-base sm:text-lg font-semibold text-slate-100 truncate">
-            {summary?.topUsage?.name || '—'}
-          </p>
-          <p className="mt-1 text-[11px] sm:text-xs font-mono tabular-nums text-emerald-400 truncate">
-            {summary?.topUsage
-              ? experienceMode === 'simple'
-                ? `${summary.topUsage.usgPct.toFixed(1)}% ataques · 1ª Estrella`
-                : `${summary.topUsage.usgPct.toFixed(1)}% USG · ${summary.topUsage.gmSc.toFixed(1)} GmSc`
-              : '—'}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+            {summary?.topUsage && (
+              <PlayerAvatar
+                playerId={summary.topUsage.id}
+                name={summary.topUsage.name}
+                headshotUrl={summary.topUsage.headshotUrl}
+                teamAbbr={summary.topUsage.teamAbbr}
+                showTeamBadge
+                size="sm"
+              />
+            )}
+            <div className="min-w-0">
+              <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                {summary?.topUsage?.name || '—'}
+              </p>
+              <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-emerald-400 truncate">
+                {summary?.topUsage
+                  ? experienceMode === 'simple'
+                    ? `${summary.topUsage.usgPct.toFixed(1)}% ataques · 1ª Estrella`
+                    : `${summary.topUsage.usgPct.toFixed(1)}% USG · ${summary.topUsage.gmSc.toFixed(1)} GmSc`
+                  : '—'}
+              </p>
+            </div>
+          </div>
         </div>
 
         <div className="p-3.5 sm:p-4">
@@ -432,16 +461,30 @@ export function PlayersExplorerView({
             </span>
             <MetricInfoTooltip helpKey="pie" align="right" />
           </div>
-          <p className="mt-1 text-base sm:text-lg font-semibold text-slate-100 truncate">
-            {summary?.topPie?.name || '—'}
-          </p>
-          <p className="mt-1 text-[11px] sm:text-xs font-mono tabular-nums text-slate-300 truncate">
-            {summary?.topPie
-              ? experienceMode === 'simple'
-                ? `Impacto ${summary.topPie.pie.toFixed(1)}% · Nivel MVP`
-                : `${summary.topPie.pie.toFixed(1)}% PIE · Net ${formatSigned(summary.topPie.netRtg)}`
-              : '—'}
-          </p>
+          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+            {summary?.topPie && (
+              <PlayerAvatar
+                playerId={summary.topPie.id}
+                name={summary.topPie.name}
+                headshotUrl={summary.topPie.headshotUrl}
+                teamAbbr={summary.topPie.teamAbbr}
+                showTeamBadge
+                size="sm"
+              />
+            )}
+            <div className="min-w-0">
+              <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                {summary?.topPie?.name || '—'}
+              </p>
+              <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-slate-300 truncate">
+                {summary?.topPie
+                  ? experienceMode === 'simple'
+                    ? `Impacto ${summary.topPie.pie.toFixed(1)}% · Nivel MVP`
+                    : `${summary.topPie.pie.toFixed(1)}% PIE · Net ${formatSigned(summary.topPie.netRtg)}`
+                  : '—'}
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -567,14 +610,20 @@ export function PlayersExplorerView({
                 type="button"
                 disabled={addingPlayerId === item.id}
                 onClick={() => void onAddExternalPlayer(item)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#283548] rounded-md text-slate-100 transition-colors whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-2 px-2.5 py-1.5 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#283548] rounded-md text-slate-100 transition-colors whitespace-nowrap shrink-0"
               >
-                <Plus className="w-3.5 h-3.5 text-orange-400" />
+                <PlayerAvatar
+                  playerId={item.id}
+                  name={item.name}
+                  teamAbbr={item.teamAbbr}
+                  size="xs"
+                />
                 <span>
                   {addingPlayerId === item.id
                     ? `Cargando ${item.name}...`
                     : `${item.name} · ${item.teamAbbr}`}
                 </span>
+                <Plus className="w-3.5 h-3.5 text-orange-400" />
               </button>
             ))}
           </div>
@@ -644,7 +693,7 @@ export function PlayersExplorerView({
                       className="px-3.5 py-2.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors flex flex-col justify-between overflow-hidden"
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-start gap-2 min-w-0">
+                        <div className="flex items-center gap-2 min-w-0">
                           <button
                             type="button"
                             aria-label="Alternar seguimiento"
@@ -660,6 +709,14 @@ export function PlayersExplorerView({
                               }`}
                             />
                           </button>
+                          <PlayerAvatar
+                            playerId={p.id}
+                            name={p.name}
+                            headshotUrl={p.headshotUrl}
+                            teamAbbr={p.teamAbbr}
+                            showTeamBadge
+                            size="sm"
+                          />
                           <div className="min-w-0">
                             <div className="font-semibold text-sm text-slate-100 truncate">
                               {p.name}
@@ -1030,17 +1087,29 @@ export function PlayersExplorerView({
                       </td>
 
                       <td className="py-2.5 px-3">
-                        <div className="font-medium text-slate-100 whitespace-nowrap">
-                          {p.name}
-                        </div>
-                        <div className="text-xs text-slate-400 whitespace-nowrap">
-                          <span>
-                            {p.teamAbbr} · {p.position} · {p.games.length} PJ
-                          </span>
-                          <span aria-hidden="true"> · </span>
-                          <span className={roleHint.textClass}>
-                            {roleHint.label}
-                          </span>
+                        <div className="flex items-center gap-2.5">
+                          <PlayerAvatar
+                            playerId={p.id}
+                            name={p.name}
+                            headshotUrl={p.headshotUrl}
+                            teamAbbr={p.teamAbbr}
+                            showTeamBadge
+                            size="sm"
+                          />
+                          <div>
+                            <div className="font-medium text-slate-100 whitespace-nowrap">
+                              {p.name}
+                            </div>
+                            <div className="text-xs text-slate-400 whitespace-nowrap">
+                              <span>
+                                {p.teamAbbr} · {p.position} · {p.games.length} PJ
+                              </span>
+                              <span aria-hidden="true"> · </span>
+                              <span className={roleHint.textClass}>
+                                {roleHint.label}
+                              </span>
+                            </div>
+                          </div>
                         </div>
                       </td>
 

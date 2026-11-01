@@ -3,6 +3,7 @@ import type {
   ComparisonMetricRow,
   FilterPresetId,
   PlayerSummary,
+  StreakEntry,
   TeamSummary,
   ThresholdSettings,
   WindowSize,
@@ -15,6 +16,8 @@ export interface MetricBenchmark {
   lowerIsBetter?: boolean;
   decimals?: number;
   suffix?: string;
+  isZeroSumBalance?: boolean;
+  spreadMean?: number;
 }
 
 export interface LeagueBenchmarks {
@@ -23,6 +26,8 @@ export interface LeagueBenchmarks {
     reb: MetricBenchmark;
     oreb: MetricBenchmark;
     ast: MetricBenchmark;
+    pra: MetricBenchmark;
+    fg3m: MetricBenchmark;
     stocks: MetricBenchmark;
     tsPct: MetricBenchmark;
     usgPct: MetricBenchmark;
@@ -142,7 +147,13 @@ export function computeLeagueBenchmarks(
     vals: number[],
     fallbackMean: number,
     fallbackSd: number,
-    opts?: { lowerIsBetter?: boolean; decimals?: number; suffix?: string }
+    opts?: {
+      lowerIsBetter?: boolean;
+      decimals?: number;
+      suffix?: string;
+      isZeroSumBalance?: boolean;
+      spreadMean?: number;
+    }
   ): MetricBenchmark => {
     if (vals.length < 5) {
       return {
@@ -151,9 +162,11 @@ export function computeLeagueBenchmarks(
         lowerIsBetter: opts?.lowerIsBetter,
         decimals: opts?.decimals ?? 1,
         suffix: opts?.suffix ?? '',
+        isZeroSumBalance: opts?.isZeroSumBalance,
+        spreadMean: opts?.spreadMean,
       };
     }
-    const avg = round1(mean(vals));
+    const avg = opts?.isZeroSumBalance ? 0 : round1(mean(vals));
     const s = Math.max(fallbackSd * 0.45, round1(stdDev(vals)));
     return {
       mean: avg,
@@ -161,6 +174,8 @@ export function computeLeagueBenchmarks(
       lowerIsBetter: opts?.lowerIsBetter,
       decimals: opts?.decimals ?? 1,
       suffix: opts?.suffix ?? '',
+      isZeroSumBalance: opts?.isZeroSumBalance,
+      spreadMean: opts?.spreadMean,
     };
   };
 
@@ -168,6 +183,8 @@ export function computeLeagueBenchmarks(
   const pReb = pPool.map((p) => mean(p.games.map((g) => g.rebounds)));
   const pOreb = pPool.map((p) => mean(p.games.map((g) => g.oreb)));
   const pAst = pPool.map((p) => mean(p.games.map((g) => g.assists)));
+  const pPra = pPool.map((p) => mean(p.games.map((g) => g.pra)));
+  const pFg3m = pPool.map((p) => mean(p.games.map((g) => g.fg3m)));
   const pStocks = pPool.map((p) => mean(p.games.map((g) => g.stocks)));
   const pMin = pPool.map((p) => mean(p.games.map((g) => g.minutes)));
   const pGmSc = pPool.map((p) => mean(p.games.map((g) => g.gameScore)));
@@ -222,6 +239,10 @@ export function computeLeagueBenchmarks(
   const tPaint = tPool
     .map((t) => t.advanced?.ptsPaint ?? 0)
     .filter((v) => v > 0);
+  const tDiffAbs = tDiff.map((v) => Math.abs(v)).filter((v) => v > 0);
+  const diffSpread = tDiffAbs.length >= 5 ? round1(mean(tDiffAbs)) : 4.8;
+  const tNetAbs = tNet.map((v) => Math.abs(v)).filter((v) => v > 0);
+  const netSpread = tNetAbs.length >= 5 ? round1(mean(tNetAbs)) : 4.6;
 
   return {
     player: {
@@ -229,6 +250,8 @@ export function computeLeagueBenchmarks(
       reb: buildStat(pReb, 4.9, 2.4),
       oreb: buildStat(pOreb, 1.2, 0.9),
       ast: buildStat(pAst, 3.2, 2.1),
+      pra: buildStat(pPra, 21.9, 9.2),
+      fg3m: buildStat(pFg3m, 1.8, 1.1),
       stocks: buildStat(pStocks, 1.4, 0.6),
       tsPct: buildStat(pTs, 58.0, 4.8, { suffix: '%' }),
       usgPct: buildStat(pUsg, 19.6, 5.4, { suffix: '%' }),
@@ -240,10 +263,17 @@ export function computeLeagueBenchmarks(
     team: {
       avgPointsFor: buildStat(tPf, 114.2, 4.2),
       avgPointsAgainst: buildStat(tPa, 114.2, 4.2, { lowerIsBetter: true }),
-      differential: buildStat(tDiff, 0.0, 4.8),
+      differential: buildStat(tDiff, 0.0, 4.8, {
+        isZeroSumBalance: true,
+        spreadMean: diffSpread,
+        suffix: ' PTS',
+      }),
       offRtg: buildStat(tOff, 114.5, 3.6),
       defRtg: buildStat(tDef, 114.5, 3.6, { lowerIsBetter: true }),
-      netRtg: buildStat(tNet, 0.0, 4.6),
+      netRtg: buildStat(tNet, 0.0, 4.6, {
+        isZeroSumBalance: true,
+        spreadMean: netSpread,
+      }),
       pace: buildStat(tPace, 99.6, 2.2),
       efgPct: buildStat(tEfg, 54.5, 2.1, { suffix: '%' }),
       tsPct: buildStat(tTs, 58.0, 2.0, { suffix: '%' }),
@@ -266,9 +296,10 @@ export function evaluateVsLeague(
     : value - bench.mean;
   const z = rawDelta / Math.max(0.25, bench.sd);
   const pct = Math.max(4, Math.min(98, Math.round(50 + z * 22)));
-  const avgFormatted = `${bench.mean.toFixed(bench.decimals ?? 1)}${
-    bench.suffix ?? ''
-  }`;
+  const avgFormatted =
+    bench.isZeroSumBalance && bench.spreadMean !== undefined && bench.spreadMean > 0
+      ? `±${bench.spreadMean.toFixed(bench.decimals ?? 1)}${bench.suffix ?? ''}`
+      : `${bench.mean.toFixed(bench.decimals ?? 1)}${bench.suffix ?? ''}`;
 
   if (z >= 1.3) {
     return {
@@ -420,6 +451,243 @@ export function plainMetricName(metricKey: string, fallback: string): string {
     default:
       return fallback;
   }
+}
+
+export function isAnomalyPositive(
+  sig: Pick<AnomalySignal, 'metricKey' | 'absDelta'>
+): boolean {
+  if (sig.metricKey === 'defRtg') {
+    return sig.absDelta < 0;
+  }
+  return sig.absDelta >= 0;
+}
+
+export interface ResolvedStatBenchmark {
+  value: number;
+  benchmark: MetricBenchmark;
+  showValueLabel: string;
+  shortUnit: string;
+}
+
+export function resolveSignalBenchmark(
+  sig: Pick<AnomalySignal, 'entityType' | 'metricKey' | 'windowAvg'>,
+  benchmarks: LeagueBenchmarks
+): ResolvedStatBenchmark {
+  const val = sig.windowAvg;
+
+  if (sig.entityType === 'team') {
+    switch (sig.metricKey) {
+      case 'defRtg':
+        return {
+          value: val,
+          benchmark: { ...benchmarks.team.defRtg, suffix: ' DefRtg' },
+          showValueLabel: `${val.toFixed(1)} DefRtg`,
+          shortUnit: 'DefRtg',
+        };
+      case 'offRtg':
+        return {
+          value: val,
+          benchmark: { ...benchmarks.team.offRtg, suffix: ' OffRtg' },
+          showValueLabel: `${val.toFixed(1)} OffRtg`,
+          shortUnit: 'OffRtg',
+        };
+      case 'pace':
+        return {
+          value: val,
+          benchmark: { ...benchmarks.team.pace, suffix: ' Pace' },
+          showValueLabel: `${val.toFixed(1)} Pace`,
+          shortUnit: 'Pace',
+        };
+      case 'differential':
+        return {
+          value: val,
+          benchmark: {
+            ...benchmarks.team.differential,
+            isZeroSumBalance: false,
+            suffix: ' PTS',
+          },
+          showValueLabel: `${formatSigned(val, 1)} PTS`,
+          shortUnit: 'PTS dif.',
+        };
+      case 'avgPointsFor':
+        return {
+          value: val,
+          benchmark: { ...benchmarks.team.avgPointsFor, suffix: ' PTS' },
+          showValueLabel: `${val.toFixed(1)} PTS`,
+          shortUnit: 'PTS',
+        };
+      case 'netRtg':
+      default:
+        return {
+          value: val,
+          benchmark: {
+            ...benchmarks.team.netRtg,
+            isZeroSumBalance: false,
+            suffix: ' NetRtg',
+          },
+          showValueLabel: `${formatSigned(val, 1)} NetRtg`,
+          shortUnit: 'NetRtg',
+        };
+    }
+  }
+
+  switch (sig.metricKey) {
+    case 'rebounds':
+    case 'reb':
+      return {
+        value: val,
+        benchmark: { ...benchmarks.player.reb, suffix: ' REB' },
+        showValueLabel: `${val.toFixed(1)} REB`,
+        shortUnit: 'REB',
+      };
+    case 'oreb':
+      return {
+        value: val,
+        benchmark: { ...benchmarks.player.oreb, suffix: ' OR' },
+        showValueLabel: `${val.toFixed(1)} OR`,
+        shortUnit: 'OR',
+      };
+    case 'assists':
+    case 'ast':
+      return {
+        value: val,
+        benchmark: { ...benchmarks.player.ast, suffix: ' AST' },
+        showValueLabel: `${val.toFixed(1)} AST`,
+        shortUnit: 'AST',
+      };
+    case 'pra':
+      return {
+        value: val,
+        benchmark: { ...benchmarks.player.pra, suffix: ' PRA' },
+        showValueLabel: `${val.toFixed(1)} PRA`,
+        shortUnit: 'PRA',
+      };
+    case 'gameScore':
+    case 'gmSc':
+      return {
+        value: val,
+        benchmark: { ...benchmarks.player.gmSc, suffix: ' GmSc' },
+        showValueLabel: `${val.toFixed(1)} GmSc`,
+        shortUnit: 'GmSc',
+      };
+    case 'usgEst':
+    case 'usgPct':
+      return {
+        value: val,
+        benchmark: { ...benchmarks.player.usgPct, suffix: '% USG' },
+        showValueLabel: `${val.toFixed(1)}% USG`,
+        shortUnit: 'USG%',
+      };
+    case 'minutes':
+    case 'min':
+      return {
+        value: val,
+        benchmark: { ...benchmarks.player.min, suffix: ' MIN' },
+        showValueLabel: `${val.toFixed(1)} MIN`,
+        shortUnit: 'MIN',
+      };
+    case 'tsPct':
+      return {
+        value: val,
+        benchmark: { ...benchmarks.player.tsPct, suffix: '% TS' },
+        showValueLabel: `${val.toFixed(1)}% TS`,
+        shortUnit: 'TS%',
+      };
+    case 'efgPct':
+      return {
+        value: val,
+        benchmark: { ...benchmarks.player.efgPct, suffix: '% eFG' },
+        showValueLabel: `${val.toFixed(1)}% eFG`,
+        shortUnit: 'eFG%',
+      };
+    case 'fg3m':
+      return {
+        value: val,
+        benchmark: { ...benchmarks.player.fg3m, suffix: ' 3PM' },
+        showValueLabel: `${val.toFixed(1)} 3PM`,
+        shortUnit: '3PM',
+      };
+    case 'points':
+    case 'pts':
+    default:
+      return {
+        value: val,
+        benchmark: { ...benchmarks.player.pts, suffix: ' PTS' },
+        showValueLabel: `${val.toFixed(1)} PTS`,
+        shortUnit: 'PTS',
+      };
+  }
+}
+
+export function resolveStreakBenchmark(
+  st: Pick<
+    StreakEntry,
+    'id' | 'entityType' | 'metricLabel' | 'windowAvgDuringStreak'
+  >,
+  benchmarks: LeagueBenchmarks
+): ResolvedStatBenchmark {
+  const val = st.windowAvgDuringStreak;
+
+  if (st.entityType === 'team' || st.metricLabel === 'Net Rating') {
+    return {
+      value: val,
+      benchmark: {
+        ...benchmarks.team.netRtg,
+        isZeroSumBalance: false,
+        suffix: ' NetRtg',
+      },
+      showValueLabel: `${formatSigned(val, 1)} NetRtg`,
+      shortUnit: 'NetRtg',
+    };
+  }
+
+  if (st.id.includes('-reb') || st.metricLabel === 'Rebotes') {
+    return {
+      value: val,
+      benchmark: { ...benchmarks.player.reb, suffix: ' REB' },
+      showValueLabel: `${val.toFixed(1)} REB`,
+      shortUnit: 'REB',
+    };
+  }
+  if (st.id.includes('-ast') || st.metricLabel === 'Asistencias') {
+    return {
+      value: val,
+      benchmark: { ...benchmarks.player.ast, suffix: ' AST' },
+      showValueLabel: `${val.toFixed(1)} AST`,
+      shortUnit: 'AST',
+    };
+  }
+  if (st.id.includes('-3pm') || st.metricLabel === 'Triples') {
+    return {
+      value: val,
+      benchmark: { ...benchmarks.player.fg3m, suffix: ' 3PM' },
+      showValueLabel: `${val.toFixed(1)} 3PM`,
+      shortUnit: '3PM',
+    };
+  }
+  if (st.id.includes('-gmsc') || st.metricLabel === 'Game Score') {
+    return {
+      value: val,
+      benchmark: { ...benchmarks.player.gmSc, suffix: ' GmSc' },
+      showValueLabel: `${val.toFixed(1)} GmSc`,
+      shortUnit: 'GmSc',
+    };
+  }
+  if (st.id.includes('-cold_ts') || st.metricLabel === 'Tiro Verdadero') {
+    return {
+      value: val,
+      benchmark: { ...benchmarks.player.tsPct, suffix: '% TS' },
+      showValueLabel: `${val.toFixed(1)}% TS`,
+      shortUnit: 'TS%',
+    };
+  }
+
+  return {
+    value: val,
+    benchmark: { ...benchmarks.player.pts, suffix: ' PTS' },
+    showValueLabel: `${val.toFixed(1)} PTS`,
+    shortUnit: 'PTS',
+  };
 }
 
 export function plainAnomalyExplanation(sig: AnomalySignal): {
@@ -1323,12 +1591,22 @@ export const COLUMN_HELP: Record<string, ColumnHelpEntry> = {
       'Dejar a los oponentes por debajo de 109–110 PTS es nivel defensivo top.',
   },
   differential: {
-    title: 'Margen Medio de Puntos (Diferencial)',
+    title: 'Margen Medio de Puntos (Diferencial +/-)',
     simpleDesc:
-      'Ventaja (+) o desventaja (−) media de puntos por la que gana o pierde sus encuentros.',
-    calculation: 'Puntos Anotados por partido (PTS Favor) − Puntos Recibidos por partido (PTS Contra).',
+      'Ventaja (+) o desventaja (−) media de puntos por la que gana o pierde sus encuentros respecto al equilibrio de la NBA.',
+    calculation:
+      'Puntos Anotados por partido (PTS Favor) − Puntos Recibidos por partido (PTS Contra). La referencia Media NBA (±PTS) refleja la desviación media real entre las 30 franquicias respecto al punto de equilibrio (0).',
     benchmarkText:
-      '+5.0 PTS o más suele corresponder a claros aspirantes al anillo.',
+      'Media NBA de desviación ~±4.8 PTS · +5.0 PTS o más distingue a claros aspirantes al anillo.',
+  },
+  avgMargin: {
+    title: 'Margen Medio de Victoria por Partido NBA',
+    simpleDesc:
+      'Diferencia media de puntos por la que se deciden los partidos oficiales en el marcador final.',
+    calculation:
+      'Promedio del valor absoluto |Puntos Local − Puntos Visitante| en todos los encuentros disputados.',
+    benchmarkText:
+      '~12.0 PTS es el margen medio habitual por el que se resuelve un partido NBA.',
   },
   windowDiff: {
     title: 'Margen de Puntos Reciente',
@@ -1660,13 +1938,13 @@ export const COLUMN_HELP: Record<string, ColumnHelpEntry> = {
       'Reúne en una sola fila las 5 mejores hojas estadísticas del día sin revisar 10–12 boxscores.',
   },
   gamedayMatchKeys: {
-    title: 'Radiografía Automática de Claves del Partido',
+    title: 'Diagnóstico Individual de Claves del Partido',
     simpleDesc:
-      'Explica en dos frases por qué ganó cada equipo analizando las ventajas estadísticas reales que decidieron el marcador.',
+      'Detecta automáticamente las dos causas específicas que decidieron cada encuentro concreto, evitando plantillas genéricas cuando la historia real estuvo en otro apartado.',
     calculation:
-      'Evalúa y jerarquiza los diferenciales Ganador vs Perdedor en los Cuatro Factores de Dean Oliver: 1) Tiro Efectivo (eFG%), 2) Volumen y puntería exterior (3PM / 3P%), 3) Pérdidas provocadas (TOV / TOV%), 4) Rebote ofensivo (OREB%) y 5) Tiros libres anotados (FTM).',
+      'Evalúa más de 15 casuísticas individuales por partido y elige las 2 de mayor peso real: paradojas de victoria con peor tiro, sangría de tiros libres en finales apretados, asedio en tiros de 2 frente al triple, robos y pérdidas, segundas opciones, cerrojos defensivos, explosiones de secundarios (Factor X), anulación de la estrella rival, rachas y peaje físico de Back-to-Back.',
     benchmarkText:
-      'Pulsa cualquier partido para desplegar al instante los mejores jugadores de ambos equipos.',
+      'Combina siempre dos dimensiones complementarias del partido · Pulsa la tarjeta para abrir el informe completo.',
   },
   gamedayExplosions: {
     title: 'Noches de Explosión frente a su Media (▲)',
@@ -1741,13 +2019,113 @@ export const COLUMN_HELP: Record<string, ColumnHelpEntry> = {
       'Ganar 3 o más de estas 5 batallas tácticas se traduce en victoria en más del 78% de los partidos NBA.',
   },
   gameReportLeaders: {
-    title: 'Cara a Cara: Líderes Individuales (#Dorsal I. Apellido)',
+    title: 'Cara a Cara: Líderes Individuales (20 categorías)',
     simpleDesc:
-      'Enfrenta directamente al mejor especialista del equipo visitante y del equipo local en las 8 grandes categorías individuales del encuentro.',
+      'Enfrenta directamente al referente del equipo visitante y del equipo local en las 20 categorías individuales esenciales del partido.',
     calculation:
-      'Selecciona al líder máximo de cada plantilla en Puntos, Rebotes, Asistencias, Triples, Robos, Tapones, Más/Menos (+/-) y Valoración (GmSc), desempatando por eficiencia y menor número de minutos.',
+      'Selecciona al líder máximo de cada plantilla en cada apartado (desempatando por Game Score y menor minutaje). En "Pérdidas" muestra al jugador con más balones perdidos de cada equipo y otorga la ventaja al registro más bajo.',
     benchmarkText:
-      'Formato estricto de scouting oficial: #Dorsal Inicial. Apellido (Registro). Pulsa cualquier líder para abrir su ficha.',
+      'Incluye retrato oficial, dorsal, dato destacado, ventaja diferencial y pulso comparativo. Pulsa cualquier jugador para abrir su ficha.',
+  },
+  threeRatio: {
+    title: 'Ratio de Tiros de Tres (3PAr %)',
+    simpleDesc:
+      'Mide el peso del perímetro en la pizarra ofensiva: qué proporción de todos los tiros en juego del equipo se lanzaron desde la línea de triple.',
+    calculation: '(Triples Intentados FG3A / Tiros de Campo Intentados FGA) × 100.',
+    benchmarkText:
+      '~41% es la media NBA actual · 46%+ refleja un sistema ultramoderno de cinco abiertos (5-Out).',
+  },
+  personalFouls: {
+    title: 'Faltas Personales Cometidas (FP / PF)',
+    simpleDesc:
+      'Infracciones de contacto señaladas sobre jugadores o equipo. Cometer menos faltas evita regalar tiros libres fáciles en bonus. Con 6 faltas un jugador queda expulsado.',
+    calculation: 'Suma oficial en acta de faltas personales (excluye técnicas de banquillo). Menor cifra otorga ventaja disciplinaria.',
+    benchmarkText:
+      'Equipo: ~19.0 FP es la media NBA (<16 FP = gran disciplina defensiva). Jugador: 6 FP = eliminación del partido.',
+  },
+  fgmMade: {
+    title: 'Tiros de Campo Anotados (TC / FGM)',
+    simpleDesc:
+      'Total de canastas en juego convertidas durante el partido (sumando tiros de dos puntos y triples, sin contar tiros libres).',
+    calculation: 'Conteo directo de lanzamientos en juego encestados (FGM), acompañado de los intentos totales (FGM/FGA).',
+    benchmarkText:
+      'Jugador: 10+ TC anotados refleja una noche de gran peso anotador · Equipo: ~42 TC es la media NBA.',
+  },
+  fg3a: {
+    title: 'Triples Intentados (3PA / T3I)',
+    simpleDesc:
+      'Volumen total de lanzamientos ejecutados desde más allá del arco de tres puntos.',
+    calculation: 'Suma de triples anotados más triples fallados en el encuentro (FG3A).',
+    benchmarkText:
+      'Jugador: 8+ intentos identifica a especialistas exteriores de alto volumen · Equipo: ~37 intentos media NBA.',
+  },
+  ftmMade: {
+    title: 'Tiros Libres Anotados (TL / FTM)',
+    simpleDesc:
+      'Puntos convertidos desde la línea de personal (a 4,57 m) tras recibir faltas de tiro o faltas en situación de bonus.',
+    calculation: 'Conteo directo de tiros libres encestados (FTM), mostrado junto a los lanzados (FTM/FTA).',
+    benchmarkText:
+      'Jugador: 8+ TL anotados indica castigo constante atacando la pintura y sacando faltas.',
+  },
+  leaderTurnovers: {
+    title: 'Pérdidas de Balón · Máximo Perdedor (PER)',
+    simpleDesc:
+      'Identifica al jugador de cada equipo que más balones perdió en el encuentro. Al ser una métrica negativa, la ventaja recae en el equipo cuyo máximo perdedor cometió MENOS errores.',
+    calculation:
+      'Selecciona máx(TOV) de cada plantilla; compara ambos registros otorgando la ventaja al valor numérico inferior.',
+    benchmarkText:
+      '≤2 pérdidas en el principal manejador es control élite · 5+ pérdidas señala fuerte presión defensiva rival.',
+  },
+  sixthMan: {
+    title: 'Mejor Suplente (Impacto 6.º Hombre)',
+    simpleDesc:
+      'Destaca al jugador más determinante saliendo desde el banquillo (no titular) en cada equipo.',
+    calculation:
+      'Filtra exclusivamente suplentes y elige al de mayor valoración integral Hollinger Game Score (GmSc) en el partido.',
+    benchmarkText:
+      '14.0+ GmSc desde el banquillo suele inclinar los tramos de rotación de segunda unidad.',
+  },
+  matchAdvantageDelta: {
+    title: 'Ventaja Estadística Directa (Δ)',
+    simpleDesc:
+      'Muestra la diferencia neta exacta en esa categoría a favor del equipo o líder ganador del duelo.',
+    calculation:
+      'Valor absoluto |Visitante − Local| acompañado de las siglas del conjunto con mejor registro (invirtiendo el sentido en Pérdidas y Faltas).',
+    benchmarkText: 'Permite detectar al instante dónde se abrieron las brechas reales del marcador.',
+  },
+  comparisonPulse: {
+    title: 'Pulso Comparativo Alineado',
+    simpleDesc:
+      'Representación visual proporcional del cara a cara entre Visitante (izquierda) y Local (derecha) en una columna unificada.',
+    calculation:
+      'Proporción relativa entre ambos valores acotada entre 10% y 90%. Invierte automáticamente las métricas donde menos es mejor (Pérdidas, TOV%, Faltas) y normaliza escalas con negativos (+/-).',
+    benchmarkText: 'El tramo iluminado en naranja identifica al dominador de esa faceta.',
+  },
+  decisivePeriod: {
+    title: 'Tramo Decisivo / Punto de Quiebre',
+    simpleDesc:
+      'Señala el cuarto o prórroga donde el ganador abrió la brecha parcial más determinante del encuentro.',
+    calculation:
+      'Evalúa el diferencial neto periodo a periodo (1Q–4Q y PR) a favor del vencedor final del partido.',
+    benchmarkText: 'Un parcial de +8 o más puntos en un cuarto suele romper la inercia táctica.',
+  },
+  leadChangesTies: {
+    title: 'Alternancias de Mando y Empates',
+    simpleDesc:
+      'Refleja cuántas veces cambió de dueño el liderato en el marcador y cuántas veces se igualó el tanteo.',
+    calculation:
+      'Contabilizado jugada a jugada en el acta oficial de NBA.com (leadChanges y timesTied).',
+    benchmarkText:
+      '12+ cambios de líder definen un duelo de máxima igualdad y alternativas constantes.',
+  },
+  gamePaceVsLeague: {
+    title: 'Ritmo del Encuentro vs. Media NBA (Pace)',
+    simpleDesc:
+      'Estima las posesiones jugadas por cada 48 minutos y las compara directamente con el ritmo medio de toda la NBA en esta misma temporada.',
+    calculation:
+      'Pace del partido − Promedio oficial de Pace de los 30 equipos NBA en la campaña del encuentro.',
+    benchmarkText:
+      'Positivo (+) indica un partido más eléctrico y de ida y vuelta que la media de la liga; negativo (−) indica baloncesto pausado en media pista.',
   },
   benchPts: {
     title: 'Puntos de la Segunda Unidad (Banquillo)',
@@ -1767,6 +2145,148 @@ export const COLUMN_HELP: Record<string, ColumnHelpEntry> = {
     benchmarkText:
       'Remontar desventajas de 15+ puntos distingue victorias de enorme resiliencia táctica.',
   },
+  fg2m: {
+    title: 'Tiros de Dos Anotados por Partido (T2A)',
+    simpleDesc:
+      'Canastas convertidas dentro del arco de tres puntos (bandejas, mates, posteos y media distancia).',
+    calculation: '(Tiros de Campo Anotados FGM − Triples Anotados FG3M) / Partidos jugados.',
+    benchmarkText:
+      '6.0+ T2A por noche identifica a grandes finalizadores interiores y especialistas de media distancia.',
+  },
+  fg2a: {
+    title: 'Tiros de Dos Intentados por Partido (T2I)',
+    simpleDesc:
+      'Volumen de lanzamientos en juego ejecutados desde dentro de la línea de tres puntos.',
+    calculation: '(Tiros de Campo Intentados FGA − Triples Intentados FG3A) / Partidos jugados.',
+    benchmarkText:
+      'Mide el peso del juego interior y de media distancia dentro del repertorio del jugador.',
+  },
+  fg2Pct: {
+    title: 'Porcentaje en Tiros de Dos (T2%)',
+    simpleDesc:
+      'Eficacia anotadora en lanzamientos de dos puntos (excluyendo triples y tiros libres).',
+    calculation: '((FGM − FG3M) / (FGA − FG3A)) × 100.',
+    benchmarkText:
+      '~54.5% es la media NBA actual · 60%+ refleja gran eficacia finalizando cerca del aro.',
+  },
+  ftr: {
+    title: 'Ratio de Tiros Libres (Free Throw Rate · FTr %)',
+    simpleDesc:
+      'Mide cuántos tiros libres provoca el jugador en proporción a sus lanzamientos de campo: refleja agresividad física atacando el aro.',
+    calculation: '(Tiros Libres Intentados FTA / Tiros de Campo Intentados FGA) × 100.',
+    benchmarkText:
+      '~26% media rotación NBA · 38%+ identifica a especialistas sacando faltas personales.',
+  },
+  tovRatioEst: {
+    title: 'Ratio de Pérdidas Ofensivas (TOV% indiv.)',
+    simpleDesc:
+      'Qué porcentaje de las jugadas que finaliza el jugador acaban en balón perdido antes de poder lanzar. ¡Menos es mejor!',
+    calculation: 'Pérdidas TOV / (FGA + 0.44 × FTA + TOV) × 100.',
+    benchmarkText:
+      '<10% = gran seguridad · ~12.5% = media rotación NBA · >16% = exceso de pérdidas.',
+  },
+  ptsPerShot: {
+    title: 'Puntos por Tiro de Campo Intentado (PTS/TCI)',
+    simpleDesc:
+      'Rentabilidad directa de cada lanzamiento de campo intentado incluyendo los puntos sumados desde el tiro libre.',
+    calculation: 'Puntos Totales (PTS) / Tiros de Campo Intentados (FGA).',
+    benchmarkText:
+      '~1.24 PTS/TCI es la media NBA · 1.38+ indica una eficiencia ofensiva sobresaliente.',
+  },
+  ptsPer36: {
+    title: 'Ratio Puntos por 36 Minutos (PTS/36)',
+    simpleDesc:
+      'Ritmo anotador estandarizado a 36 minutos de juego para comparar en igualdad a titulares y suplentes.',
+    calculation: '(Puntos Totales PTS / Minutos Jugados MIN) × 36.',
+    benchmarkText:
+      '20+ PTS/36 = anotador sólido · 26+ PTS/36 = producción ofensiva de calibre All-Star.',
+  },
+  praPer36: {
+    title: 'Producción PRA por 36 Minutos (PRA/36)',
+    simpleDesc:
+      'Suma de Puntos + Rebotes + Asistencias proyectada por cada 36 minutos sobre el parqué.',
+    calculation: '((PTS + REB + AST) / Minutos Jugados MIN) × 36.',
+    benchmarkText:
+      '36+ PRA/36 = impacto integral alto · 44+ PRA/36 = ritmo de superestrella.',
+  },
+  stocksPer36: {
+    title: 'Robos + Tapones por 36 Minutos (STK/36)',
+    simpleDesc:
+      'Tasa de disrupción defensiva (recuperaciones más tapones) estandarizada a 36 minutos en pista.',
+    calculation: '((Robos STL + Tapones BLK) / Minutos Jugados MIN) × 36.',
+    benchmarkText:
+      '2.8+ STK/36 identifica a defensores de élite independientemente de su minutaje.',
+  },
+  astRatio: {
+    title: 'Ratio de Asistencias NBA.com (AST Ratio)',
+    simpleDesc:
+      'Cuántas de cada 100 posesiones que pasan y terminan por manos del jugador se convierten en asistencia.',
+    calculation: '(Asistencias AST × 100) / (FGA + 0.44 × FTA + AST + TOV).',
+    benchmarkText:
+      '~18.0 media rotación NBA · 28+ distingue a bases organizadores puros.',
+  },
+  rebPct: {
+    title: 'Porcentaje de Rebote Total en Pista (REB%)',
+    simpleDesc:
+      'Porcentaje de todos los rebotes disponibles (en ambos aros) que captura el jugador mientras está en cancha.',
+    calculation: 'Rebotes Jugador / Rebotes Totales Disponibles con él en pista × 100 (NBA.com).',
+    benchmarkText:
+      '~8.5% media rotación NBA · 16%+ identifica a dominadores de los tableros.',
+  },
+  doubleDoubles: {
+    title: 'Dobles-Dobles Logrados (DD2)',
+    simpleDesc:
+      'Partidos en los que el jugador alcanza dobles dígitos (10 o más) en al menos dos apartados estadísticos.',
+    calculation:
+      'Conteo de partidos donde al menos 2 de [Puntos, Rebotes, Asistencias, Robos, Tapones] son ≥ 10.',
+    benchmarkText:
+      'Referencia clásica de consistencia interior y de bases directores de juego.',
+  },
+  prCombo: {
+    title: 'Combinada Puntos + Rebotes (PTS+REB)',
+    simpleDesc:
+      'Suma directa de los puntos anotados más los rebotes totales capturados en el encuentro.',
+    calculation: 'Puntos (PTS) + Rebotes Totales (REB) por partido.',
+    benchmarkText:
+      '30+ PTS+REB por noche distingue a referentes interiores y aleros dominantes.',
+  },
+  paCombo: {
+    title: 'Combinada Puntos + Asistencias (PTS+AST)',
+    simpleDesc:
+      'Suma de puntos propios anotados más asistencias repartidas, reflejando el peso generador ofensivo directo.',
+    calculation: 'Puntos (PTS) + Asistencias (AST) por partido.',
+    benchmarkText:
+      '32+ PTS+AST por noche caracteriza a bases y escoltas estrellas (1ª espada).',
+  },
+  raCombo: {
+    title: 'Combinada Rebotes + Asistencias (REB+AST)',
+    simpleDesc:
+      'Mide el impacto complementario sin necesidad de anotar sumando control del cristal y creación de juego.',
+    calculation: 'Rebotes Totales (REB) + Asistencias (AST) por partido.',
+    benchmarkText:
+      '14+ REB+AST identifica a conectores todoterreno y pívots distribuidores.',
+  },
+  drebPer36: {
+    title: 'Rebotes Defensivos por 36 Minutos (DR/36)',
+    simpleDesc:
+      'Tasa de cierre del propio tablero proyectada a 36 minutos en pista.',
+    calculation: '(Rebotes Defensivos DREB / Minutos Jugados MIN) × 36.',
+    benchmarkText: '8.0+ DR/36 refleja gran solvencia asegurando el rebote defensivo.',
+  },
+  orebPer36: {
+    title: 'Rebotes Ofensivos por 36 Minutos (OR/36)',
+    simpleDesc:
+      'Capacidad para generar segundas oportunidades en el aro rival estandarizada por cada 36 minutos.',
+    calculation: '(Rebotes Ofensivos OREB / Minutos Jugados MIN) × 36.',
+    benchmarkText: '3.2+ OR/36 identifica a especialistas en cargar el rebote ofensivo.',
+  },
+  tsaVolume: {
+    title: 'Posesiones de Tiro Lanzadas (TSA)',
+    simpleDesc:
+      'Volumen real de lanzamientos consumidos sumando tiros de campo y viajes a la línea de tiros libres.',
+    calculation: 'Tiros de Campo Intentados (FGA) + 0.44 × Tiros Libres Intentados (FTA).',
+    benchmarkText: '18+ TSA refleja volumen ofensivo propio de primera opción anotadora.',
+  },
 };
 
 const METRIC_KEY_ALIASES: Record<string, string> = {
@@ -1783,17 +2303,39 @@ const METRIC_KEY_ALIASES: Record<string, string> = {
   minutes: 'minBase',
   min: 'minBase',
   stocks: 'stocksBase',
+  turnovers: 'tov',
+  fouls: 'personalFouls',
+  fgm: 'fgmMade',
+  fga: 'fga',
+  ftm: 'ftmMade',
+  fta: 'fta',
+  threePar: 'threeRatio',
+  threeRate: 'threeRatio',
+  ftRate: 'ftr',
+  tovPctEst: 'tovRatioEst',
+  doubleDouble: 'doubleDoubles',
+  tripleDouble: 'tripleDoubles',
+  ptsReb: 'prCombo',
+  ptsAst: 'paCombo',
+  rebAst: 'raCombo',
+  tsa: 'tsaVolume',
+  fg_split: 'fgPct',
+  fg2_split: 'fg2Pct',
+  fg3_split: 'fg3Pct',
+  ft_split: 'ftPct',
   plusMinus: 'plusMinusBase',
   usgEst: 'usgPct',
   gameScore: 'gmSc',
   fg3mAvg: 'fg3m',
   pf: 'avgPointsFor',
   pa: 'avgPointsAgainst',
+  avgPointsAgainst: 'avgPointsAgainst',
   diff: 'differential',
   pace: 'paceSimple',
   // Milestones Global IDs
   ppg: 'avgPointsFor',
   tot: 'totalGamePoints',
+  margin: 'avgMargin',
   offrtg: 'offRtg',
   efg: 'efgPct',
   ts: 'tsPct',
@@ -1808,39 +2350,147 @@ const METRIC_KEY_ALIASES: Record<string, string> = {
   homew: 'homeWinPct',
   close: 'closeGamesPct',
   blowout: 'blowoutGamesPct',
-  // Milestones Single-Game IDs
+  // Milestones Single-Game IDs (51 metrics)
   'sg-player-pts': 'ptsBase',
-  'sg-player-gmsc': 'gmSc',
+  'sg-player-fgm': 'fgmMade',
+  'sg-player-fga': 'fga',
+  'sg-player-fg2m': 'fg2m',
   'sg-player-3pm': 'fg3m',
-  'sg-player-oreb': 'orebBase',
+  'sg-player-3pa': 'fg3a',
+  'sg-player-ftm': 'ftmMade',
+  'sg-player-fta': 'fta',
+  'sg-player-ft-perfect': 'ftPct',
+  'sg-player-fgpct': 'fgPct',
+  'sg-player-3ppct': 'fg3Pct',
+  'sg-player-ts': 'tsPct',
+  'sg-player-efg': 'efgPct',
   'sg-player-reb': 'rebBase',
+  'sg-player-oreb': 'orebBase',
+  'sg-player-dreb': 'drebBase',
   'sg-player-ast': 'astBase',
+  'sg-player-ast-notov': 'astTo',
+  'sg-player-pra': 'pra',
+  'sg-player-stl': 'steals',
+  'sg-player-blk': 'blocks',
   'sg-player-stocks': 'stocksBase',
+  'sg-player-tov': 'tov',
+  'sg-player-gmsc': 'gmSc',
   'sg-player-pm': 'plusMinusBase',
+  'sg-player-usg': 'usgPct',
+  'sg-player-min': 'minBase',
   'sg-team-pts': 'avgPointsFor',
-  'sg-team-3pm': 'fg3m',
-  'sg-team-margin': 'differential',
   'sg-team-total': 'totalGamePoints',
-  // Milestones Season Leaders IDs
-  'sl-player-orb-avg': 'orebBase',
-  'sl-player-orb-tot': 'orebBase',
-  'sl-team-orb-avg': 'orebBase',
-  'sl-player-reb-avg': 'rebBase',
+  'sg-team-fgm': 'fgmMade',
+  'sg-team-fgpct': 'fgPct',
+  'sg-team-3pm': 'fg3m',
+  'sg-team-3pa': 'fg3a',
+  'sg-team-3ppct': 'fg3Pct',
+  'sg-team-ftm': 'ftmMade',
+  'sg-team-efg': 'efgPct',
+  'sg-team-ts': 'tsPct',
+  'sg-team-reb': 'rebBase',
+  'sg-team-oreb': 'orebBase',
+  'sg-team-dreb': 'drebBase',
+  'sg-team-ast': 'astBase',
+  'sg-team-stl': 'steals',
+  'sg-team-blk': 'blocks',
+  'sg-team-stocks': 'stocksBase',
+  'sg-team-opp-pts-low': 'avgPointsAgainst',
+  'sg-team-tov-low': 'tov',
+  'sg-team-defrtg': 'defRtg',
+  'sg-team-margin': 'differential',
+  'sg-team-offrtg': 'offRtg',
+  'sg-team-netrtg': 'netRtg',
+  'sg-team-pace': 'paceSimple',
+  // Milestones Season Leaders IDs (88 metrics)
   'sl-player-pts-avg': 'ptsBase',
+  'sl-player-pts-tot': 'ptsBase',
+  'sl-player-pts36': 'ptsPer36',
+  'sl-player-fgm-avg': 'fgmMade',
+  'sl-player-fgm-tot': 'fgmMade',
+  'sl-player-fga-avg': 'fga',
+  'sl-player-fgpct': 'fgPct',
+  'sl-player-fg2m-avg': 'fg2m',
+  'sl-player-fg2pct': 'fg2Pct',
   'sl-player-3pm-avg': 'fg3m',
   'sl-player-3pm-tot': 'fg3m',
-  'sl-team-3pm-avg': 'fg3m',
+  'sl-player-3pa-avg': 'fg3a',
+  'sl-player-3ppct': 'fg3Pct',
+  'sl-player-ftm-avg': 'ftmMade',
+  'sl-player-ftm-tot': 'ftmMade',
+  'sl-player-fta-avg': 'fta',
+  'sl-player-ftpct': 'ftPct',
+  'sl-player-efg': 'efgPct',
+  'sl-player-ts': 'tsPct',
+  'sl-player-reb-avg': 'rebBase',
+  'sl-player-reb-tot': 'rebBase',
+  'sl-player-orb-avg': 'orebBase',
+  'sl-player-orb-tot': 'orebBase',
+  'sl-player-drb-avg': 'drebBase',
+  'sl-player-drb-tot': 'drebBase',
+  'sl-player-reb36': 'rebPer36',
+  'sl-player-orebpct': 'orebPct',
+  'sl-player-rebpct': 'rebPct',
   'sl-player-ast-avg': 'astBase',
-  'sl-player-blk-avg': 'blocks',
+  'sl-player-ast-tot': 'astBase',
+  'sl-player-astto': 'astTo',
+  'sl-player-ast36': 'astPer36',
+  'sl-player-astpct': 'astPct',
+  'sl-player-pra-avg': 'pra',
+  'sl-player-pr-avg': 'prCombo',
+  'sl-player-pa-avg': 'paCombo',
+  'sl-player-ra-avg': 'raCombo',
+  'sl-player-dd2': 'doubleDoubles',
   'sl-player-td3': 'tripleDoubles',
+  'sl-player-gmsc-avg': 'gmSc',
+  'sl-player-min-avg': 'minBase',
+  'sl-player-min-tot': 'minBase',
+  'sl-player-pm-avg': 'plusMinusBase',
+  'sl-player-pm-tot': 'plusMinusBase',
+  'sl-player-stl-avg': 'steals',
+  'sl-player-stl-tot': 'steals',
+  'sl-player-blk-avg': 'blocks',
+  'sl-player-blk-tot': 'blocks',
+  'sl-player-stocks-avg': 'stocksBase',
+  'sl-player-stocks-tot': 'stocksBase',
+  'sl-player-defl': 'deflections',
+  'sl-player-contest': 'contestedShots',
+  'sl-player-loose': 'looseBalls',
+  'sl-player-boxouts': 'boxOuts',
+  'sl-player-tov-high': 'tov',
+  'sl-player-pf-low': 'personalFouls',
   'sl-player-usg': 'usgPct',
   'sl-player-pie': 'pie',
-  'sl-player-ts': 'tsPct',
+  'sl-player-netrtg': 'netRtg',
+  'sl-player-offrtg': 'offRtg',
+  'sl-player-defrtg': 'defRtg',
   'sl-player-paint': 'ptsPaint',
-  'sl-player-defl': 'deflections',
-  'sl-team-netrtg': 'netRtg',
+  'sl-player-fb': 'ptsFastBreak',
+  'sl-player-2nd': 'pts2ndChance',
+  'sl-player-pfd': 'foulsDrawn',
+  'sl-player-screen': 'screenAssists',
+  'sl-team-winpct': 'winPct',
+  'sl-team-pts-avg': 'avgPointsFor',
+  'sl-team-opp-pts': 'avgPointsAgainst',
+  'sl-team-diff': 'differential',
+  'sl-team-offrtg': 'offRtg',
   'sl-team-defrtg': 'defRtg',
+  'sl-team-netrtg': 'netRtg',
   'sl-team-pace': 'paceSimple',
+  'sl-team-3pm-avg': 'fg3m',
+  'sl-team-3ppct': 'fg3Pct',
+  'sl-team-fgpct': 'fgPct',
+  'sl-team-ftpct': 'ftPct',
+  'sl-team-efg': 'efgPct',
+  'sl-team-ts': 'tsPct',
+  'sl-team-reb-avg': 'rebBase',
+  'sl-team-orb-avg': 'orebBase',
+  'sl-team-ast-avg': 'astBase',
+  'sl-team-stl-avg': 'steals',
+  'sl-team-blk-avg': 'blocks',
+  'sl-team-tov-low': 'tov',
+  'sl-team-paint': 'ptsPaint',
+  'sl-team-fb': 'ptsFastBreak',
 };
 
 export function resolveMetricHelp(
