@@ -1051,3 +1051,20 @@ export interface FantasyNbaContextPayload {
 }
 
 export type FantasyEspnSyncPayload = FantasyNbaContextPayload;
+
+export interface AdminSecurityConfigValues {
+  nbaApiLimit: number;
+  nbaApiWindowMinutes: number;
+  nbaRefreshLimit: number;
+  nbaRefreshWindowMinutes: number;
+  adminBruteForceMaxAttempts: number;
+  adminBruteForceWindowMinutes: number;
+  adminFloodLimit: number;
+  adminFloodWindowMinutes: number;
+  adminSessionTtlHours: number;
+}
+
+export interface AdminSecurityConfig extends AdminSecurityConfigValues {
+  updatedAt: number;
+}
+

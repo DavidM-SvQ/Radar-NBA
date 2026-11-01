@@ -363,6 +363,12 @@ export function EntityInspectorDrawer({
   const [chartMetricCategory, setChartMetricCategory] = useState<
     'basic' | 'advanced' | 'all'
   >('basic');
+  const [chartLayoutMode, setChartLayoutMode] = useState<
+    'timeline' | 'parallel'
+  >('timeline');
+  const [parallelAlign, setParallelAlign] = useState<'opening' | 'recent'>(
+    'opening'
+  );
   const [hoveredChartIdx, setHoveredChartIdx] = useState<number | null>(null);
 
   const [selectedLogCols, setSelectedLogCols] =
@@ -702,6 +708,7 @@ export function EntityInspectorDrawer({
         idx,
         dateLabel: formatShortDate(g.date),
         seasonShort: g.seasonLabel === '2026-27' ? '26/27' : '25/26',
+        isCurrentSeason: g.seasonLabel === '2026-27',
         matchupLabel: `${g.isHome ? 'vs' : '@'} ${g.opponentAbbr}`,
         result: g.result,
         minutes: g.minutes,
@@ -731,6 +738,7 @@ export function EntityInspectorDrawer({
         idx,
         dateLabel: formatShortDate(g.date),
         seasonShort: g.seasonLabel === '2026-27' ? '26/27' : '25/26',
+        isCurrentSeason: g.seasonLabel === '2026-27',
         matchupLabel: `${g.isHome ? 'vs' : '@'} ${g.opponentAbbr}`,
         result: g.result,
         minutes: 48,
@@ -747,6 +755,123 @@ export function EntityInspectorDrawer({
     }
 
     return { values: [], base: 0, baseLabel: '', pointsMeta: [] };
+  })();
+
+  const parallelChartData = (() => {
+    type ParallelSeriesPoint = {
+      slot: number;
+      seasonGameNum: number;
+      value: number;
+      formattedValue: string;
+      dateLabel: string;
+      matchupLabel: string;
+      result: 'W' | 'L';
+      minutes: number;
+    };
+
+    if (!player) {
+      return {
+        slotCount: 0,
+        series27: [] as ParallelSeriesPoint[],
+        series26: [] as ParallelSeriesPoint[],
+        bySlot27: new Map<number, ParallelSeriesPoint>(),
+        bySlot26: new Map<number, ParallelSeriesPoint>(),
+        mean27: null as number | null,
+        mean26: null as number | null,
+      };
+    }
+
+    const chrono27 = allPlayerGames
+      .filter((g) => g.seasonLabel === '2026-27')
+      .slice()
+      .reverse();
+    const chrono26 = allPlayerGames
+      .filter((g) => g.seasonLabel === '2025-26')
+      .slice()
+      .reverse();
+
+    const maxEither = Math.max(chrono27.length, chrono26.length);
+    let targetSlots = 18;
+    if (samplePreset === 'continuous_both' || samplePreset === 'season_2026') {
+      targetSlots = Math.max(2, maxEither);
+    } else if (
+      samplePreset === 'season_2027' ||
+      samplePreset === 'same_date_compare'
+    ) {
+      targetSlots = Math.max(
+        2,
+        chrono27.length > 1 ? chrono27.length : Math.min(18, maxEither)
+      );
+    } else {
+      targetSlots = Math.max(
+        2,
+        Math.min(maxEither, Math.max(chrono27.length, effectiveSliderCount))
+      );
+    }
+
+    const sub27 =
+      parallelAlign === 'opening'
+        ? chrono27.slice(0, targetSlots)
+        : chrono27.slice(Math.max(0, chrono27.length - targetSlots));
+    const sub26 =
+      parallelAlign === 'opening'
+        ? chrono26.slice(0, targetSlots)
+        : chrono26.slice(Math.max(0, chrono26.length - targetSlots));
+
+    const slotCount = Math.max(sub27.length, sub26.length);
+
+    const buildSeries = (
+      subset: PlayerGameLog[],
+      fullSeasonLen: number
+    ): ParallelSeriesPoint[] => {
+      const slotOffset =
+        parallelAlign === 'recent' ? Math.max(0, slotCount - subset.length) : 0;
+      const gameNumOffset =
+        parallelAlign === 'recent'
+          ? Math.max(0, fullSeasonLen - subset.length)
+          : 0;
+      return subset.map((g, idx) => {
+        const val = activePlayerChartMetric.gameValue(g);
+        return {
+          slot: slotOffset + idx,
+          seasonGameNum: gameNumOffset + idx + 1,
+          value: val,
+          formattedValue: formatMetricNumber(
+            val,
+            activePlayerChartMetric.decimals,
+            activePlayerChartMetric.suffix,
+            activePlayerChartMetric.signed
+          ),
+          dateLabel: formatShortDate(g.date),
+          matchupLabel: `${g.isHome ? 'vs' : '@'} ${g.opponentAbbr}`,
+          result: g.result,
+          minutes: g.minutes,
+        };
+      });
+    };
+
+    const series27 = buildSeries(sub27, chrono27.length);
+    const series26 = buildSeries(sub26, chrono26.length);
+
+    const bySlot27 = new Map<number, ParallelSeriesPoint>();
+    series27.forEach((p) => bySlot27.set(p.slot, p));
+    const bySlot26 = new Map<number, ParallelSeriesPoint>();
+    series26.forEach((p) => bySlot26.set(p.slot, p));
+
+    const mean27 =
+      sub27.length > 0 ? activePlayerChartMetric.sliceValue(sub27) : null;
+    const mean26 =
+      sub26.length > 0 ? activePlayerChartMetric.sliceValue(sub26) : null;
+
+    return {
+      slotCount,
+      series27,
+      series26,
+      bySlot27,
+      bySlot26,
+      mean27,
+      mean26,
+    };
   })();
 
   const filteredChartSelectorMetrics = useMemo(() => {
@@ -1061,11 +1186,11 @@ export function EntityInspectorDrawer({
   const wKey = `${entityType}:${entityId}`;
   const isWatched = watchlistIds.has(wKey);
 
-  // SVG Geometry for Trend Chart
+  // SVG Geometry for Trend Chart (Timeline & Parallel Season Modes)
   const svgW = 620;
-  const svgH = 162;
+  const svgH = 168;
   const padX = 24;
-  const padY = 22;
+  const padY = 24;
   const vals = chartData.values;
   const minVal = vals.length ? Math.min(...vals, chartData.base) : 0;
   const maxVal = vals.length ? Math.max(...vals, chartData.base) : 10;
@@ -1079,13 +1204,110 @@ export function EntityInspectorDrawer({
   const toY = (v: number) =>
     svgH - padY - ((v - minVal) / span) * (svgH - padY * 2);
 
-  const polylinePoints = vals.map((v, i) => `${toX(i)},${toY(v)}`).join(' ');
   const baseLineY = toY(chartData.base);
+
+  // Split timeline polyline into contiguous same-season segments (no offseason bridge line)
+  const seasonSegments: Array<{
+    isCurrentSeason: boolean;
+    pointsAttr: string;
+    count: number;
+  }> = [];
+  for (let i = 0; i < vals.length; i++) {
+    const isCurr = Boolean(chartData.pointsMeta[i]?.isCurrentSeason);
+    const coord = `${toX(i)},${toY(vals[i])}`;
+    const prevSeg = seasonSegments[seasonSegments.length - 1];
+    if (prevSeg && prevSeg.isCurrentSeason === isCurr) {
+      prevSeg.pointsAttr += ` ${coord}`;
+      prevSeg.count += 1;
+    } else {
+      seasonSegments.push({
+        isCurrentSeason: isCurr,
+        pointsAttr: coord,
+        count: 1,
+      });
+    }
+  }
+
+  // Compute exact X coordinates where season changes (e.g. 2025-26 -> 2026-27)
+  const seasonTransitions: Array<{
+    x: number;
+    leftLabel: string;
+    rightLabel: string;
+    leftCurrent: boolean;
+    rightCurrent: boolean;
+  }> = [];
+  for (let i = 1; i < chartData.pointsMeta.length; i++) {
+    const prevMeta = chartData.pointsMeta[i - 1];
+    const currMeta = chartData.pointsMeta[i];
+    if (prevMeta.isCurrentSeason !== currMeta.isCurrentSeason) {
+      seasonTransitions.push({
+        x: (toX(i - 1) + toX(i)) / 2,
+        leftLabel: prevMeta.seasonShort,
+        rightLabel: currMeta.seasonShort,
+        leftCurrent: prevMeta.isCurrentSeason,
+        rightCurrent: currMeta.isCurrentSeason,
+      });
+    }
+  }
+
+  const sampleCount26 = chartData.pointsMeta.filter(
+    (p) => !p.isCurrentSeason
+  ).length;
+  const sampleCount27 = chartData.pointsMeta.filter(
+    (p) => p.isCurrentSeason
+  ).length;
 
   const activePointMeta =
     hoveredChartIdx !== null && chartData.pointsMeta[hoveredChartIdx]
       ? chartData.pointsMeta[hoveredChartIdx]
       : chartData.pointsMeta[chartData.pointsMeta.length - 1] || null;
+
+  // Parallel Mode SVG Geometry (2 seasons sharing the same X-axis)
+  const parallelAllValues: number[] = [
+    ...parallelChartData.series27.map((p) => p.value),
+    ...parallelChartData.series26.map((p) => p.value),
+    ...(parallelChartData.mean27 !== null ? [parallelChartData.mean27] : []),
+    ...(parallelChartData.mean26 !== null ? [parallelChartData.mean26] : []),
+  ];
+  const pMinVal = parallelAllValues.length ? Math.min(...parallelAllValues) : 0;
+  const pMaxVal = parallelAllValues.length
+    ? Math.max(...parallelAllValues)
+    : 10;
+  const pRawSpan = pMaxVal - pMinVal;
+  const pSpan =
+    pRawSpan > 0 ? pRawSpan : Math.max(1, Math.abs(pMaxVal) * 0.2 || 2);
+
+  const pToX = (slot: number) =>
+    parallelChartData.slotCount <= 1
+      ? svgW / 2
+      : padX +
+        (slot / (parallelChartData.slotCount - 1)) * (svgW - padX * 2);
+  const pToY = (v: number) =>
+    svgH - padY - ((v - pMinVal) / pSpan) * (svgH - padY * 2);
+
+  const parallelPoints27 = parallelChartData.series27
+    .map((p) => `${pToX(p.slot)},${pToY(p.value)}`)
+    .join(' ');
+  const parallelPoints26 = parallelChartData.series26
+    .map((p) => `${pToX(p.slot)},${pToY(p.value)}`)
+    .join(' ');
+
+  const defaultParallelSlot =
+    parallelAlign === 'opening' && parallelChartData.series27.length > 0
+      ? parallelChartData.series27[parallelChartData.series27.length - 1].slot
+      : Math.max(0, parallelChartData.slotCount - 1);
+
+  const activeParallelSlot =
+    hoveredChartIdx !== null &&
+    hoveredChartIdx >= 0 &&
+    hoveredChartIdx < parallelChartData.slotCount
+      ? hoveredChartIdx
+      : defaultParallelSlot;
+
+  const activeParallel27 =
+    parallelChartData.bySlot27.get(activeParallelSlot) || null;
+  const activeParallel26 =
+    parallelChartData.bySlot26.get(activeParallelSlot) || null;
 
   // Game log active columns & rows
   const activeLogColumnDefs = selectedLogCols
@@ -1270,7 +1492,710 @@ export function EntityInspectorDrawer({
           {/* ================================================================ */}
           {player && (
             <>
-              {/* MASTER FILTER BAR: Configurable Sample Slider + 4 Predefined Ranges */}
+              {/* SECTION 1 (FIRST): Evolución temporal interactiva (Secuencia continua o 2 líneas paralelas) */}
+              <section className="space-y-3">
+                <div className="flex flex-wrap items-start justify-between gap-2.5">
+                  <div>
+                    <h3 className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-100">
+                      <span>
+                        {chartLayoutMode === 'timeline'
+                          ? `Evolución en ${sampleSelection.titleShort.toLowerCase()}`
+                          : `Evolución comparada 26/27 vs 25/26 (${parallelChartData.slotCount} PJ)`}
+                      </span>
+                      <MetricInfoTooltip
+                        helpKey={activePlayerChartMetric.helpKey}
+                        align="left"
+                      />
+                    </h3>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-400">
+                      {chartLayoutMode === 'timeline' ? (
+                        <>
+                          {sampleCount26 > 0 && (
+                            <span className="inline-flex items-center gap-1.5">
+                              <span className="inline-block w-3 h-0.5 bg-sky-400" />
+                              <span className="w-2 h-2 rounded-full bg-[#082F49] border border-sky-400 -ml-2.5 mr-0.5" />
+                              <span className="text-sky-300 font-medium">
+                                2025/26
+                              </span>
+                              <span className="font-mono tabular-nums text-slate-400">
+                                ({sampleCount26} PJ)
+                              </span>
+                            </span>
+                          )}
+                          {sampleCount27 > 0 && (
+                            <span className="inline-flex items-center gap-1.5">
+                              <span className="inline-block w-3 h-0.5 bg-orange-500" />
+                              <span className="w-2 h-2 rounded-full bg-orange-500 border border-orange-300 -ml-2.5 mr-0.5" />
+                              <span className="text-orange-300 font-medium">
+                                2026/27
+                              </span>
+                              <span className="font-mono tabular-nums text-slate-400">
+                                ({sampleCount27} PJ)
+                              </span>
+                            </span>
+                          )}
+                          {seasonTransitions.length > 0 && (
+                            <span className="inline-flex items-center gap-1 text-slate-400">
+                              <span className="inline-block h-3 border-l border-dashed border-slate-400" />
+                              <span>Cambio de curso</span>
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="inline-block w-3 h-0.5 bg-orange-500" />
+                            <span className="text-orange-300 font-medium">
+                              2026/27 ({parallelChartData.series27.length} PJ)
+                            </span>
+                            {parallelChartData.mean27 !== null && (
+                              <span className="font-mono tabular-nums text-slate-400">
+                                · Media{' '}
+                                {formatMetricNumber(
+                                  parallelChartData.mean27,
+                                  activePlayerChartMetric.decimals,
+                                  activePlayerChartMetric.suffix,
+                                  activePlayerChartMetric.signed
+                                )}
+                              </span>
+                            )}
+                          </span>
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="inline-block w-3 h-0.5 bg-sky-400" />
+                            <span className="text-sky-300 font-medium">
+                              2025/26 ({parallelChartData.series26.length} PJ)
+                            </span>
+                            {parallelChartData.mean26 !== null && (
+                              <span className="font-mono tabular-nums text-slate-400">
+                                · Media{' '}
+                                {formatMetricNumber(
+                                  parallelChartData.mean26,
+                                  activePlayerChartMetric.decimals,
+                                  activePlayerChartMetric.suffix,
+                                  activePlayerChartMetric.signed
+                                )}
+                              </span>
+                            )}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Chart Disposition Switch: Secuencia continua vs 2 líneas en paralelo */}
+                  <div className="inline-flex items-center gap-0.5 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setChartLayoutMode('timeline');
+                        setHoveredChartIdx(null);
+                      }}
+                      className={`px-2.5 py-1.5 text-xs rounded-md transition-colors whitespace-nowrap ${
+                        chartLayoutMode === 'timeline'
+                          ? 'bg-[#1E293B] text-slate-100 font-semibold'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Secuencia continua
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setChartLayoutMode('parallel');
+                        setHoveredChartIdx(null);
+                      }}
+                      className={`px-2.5 py-1.5 text-xs rounded-md transition-colors whitespace-nowrap ${
+                        chartLayoutMode === 'parallel'
+                          ? 'bg-orange-500 text-slate-950 font-semibold'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      2 líneas (26/27 vs 25/26)
+                    </button>
+                  </div>
+                </div>
+
+                {/* Secondary Reference / Alignment Controls */}
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  {chartLayoutMode === 'timeline' ? (
+                    <>
+                      <span className="text-[11px] text-slate-400">
+                        Línea punteada: {chartData.baseLabel}
+                      </span>
+                      <ReferenceSelectorBar
+                        mode={chartRefMode}
+                        onChangeMode={setChartRefMode}
+                        ownMode={ownBaselineMode}
+                        onChangeOwnMode={setOwnBaselineMode}
+                        ownCustomK={ownCustomK}
+                        maxGames={totalAvailableGames}
+                        onChangeOwnCustomK={setOwnCustomK}
+                        ownShortLabel={ownBaselineSelection.shortLabel}
+                        ownLabelOverride="Su media habitual"
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-[11px] text-slate-400">
+                        Ambas temporadas comparten el mismo eje horizontal de
+                        partidos
+                      </span>
+                      <div className="inline-flex items-center gap-0.5 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-md">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setParallelAlign('opening');
+                            setHoveredChartIdx(null);
+                          }}
+                          className={`px-2 py-1 text-[11px] rounded transition-colors whitespace-nowrap ${
+                            parallelAlign === 'opening'
+                              ? 'bg-[#1E293B] text-orange-300 font-semibold'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          Mismo inicio (PJ 1→N)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setParallelAlign('recent');
+                            setHoveredChartIdx(null);
+                          }}
+                          className={`px-2 py-1 text-[11px] rounded transition-colors whitespace-nowrap ${
+                            parallelAlign === 'recent'
+                              ? 'bg-[#1E293B] text-orange-300 font-semibold'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          Últimos PJ de cada curso
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3.5 space-y-2.5">
+                  {/* Live Point / Dual-Season Readout Header */}
+                  {chartLayoutMode === 'timeline' ? (
+                    activePointMeta &&
+                    vals.length > 0 && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs pb-2 border-b border-[#1E293B]">
+                        <div className="flex items-center gap-1.5 text-slate-300">
+                          <span
+                            className={`font-mono font-semibold ${
+                              activePointMeta.isCurrentSeason
+                                ? 'text-orange-300'
+                                : 'text-sky-300'
+                            }`}
+                          >
+                            {activePointMeta.seasonShort}
+                          </span>
+                          <span className="text-slate-600">·</span>
+                          <span className="font-mono text-slate-400">
+                            {activePointMeta.dateLabel}
+                          </span>
+                          <span className="text-slate-600">·</span>
+                          <span
+                            className={
+                              activePointMeta.result === 'W'
+                                ? 'text-emerald-400 font-semibold'
+                                : 'text-rose-400 font-semibold'
+                            }
+                          >
+                            {activePointMeta.result}
+                          </span>
+                          <span>{activePointMeta.matchupLabel}</span>
+                          <span className="text-slate-600">·</span>
+                          <span className="font-mono text-slate-400">
+                            {activePointMeta.minutes} MIN
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2 font-mono tabular-nums">
+                          <span className="font-semibold text-slate-100">
+                            {activePlayerChartMetric.shortLabel}:{' '}
+                            {activePointMeta.formattedValue}
+                          </span>
+                          <span className="text-slate-400">
+                            ({activePointMeta.deltaFormatted} vs línea)
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  ) : (
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs pb-2 border-b border-[#1E293B]">
+                      <div className="flex items-center gap-2 font-mono tabular-nums text-slate-300">
+                        <span className="font-semibold text-slate-200">
+                          Tramo #{activeParallelSlot + 1}
+                        </span>
+                        <span className="text-slate-600">·</span>
+                        <span className="text-orange-300">
+                          26/27:{' '}
+                          {activeParallel27
+                            ? `${activeParallel27.formattedValue} (${activeParallel27.dateLabel} ${activeParallel27.matchupLabel})`
+                            : 'Sin disputar'}
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 font-mono tabular-nums">
+                        <span className="text-sky-300">
+                          25/26:{' '}
+                          {activeParallel26
+                            ? `${activeParallel26.formattedValue} (${activeParallel26.dateLabel} ${activeParallel26.matchupLabel})`
+                            : '—'}
+                        </span>
+                        {activeParallel27 && activeParallel26 && (
+                          <>
+                            <span className="text-slate-600">·</span>
+                            {(() => {
+                              const rawDiff =
+                                activeParallel27.value - activeParallel26.value;
+                              const improved =
+                                rawDiff === 0
+                                  ? null
+                                  : !activePlayerChartMetric.lowerIsBetter
+                                  ? rawDiff > 0
+                                  : rawDiff < 0;
+                              return (
+                                <span
+                                  className={
+                                    improved === null
+                                      ? 'text-slate-400'
+                                      : improved
+                                      ? 'text-emerald-400 font-semibold'
+                                      : 'text-rose-400 font-semibold'
+                                  }
+                                >
+                                  Dif:{' '}
+                                  {formatMetricNumber(
+                                    rawDiff,
+                                    activePlayerChartMetric.decimals,
+                                    activePlayerChartMetric.suffix,
+                                    true
+                                  )}
+                                </span>
+                              );
+                            })()}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* SVG Canvas */}
+                  {chartLayoutMode === 'timeline' ? (
+                    vals.length > 1 ? (
+                      <svg
+                        viewBox={`0 0 ${svgW} ${svgH}`}
+                        className="w-full h-44 overflow-visible select-none"
+                        onMouseLeave={() => setHoveredChartIdx(null)}
+                      >
+                        {/* Dotted Reference Line */}
+                        <line
+                          x1={padX}
+                          y1={baseLineY}
+                          x2={svgW - padX}
+                          y2={baseLineY}
+                          stroke="#94A3B8"
+                          strokeDasharray="4 4"
+                          strokeWidth="1.2"
+                        />
+                        <text
+                          x={svgW - padX}
+                          y={Math.max(12, baseLineY - 5)}
+                          textAnchor="end"
+                          className="fill-slate-400 text-[10px] font-mono"
+                        >
+                          Ref:{' '}
+                          {formatMetricNumber(
+                            chartData.base,
+                            activePlayerChartMetric.decimals,
+                            activePlayerChartMetric.suffix,
+                            activePlayerChartMetric.signed
+                          )}
+                        </text>
+
+                        {/* Vertical Season Separator Lines (25/26 | 26/27) */}
+                        {seasonTransitions.map((tr, tIdx) => (
+                          <g key={`tr-${tIdx}`} className="pointer-events-none">
+                            <line
+                              x1={tr.x}
+                              y1={8}
+                              x2={tr.x}
+                              y2={svgH - 8}
+                              stroke="#64748B"
+                              strokeDasharray="3 3"
+                              strokeWidth="1.3"
+                            />
+                            <text
+                              x={tr.x - 5}
+                              y={13}
+                              textAnchor="end"
+                              fill={tr.leftCurrent ? '#FB923C' : '#38BDF8'}
+                              className="text-[9.5px] font-mono font-semibold"
+                            >
+                              {tr.leftLabel}
+                            </text>
+                            <text
+                              x={tr.x + 5}
+                              y={13}
+                              textAnchor="start"
+                              fill={tr.rightCurrent ? '#FB923C' : '#38BDF8'}
+                              className="text-[9.5px] font-mono font-semibold"
+                            >
+                              {tr.rightLabel}
+                            </text>
+                          </g>
+                        ))}
+
+                        {/* Contiguous Same-Season Trend Polylines */}
+                        {seasonSegments.map((seg, sIdx) =>
+                          seg.count > 1 ? (
+                            <polyline
+                              key={`seg-${sIdx}`}
+                              fill="none"
+                              stroke={
+                                seg.isCurrentSeason ? '#F97316' : '#38BDF8'
+                              }
+                              strokeWidth={vals.length > 45 ? '1.6' : '2.2'}
+                              points={seg.pointsAttr}
+                            />
+                          ) : null
+                        )}
+
+                        {/* Season-Colored Data Points */}
+                        {vals.map((v, i) => {
+                          const meta = chartData.pointsMeta[i];
+                          const isCurrSeason = Boolean(meta?.isCurrentSeason);
+                          const isHovered = hoveredChartIdx === i;
+                          const dense = vals.length > 40;
+                          const r = isHovered
+                            ? 5.5
+                            : isCurrSeason
+                            ? dense
+                              ? 3.3
+                              : 4.3
+                            : dense
+                            ? 2.4
+                            : 3.4;
+
+                          const isSeasonBoundary =
+                            (i > 0 &&
+                              chartData.pointsMeta[i - 1]?.isCurrentSeason !==
+                                isCurrSeason) ||
+                            (i < vals.length - 1 &&
+                              chartData.pointsMeta[i + 1]?.isCurrentSeason !==
+                                isCurrSeason);
+
+                          const showValueTag =
+                            isHovered ||
+                            (!dense &&
+                              (i === vals.length - 1 ||
+                                i === 0 ||
+                                isSeasonBoundary));
+
+                          return (
+                            <g
+                              key={i}
+                              className="cursor-pointer"
+                              onMouseEnter={() => setHoveredChartIdx(i)}
+                              onClick={() => setHoveredChartIdx(i)}
+                            >
+                              <circle
+                                cx={toX(i)}
+                                cy={toY(v)}
+                                r={10}
+                                fill="transparent"
+                              />
+                              <circle
+                                cx={toX(i)}
+                                cy={toY(v)}
+                                r={r}
+                                fill={
+                                  isHovered
+                                    ? isCurrSeason
+                                      ? '#FDBA74'
+                                      : '#7DD3FC'
+                                    : isCurrSeason
+                                    ? '#F97316'
+                                    : '#082F49'
+                                }
+                                stroke={
+                                  isHovered
+                                    ? '#FFFFFF'
+                                    : isCurrSeason
+                                    ? '#FDBA74'
+                                    : '#38BDF8'
+                                }
+                                strokeWidth="1.5"
+                              />
+                              {showValueTag && (
+                                <text
+                                  x={toX(i)}
+                                  y={Math.max(14, toY(v) - 8)}
+                                  textAnchor="middle"
+                                  className="fill-slate-200 text-[10px] font-mono pointer-events-none"
+                                >
+                                  {formatMetricNumber(
+                                    v,
+                                    activePlayerChartMetric.decimals,
+                                    '',
+                                    activePlayerChartMetric.signed
+                                  )}
+                                </text>
+                              )}
+                            </g>
+                          );
+                        })}
+                      </svg>
+                    ) : (
+                      <p className="text-xs text-slate-400 py-8 text-center">
+                        Se necesitan al menos 2 partidos en la muestra para
+                        trazar la evolución temporal.
+                      </p>
+                    )
+                  ) : parallelChartData.slotCount > 1 ? (
+                    <svg
+                      viewBox={`0 0 ${svgW} ${svgH}`}
+                      className="w-full h-44 overflow-visible select-none"
+                      onMouseLeave={() => setHoveredChartIdx(null)}
+                    >
+                      {/* Dual Season Dashed Mean Lines */}
+                      {parallelChartData.mean26 !== null && (
+                        <line
+                          x1={padX}
+                          y1={pToY(parallelChartData.mean26)}
+                          x2={svgW - padX}
+                          y2={pToY(parallelChartData.mean26)}
+                          stroke="#38BDF8"
+                          strokeOpacity="0.4"
+                          strokeDasharray="4 4"
+                          strokeWidth="1.1"
+                        />
+                      )}
+                      {parallelChartData.mean27 !== null && (
+                        <line
+                          x1={padX}
+                          y1={pToY(parallelChartData.mean27)}
+                          x2={svgW - padX}
+                          y2={pToY(parallelChartData.mean27)}
+                          stroke="#F97316"
+                          strokeOpacity="0.45"
+                          strokeDasharray="4 4"
+                          strokeWidth="1.1"
+                        />
+                      )}
+
+                      {/* Active Slot Vertical Guide */}
+                      <line
+                        x1={pToX(activeParallelSlot)}
+                        y1={10}
+                        x2={pToX(activeParallelSlot)}
+                        y2={svgH - 16}
+                        stroke="#475569"
+                        strokeDasharray="2 3"
+                        strokeWidth="1"
+                      />
+
+                      {/* X-Axis Slot Labels */}
+                      <text
+                        x={padX}
+                        y={svgH - 3}
+                        textAnchor="start"
+                        className="fill-slate-500 text-[9.5px] font-mono"
+                      >
+                        PJ 1
+                      </text>
+                      {parallelChartData.slotCount >= 5 && (
+                        <text
+                          x={pToX(Math.floor(parallelChartData.slotCount / 2))}
+                          y={svgH - 3}
+                          textAnchor="middle"
+                          className="fill-slate-500 text-[9.5px] font-mono"
+                        >
+                          PJ {Math.floor(parallelChartData.slotCount / 2) + 1}
+                        </text>
+                      )}
+                      <text
+                        x={svgW - padX}
+                        y={svgH - 3}
+                        textAnchor="end"
+                        className="fill-slate-500 text-[9.5px] font-mono"
+                      >
+                        PJ {parallelChartData.slotCount}
+                      </text>
+
+                      {/* 2025/26 Polyline (Sky Blue) */}
+                      {parallelChartData.series26.length > 1 && (
+                        <polyline
+                          fill="none"
+                          stroke="#38BDF8"
+                          strokeOpacity="0.88"
+                          strokeWidth={
+                            parallelChartData.slotCount > 45 ? '1.5' : '2'
+                          }
+                          points={parallelPoints26}
+                        />
+                      )}
+
+                      {/* 2026/27 Polyline (Amber-Orange, foreground) */}
+                      {parallelChartData.series27.length > 1 && (
+                        <polyline
+                          fill="none"
+                          stroke="#F97316"
+                          strokeWidth={
+                            parallelChartData.slotCount > 45 ? '1.8' : '2.4'
+                          }
+                          points={parallelPoints27}
+                        />
+                      )}
+
+                      {/* 2025/26 Points */}
+                      {parallelChartData.series26.map((pt) => {
+                        const isActive = pt.slot === activeParallelSlot;
+                        const dense = parallelChartData.slotCount > 40;
+                        return (
+                          <circle
+                            key={`p26-${pt.slot}`}
+                            cx={pToX(pt.slot)}
+                            cy={pToY(pt.value)}
+                            r={isActive ? 4.8 : dense ? 2.1 : 3.1}
+                            fill={isActive ? '#7DD3FC' : '#082F49'}
+                            stroke={isActive ? '#FFFFFF' : '#38BDF8'}
+                            strokeWidth="1.4"
+                          />
+                        );
+                      })}
+
+                      {/* 2026/27 Points */}
+                      {parallelChartData.series27.map((pt) => {
+                        const isActive = pt.slot === activeParallelSlot;
+                        const dense = parallelChartData.slotCount > 40;
+                        const showLabel =
+                          isActive ||
+                          (!dense &&
+                            pt.slot ===
+                              parallelChartData.series27[
+                                parallelChartData.series27.length - 1
+                              ]?.slot);
+                        return (
+                          <g key={`p27-${pt.slot}`}>
+                            <circle
+                              cx={pToX(pt.slot)}
+                              cy={pToY(pt.value)}
+                              r={isActive ? 5.4 : dense ? 3 : 4}
+                              fill={isActive ? '#FDBA74' : '#F97316'}
+                              stroke={isActive ? '#FFFFFF' : '#FDBA74'}
+                              strokeWidth="1.5"
+                            />
+                            {showLabel && (
+                              <text
+                                x={pToX(pt.slot)}
+                                y={Math.max(13, pToY(pt.value) - 8)}
+                                textAnchor="middle"
+                                className="fill-orange-200 text-[10px] font-mono font-semibold pointer-events-none"
+                              >
+                                {formatMetricNumber(
+                                  pt.value,
+                                  activePlayerChartMetric.decimals,
+                                  '',
+                                  activePlayerChartMetric.signed
+                                )}
+                              </text>
+                            )}
+                          </g>
+                        );
+                      })}
+
+                      {/* Interactive Hit Columns across all X-Axis Slots */}
+                      {Array.from({ length: parallelChartData.slotCount }).map(
+                        (_, sIdx) => {
+                          const colW =
+                            parallelChartData.slotCount <= 1
+                              ? svgW
+                              : (svgW - padX * 2) /
+                                (parallelChartData.slotCount - 1);
+                          return (
+                            <rect
+                              key={`hit-${sIdx}`}
+                              x={pToX(sIdx) - colW / 2}
+                              y={0}
+                              width={Math.max(12, colW)}
+                              height={svgH}
+                              fill="transparent"
+                              className="cursor-pointer"
+                              onMouseEnter={() => setHoveredChartIdx(sIdx)}
+                              onClick={() => setHoveredChartIdx(sIdx)}
+                            />
+                          );
+                        }
+                      )}
+                    </svg>
+                  ) : (
+                    <p className="text-xs text-slate-400 py-8 text-center">
+                      Se necesitan al menos 2 partidos para comparar la
+                      evolución en paralelo.
+                    </p>
+                  )}
+
+                  {/* Bottom Selectors: Básicas (default) | Avanzadas | Todas */}
+                  <div className="pt-2.5 border-t border-[#1E293B] space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[11px] font-medium text-slate-400">
+                        Estadística o ratio representado:
+                      </span>
+                      <div className="inline-flex items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-md">
+                        {(
+                          [
+                            { id: 'basic', label: 'Básicas' },
+                            { id: 'advanced', label: 'Avanzadas' },
+                            { id: 'all', label: 'Todas' },
+                          ] as const
+                        ).map((tab) => (
+                          <button
+                            key={tab.id}
+                            type="button"
+                            onClick={() => setChartMetricCategory(tab.id)}
+                            className={`px-2.5 py-0.5 text-[11px] rounded transition-colors whitespace-nowrap shrink-0 ${
+                              chartMetricCategory === tab.id
+                                ? 'bg-[#1E293B] text-orange-300 font-semibold'
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            {tab.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-1">
+                      {filteredChartSelectorMetrics.map((m) => {
+                        const active = pChartMetricKey === m.key;
+                        return (
+                          <button
+                            key={m.key}
+                            type="button"
+                            title={m.label}
+                            onClick={() => {
+                              setPChartMetricKey(m.key);
+                              setHoveredChartIdx(null);
+                            }}
+                            className={`px-2 py-1 text-xs font-mono rounded border transition-colors whitespace-nowrap shrink-0 ${
+                              active
+                                ? 'bg-orange-500 text-slate-950 border-orange-500 font-semibold'
+                                : 'bg-[#0B1120] border-[#1E293B] text-slate-300 hover:text-white hover:border-slate-600'
+                            }`}
+                          >
+                            {m.shortLabel}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              {/* MASTER FILTER BAR: Configurable Sample Slider + Predefined Ranges */}
               <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3.5 sm:p-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
@@ -1974,250 +2899,6 @@ export function EntityInspectorDrawer({
                 )}
               </section>
 
-              {/* SECTION 3: Evolución temporal interactiva */}
-              <section className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h3 className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-100">
-                      <span>
-                        Evolución en {sampleSelection.titleShort.toLowerCase()}
-                      </span>
-                      <MetricInfoTooltip
-                        helpKey={activePlayerChartMetric.helpKey}
-                        align="left"
-                      />
-                    </h3>
-                    <p className="text-xs text-slate-400">
-                      Línea punteada: {chartData.baseLabel} · Puntos naranjas:
-                      últimos {Math.min(windowSize, vals.length)} PJ
-                    </p>
-                  </div>
-
-                  {/* Dotted Line Reference Selector ("Su media habitual" vs "Media NBA") */}
-                  <ReferenceSelectorBar
-                    mode={chartRefMode}
-                    onChangeMode={setChartRefMode}
-                    ownMode={ownBaselineMode}
-                    onChangeOwnMode={setOwnBaselineMode}
-                    ownCustomK={ownCustomK}
-                    maxGames={totalAvailableGames}
-                    onChangeOwnCustomK={setOwnCustomK}
-                    ownShortLabel={ownBaselineSelection.shortLabel}
-                    ownLabelOverride="Su media habitual"
-                  />
-                </div>
-
-                <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3.5 space-y-2.5">
-                  {/* Live Point Readout Header */}
-                  {activePointMeta && vals.length > 0 && (
-                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs pb-2 border-b border-[#1E293B]">
-                      <div className="flex items-center gap-1.5 text-slate-300">
-                        <span className="font-mono text-slate-400">
-                          {activePointMeta.dateLabel} ({activePointMeta.seasonShort})
-                        </span>
-                        <span className="text-slate-600">·</span>
-                        <span
-                          className={
-                            activePointMeta.result === 'W'
-                              ? 'text-emerald-400 font-semibold'
-                              : 'text-rose-400 font-semibold'
-                          }
-                        >
-                          {activePointMeta.result}
-                        </span>
-                        <span>{activePointMeta.matchupLabel}</span>
-                        <span className="text-slate-600">·</span>
-                        <span className="font-mono text-slate-400">
-                          {activePointMeta.minutes} MIN
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-2 font-mono tabular-nums">
-                        <span className="font-semibold text-slate-100">
-                          {activePlayerChartMetric.shortLabel}:{' '}
-                          {activePointMeta.formattedValue}
-                        </span>
-                        <span className="text-slate-400">
-                          ({activePointMeta.deltaFormatted} vs línea)
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  {vals.length > 1 ? (
-                    <svg
-                      viewBox={`0 0 ${svgW} ${svgH}`}
-                      className="w-full h-40 overflow-visible select-none"
-                      onMouseLeave={() => setHoveredChartIdx(null)}
-                    >
-                      {/* Dotted Reference Line */}
-                      <line
-                        x1={padX}
-                        y1={baseLineY}
-                        x2={svgW - padX}
-                        y2={baseLineY}
-                        stroke="#94A3B8"
-                        strokeDasharray="4 4"
-                        strokeWidth="1.2"
-                      />
-                      <text
-                        x={svgW - padX}
-                        y={Math.max(11, baseLineY - 5)}
-                        textAnchor="end"
-                        className="fill-slate-400 text-[10px] font-mono"
-                      >
-                        Ref:{' '}
-                        {formatMetricNumber(
-                          chartData.base,
-                          activePlayerChartMetric.decimals,
-                          activePlayerChartMetric.suffix,
-                          activePlayerChartMetric.signed
-                        )}
-                      </text>
-
-                      {/* Trend Polyline */}
-                      <polyline
-                        fill="none"
-                        stroke="#38BDF8"
-                        strokeWidth={vals.length > 45 ? '1.5' : '2'}
-                        points={polylinePoints}
-                      />
-
-                      {/* Data Points */}
-                      {vals.map((v, i) => {
-                        const isRecentWindow = i >= vals.length - windowSize;
-                        const isHovered = hoveredChartIdx === i;
-                        const dense = vals.length > 40;
-                        const r = isHovered
-                          ? 5.5
-                          : isRecentWindow
-                          ? dense
-                            ? 3.4
-                            : 4.5
-                          : dense
-                          ? 2.1
-                          : 3.1;
-
-                        const showValueTag =
-                          isHovered ||
-                          (!dense &&
-                            (i === vals.length - 1 ||
-                              i === 0 ||
-                              i === vals.length - windowSize));
-
-                        return (
-                          <g
-                            key={i}
-                            className="cursor-pointer"
-                            onMouseEnter={() => setHoveredChartIdx(i)}
-                            onClick={() => setHoveredChartIdx(i)}
-                          >
-                            <circle
-                              cx={toX(i)}
-                              cy={toY(v)}
-                              r={10}
-                              fill="transparent"
-                            />
-                            <circle
-                              cx={toX(i)}
-                              cy={toY(v)}
-                              r={r}
-                              fill={
-                                isHovered
-                                  ? '#FDBA74'
-                                  : isRecentWindow
-                                  ? '#F97316'
-                                  : '#0F172A'
-                              }
-                              stroke={
-                                isHovered
-                                  ? '#FFFFFF'
-                                  : isRecentWindow
-                                  ? '#FDBA74'
-                                  : '#38BDF8'
-                              }
-                              strokeWidth="1.5"
-                            />
-                            {showValueTag && (
-                              <text
-                                x={toX(i)}
-                                y={Math.max(12, toY(v) - 8)}
-                                textAnchor="middle"
-                                className="fill-slate-200 text-[10px] font-mono pointer-events-none"
-                              >
-                                {formatMetricNumber(
-                                  v,
-                                  activePlayerChartMetric.decimals,
-                                  '',
-                                  activePlayerChartMetric.signed
-                                )}
-                              </text>
-                            )}
-                          </g>
-                        );
-                      })}
-                    </svg>
-                  ) : (
-                    <p className="text-xs text-slate-400 py-8 text-center">
-                      Se necesitan al menos 2 partidos en la muestra para trazar
-                      la evolución temporal.
-                    </p>
-                  )}
-
-                  {/* Bottom Selectors: Básicas (default) | Avanzadas | Todas */}
-                  <div className="pt-2.5 border-t border-[#1E293B] space-y-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-[11px] font-medium text-slate-400">
-                        Estadística o ratio representado:
-                      </span>
-                      <div className="inline-flex items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-md">
-                        {(
-                          [
-                            { id: 'basic', label: 'Básicas' },
-                            { id: 'advanced', label: 'Avanzadas' },
-                            { id: 'all', label: 'Todas' },
-                          ] as const
-                        ).map((tab) => (
-                          <button
-                            key={tab.id}
-                            type="button"
-                            onClick={() => setChartMetricCategory(tab.id)}
-                            className={`px-2.5 py-0.5 text-[11px] rounded transition-colors whitespace-nowrap shrink-0 ${
-                              chartMetricCategory === tab.id
-                                ? 'bg-[#1E293B] text-orange-300 font-semibold'
-                                : 'text-slate-400 hover:text-slate-200'
-                            }`}
-                          >
-                            {tab.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap gap-1">
-                      {filteredChartSelectorMetrics.map((m) => {
-                        const active = pChartMetricKey === m.key;
-                        return (
-                          <button
-                            key={m.key}
-                            type="button"
-                            title={m.label}
-                            onClick={() => setPChartMetricKey(m.key)}
-                            className={`px-2 py-1 text-xs font-mono rounded border transition-colors whitespace-nowrap shrink-0 ${
-                              active
-                                ? 'bg-orange-500 text-slate-950 border-orange-500 font-semibold'
-                                : 'bg-[#0B1120] border-[#1E293B] text-slate-300 hover:text-white hover:border-slate-600'
-                            }`}
-                          >
-                            {m.shortLabel}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              </section>
-
               {/* SECTION 4: Desglose por contexto (Governed by active sample filter) */}
               <section className="space-y-2.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2683,6 +3364,10 @@ export function EntityInspectorDrawer({
                     </h3>
                     <p className="text-xs text-slate-400">
                       Línea punteada: su media habitual ({chartData.base.toFixed(1)})
+                      {' · '}
+                      <span className="text-sky-300">25/26</span>
+                      {' | '}
+                      <span className="text-orange-300">26/27</span>
                     </p>
                   </div>
 
@@ -2727,22 +3412,60 @@ export function EntityInspectorDrawer({
                         strokeDasharray="4 4"
                         strokeWidth="1"
                       />
-                      <polyline
-                        fill="none"
-                        stroke="#38BDF8"
-                        strokeWidth="2"
-                        points={polylinePoints}
-                      />
+                      {seasonTransitions.map((tr, tIdx) => (
+                        <g key={`t-tr-${tIdx}`}>
+                          <line
+                            x1={tr.x}
+                            y1={8}
+                            x2={tr.x}
+                            y2={svgH - 8}
+                            stroke="#64748B"
+                            strokeDasharray="3 3"
+                            strokeWidth="1.2"
+                          />
+                          <text
+                            x={tr.x - 5}
+                            y={13}
+                            textAnchor="end"
+                            fill={tr.leftCurrent ? '#FB923C' : '#38BDF8'}
+                            className="text-[9.5px] font-mono font-semibold"
+                          >
+                            {tr.leftLabel}
+                          </text>
+                          <text
+                            x={tr.x + 5}
+                            y={13}
+                            textAnchor="start"
+                            fill={tr.rightCurrent ? '#FB923C' : '#38BDF8'}
+                            className="text-[9.5px] font-mono font-semibold"
+                          >
+                            {tr.rightLabel}
+                          </text>
+                        </g>
+                      ))}
+                      {seasonSegments.map((seg, sIdx) =>
+                        seg.count > 1 ? (
+                          <polyline
+                            key={`t-seg-${sIdx}`}
+                            fill="none"
+                            stroke={seg.isCurrentSeason ? '#F97316' : '#38BDF8'}
+                            strokeWidth="2.1"
+                            points={seg.pointsAttr}
+                          />
+                        ) : null
+                      )}
                       {vals.map((v, i) => {
-                        const isRecentWindow = i >= vals.length - windowSize;
+                        const isCurrSeason = Boolean(
+                          chartData.pointsMeta[i]?.isCurrentSeason
+                        );
                         return (
                           <g key={i}>
                             <circle
                               cx={toX(i)}
                               cy={toY(v)}
-                              r={isRecentWindow ? 4.5 : 3}
-                              fill={isRecentWindow ? '#F97316' : '#0F172A'}
-                              stroke={isRecentWindow ? '#FDBA74' : '#38BDF8'}
+                              r={isCurrSeason ? 4.2 : 3.2}
+                              fill={isCurrSeason ? '#F97316' : '#082F49'}
+                              stroke={isCurrSeason ? '#FDBA74' : '#38BDF8'}
                               strokeWidth="1.5"
                             />
                           </g>

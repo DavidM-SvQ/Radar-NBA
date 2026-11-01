@@ -42,6 +42,7 @@ import {
   parseCopiedEspnTextToPlayers,
 } from '../utils/fantasyScoring';
 import { PlayerAvatar, TeamLogo } from './NbaVisuals';
+import { buildAdminAuthHeaders } from '../utils/adminAuthClient';
 
 export type FantasyTab = 'lineup' | 'waivers' | 'trades' | 'injuries_rules' | 'rules';
 
@@ -279,7 +280,7 @@ export function FantasyEspnAssistantView({
     try {
       await fetch('/api/nba/fantasy/manual-state', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(stateToSave),
       });
     } catch {
@@ -358,7 +359,9 @@ export function FantasyEspnAssistantView({
         const url = forceRefresh
           ? '/api/nba/fantasy/context?refresh=1'
           : '/api/nba/fantasy/context';
-        const res = await fetch(url);
+        const res = await fetch(url, {
+          headers: buildAdminAuthHeaders(),
+        });
         if (res.ok) {
           const payload = (await res.json()) as FantasyEspnSyncPayload;
           setNbaContext(payload);

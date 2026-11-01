@@ -10,11 +10,11 @@ import {
   Flame,
   LayoutGrid,
   Link2,
+  Lock,
   Menu,
   RefreshCw,
   Shield,
   SlidersHorizontal,
-  Sparkles,
   Star,
   Swords,
   Trophy,
@@ -56,6 +56,7 @@ import { PlayersExplorerView } from './components/PlayersExplorerView';
 import { SeasonMilestonesView } from './components/SeasonMilestonesView';
 import { GlossaryView } from './components/GlossaryView';
 import { FantasyEspnAssistantView } from './components/FantasyEspnAssistantView';
+import { AdminSecurityConfigPanel } from './components/AdminSecurityConfigPanel';
 import { EntityInspectorDrawer } from './components/EntityInspectorDrawer';
 import { MetricInfoTooltip } from './components/MetricUiHelpers';
 import { TeamLogo } from './components/NbaVisuals';
@@ -70,6 +71,12 @@ import {
   fetchBootstrapClient,
   peekCachedBootstrapClient,
 } from './utils/bootstrapWireCodec';
+import {
+  getStoredAdminToken,
+  loginAdminWithPasscode,
+  logoutAdminSession,
+  verifyStoredAdminSession,
+} from './utils/adminAuthClient';
 
 const STORAGE_THRESHOLDS_KEY = 'courtpulse_nba_thresholds_v1';
 const STORAGE_WATCHLIST_KEY = 'courtpulse_nba_watchlist_v2';
@@ -154,7 +161,8 @@ export default function App() {
   const initialRoute = useMemo(
     () =>
       parseRouteFromSearch(
-        typeof window !== 'undefined' ? window.location.search : ''
+        typeof window !== 'undefined' ? window.location.search : '',
+        typeof window !== 'undefined' ? window.location.pathname : '/'
       ),
     []
   );
@@ -192,15 +200,13 @@ export default function App() {
   const [milestonesError, setMilestonesError] = useState<string | null>(null);
   const [gamedayRefreshCounter, setGamedayRefreshCounter] = useState(0);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [isPrivateUnlocked, setIsPrivateUnlocked] = useState<boolean>(() => {
-    try {
-      return sessionStorage.getItem('radarnba_private_unlocked') === 'true';
-    } catch {
-      return false;
-    }
-  });
+  const [isPrivateUnlocked, setIsPrivateUnlocked] = useState<boolean>(() =>
+    Boolean(getStoredAdminToken())
+  );
   const [passcodeAttempt, setPasscodeAttempt] = useState('');
-  const [passcodeError, setPasscodeError] = useState(false);
+  const [passcodeErrorMsg, setPasscodeErrorMsg] = useState<string | null>(null);
+  const [passcodeLockedOut, setPasscodeLockedOut] = useState(false);
+  const [verifyingPasscode, setVerifyingPasscode] = useState(false);
 
   // URL-synced Inspector, Jornadas, Comparator, Duel & Fantasy sub-routing state
   const [inspected, setInspected] = useState<{
@@ -341,11 +347,32 @@ export default function App() {
     [applyRouteState]
   );
 
+  // Verify stored admin session token against server on startup
+  useEffect(() => {
+    if (!getStoredAdminToken()) {
+      setIsPrivateUnlocked(false);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const valid = await verifyStoredAdminSession();
+      if (!cancelled) {
+        setIsPrivateUnlocked(valid);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Sync Browser Back / Forward buttons (popstate)
   useEffect(() => {
     const handlePopState = () => {
       setMobileMenuOpen(false);
-      const parsed = parseRouteFromSearch(window.location.search);
+      const parsed = parseRouteFromSearch(
+        window.location.search,
+        window.location.pathname
+      );
       applyRouteState(parsed);
     };
     window.addEventListener('popstate', handlePopState);
@@ -919,7 +946,10 @@ export default function App() {
     },
   ];
 
-  const activeNavMeta = navItems.find((n) => n.id === activeSection) || navItems[0];
+  const activeNavMeta =
+    activeSection === 'fantasy_espn'
+      ? { id: 'fantasy_espn' as const, label: 'Zona Privada · Admin', icon: Shield }
+      : navItems.find((n) => n.id === activeSection) || navItems[0];
 
   return (
     <div className="min-h-screen bg-[#0B1120] text-slate-100 flex">
@@ -1049,10 +1079,11 @@ export default function App() {
           <button
             type="button"
             onClick={() => handleNavigateSection('fantasy_espn')}
-            className="text-slate-500 hover:text-orange-400 font-mono transition-colors"
+            className="inline-flex items-center gap-1 text-slate-500 hover:text-orange-400 font-mono transition-colors"
             title="Zona Admin / Privada"
           >
-            🔒 Admin
+            <Lock className="w-3 h-3" />
+            <span>Admin</span>
           </button>
         </div>
       </aside>
@@ -1065,7 +1096,7 @@ export default function App() {
             onClick={() => setMobileMenuOpen(false)}
             aria-hidden="true"
           />
-          <div className="relative z-10 w-72 max-w-[85vw] bg-[#0F172A] border-r border-[#1E293B] h-full flex flex-col pb-safe">
+          <div className="relative z-10 w-72 max-w-[85vw] bg-[#0F172A] border-r border-[#1E293B] h-[100dvh] max-h-[100dvh] flex flex-col pb-safe">
             <div className="h-14 px-4 flex items-center justify-between border-b border-[#1E293B] shrink-0">
               <span className="font-display text-base font-bold text-slate-100">
                 RadarNBA
@@ -1173,6 +1204,20 @@ export default function App() {
                 </div>
               )}
             </div>
+
+            {/* Discreet Admin Footer Button (Mobile Drawer) */}
+            <div className="px-3.5 py-1.5 border-t border-[#1E293B] bg-[#0B1120]/90 flex items-center justify-between text-xs text-slate-500 shrink-0">
+              <span>RadarNBA</span>
+              <button
+                type="button"
+                onClick={() => handleNavigateSection('fantasy_espn')}
+                className="min-h-[40px] px-2.5 -mr-1.5 inline-flex items-center gap-1.5 text-slate-400 hover:text-orange-400 active:text-orange-300 font-mono transition-colors"
+                title="Zona Admin / Privada"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>Admin</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1271,7 +1316,7 @@ export default function App() {
         </header>
 
         {/* Workspace Body */}
-        <main className="flex-1 px-3 sm:px-6 pt-3.5 sm:pt-5 pb-20 lg:pb-6 max-w-[1440px] w-full mx-auto space-y-4 sm:space-y-5">
+        <main className="flex-1 px-3 sm:px-6 pt-3.5 sm:pt-5 pb-24 lg:pb-6 max-w-[1440px] w-full mx-auto space-y-4 sm:space-y-5">
 
           {/* Homogeneous Global Parameter & Threshold Strip (shown on rolling-window analytical views) */}
           {activeSection !== 'milestones' &&
@@ -1641,13 +1686,24 @@ export default function App() {
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
-                    if (passcodeAttempt.trim() === '19.Sirio.85') {
-                      setIsPrivateUnlocked(true);
-                      setPasscodeError(false);
-                      try { sessionStorage.setItem('radarnba_private_unlocked', 'true'); } catch {}
-                    } else {
-                      setPasscodeError(true);
-                    }
+                    if (verifyingPasscode || !passcodeAttempt.trim()) return;
+                    setVerifyingPasscode(true);
+                    setPasscodeErrorMsg(null);
+                    void (async () => {
+                      const result = await loginAdminWithPasscode(passcodeAttempt.trim());
+                      setVerifyingPasscode(false);
+                      if (result.ok) {
+                        setPasscodeAttempt('');
+                        setPasscodeLockedOut(false);
+                        setPasscodeErrorMsg(null);
+                        setIsPrivateUnlocked(true);
+                      } else {
+                        setPasscodeLockedOut(Boolean(result.lockedOut));
+                        setPasscodeErrorMsg(
+                          result.error || 'Clave incorrecta. Inténtalo de nuevo.'
+                        );
+                      }
+                    })();
                   }}
                   className="space-y-4"
                 >
@@ -1655,44 +1711,50 @@ export default function App() {
                     <input
                       type="password"
                       placeholder="Clave de acceso"
+                      disabled={verifyingPasscode}
                       value={passcodeAttempt}
                       onChange={(e) => {
                         setPasscodeAttempt(e.target.value);
-                        if (passcodeError) setPasscodeError(false);
+                        if (passcodeErrorMsg && !passcodeLockedOut) {
+                          setPasscodeErrorMsg(null);
+                        }
                       }}
-                      className="w-full px-3.5 py-2 bg-[#0B1120] border border-[#1E293B] rounded-lg text-sm text-slate-100 focus:outline-none focus:border-orange-500"
+                      className="w-full px-3.5 py-2 bg-[#0B1120] border border-[#1E293B] rounded-lg text-sm text-slate-100 focus:outline-none focus:border-orange-500 disabled:opacity-60"
                       autoFocus
                     />
-                    {passcodeError && (
-                      <p className="mt-1.5 text-xs text-rose-400">Clave incorrecta. Inténtalo de nuevo.</p>
+                    {passcodeErrorMsg && (
+                      <p
+                        className={`mt-2 text-xs leading-relaxed ${
+                          passcodeLockedOut
+                            ? 'p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 font-medium'
+                            : 'text-rose-400'
+                        }`}
+                      >
+                        {passcodeErrorMsg}
+                      </p>
                     )}
                   </div>
                   <button
                     type="submit"
-                    className="w-full py-2.5 bg-orange-500 hover:bg-orange-400 font-semibold text-slate-950 text-xs rounded-lg transition-colors"
+                    disabled={verifyingPasscode || !passcodeAttempt.trim()}
+                    className="w-full py-2.5 bg-orange-500 hover:bg-orange-400 disabled:opacity-60 font-semibold text-slate-950 text-xs rounded-lg transition-colors inline-flex items-center justify-center gap-2"
                   >
-                    Desbloquear Zona Privada
+                    {verifyingPasscode && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                    <span>
+                      {verifyingPasscode ? 'Verificando acceso...' : 'Desbloquear Zona Privada'}
+                    </span>
                   </button>
                 </form>
               </div>
             ) : (
               <div className="space-y-6">
-                <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-100">Panel de Configuración General y Privado</h3>
-                    <p className="text-xs text-slate-400">Zona exclusiva de gestión y asistente fantasy.</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsPrivateUnlocked(false);
-                      try { sessionStorage.removeItem('radarnba_private_unlocked'); } catch {}
-                    }}
-                    className="px-3 py-1.5 text-xs font-semibold bg-[#0B1120] hover:bg-[#182338] text-slate-300 border border-[#1E293B] rounded-lg transition-colors"
-                  >
-                    Bloquear Sesión
-                  </button>
-                </div>
+                <AdminSecurityConfigPanel
+                  onLockSession={() => {
+                    setIsPrivateUnlocked(false);
+                    setPasscodeAttempt('');
+                    void logoutAdminSession();
+                  }}
+                />
                 <FantasyEspnAssistantView
                   players={players}
                   teams={teams}
@@ -1881,6 +1943,20 @@ export default function App() {
               )}
             </>
           )}
+
+          {/* Discreet Workspace Page Footer (accessible on mobile & desktop) */}
+          <footer className="pt-4 mt-6 border-t border-[#1E293B]/70 flex items-center justify-between text-xs text-slate-500">
+            <span>RadarNBA · Analítica y Scouting</span>
+            <button
+              type="button"
+              onClick={() => handleNavigateSection('fantasy_espn')}
+              className="min-h-[40px] px-2.5 -mr-2 inline-flex items-center gap-1.5 text-slate-500 hover:text-orange-400 active:text-orange-300 font-mono text-xs transition-colors"
+              title="Zona Privada Admin"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span>Admin</span>
+            </button>
+          </footer>
         </main>
       </div>
 

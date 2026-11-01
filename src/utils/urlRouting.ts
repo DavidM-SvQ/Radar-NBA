@@ -50,7 +50,15 @@ const VALID_FANTASY_TABS = new Set<FantasyUrlTab>([
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-export function parseRouteFromSearch(search: string): AppRouteState {
+function isCleanAdminPathname(pathname: string): boolean {
+  const clean = (pathname || '/').replace(/\/+$/, '') || '/';
+  return clean === '/admin' || clean === '/fantasy_espn';
+}
+
+export function parseRouteFromSearch(
+  search: string,
+  pathname: string = typeof window !== 'undefined' ? window.location.pathname : '/'
+): AppRouteState {
   const params = new URLSearchParams(search || '');
 
   const rawView = (params.get('view') || '').trim();
@@ -71,12 +79,14 @@ export function parseRouteFromSearch(search: string): AppRouteState {
     ? rawFTab
     : 'lineup';
 
-  // Smart section resolution if user shares a link with specific view params
+  // Smart section resolution supporting both /admin pathname and ?view=admin query
   let section: ActiveSection = 'home';
   if (rawView === 'admin') {
     section = 'fantasy_espn';
   } else if (VALID_SECTIONS.has(rawView as ActiveSection)) {
     section = rawView as ActiveSection;
+  } else if (isCleanAdminPathname(pathname)) {
+    section = 'fantasy_espn';
   } else if (gamedayDate || gamedayReportId) {
     section = 'gameday';
   } else if (duelPlayerAId || duelPlayerBId) {
@@ -114,11 +124,16 @@ export function parseRouteFromSearch(search: string): AppRouteState {
   };
 }
 
-export function buildSearchFromRoute(state: AppRouteState): string {
+export function buildSearchFromRoute(
+  state: AppRouteState,
+  useCleanAdminPath = false
+): string {
   const params = new URLSearchParams();
 
   if (state.section === 'fantasy_espn') {
-    params.set('view', 'admin');
+    if (!useCleanAdminPath) {
+      params.set('view', 'admin');
+    }
   } else if (state.section !== 'home') {
     params.set('view', state.section);
   }
@@ -182,12 +197,20 @@ export function syncBrowserUrl(
 ): void {
   if (typeof window === 'undefined') return;
 
-  const nextSearch = buildSearchFromRoute(nextRoute);
+  const isTargetAdmin = nextRoute.section === 'fantasy_espn';
+  const nextPathname = isTargetAdmin
+    ? '/admin'
+    : isCleanAdminPathname(window.location.pathname)
+    ? '/'
+    : window.location.pathname;
+
+  const nextSearch = buildSearchFromRoute(nextRoute, isTargetAdmin);
+  const currentPathname = window.location.pathname || '/';
   const currentSearch = window.location.search || '';
-  const nextUrl = `${window.location.pathname}${nextSearch}${window.location.hash || ''}`;
+  const nextUrl = `${nextPathname}${nextSearch}${window.location.hash || ''}`;
   const prevMeta = readRadarHistoryMeta();
 
-  if (nextSearch === currentSearch) {
+  if (nextPathname === currentPathname && nextSearch === currentSearch) {
     return;
   }
 
