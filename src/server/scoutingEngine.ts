@@ -4440,17 +4440,9 @@ export function createScoutingEngine(deps: ScoutingEngineDeps) {
       1
     )} posesiones.`;
 
-    const idealProse = gd.idealFive
-      .slice(0, 5)
-      .map(
-        (p, idx) =>
-          `${idx === 0 ? '**Liderando el Quinteto Ideal de la madrugada**,' : 'Junto a él,'} **${
-            p.playerName
-          }** (${p.teamAbbr}) firmó ${p.points} puntos, ${p.rebounds} rebotes y ${
-            p.assists
-          } asistencias (${p.tsPct.toFixed(0)}% TS, GmSc ${p.gameScore.toFixed(1)})`
-      )
-      .join('; ');
+    const openingTheme = mvp
+      ? `La madrugada dejó una demostración colosal de impacto individual y lectura táctica, con **${mvp.playerName}** ejerciendo como faro ofensivo de la jornada en una cartelera marcada por el pulso en la media pista y la dureza en las ayudas defensivas.`
+      : `La jornada dejó un pulso colectivo de enorme exigencia táctica, con los bloques exteriores marcando las diferencias en los tramos calientes de los encuentros.`;
 
     const dynamicSections: ChronicleDynamicSection[] = [
       {
@@ -4459,13 +4451,13 @@ export function createScoutingEngine(deps: ScoutingEngineDeps) {
           gd.pulse.closeGamesCount >= 3
             ? `Noche de nervios de acero con ${gd.pulse.closeGamesCount} cierres en el clutch`
             : mvp
-            ? `El impacto total de ${mvp.playerName} al mando del Quinteto Ideal`
+            ? `Exhibición de jerarquía y gobierno del ritmo por ${mvp.playerName}`
             : 'Pulso competitivo y reparto de golpes en la cartelera',
-        body: `${idealProse}.\n\nDe los ${gd.pulse.gamesCount} duelos disputados, ${
+        body: `${openingTheme}\n\nDe los ${gd.pulse.gamesCount} duelos disputados, ${
           gd.pulse.closeGamesCount
         } se resolvieron en un pañuelo de cinco o menos puntos, **exigiendo máxima precisión en media pista** durante los últimos minutos, mientras que ${
           gd.pulse.blowoutsCount
-        } encuentros quedaron rotos por rentas superiores a los quince tantos.`,
+        } encuentros quedaron rotos por rentas superiores a los quince tantos en favor de los equipos más sólidos en la transición defensiva.`,
       },
     ];
 
@@ -4798,7 +4790,7 @@ export function createScoutingEngine(deps: ScoutingEngineDeps) {
         'REGLAS INQUEBRANTABLES DE RIGOR Y MUNDO CERRADO (CERO DATOS POR SUPUESTOS):',
         '1. RIGOR EMPÍRICO TOTAL: Todos los marcadores, puntos, porcentajes, récords y rachas que cites deben coincidir al 100% con el dossier adjunto. Jamás inventes resultados, cifras ni jugadas concretas no descritas.',
         '2. PROHIBICIÓN TOTAL DE DAR DATOS POR SUPUESTOS O USAR MEMORIA PREENTRENADA: Tu conocimiento interno previo está desactualizado respecto a la temporada actual. Tienes TERMINANTEMENTE PROHIBIDO dar por supuesto o mencionar: (a) nombres propios o apodos de entrenadores, asistentes o directivos (ej. Tom Thibodeau dejó los NY Knicks hace años; NUNCA cites nombres de entrenadores, habla SIEMPRE de "el cuerpo técnico de [Equipo]", "la dirección técnica de [Equipo]" o "la pizarra de [Equipo]"); (b) antigüedad, edad, rondas de Draft, condición de rookie, contratos, exequipos o traspasos de jugadores; (c) premios pasados, anillos, "vigente campeón" o series de temporadas anteriores; (d) puestos exactos en la clasificación (ej. "4º del Este") o próximos rivales del calendario; (e) causas o plazos de lesiones no escritos literalmente en el dossier.',
-        '3. PROSA DE REVISTA + SCOUTING PROFUNDO: Redacción fluida, analítica y 100% humana en español. Cero muletillas de IA ("En conclusión", "Cabe destacar", "Sin duda"). Conecta los partidos buscando hilos estrictamente tácticos y estadísticos.',
+        '3. PROSA DE REVISTA DE AUTOR + CERO LISTAS MECÁNICAS DE ESTADÍSTICAS: Queda terminantemente prohibido soltar oraciones del tipo "X firmó N puntos, N rebotes y N asistencias" enumerando jugadores como si fuera una base de datos o un parte de estadísticas. Esos datos ya se muestran en las tarjetas visuales de la interfaz. Escribe un relato periodístico de alta calidad y profundidad táctica (estilo artículo de fondo de Gigantes o The Athletic), analizando dinámicas colectivas, alternativas en el marcador, lectura de espacios y sensaciones de la jornada con total naturalidad humana.',
         '4. JERARQUÍA VISUAL Y ÉNFASIS EN NEGRITA (**...**): En todos los párrafos del cuerpo (ENTRADILLA, párrafos de CAPITULOS_DINAMICOS, PIZARRAS, HITOS, ESPANOLES y la explicación tras :: en CLAVES), utiliza negrita Markdown (**texto**) EXCLUSIVAMENTE para estos tres elementos: (a) nombres de jugadores (ej. **Nikola Jokić**, **#34 Giannis Antetokounmpo**), (b) nombres o apodos oficiales de equipos/franquicias (ej. **Boston Celtics**, **Thunder**, **Lakers**), y (c) UNA sola idea táctica clave por párrafo (frase breve de 4 a 10 palabras que resuma la clave del juego, ej. **castigando la zona desde la esquina débil**). PROHIBIDO poner en negrita cifras o estadísticas aisladas (como "49 puntos", "14 rebotes" o "61.2%"): intégralas en texto normal sin formato especial. PROHIBIDO poner ** en TITULAR, en el título del capítulo previo a :: o en el título corto previo a :: en CLAVES.',
         '5. FORMATO EXACTO CON ESTAS 7 ETIQUETAS EN MAYÚSCULAS:',
         '===TITULAR===',
