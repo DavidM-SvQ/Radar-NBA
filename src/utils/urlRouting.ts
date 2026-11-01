@@ -53,7 +53,7 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export function parseRouteFromSearch(search: string): AppRouteState {
   const params = new URLSearchParams(search || '');
 
-  const rawView = (params.get('view') || '').trim() as ActiveSection;
+  const rawView = (params.get('view') || '').trim();
   const rawDate = (params.get('date') || '').trim();
   const gamedayDate = ISO_DATE_RE.test(rawDate) ? rawDate : null;
   const gamedayReportId = (params.get('game') || '').trim() || null;
@@ -73,8 +73,10 @@ export function parseRouteFromSearch(search: string): AppRouteState {
 
   // Smart section resolution if user shares a link with specific view params
   let section: ActiveSection = 'home';
-  if (VALID_SECTIONS.has(rawView)) {
-    section = rawView;
+  if (rawView === 'admin') {
+    section = 'fantasy_espn';
+  } else if (VALID_SECTIONS.has(rawView as ActiveSection)) {
+    section = rawView as ActiveSection;
   } else if (gamedayDate || gamedayReportId) {
     section = 'gameday';
   } else if (duelPlayerAId || duelPlayerBId) {
@@ -115,7 +117,9 @@ export function parseRouteFromSearch(search: string): AppRouteState {
 export function buildSearchFromRoute(state: AppRouteState): string {
   const params = new URLSearchParams();
 
-  if (state.section !== 'home') {
+  if (state.section === 'fantasy_espn') {
+    params.set('view', 'admin');
+  } else if (state.section !== 'home') {
     params.set('view', state.section);
   }
 

@@ -192,6 +192,15 @@ export default function App() {
   const [milestonesError, setMilestonesError] = useState<string | null>(null);
   const [gamedayRefreshCounter, setGamedayRefreshCounter] = useState(0);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [isPrivateUnlocked, setIsPrivateUnlocked] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem('radarnba_private_unlocked') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [passcodeAttempt, setPasscodeAttempt] = useState('');
+  const [passcodeError, setPasscodeError] = useState(false);
 
   // URL-synced Inspector, Jornadas, Comparator, Duel & Fantasy sub-routing state
   const [inspected, setInspected] = useState<{
@@ -1033,6 +1042,19 @@ export default function App() {
             </div>
           )}
         </div>
+
+        {/* Discreet Admin Footer Button */}
+        <div className="px-4 py-2 border-t border-[#1E293B] bg-[#0B1120]/70 flex items-center justify-between text-[11px] text-slate-500 shrink-0">
+          <span>RadarNBA</span>
+          <button
+            type="button"
+            onClick={() => handleNavigateSection('fantasy_espn')}
+            className="text-slate-500 hover:text-orange-400 font-mono transition-colors"
+            title="Zona Admin / Privada"
+          >
+            🔒 Admin
+          </button>
+        </div>
       </aside>
 
       {/* Mobile Navigation Drawer */}
@@ -1605,14 +1627,82 @@ export default function App() {
           {activeSection === 'glossary' ? (
             <GlossaryView onNavigateSection={handleNavigateSection} />
           ) : activeSection === 'fantasy_espn' ? (
-            <FantasyEspnAssistantView
-              players={players}
-              teams={teams}
-              onInspectEntity={handleInspectEntity}
-              onOpenInDuel={handleOpenInDuel}
-              initialTab={fantasyTab}
-              onTabChange={handleFantasyTabChange}
-            />
+            !isPrivateUnlocked ? (
+              <div className="max-w-md mx-auto mt-12 bg-[#131C2E] border border-[#1E293B] rounded-xl p-6 shadow-2xl space-y-5">
+                <div className="space-y-1 text-center">
+                  <div className="w-12 h-12 bg-orange-500/10 border border-orange-500/30 rounded-full flex items-center justify-center mx-auto text-orange-400 mb-2">
+                    <Shield className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-100">Zona Privada y Asistente Fantasy</h3>
+                  <p className="text-xs text-slate-400">
+                    Introduce la clave de acceso para desbloquear tu panel privado.
+                  </p>
+                </div>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (passcodeAttempt.trim() === 'radarnba2026') {
+                      setIsPrivateUnlocked(true);
+                      setPasscodeError(false);
+                      try { sessionStorage.setItem('radarnba_private_unlocked', 'true'); } catch {}
+                    } else {
+                      setPasscodeError(true);
+                    }
+                  }}
+                  className="space-y-4"
+                >
+                  <div>
+                    <input
+                      type="password"
+                      placeholder="Clave de acceso (ej. radarnba2026)"
+                      value={passcodeAttempt}
+                      onChange={(e) => {
+                        setPasscodeAttempt(e.target.value);
+                        if (passcodeError) setPasscodeError(false);
+                      }}
+                      className="w-full px-3.5 py-2 bg-[#0B1120] border border-[#1E293B] rounded-lg text-sm text-slate-100 focus:outline-none focus:border-orange-500"
+                      autoFocus
+                    />
+                    {passcodeError && (
+                      <p className="mt-1.5 text-xs text-rose-400">Clave incorrecta. Inténtalo de nuevo.</p>
+                    )}
+                  </div>
+                  <button
+                    type="submit"
+                    className="w-full py-2.5 bg-orange-500 hover:bg-orange-400 font-semibold text-slate-950 text-xs rounded-lg transition-colors"
+                  >
+                    Desbloquear Zona Privada
+                  </button>
+                </form>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-100">Panel de Configuración General y Privado</h3>
+                    <p className="text-xs text-slate-400">Zona exclusiva de gestión y asistente fantasy.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsPrivateUnlocked(false);
+                      try { sessionStorage.removeItem('radarnba_private_unlocked'); } catch {}
+                    }}
+                    className="px-3 py-1.5 text-xs font-semibold bg-[#0B1120] hover:bg-[#182338] text-slate-300 border border-[#1E293B] rounded-lg transition-colors"
+                  >
+                    Bloquear Sesión
+                  </button>
+                </div>
+                <FantasyEspnAssistantView
+                  players={players}
+                  teams={teams}
+                  onInspectEntity={handleInspectEntity}
+                  onOpenInDuel={handleOpenInDuel}
+                  initialTab={fantasyTab}
+                  onTabChange={handleFantasyTabChange}
+                />
+              </div>
+            )
           ) : activeSection === 'gameday' ? (
             <GameDayAnalyzerView
               experienceMode={experienceMode}

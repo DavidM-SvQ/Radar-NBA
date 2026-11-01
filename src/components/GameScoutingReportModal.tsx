@@ -1246,7 +1246,7 @@ export function GameScoutingReportModal({
                 }
               : undefined
           }
-          className={`py-2 px-2 text-right font-mono tabular-nums text-xs whitespace-nowrap transition-colors ${textColorClass}`}
+          className={`py-1 px-1.5 text-center font-mono tabular-nums text-xs whitespace-nowrap transition-colors ${textColorClass}`}
         >
           {displayVal}
         </td>
@@ -1551,45 +1551,45 @@ export function GameScoutingReportModal({
         </div>
 
         <div
-          className="overflow-x-auto"
+          className="max-h-[520px] overflow-y-auto overflow-x-auto"
           onScroll={() => {
             if (hoveredSeasonHigh) setHoveredSeasonHigh(null);
           }}
         >
           <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-[#1E293B] text-[11px] text-slate-400 bg-[#0B1120]/60">
-                <th className="py-2 pl-3 pr-2 font-medium sticky left-0 bg-[#0B1120] z-10 shadow-[2px_0_5px_rgba(0,0,0,0.3)]">Jugador</th>
-                <th className="py-2 px-2 font-medium text-right">MIN</th>
-                <th className="py-2 px-2 font-medium text-right">PTOS</th>
-                <th className="py-2 px-2 font-medium text-right">FGM</th>
-                <th className="py-2 px-2 font-medium text-right">FGA</th>
-                <th className="py-2 px-2 font-medium text-right">FG%</th>
-                <th className="py-2 px-2 font-medium text-right">3PM</th>
-                <th className="py-2 px-2 font-medium text-right">3PA</th>
-                <th className="py-2 px-2 font-medium text-right">3P%</th>
-                <th className="py-2 px-2 font-medium text-right">FTM</th>
-                <th className="py-2 px-2 font-medium text-right">FTA</th>
-                <th className="py-2 px-2 font-medium text-right">FT%</th>
-                <th className="py-2 px-2 font-medium text-right">OREB</th>
-                <th className="py-2 px-2 font-medium text-right">DREB</th>
-                <th className="py-2 px-2 font-medium text-right">REB</th>
-                <th className="py-2 px-2 font-medium text-right">AST</th>
-                <th className="py-2 px-2 font-medium text-right">STL</th>
-                <th className="py-2 px-2 font-medium text-right">BLK</th>
-                <th className="py-2 px-2 font-medium text-right">TO</th>
-                <th className="py-2 px-2 font-medium text-right">PF</th>
-                <th className="py-2 px-2 font-medium text-right">+/-</th>
-                <th className="py-2 px-2 font-medium text-right">
+            <thead className="sticky top-0 z-20 bg-[#0F172A] shadow-sm">
+              <tr className="border-b border-[#1E293B] text-[11px] text-slate-400">
+                <th className="py-1.5 pl-3 pr-2 font-medium sticky left-0 bg-[#0F172A] z-30 shadow-[2px_0_5px_rgba(0,0,0,0.3)]">Jugador</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">MIN</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">PTOS</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">FGM</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">FGA</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">FG%</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">3PM</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">3PA</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">3P%</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">FTM</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">FTA</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">FT%</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">OREB</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">DREB</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">REB</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">AST</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">STL</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">BLK</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">TO</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">PF</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">+/-</th>
+                <th className="py-1.5 px-1.5 font-medium text-center align-middle">
                   <ColumnHelpHeader label="GmSc" helpKey="gmSc" />
                 </th>
                 {boxscoreColsMode === 'all' && (
                   <>
-                    <th className="py-2 px-2 font-medium text-right">TS%</th>
-                    <th className="py-2 px-2 font-medium text-right">USG%</th>
+                    <th className="py-1.5 px-1.5 font-medium text-center align-middle">TS%</th>
+                    <th className="py-1.5 px-1.5 font-medium text-center align-middle">USG%</th>
                   </>
                 )}
-                <th className="py-2 pl-1 pr-3 font-medium text-right">1v1</th>
+                <th className="py-1.5 pl-1 pr-3 font-medium text-center align-middle">1v1</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#1E293B]/80">
