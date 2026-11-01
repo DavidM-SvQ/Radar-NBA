@@ -1641,7 +1641,7 @@ export default function App() {
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
-                    if (passcodeAttempt.trim() === 'radarnba2026') {
+                    if (passcodeAttempt.trim() === '19.Sirio.85') {
                       setIsPrivateUnlocked(true);
                       setPasscodeError(false);
                       try { sessionStorage.setItem('radarnba_private_unlocked', 'true'); } catch {}
@@ -1654,7 +1654,7 @@ export default function App() {
                   <div>
                     <input
                       type="password"
-                      placeholder="Clave de acceso (ej. radarnba2026)"
+                      placeholder="Clave de acceso"
                       value={passcodeAttempt}
                       onChange={(e) => {
                         setPasscodeAttempt(e.target.value);
