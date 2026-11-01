@@ -904,11 +904,6 @@ export default function App() {
       icon: Users,
     },
     {
-      id: 'fantasy_espn',
-      label: 'Asistente Fantasy NBA',
-      icon: Sparkles,
-    },
-    {
       id: 'glossary',
       label: 'Glosario y Guía',
       icon: BookOpen,
