@@ -1514,6 +1514,7 @@ export function createScoutingEngine(deps: ScoutingEngineDeps) {
     if (!forceRefresh && cachedScheduleList && cachedScheduleList.expiresAt > Date.now()) {
       return cachedScheduleList.games;
     }
+    const parsed: ScheduledLeagueGame[] = [];
     try {
       const raw = await deps.cachedFetchJson<Record<string, any>>(
         'https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_1.json',
@@ -1525,7 +1526,6 @@ export function createScoutingEngine(deps: ScoutingEngineDeps) {
       const gameDates = Array.isArray(raw?.leagueSchedule?.gameDates)
         ? raw.leagueSchedule.gameDates
         : [];
-      const parsed: ScheduledLeagueGame[] = [];
       for (const gd of gameDates) {
         const gamesArr = Array.isArray(gd?.games) ? gd.games : [];
         for (const g of gamesArr) {
@@ -1559,6 +1559,53 @@ export function createScoutingEngine(deps: ScoutingEngineDeps) {
           });
         }
       }
+    } catch {
+      // CDN fetch failed or timed out on serverless
+    }
+
+    // Always ensure snapshot dataset fallback/supplement so Vercel serverless has complete schedule
+    try {
+      const full = await deps.getFullLeagueMemory();
+      const gameMap = new Map<string, ScheduledLeagueGame>();
+      for (const p of parsed) {
+        gameMap.set(`${p.dateIso}:${p.awayAbbr}:${p.homeAbbr}`, p);
+      }
+
+      for (const t of full.teams) {
+        for (const g of t.games) {
+          const dateIso = g.date.slice(0, 10);
+          const isHome = g.isHome;
+          const homeAbbr = isHome ? t.abbreviation : g.opponentAbbr;
+          const awayAbbr = isHome ? g.opponentAbbr : t.abbreviation;
+          const key = `${dateIso}:${awayAbbr}:${homeAbbr}`;
+          if (!gameMap.has(key)) {
+            const fallbackArena = NBA_TEAM_ARENAS[homeAbbr];
+            gameMap.set(key, {
+              gameId: g.eventId || `mem_${dateIso}_${awayAbbr}_${homeAbbr}`,
+              dateIso,
+              dateTimeUtc: `${dateIso}T00:00:00Z`,
+              awayAbbr,
+              homeAbbr,
+              arenaName: fallbackArena?.arenaName || `Pabellón ${homeAbbr}`,
+              arenaCity: fallbackArena?.arenaCity || '',
+            });
+          }
+        }
+      }
+
+      const combined = [...gameMap.values()];
+      combined.sort((a, b) =>
+        (a.dateIso + 'T' + (a.dateTimeUtc || '')).localeCompare(
+          b.dateIso + 'T' + (b.dateTimeUtc || '')
+        )
+      );
+
+      cachedScheduleList = {
+        expiresAt: Date.now() + 6 * 60 * 60 * 1000,
+        games: combined,
+      };
+      return combined;
+    } catch {
       parsed.sort((a, b) =>
         (a.dateIso + 'T' + (a.dateTimeUtc || '')).localeCompare(
           b.dateIso + 'T' + (b.dateTimeUtc || '')
@@ -1569,8 +1616,6 @@ export function createScoutingEngine(deps: ScoutingEngineDeps) {
         games: parsed,
       };
       return parsed;
-    } catch {
-      return [];
     }
   }
 
