@@ -203,6 +203,9 @@ export default function App() {
   const [isPrivateUnlocked, setIsPrivateUnlocked] = useState<boolean>(() =>
     Boolean(getStoredAdminToken())
   );
+  const [adminZoneSection, setAdminZoneSection] = useState<'fantasy' | 'web_config'>(
+    'fantasy'
+  );
   const [passcodeAttempt, setPasscodeAttempt] = useState('');
   const [passcodeErrorMsg, setPasscodeErrorMsg] = useState<string | null>(null);
   const [passcodeLockedOut, setPasscodeLockedOut] = useState(false);
@@ -1748,21 +1751,71 @@ export default function App() {
               </div>
             ) : (
               <div className="space-y-6">
-                <AdminSecurityConfigPanel
-                  onLockSession={() => {
-                    setIsPrivateUnlocked(false);
-                    setPasscodeAttempt('');
-                    void logoutAdminSession();
-                  }}
-                />
-                <FantasyEspnAssistantView
-                  players={players}
-                  teams={teams}
-                  onInspectEntity={handleInspectEntity}
-                  onOpenInDuel={handleOpenInDuel}
-                  initialTab={fantasyTab}
-                  onTabChange={handleFantasyTabChange}
-                />
+                {/* Admin Top-Level Section Switcher */}
+                <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 shadow-lg">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-orange-400 px-2">
+                      Zona Privada Admin:
+                    </span>
+                    <div className="inline-flex items-center gap-1 bg-[#0B1120] border border-[#1E293B] p-1 rounded-lg">
+                      <button
+                        type="button"
+                        onClick={() => setAdminZoneSection('fantasy')}
+                        className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-2 ${
+                          adminZoneSection === 'fantasy'
+                            ? 'bg-orange-500 text-slate-950 shadow-sm'
+                            : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
+                        }`}
+                      >
+                        <span>🏀 Zona Fantasy & Asistente</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAdminZoneSection('web_config')}
+                        className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-2 ${
+                          adminZoneSection === 'web_config'
+                            ? 'bg-orange-500 text-slate-950 shadow-sm'
+                            : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
+                        }`}
+                      >
+                        <span>🛡️ Configuración de la Web</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsPrivateUnlocked(false);
+                      setPasscodeAttempt('');
+                      void logoutAdminSession();
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#0B1120] hover:bg-rose-500/10 border border-[#1E293B] hover:border-rose-500/40 text-rose-400 text-xs font-medium rounded-lg transition-colors"
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Bloquear sesión</span>
+                  </button>
+                </div>
+
+                {/* Active Section Content */}
+                {adminZoneSection === 'fantasy' ? (
+                  <FantasyEspnAssistantView
+                    players={players}
+                    teams={teams}
+                    onInspectEntity={handleInspectEntity}
+                    onOpenInDuel={handleOpenInDuel}
+                    initialTab={fantasyTab}
+                    onTabChange={handleFantasyTabChange}
+                  />
+                ) : (
+                  <AdminSecurityConfigPanel
+                    onLockSession={() => {
+                      setIsPrivateUnlocked(false);
+                      setPasscodeAttempt('');
+                      void logoutAdminSession();
+                    }}
+                  />
+                )}
               </div>
             )
           ) : activeSection === 'gameday' ? (

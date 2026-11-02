@@ -29,9 +29,10 @@ import type {
  *    - EJ:   -5.0  (Expulsión del partido)
  */
 export const OFFICIAL_LEAGUE_RULES = {
-  maxContracts: 12,
+  maxContracts: 13,
   activeStarters: 10,
   benchReserves: 2,
+  irSlots: 1,
   weights: {
     fgm: 2.0,
     fgmi: -1.0,
