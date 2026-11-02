@@ -441,8 +441,8 @@ async function buildSingleSeasonDataset(
     ) {
       const hydrated27 = hydrateSeasonDatasetFromSnapshot(snap.s2027);
       await applyCdnDeltaGamesTo2027(hydrated27, biosMap, {
-        maxGamesToFetch: options?.cdnMaxGames ?? 20,
-        timeoutBudgetMs: options?.cdnTimeoutMs ?? 4500,
+        maxGamesToFetch: options?.cdnMaxGames ?? 45,
+        timeoutBudgetMs: options?.cdnTimeoutMs ?? 9000,
         forceRefresh,
       });
       seasonDatasetCache.set(seasonCode, {
