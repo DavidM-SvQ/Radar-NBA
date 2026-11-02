@@ -1,9 +1,9 @@
 @import "tailwindcss";
 
 @theme {
-  --font-display: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-display: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
 }
 
 :root {
@@ -23,11 +23,7 @@ body {
   overscroll-behavior-y: none;
 }
 
-h1,
-h2,
-h3,
-h4,
-.font-display {
+h1, h2, h3, h4, .font-display {
   font-family: var(--font-display);
   text-wrap: balance;
 }
@@ -36,7 +32,6 @@ h4,
   font-variant-numeric: tabular-nums;
 }
 
-/* Safe area support */
 .pb-safe {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
@@ -45,18 +40,17 @@ h4,
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
 
-/* Minimalist dark-mode scrollbars: virtually invisible at rest, subtle slate thumb on active scroll */
 * {
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 184, 0.04) transparent;
 }
 
-html[data-scrolling="true"],
-[data-scrolling="true"] {
+html[data-scrolling="true"], [data-scrolling="true"] {
   scrollbar-color: rgba(148, 163, 184, 0.34) transparent;
 }
 
@@ -65,8 +59,7 @@ html[data-scrolling="true"],
   height: 5px;
 }
 
-::-webkit-scrollbar-track,
-::-webkit-scrollbar-corner {
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
@@ -75,13 +68,10 @@ html[data-scrolling="true"],
   border-radius: 9999px;
 }
 
-html[data-scrolling="true"] ::-webkit-scrollbar-thumb,
-[data-scrolling="true"]::-webkit-scrollbar-thumb {
+html[data-scrolling="true"] ::-webkit-scrollbar-thumb, [data-scrolling="true"]::-webkit-scrollbar-thumb {
   background-color: rgba(148, 163, 184, 0.34);
 }
 
-::-webkit-scrollbar-thumb:hover,
-::-webkit-scrollbar-thumb:active {
+::-webkit-scrollbar-thumb:hover, ::-webkit-scrollbar-thumb:active {
   background-color: rgba(148, 163, 184, 0.52);
 }
-

@@ -1,11 +1,3 @@
-export type SeasonMode = 'continuous' | '2027' | '2026';
-
-export type WindowSize = 3 | 5 | 10;
-
-export type ExperienceMode = 'simple' | 'advanced';
-
-export type FilterPresetId = 'broad' | 'balanced' | 'blockbusters' | 'custom';
-
 export type ActiveSection =
   | 'home'
   | 'gameday'
@@ -19,125 +11,42 @@ export type ActiveSection =
   | 'fantasy_espn'
   | 'glossary';
 
-export type MilestoneComparisonMode =
-  | 'full_season'
-  | 'same_opening'
-  | 'head_to_head';
+export type ExperienceMode = 'simple' | 'advanced';
 
-export type DataSourceKind = 'nba_official_hybrid' | 'espn_fallback';
+export type SeasonMode = 'continuous' | '2027' | '2026';
 
-export interface PlayerAdvancedProfile {
-  gp: number;
-  usgPct: number; // Usage %
-  tsPct: number; // True Shooting %
-  efgPct: number; // Effective FG %
-  offRtg: number; // Offensive Rating
-  defRtg: number; // Defensive Rating
-  netRtg: number; // Net Rating
-  pie: number; // Player Impact Estimate (0-100 scale, e.g. 18.4%)
-  pace: number; // Pace on court
-  astPct: number; // Assist %
-  astTo: number; // AST / TOV ratio
-  astRatio: number; // Assist Ratio
-  orebPct: number; // Offensive Rebound %
-  drebPct: number; // Defensive Rebound %
-  rebPct: number; // Total Rebound %
-  tovPct: number; // Turnover %
-  ptsPaint: number; // Points in the Paint / GP
-  pts2ndChance: number; // Second Chance Points / GP
-  ptsFastBreak: number; // Fastbreak Points / GP
-  ptsOffTov: number; // Points off Turnovers / GP
-  foulsDrawn: number; // Personal Fouls Drawn / GP
-  contestedShots: number; // Hustle: Contested Shots / GP
-  deflections: number; // Hustle: Deflections / GP
-  screenAssists: number; // Hustle: Screen Assists / GP
-  looseBalls: number; // Hustle: Loose Balls Recovered / GP
-  boxOuts: number; // Hustle: Box Outs / GP
+export type DataSourceKind =
+  | 'official_nba'
+  | 'nba_cdn_live'
+  | 'nba_official_hybrid'
+  | 'espn_fallback'
+  | 'snapshot_hybrid'
+  | string;
+
+export type WindowSize = 3 | 5 | 10;
+
+export interface ThresholdSettings {
+  windowSize: WindowSize;
+  minZScore: number;
+  minPctDelta: number;
+  minMinutes: number;
+  minStreakGames: number;
 }
 
-export interface PlayerGameLog {
-  eventId: string;
-  date: string; // ISO string or YYYY-MM-DD
-  seasonLabel: string; // '2026-27' | '2025-26'
-  teamAbbr?: string;
-  teamId?: string;
-  opponentAbbr: string;
-  opponentName: string;
-  isHome: boolean;
-  result: 'W' | 'L';
-  scoreDisplay: string;
-  restDays: number | null; // 0 = back-to-back
-  isBackToBack: boolean;
-  minutes: number;
-  points: number;
-  rebounds: number;
-  oreb: number;
-  dreb: number;
-  assists: number;
-  steals: number;
-  blocks: number;
-  stocks: number; // steals + blocks
-  turnovers: number;
-  fouls: number;
-  plusMinus: number;
-  fgm: number;
-  fga: number;
-  fgPct: number;
-  fg3m: number;
-  fg3a: number;
-  fg3Pct: number;
-  ftm: number;
-  fta: number;
-  ftPct: number;
-  pra: number; // points + rebounds + assists
-  tsPct: number; // Single-game True Shooting %
-  efgPct: number; // Single-game Effective FG %
-  usgEst: number; // Single-game Usage Rate %
-  gameScore: number; // Hollinger Game Score (GmSc)
+export interface AdminSecurityConfigValues {
+  nbaApiLimit: number;
+  nbaApiWindowMinutes: number;
+  nbaRefreshLimit: number;
+  nbaRefreshWindowMinutes: number;
+  adminBruteForceMaxAttempts: number;
+  adminBruteForceWindowMinutes: number;
+  adminFloodLimit: number;
+  adminFloodWindowMinutes: number;
+  adminSessionTtlHours: number;
 }
 
-export interface PlayerSummary {
-  id: string;
-  name: string;
-  teamId: string;
-  teamAbbr: string;
-  teamName: string;
-  position: string;
-  jersey?: string;
-  height?: string;
-  country?: string;
-  headshotUrl?: string;
-  advanced?: PlayerAdvancedProfile;
-  games: PlayerGameLog[]; // Ordered newest first (index 0 = most recent game)
-}
-
-export interface TeamAdvancedProfile {
-  gp: number;
-  offRtg: number;
-  defRtg: number;
-  netRtg: number;
-  pace: number;
-  pie: number; // 0-100 scale
-  efgPct: number;
-  tsPct: number;
-  astPct: number;
-  astTo: number;
-  astRatio: number;
-  orebPct: number;
-  drebPct: number;
-  rebPct: number;
-  tovPct: number;
-  ptsPaint: number;
-  oppPtsPaint: number;
-  pts2ndChance: number;
-  oppPts2ndChance: number;
-  ptsFastBreak: number;
-  ptsOffTov: number;
-  contestedShots: number;
-  deflections: number;
-  screenAssists: number;
-  looseBalls: number;
-  boxOuts: number;
+export interface AdminSecurityConfig extends AdminSecurityConfigValues {
+  updatedAt: number;
 }
 
 export interface TeamGameLog {
@@ -151,9 +60,129 @@ export interface TeamGameLog {
   pointsFor: number;
   pointsAgainst: number;
   differential: number;
-  totalPoints: number;
+  totalPoints?: number;
   restDays: number | null;
   isBackToBack: boolean;
+  fgm: number;
+  fga: number;
+  fgPct?: number;
+  fg3m: number;
+  fg3a: number;
+  fg3Pct?: number;
+  ftm: number;
+  fta: number;
+  ftPct?: number;
+  oreb: number;
+  dreb: number;
+  reb: number;
+  ast: number;
+  stl: number;
+  blk: number;
+  tov: number;
+  poss: number;
+  offRtg: number;
+  defRtg: number;
+  netRtg: number;
+  pace: number;
+  efgPct: number;
+  tsPct: number;
+  orebPct: number;
+  tovPct: number;
+}
+
+export interface TeamAdvancedProfile {
+  offRtg: number;
+  defRtg: number;
+  netRtg: number;
+  pace: number;
+  efgPct: number;
+  tsPct: number;
+  orebPct: number;
+  drebPct: number;
+  rebPct: number;
+  astPct: number;
+  astTo?: number;
+  tovPct: number;
+  pie: number;
+  ptsPaint: number;
+  oppPtsPaint: number;
+  ptsFastBreak: number;
+  pts2ndChance: number;
+  ptsOffTov: number;
+  contestedShots: number;
+  deflections: number;
+  boxOuts: number;
+  looseBalls?: number;
+  screenAssists: number;
+}
+
+export interface TeamSummary {
+  id: string;
+  name: string;
+  shortName: string;
+  abbreviation: string;
+  logoUrl?: string;
+  conference: 'Este' | 'Oeste' | 'East' | 'West';
+  wins: number;
+  losses: number;
+  winPct: number;
+  playoffSeed?: number;
+  gamesBehind?: string;
+  streakCode: string;
+  currentStreak?: string;
+  homeRecord: string;
+  roadRecord: string;
+  awayRecord?: string;
+  lastTenRecord: string;
+  last10Record?: string;
+  b2bRecord?: string;
+  avgPointsFor: number;
+  avgPointsAgainst: number;
+  differential: number;
+  ppg?: number;
+  oppPpg?: number;
+  diffPpg?: number;
+  offRtg?: number;
+  defRtg?: number;
+  netRtg?: number;
+  pace?: number;
+  efgPct?: number;
+  tsPct?: number;
+  orebPct?: number;
+  tovPct?: number;
+  rebPerGame?: number;
+  astPerGame?: number;
+  fg3Pct?: number;
+  ftPct?: number;
+  advanced?: TeamAdvancedProfile;
+  games: TeamGameLog[];
+}
+
+export interface PlayerGameLog {
+  eventId: string;
+  date: string;
+  seasonLabel: string;
+  teamAbbr?: string;
+  teamId?: string;
+  opponentAbbr: string;
+  opponentName: string;
+  isHome: boolean;
+  result: 'W' | 'L';
+  scoreDisplay?: string;
+  restDays: number | null;
+  isBackToBack: boolean;
+  minutes: number;
+  points: number;
+  rebounds: number;
+  oreb: number;
+  dreb: number;
+  assists: number;
+  steals: number;
+  blocks: number;
+  stocks: number;
+  turnovers: number;
+  fouls: number;
+  plusMinus: number;
   fgm: number;
   fga: number;
   fgPct: number;
@@ -163,59 +192,86 @@ export interface TeamGameLog {
   ftm: number;
   fta: number;
   ftPct: number;
-  oreb: number;
-  dreb: number;
-  reb: number;
-  ast: number;
-  stl: number;
-  blk: number;
-  tov: number;
-  poss: number; // Estimated possessions
-  offRtg: number; // Per-game Offensive Rating
-  defRtg: number; // Per-game Defensive Rating
-  netRtg: number; // Per-game Net Rating
-  pace: number; // Per-game Pace (48 min)
-  efgPct: number; // Four Factors: Effective FG%
-  tsPct: number; // True Shooting %
-  orebPct: number; // Four Factors: Offensive Rebound %
-  tovPct: number; // Four Factors: Turnover %
+  tsPct: number;
+  efgPct: number;
+  usgEst: number;
+  gameScore: number;
+  pra: number;
 }
 
-export interface TeamSummary {
+export interface PlayerAdvancedProfile {
+  gp?: number;
+  offRtg: number;
+  defRtg: number;
+  netRtg: number;
+  pie: number;
+  usgPct?: number;
+  tsPct?: number;
+  efgPct?: number;
+  astTo?: number;
+  astPct: number;
+  orebPct: number;
+  drebPct: number;
+  rebPct: number;
+  ptsPaint: number;
+  pts2ndChance: number;
+  ptsFastBreak: number;
+  ptsOffTov: number;
+  contestedShots: number;
+  deflections: number;
+  screenAssists: number;
+  boxOuts: number;
+  looseBalls: number;
+  foulsDrawn: number;
+}
+
+export interface PlayerSummary {
   id: string;
   name: string;
-  shortName: string;
-  abbreviation: string;
-  conference: 'Este' | 'Oeste';
-  logoUrl?: string;
-  wins: number;
-  losses: number;
-  winPct: number;
-  playoffSeed: number;
-  gamesBehind: string;
-  streakCode: string;
-  homeRecord: string;
-  roadRecord: string;
-  lastTenRecord: string;
-  avgPointsFor: number;
-  avgPointsAgainst: number;
-  differential: number;
-  advanced?: TeamAdvancedProfile;
-  games: TeamGameLog[]; // Ordered newest first
+  teamId: string;
+  teamAbbr: string;
+  teamName: string;
+  position: string;
+  jersey?: string;
+  height?: string;
+  country?: string;
+  headshotUrl?: string;
+  gamesPlayed?: number;
+  minutesAvg?: number;
+  ptsAvg?: number;
+  rebAvg?: number;
+  astAvg?: number;
+  stlAvg?: number;
+  blkAvg?: number;
+  tovAvg?: number;
+  fgPct?: number;
+  fg3Pct?: number;
+  ftPct?: number;
+  tsPct?: number;
+  efgPct?: number;
+  usgAvg?: number;
+  gameScoreAvg?: number;
+  plusMinusAvg?: number;
+  advanced?: PlayerAdvancedProfile;
+  games: PlayerGameLog[];
 }
 
 export interface ScoreboardGame {
   id: string;
-  date: string;
+  date?: string;
+  status?: 'scheduled' | 'in_progress' | 'final' | string;
+  statusDetail?: string;
   statusText: string;
   isLive: boolean;
   isCompleted: boolean;
-  awayAbbr: string;
-  awayName: string;
-  awayScore: number;
   homeAbbr: string;
-  homeName: string;
+  homeName?: string;
   homeScore: number;
+  awayAbbr: string;
+  awayName?: string;
+  awayScore: number;
+  venue?: string;
+  startTimeEs?: string;
 }
 
 export interface BootstrapPayload {
@@ -224,9 +280,9 @@ export interface BootstrapPayload {
   totalLeaguePlayersAvailable: number;
   allPlayersLoaded: boolean;
   generatedAt: string;
+  scoreboard: ScoreboardGame[];
   teams: TeamSummary[];
   players: PlayerSummary[];
-  scoreboard: ScoreboardGame[];
 }
 
 export type AnomalyCategory =
@@ -234,6 +290,7 @@ export type AnomalyCategory =
   | 'slump'
   | 'role_shift'
   | 'shooting_variance'
+  | 'efficiency_outlier'
   | 'advanced_shift'
   | 'team_shift';
 
@@ -256,7 +313,7 @@ export interface AnomalySignal {
   sampleGames: number;
   baselineGames: number;
   sustainabilityLabel: string;
-  sustainabilityTone: 'solid' | 'warning' | 'negative';
+  sustainabilityTone: 'solid' | 'sustainable' | 'warning' | 'negative' | 'neutral';
   contextNote: string;
   takeaways: string[];
 }
@@ -294,34 +351,9 @@ export interface ConsistencyEntry {
   praFloor: number;
   praCeiling: number;
   gmScAvg: number;
-  consistencyScore: number; // 0 - 100
+  consistencyScore: number;
   profileLabel: string;
   hitRate20Pts: number;
-}
-
-export interface ThresholdSettings {
-  windowSize: WindowSize;
-  minZScore: number;
-  minPctDelta: number;
-  minMinutes: number;
-  minStreakGames: number;
-}
-
-export interface SearchPlayerResult {
-  id: string;
-  name: string;
-  teamAbbr: string;
-  position: string;
-}
-
-export interface RosterPlayerItem {
-  id: string;
-  name: string;
-  position: string;
-  jersey: string;
-  height?: string;
-  country?: string;
-  age?: number;
 }
 
 export type RangePreset =
@@ -339,15 +371,16 @@ export type RangePreset =
 
 export interface RangeSelection {
   preset: RangePreset;
-  startDate: string; // YYYY-MM-DD
-  endDate: string; // YYYY-MM-DD
+  startDate?: string;
+  endDate?: string;
+  label?: string;
 }
 
 export interface ComparisonMetricRow {
   key: string;
   label: string;
   unit: string;
-  group: 'basic' | 'advanced';
+  group: 'volume' | 'efficiency' | 'advanced' | 'pace_four_factors' | string;
   rangeAValue: number;
   rangeBValue: number;
   absDiff: number;
@@ -355,33 +388,68 @@ export interface ComparisonMetricRow {
   inverseGood?: boolean;
 }
 
-/* --- Season Milestones & Inter-Season Comparison Types --- */
+export type FilterPresetId = 'broad' | 'balanced' | 'blockbusters' | 'custom';
 
-export interface LeagueGlobalSnapshot {
-  seasonLabel: string;
-  gamesCount: number;
-  avgTeamPoints: number;
-  avgTotalGamePoints: number;
-  avgMargin: number;
-  homeWinPct: number;
-  closeGamesPct: number; // Margin <= 5 pts
-  blowoutGamesPct: number; // Margin >= 15 pts
-  avgTeam3PM: number;
-  avgTeam3Pct: number;
-  avgTeamORB: number;
-  avgTeamREB: number;
-  avgTeamAST: number;
-  // Official NBA.com Advanced & Zone League Averages
-  avgPace: number;
-  avgOffRtg: number;
-  avgEfgPct: number;
-  avgTsPct: number;
-  avgOrebPct: number;
-  avgTovPct: number;
-  avgPtsPaint: number;
-  avgPts2ndChance: number;
-  avgPtsFastBreak: number;
+export interface SearchPlayerResult {
+  id: string;
+  name: string;
+  teamId?: string;
+  teamAbbr: string;
+  teamName?: string;
+  position: string;
+  jersey?: string;
+  height?: string;
+  country?: string;
+  headshotUrl?: string;
+  hasActiveLogs?: boolean;
+  gamesPlayed?: number;
 }
+
+export interface RosterPlayerItem {
+  id: string;
+  name: string;
+  position: string;
+  jersey: string;
+  height?: string;
+  country?: string;
+  headshotUrl?: string;
+  ptsAvg?: number;
+  rebAvg?: number;
+  astAvg?: number;
+  minutesAvg?: number;
+  gamesPlayed?: number;
+}
+
+export interface PlayerInspectorBenchmarkItem {
+  key?: string;
+  mean: number;
+  sd: number;
+  lowerIsBetter?: boolean;
+  decimals: number;
+  suffix: string;
+  valuesAsc?: number[];
+}
+
+export interface PlayerInspectorDossier {
+  player: PlayerSummary;
+  player2027: PlayerSummary | null;
+  player2026: PlayerSummary | null;
+  advanced2027?: PlayerAdvancedProfile | null;
+  advanced2026?: PlayerAdvancedProfile | null;
+  latestLeagueDate2027: string;
+  benchmarksByScope: {
+    continuous: Record<string, PlayerInspectorBenchmarkItem>;
+    s2027: Record<string, PlayerInspectorBenchmarkItem>;
+    s2026: Record<string, PlayerInspectorBenchmarkItem>;
+    sameDate2026: Record<string, PlayerInspectorBenchmarkItem>;
+  };
+}
+
+export type MilestoneComparisonMode =
+  | 'full_season'
+  | 'same_opening'
+  | 'same_stage'
+  | 'head_to_head';
 
 export interface SingleGamePerformance {
   entityId: string;
@@ -392,14 +460,15 @@ export interface SingleGamePerformance {
   date: string;
 }
 
-export interface SingleGameRecordItem {
+export interface SingleGameRecordEntry {
   metricId: string;
   metricLabel: string;
   category: 'player' | 'team';
-  subGroup?: 'scoring' | 'playmaking_reb' | 'defense' | 'impact';
+  subGroup: 'scoring' | 'playmaking_reb' | 'defense' | 'impact';
   unit: string;
-  decimals?: number;
+  decimals: number;
   lowerIsBetter?: boolean;
+  layer?: 'basic' | 'advanced';
   current2027: SingleGamePerformance | null;
   prev2026Full: SingleGamePerformance | null;
   prev2026Opening: SingleGamePerformance | null;
@@ -411,26 +480,49 @@ export interface SeasonLeaderHolder {
   teamAbbr: string;
   value: number;
   secondaryLabel: string;
+  gamesPlayed?: number;
 }
 
-export interface SeasonLeaderMilestoneItem {
+export interface MilestoneSeasonLeaderEntry {
   metricId: string;
   metricLabel: string;
-  group:
-    | 'rebounding'
-    | 'shooting_scoring'
-    | 'playmaking_allaround'
-    | 'defense_discipline'
-    | 'advanced_hustle'
-    | 'team_leaders';
+  group: string;
   entityType: 'player' | 'team';
   unit: string;
   decimals: number;
   isCumulativeTotal?: boolean;
   lowerIsBetter?: boolean;
+  layer?: 'basic' | 'advanced';
   current2027: SeasonLeaderHolder | null;
   prev2026Full: SeasonLeaderHolder | null;
   prev2026Opening: SeasonLeaderHolder | null;
+}
+
+export interface MilestoneGlobalSnapshot {
+  seasonLabel: string;
+  gamesCount: number;
+  avgTeamPoints: number;
+  avgTotalGamePoints: number;
+  avgMargin: number;
+  homeWinPct: number;
+  closeGamesPct: number;
+  blowoutGamesPct: number;
+  avgTeam3PM: number;
+  avgTeam3Pct: number;
+  avgTeamORB: number;
+  avgTeamREB: number;
+  avgTeamAST: number;
+  avgTeamSTL?: number;
+  avgTeamBLK?: number;
+  avgTeamTOV?: number;
+  avgPace?: number;
+  avgOffRtg?: number;
+  avgEfgPct?: number;
+  avgTsPct?: number;
+  avgPtsPaint?: number;
+  avgPts2ndChance?: number;
+  avgPtsFastBreak?: number;
+  [key: string]: any;
 }
 
 export interface MilestonesPayload {
@@ -438,33 +530,28 @@ export interface MilestonesPayload {
   dataSource: DataSourceKind;
   totalPlayersScanned: number;
   openingGamesPerTeam: number;
-  global2027: LeagueGlobalSnapshot;
-  global2026Full: LeagueGlobalSnapshot;
-  global2026Opening: LeagueGlobalSnapshot;
-  singleGameRecords: SingleGameRecordItem[];
-  seasonLeaders: SeasonLeaderMilestoneItem[];
-}
-
-/* --- Fase 1: Analizador Integral de Jornadas NBA Types --- */
-
-export interface GameDayDateOption {
-  date: string; // YYYY-MM-DD
-  seasonLabel: string; // '2026-27' | '2025-26'
-  gamesCount: number;
+  global2027: MilestoneGlobalSnapshot;
+  global2026Full: MilestoneGlobalSnapshot;
+  global2026Opening: MilestoneGlobalSnapshot;
+  singleGameRecords: SingleGameRecordEntry[];
+  seasonLeaders: MilestoneSeasonLeaderEntry[];
 }
 
 export interface GameDayPlayerLine {
   playerId: string;
   playerName: string;
   teamAbbr: string;
-  position: string;
   opponentAbbr: string;
   isHome: boolean;
   result: 'W' | 'L';
+  scoreDisplay?: string;
+  eventId: string;
+  position: string;
   minutes: number;
   points: number;
   rebounds: number;
   oreb: number;
+  dreb: number;
   assists: number;
   steals: number;
   blocks: number;
@@ -472,48 +559,51 @@ export interface GameDayPlayerLine {
   turnovers: number;
   fgm: number;
   fga: number;
+  fgPct?: number;
   fg3m: number;
   fg3a: number;
+  fg3Pct?: number;
   ftm: number;
   fta: number;
+  ftPct?: number;
   plusMinus: number;
   tsPct: number;
-  efgPct: number;
+  efgPct?: number;
   usgEst: number;
   gameScore: number;
+  pra?: number;
   ptsBaselineAvg: number;
   ptsDelta: number;
   gmScBaselineAvg: number;
+  [key: string]: any;
 }
 
-export interface GameDayMatchupTeamSide {
+export interface GameDayMatchupSide {
   teamId: string;
   abbr: string;
   name: string;
   shortName: string;
-  recordAfter: string;
   score: number;
   isWinner: boolean;
-  fg3m: number;
-  fg3a: number;
-  fg3Pct: number;
-  efgPct: number;
-  tsPct: number;
-  reb: number;
-  oreb: number;
-  orebPct: number;
-  ast: number;
-  tov: number;
-  tovPct: number;
-  ftm: number;
-  fta: number;
+  isBackToBack: boolean;
+  restDays: number | null;
+  record?: string;
   offRtg: number;
   defRtg: number;
   netRtg: number;
-  pace: number;
-  isBackToBack: boolean;
-  topPlayer: GameDayPlayerLine | null;
+  efgPct: number;
+  tsPct: number;
+  fg3m: number;
+  fg3a: number;
+  fg3Pct: number;
+  oreb: number;
+  reb: number;
+  ast: number;
+  tov: number;
+  topPlayer?: GameDayPlayerLine | null;
+  topPlayers?: GameDayPlayerLine[];
   rotationPlayers: GameDayPlayerLine[];
+  [key: string]: any;
 }
 
 export interface GameDayMatchupCard {
@@ -521,98 +611,51 @@ export interface GameDayMatchupCard {
   date: string;
   seasonLabel: string;
   contextTag: string;
-  contextTone: 'amber' | 'emerald' | 'slate';
+  contextTone: 'amber' | 'emerald' | 'slate' | string;
   margin: number;
   totalPoints: number;
   pace: number;
-  away: GameDayMatchupTeamSide;
-  home: GameDayMatchupTeamSide;
+  away: GameDayMatchupSide;
+  home: GameDayMatchupSide;
   keyTakeawaysSimple: string[];
   keyTakeawaysAdvanced: string[];
+  [key: string]: any;
 }
 
-export interface GameDayOutlierItem {
-  playerId: string;
-  playerName: string;
-  teamAbbr: string;
-  position: string;
-  opponentAbbr: string;
-  isHome: boolean;
-  result: 'W' | 'L';
-  scoreDisplay: string;
-  kind: 'explosion' | 'slump';
-  minutes: number;
-  minutesAvg: number;
-  points: number;
-  ptsAvg: number;
-  ptsDelta: number;
-  rebounds: number;
-  assists: number;
-  stocks: number;
-  turnovers: number;
-  fgm: number;
-  fga: number;
-  fg3m: number;
-  fg3a: number;
-  tsPct: number;
-  tsAvg: number;
-  usgEst: number;
-  usgAvg: number;
-  gameScore: number;
-  gmScAvg: number;
-  singleNightZ: number;
-  driverTag: string;
-  driverDetailSimple: string;
-  driverDetailAdvanced: string;
-}
-
-export interface GameDayRoleShiftItem {
-  playerId: string;
-  playerName: string;
-  teamAbbr: string;
-  position: string;
-  opponentAbbr: string;
-  isHome: boolean;
-  result: 'W' | 'L';
-  minutes: number;
-  minutesAvg: number;
-  minutesDelta: number;
-  usgEst: number;
-  usgAvg: number;
-  usgDelta: number;
-  points: number;
-  rebounds: number;
-  assists: number;
-  fga: number;
-  fgaAvg: number;
-  gameScore: number;
-  shiftType: 'minutes_spike' | 'usage_spike' | 'dual_breakout';
-  headlineSimple: string;
-  headlineAdvanced: string;
-}
-
-export interface GameDayStreakShiftItem {
-  id: string;
-  playerId: string;
-  playerName: string;
-  teamAbbr: string;
-  position: string;
-  opponentAbbr: string;
-  isHome: boolean;
-  status: 'extended' | 'broken';
-  thresholdLabel: string;
-  streakCount: number;
-  nightValueDisplay: string;
-  avgDuringStreak: number;
-  unit: string;
+export interface GameDayChroniclePayload {
+  date: string;
+  seasonLabel: string;
+  gamesCount: number;
+  generatedAt: string;
+  engineMode: string;
+  headline: string;
+  lead: string;
+  dynamicSections: Array<{
+    kicker: string;
+    title: string;
+    body: string;
+  }>;
+  pizarrasSection: string;
+  hitosSection: string;
+  espanolesSection: string;
+  clavesList: Array<{
+    title: string;
+    detail: string;
+    body?: string;
+  }>;
+  spanishPlayersSummary: string;
+  sources: Array<{ uri: string; title: string }>;
+  [key: string]: any;
 }
 
 export interface GameDayPayload {
-  generatedAt: string;
-  dataSource: DataSourceKind;
   selectedDate: string;
   seasonLabel: string;
-  availableDates: GameDayDateOption[];
+  availableDates: Array<{
+    date: string;
+    seasonLabel: string;
+    gamesCount: number;
+  }>;
   pulse: {
     gamesCount: number;
     avgTotalPoints: number;
@@ -623,89 +666,28 @@ export interface GameDayPayload {
     avgPace: number;
   };
   mvpOfTheNight: GameDayPlayerLine | null;
-  topExplosion: GameDayOutlierItem | null;
-  statementTeamWin: {
-    teamId: string;
-    teamAbbr: string;
-    teamName: string;
-    opponentAbbr: string;
-    isHome: boolean;
-    scoreDisplay: string;
-    margin: number;
-    netRtg: number;
-    efgPct: number;
-    summarySimple: string;
-    summaryAdvanced: string;
-  } | null;
+  topExplosion: any | null;
+  statementTeamWin: any | null;
   idealFive: GameDayPlayerLine[];
   matchups: GameDayMatchupCard[];
-  explosions: GameDayOutlierItem[];
-  slumps: GameDayOutlierItem[];
-  roleShifts: GameDayRoleShiftItem[];
-  streakShifts: GameDayStreakShiftItem[];
+  explosions: any[];
+  slumps: any[];
+  roleShifts: any[];
+  streakShifts: any[];
   liveOrScheduledToday: ScoreboardGame[];
-}
-
-/* --- Crónica Global de Scouting e Informe Táctico de Partido (Paso B + NBA.com) --- */
-
-export interface GroundingSourceLink {
-  title: string;
-  uri: string;
-}
-
-export interface ChronicleDynamicSection {
-  kicker?: string;
-  title: string;
-  body: string;
-}
-
-export interface ChronicleKeyItem {
-  title: string;
-  detail: string;
-}
-
-export interface GameDayChroniclePayload {
-  date: string;
-  seasonLabel: string;
-  gamesCount: number;
-  generatedAt: string;
-  engineMode: 'gemini_search' | 'empirical_fallback';
-  headline: string;
-  lead: string;
-  dynamicSections: ChronicleDynamicSection[];
-  pizarrasSection: string;
-  hitosSection: string;
-  espanolesSection: string;
-  clavesList: ChronicleKeyItem[];
-  spanishPlayersSummary: string | null;
-  sources: GroundingSourceLink[];
-}
-
-export interface GamePeriodScore {
-  period: number;
-  label: string; // '1Q' | '2Q' | '3Q' | '4Q' | 'PR1' ...
-  isOvertime: boolean;
-  awayScore: number;
-  homeScore: number;
-}
-
-export interface PlayerSeasonHighEntry {
-  mode: 'sole' | 'tied';
-  prevBest: number | null;
-  gamesPlayed: number;
+  [key: string]: any;
 }
 
 export interface GameBoxScorePlayerLine {
   playerId: string;
   name: string;
-  shortName: string; // I. Apellido
-  jersey: string; // Dorsal sin '#', ej. '15'
+  shortName: string;
   position: string;
-  country: string;
-  isSpanish: boolean;
+  jersey: string;
   isStarter: boolean;
+  starter?: boolean;
   minutes: number;
-  minutesFormatted: string; // '37:19' o '37'
+  minutesFormatted: string;
   points: number;
   rebounds: number;
   oreb: number;
@@ -713,6 +695,7 @@ export interface GameBoxScorePlayerLine {
   assists: number;
   steals: number;
   blocks: number;
+  stocks?: number;
   turnovers: number;
   fouls: number;
   plusMinus: number;
@@ -726,112 +709,36 @@ export interface GameBoxScorePlayerLine {
   fta: number;
   ftPct: number;
   tsPct: number;
-  usgEst?: number;
+  efgPct: number;
+  usgEst: number;
   gameScore: number;
-  ptsPaint?: number;
-  ptsFastBreak?: number;
-  doubleDouble: boolean;
-  tripleDouble: boolean;
-  seasonHighs?: Record<string, PlayerSeasonHighEntry>;
+  doubleDouble?: boolean;
+  tripleDouble?: boolean;
+  country?: string;
+  [key: string]: any;
 }
 
 export interface GameInactiveOrDnpItem {
   playerId?: string;
   name: string;
-  jersey: string;
-  category: 'dnp_bench' | 'inactive' | 'rotation_absence' | 'in_game_setback';
-  statusType?:
-    | 'injury'
-    | 'rest'
-    | 'coach_decision'
-    | 'gleague'
-    | 'suspension_personal'
-    | 'foul_out'
-    | 'in_game_setback';
-  statusLabel?: string;
-  statusTone?: 'rose' | 'amber' | 'slate' | 'orange';
+  jersey?: string;
+  position?: string;
+  statusType: 'injury' | 'dnp_cd' | 'foul_out' | 'inactive' | string;
+  statusLabel: string;
+  reason: string;
   foulOutPeriod?: string;
   foulOutClock?: string;
-  priorityRank?: number;
-  note: string;
-  ptsAvg?: number;
-  minAvg?: number;
-  reason?: string;
-  isSpanish?: boolean;
+  [key: string]: any;
 }
 
-export interface GameNextMatchInfo {
-  hasScheduledGame: boolean;
-  record: string;
-  conference: 'Este' | 'Oeste';
-  conferenceRank: number;
-  streakCode: string;
-  opponentAbbr: string;
-  opponentName: string;
-  opponentTeamId?: string;
-  isHome: boolean;
-  dateIso?: string;
-  dateFormatted: string;
-  timeFormatted: string;
-  arenaName: string;
-  arenaCity: string;
-  restDays?: number | null;
-  isBackToBackNext?: boolean;
-  fatigueShort?: string;
-  fatigueDetail?: string;
-  fatigueTone?: 'rose' | 'emerald' | 'slate';
-}
-
-export interface GamePodiumEntry {
-  stars: 3 | 2 | 1;
+export interface PlayerSeasonHighEntry {
   playerId: string;
-  jersey: string;
-  name: string;
-  position: string;
-  points: number;
-  rebounds: number;
-  assists: number;
-  plusMinus: number;
-  fgm: number;
-  fga: number;
-  tsPct: number;
-  shortLine: string;
-  gameScore: number;
-  podiumScore: number;
-}
-
-export interface GameTeamTotalsSummary {
-  points: number;
-  fgm: number;
-  fga: number;
-  fgPct: number;
-  fg3m: number;
-  fg3a: number;
-  fg3Pct: number;
-  ftm: number;
-  fta: number;
-  ftPct: number;
-  reb: number;
-  oreb: number;
-  dreb: number;
-  ast: number;
-  stl: number;
-  blk: number;
-  tov: number;
-  fouls: number;
-  efgPct: number;
-  tsPct: number;
-  offRtg: number;
-  defRtg: number;
-  netRtg: number;
-  pace: number;
-  ptsPaint: number | null;
-  ptsFastBreak: number | null;
-  ptsOffTov: number | null;
-  ptsSecondChance: number | null;
-  benchPoints: number;
-  biggestLead: number | null;
-  biggestRun: number | null;
+  playerName: string;
+  teamAbbr: string;
+  metricLabel: string;
+  value: number;
+  previousHigh?: number;
+  [key: string]: any;
 }
 
 export interface GameReportTeamSide {
@@ -845,59 +752,31 @@ export interface GameReportTeamSide {
   isBackToBack: boolean;
   starters: GameBoxScorePlayerLine[];
   bench: GameBoxScorePlayerLine[];
-  totals: GameTeamTotalsSummary;
+  totals: Record<string, any>;
   absencesAndDnp: GameInactiveOrDnpItem[];
-  podium: GamePodiumEntry[];
-  nextGame: GameNextMatchInfo;
+  podium: GameBoxScorePlayerLine[];
+  nextGame: Record<string, any>;
+  [key: string]: any;
 }
 
-export interface GameTeamComparisonRow {
-  key: string;
-  label: string;
-  helpKey?: string;
-  awayDisplay: string;
-  homeDisplay: string;
-  awayNumeric: number;
-  homeNumeric: number;
-  diffDisplay: string;
-  betterSide: 'away' | 'home' | 'tie';
-  section: 'scoring_shooting' | 'efficiency_tactics' | 'reb_playmaking_defense' | 'core' | 'specialty';
-  lowerIsBetter?: boolean;
-}
-
-export interface GameLeaderComparisonRow {
-  categoryKey: string;
-  categoryLabel: string;
-  helpKey?: string;
-  awayPlayerId: string;
-  awayJersey?: string;
-  awayShortName?: string;
-  awayPlayerName?: string;
-  awayStatDisplay?: string;
-  awayFormatted: string; // '#Dorsal I. Apellido (Dato)'
-  awayValue: number;
-  awayAvg?: number;
-  awayDeltaVsAvg?: number;
-  awayDeltaDisplay?: string;
-  awayDeltaTone?: 'positive' | 'negative' | 'neutral';
-  homePlayerId: string;
-  homeJersey?: string;
-  homeShortName?: string;
-  homePlayerName?: string;
-  homeStatDisplay?: string;
-  homeFormatted: string; // '#Dorsal I. Apellido (Dato)'
-  homeValue: number;
-  homeAvg?: number;
-  homeDeltaVsAvg?: number;
-  homeDeltaDisplay?: string;
-  homeDeltaTone?: 'positive' | 'negative' | 'neutral';
-  diffDisplay?: string;
-  lowerIsBetter?: boolean;
-  betterSide: 'away' | 'home' | 'tie';
-  blockSection?: 'minutes_scoring' | 'playmaking_rebound' | 'efficiency_defense';
-  groupLabel?: string;
-  awayIsElite?: boolean;
-  homeIsElite?: boolean;
+export interface GameNarrativePayload {
+  eventId: string;
+  generatedAt: string;
+  engineMode: string;
+  pressHeadline: string;
+  pressLead: string;
+  gameFlowSection: string;
+  chalkboardSection: string;
+  dynamicSpotlight: {
+    kicker?: string;
+    title: string;
+    body: string;
+  } | null;
+  xFactorSection: string;
+  spanishSection: string;
+  verdictSection: string;
+  sources: Array<{ uri: string; title: string }>;
+  [key: string]: any;
 }
 
 export interface GameOfficialReportData {
@@ -918,70 +797,24 @@ export interface GameOfficialReportData {
   timesTied: number | null;
   leagueAvgPace: number;
   paceDiffVsLeague: number;
-  periods: GamePeriodScore[];
+  periods: Array<{
+    period: number;
+    label: string;
+    awayScore: number;
+    homeScore: number;
+    [key: string]: any;
+  }>;
   away: GameReportTeamSide;
   home: GameReportTeamSide;
   spanishPlayersReport: {
     hasSpanishPlayers: boolean;
     summaryLine: string;
-    details: Array<{
-      playerId: string;
-      name: string;
-      jersey: string;
-      teamAbbr: string;
-      played: boolean;
-      lineSummary: string;
-    }>;
+    details: any[];
   };
-  milestonesList: Array<{
-    playerId: string;
-    name: string;
-    jersey: string;
-    teamAbbr: string;
-    type: 'TD' | 'DD';
-    detail: string;
-  }>;
-  teamComparisonRows: GameTeamComparisonRow[];
-  leaderComparisonRows: GameLeaderComparisonRow[];
-}
-
-export interface GameNarrativePayload {
-  eventId: string;
-  generatedAt: string;
-  engineMode: 'gemini_search' | 'empirical_fallback';
-  pressHeadline: string;
-  pressLead: string;
-  gameFlowSection: string;
-  chalkboardSection: string;
-  dynamicSpotlight: {
-    title: string;
-    body: string;
-  } | null;
-  xFactorSection: string;
-  spanishSection: string;
-  verdictSection: string;
-  sources: GroundingSourceLink[];
-}
-
-export interface PlayerInspectorBenchmarkItem {
-  mean: number;
-  sd: number;
-  lowerIsBetter?: boolean;
-  decimals?: number;
-  suffix?: string;
-}
-
-export interface PlayerInspectorDossier {
-  player: PlayerSummary;
-  advanced2027?: PlayerAdvancedProfile;
-  advanced2026?: PlayerAdvancedProfile;
-  latestLeagueDate2027: string;
-  benchmarksByScope: {
-    continuous: Record<string, PlayerInspectorBenchmarkItem>;
-    s2027: Record<string, PlayerInspectorBenchmarkItem>;
-    s2026: Record<string, PlayerInspectorBenchmarkItem>;
-    sameDate2026: Record<string, PlayerInspectorBenchmarkItem>;
-  };
+  milestonesList: any[];
+  teamComparisonRows: any[];
+  leaderComparisonRows: any[];
+  [key: string]: any;
 }
 
 export type FantasyInjurySeverity =
@@ -989,35 +822,10 @@ export type FantasyInjurySeverity =
   | 'probable'
   | 'questionable'
   | 'doubtful'
+  | 'dtd'
   | 'out'
+  | 'ir'
   | 'suspended';
-
-export interface FantasyTeamGameSlot {
-  gameId: string;
-  dateIso: string;
-  dayShortEs: string; // e.g. 'Lun 26'
-  opponentAbbr: string;
-  isHome: boolean;
-  isBackToBack: boolean;
-}
-
-export interface FantasyWeekWindow {
-  id: 'prev' | 'current' | 'next' | 'next2';
-  label: string; // e.g. 'Semana Actual' | 'Próxima Semana'
-  rangeLabel: string; // e.g. 'Lun 26 oct – Dom 1 nov'
-  startIso: string; // Monday YYYY-MM-DD
-  endIso: string; // Sunday YYYY-MM-DD
-  lockDeadlineLabel: string; // e.g. 'Lun 26 oct · 00:00h ESP (Cierre estricto)'
-  isLocked: boolean;
-  teamSchedules: Record<
-    string,
-    {
-      gamesCount: number;
-      b2bCount: number;
-      games: FantasyTeamGameSlot[];
-    }
-  >;
-}
 
 export interface FantasyPlayerInjuryAlert {
   playerNameNorm: string;
@@ -1025,11 +833,47 @@ export interface FantasyPlayerInjuryAlert {
   severity: FantasyInjurySeverity;
   statusLabelEs: string;
   detailEs: string;
+  [key: string]: any;
+}
+
+export interface FantasyTeamGameSlot {
+  gameId: string;
+  dateIso: string;
+  dateTimeUtc?: string;
+  dayShortEs?: string;
+  opponentAbbr: string;
+  isHome: boolean;
+  isBackToBack?: boolean;
+  [key: string]: any;
+}
+
+export interface FantasyWeekWindow {
+  id: string;
+  weekNumber?: number;
+  label: string;
+  rangeLabel: string;
+  startIso: string;
+  endIso: string;
+  lockDeadlineLabel: string;
+  isLocked: boolean;
+  isCurrent?: boolean;
+  teamSchedules: Record<
+    string,
+    {
+      gamesCount: number;
+      b2bCount: number;
+      homeCount?: number;
+      awayCount?: number;
+      games: FantasyTeamGameSlot[];
+      [key: string]: any;
+    }
+  >;
+  [key: string]: any;
 }
 
 export interface FantasyRosterContract {
   playerId: string;
-  slot: 'starter' | 'bench';
+  slot: 'starter' | 'bench' | 'ir' | string;
 }
 
 export interface FantasyManualLeagueState {
@@ -1041,30 +885,11 @@ export interface FantasyManualLeagueState {
   rivalTeamNames: Record<string, string>;
 }
 
-export interface FantasyNbaContextPayload {
+export interface FantasyEspnSyncPayload {
   generatedAt: string;
   injuriesByNormName: Record<string, FantasyPlayerInjuryAlert>;
   injuriesByPlayerId: Record<string, FantasyPlayerInjuryAlert>;
   weeks: FantasyWeekWindow[];
-  defaultWeekId: 'current' | 'next';
+  defaultWeekId: string;
   savedState: FantasyManualLeagueState | null;
 }
-
-export type FantasyEspnSyncPayload = FantasyNbaContextPayload;
-
-export interface AdminSecurityConfigValues {
-  nbaApiLimit: number;
-  nbaApiWindowMinutes: number;
-  nbaRefreshLimit: number;
-  nbaRefreshWindowMinutes: number;
-  adminBruteForceMaxAttempts: number;
-  adminBruteForceWindowMinutes: number;
-  adminFloodLimit: number;
-  adminFloodWindowMinutes: number;
-  adminSessionTtlHours: number;
-}
-
-export interface AdminSecurityConfig extends AdminSecurityConfigValues {
-  updatedAt: number;
-}
-
