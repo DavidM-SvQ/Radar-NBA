@@ -22,6 +22,7 @@ import type {
   TeamGameLog,
   TeamSummary,
 } from '../types/nba.ts';
+import { STATIC_SCHEDULE_2027 } from '../utils/staticSchedule.ts';
 import { ESPN_TEAM_IDS, NBA_TEAMS_MAP } from '../utils/teamLogos.ts';
 
 export interface PlayerBioRecord {
@@ -1009,7 +1010,24 @@ function sanitizeUnverifiedCoachClaims(
       );
   }
 
-  return out;
+  return sanitizeEditorialSpanishGrammar(out);
+}
+
+function sanitizeEditorialSpanishGrammar(text: string): string {
+  if (!text) return text;
+  return text
+    .replace(
+      /\b(de|a|ante|contra|para|por|con|sobre|entre)\s+los\s+(\*\*)?Los\s+Angeles\b/giu,
+      (_m, prep: string, stars?: string) => `${prep} ${stars || ''}Los Angeles`
+    )
+    .replace(
+      /\b[Ll]os\s+(\*\*)?Los\s+Angeles\b/gu,
+      (_m, stars?: string) => `${stars || ''}Los Angeles`
+    )
+    .replace(
+      /\btasa\s+de\s+tiros\s+libres\b/giu,
+      'frecuencia de visitas al tiro libre'
+    );
 }
 
 let flashLiteQuotaCooldownUntil = 0;
@@ -1329,7 +1347,10 @@ function parseClavesList(
       }
     }
     if (title && detail.length >= 15) {
-      items.push({ title, detail });
+      items.push({
+        title: sanitizeEditorialSpanishGrammar(title),
+        detail: sanitizeEditorialSpanishGrammar(detail),
+      });
     }
   }
 
@@ -1514,13 +1535,30 @@ export function createScoutingEngine(deps: ScoutingEngineDeps) {
     if (!forceRefresh && cachedScheduleList && cachedScheduleList.expiresAt > Date.now()) {
       return cachedScheduleList.games;
     }
-    const parsed: ScheduledLeagueGame[] = [];
+
+    const gameMap = new Map<string, ScheduledLeagueGame>();
+
+    // 1. Seed instantaneously in 0ms from official embedded 2026-27 NBA schedule (all 1,200 regular season games)
+    for (const sg of STATIC_SCHEDULE_2027) {
+      const fallbackArena = NBA_TEAM_ARENAS[sg.homeAbbr];
+      gameMap.set(`${sg.dateIso}:${sg.awayAbbr}:${sg.homeAbbr}`, {
+        gameId: sg.gameId,
+        dateIso: sg.dateIso,
+        dateTimeUtc: sg.dateTimeUtc,
+        awayAbbr: sg.awayAbbr,
+        homeAbbr: sg.homeAbbr,
+        arenaName: fallbackArena?.arenaName || `Pabellón ${sg.homeAbbr}`,
+        arenaCity: fallbackArena?.arenaCity || '',
+      });
+    }
+
+    // 2. Fast optional CDN overlay (3.5s cap so Vercel serverless never risks a 504 timeout)
     try {
       const raw = await deps.cachedFetchJson<Record<string, any>>(
         'https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_1.json',
         6 * 60 * 60 * 1000,
         NBA_LIVE_HEADERS,
-        9000,
+        3500,
         forceRefresh
       );
       const gameDates = Array.isArray(raw?.leagueSchedule?.gameDates)
@@ -1544,7 +1582,7 @@ export function createScoutingEngine(deps: ScoutingEngineDeps) {
           );
           if (!/^\d{4}-\d{2}-\d{2}$/.test(dateIso)) continue;
           const fallbackArena = NBA_TEAM_ARENAS[homeAbbr];
-          parsed.push({
+          gameMap.set(`${dateIso}:${awayAbbr}:${homeAbbr}`, {
             gameId: String(g?.gameId || ''),
             dateIso,
             dateTimeUtc: utcStr,
@@ -1560,63 +1598,50 @@ export function createScoutingEngine(deps: ScoutingEngineDeps) {
         }
       }
     } catch {
-      // CDN fetch failed or timed out on serverless
+      // Static 2026-27 schedule already covers all weekly windows
     }
 
-    // Always ensure snapshot dataset fallback/supplement so Vercel serverless has complete schedule
-    try {
-      const full = await deps.getFullLeagueMemory();
-      const gameMap = new Map<string, ScheduledLeagueGame>();
-      for (const p of parsed) {
-        gameMap.set(`${p.dateIso}:${p.awayAbbr}:${p.homeAbbr}`, p);
-      }
-
-      for (const t of full.teams) {
-        for (const g of t.games) {
-          const dateIso = g.date.slice(0, 10);
-          const isHome = g.isHome;
-          const homeAbbr = isHome ? t.abbreviation : g.opponentAbbr;
-          const awayAbbr = isHome ? g.opponentAbbr : t.abbreviation;
-          const key = `${dateIso}:${awayAbbr}:${homeAbbr}`;
-          if (!gameMap.has(key)) {
-            const fallbackArena = NBA_TEAM_ARENAS[homeAbbr];
-            gameMap.set(key, {
-              gameId: g.eventId || `mem_${dateIso}_${awayAbbr}_${homeAbbr}`,
-              dateIso,
-              dateTimeUtc: `${dateIso}T00:00:00Z`,
-              awayAbbr,
-              homeAbbr,
-              arenaName: fallbackArena?.arenaName || `Pabellón ${homeAbbr}`,
-              arenaCity: fallbackArena?.arenaCity || '',
-            });
+    if (gameMap.size === 0) {
+      try {
+        const full = await deps.getFullLeagueMemory();
+        for (const t of full.teams) {
+          for (const g of t.games) {
+            const dateIso = g.date.slice(0, 10);
+            const isHome = g.isHome;
+            const homeAbbr = isHome ? t.abbreviation : g.opponentAbbr;
+            const awayAbbr = isHome ? g.opponentAbbr : t.abbreviation;
+            const key = `${dateIso}:${awayAbbr}:${homeAbbr}`;
+            if (!gameMap.has(key)) {
+              const fallbackArena = NBA_TEAM_ARENAS[homeAbbr];
+              gameMap.set(key, {
+                gameId: g.eventId || `mem_${dateIso}_${awayAbbr}_${homeAbbr}`,
+                dateIso,
+                dateTimeUtc: `${dateIso}T00:00:00Z`,
+                awayAbbr,
+                homeAbbr,
+                arenaName: fallbackArena?.arenaName || `Pabellón ${homeAbbr}`,
+                arenaCity: fallbackArena?.arenaCity || '',
+              });
+            }
           }
         }
+      } catch {
+        // Ignore memory fallback failure
       }
-
-      const combined = [...gameMap.values()];
-      combined.sort((a, b) =>
-        (a.dateIso + 'T' + (a.dateTimeUtc || '')).localeCompare(
-          b.dateIso + 'T' + (b.dateTimeUtc || '')
-        )
-      );
-
-      cachedScheduleList = {
-        expiresAt: Date.now() + 6 * 60 * 60 * 1000,
-        games: combined,
-      };
-      return combined;
-    } catch {
-      parsed.sort((a, b) =>
-        (a.dateIso + 'T' + (a.dateTimeUtc || '')).localeCompare(
-          b.dateIso + 'T' + (b.dateTimeUtc || '')
-        )
-      );
-      cachedScheduleList = {
-        expiresAt: Date.now() + 6 * 60 * 60 * 1000,
-        games: parsed,
-      };
-      return parsed;
     }
+
+    const combined = [...gameMap.values()];
+    combined.sort((a, b) =>
+      (a.dateIso + 'T' + (a.dateTimeUtc || '')).localeCompare(
+        b.dateIso + 'T' + (b.dateTimeUtc || '')
+      )
+    );
+
+    cachedScheduleList = {
+      expiresAt: Date.now() + 6 * 60 * 60 * 1000,
+      games: combined,
+    };
+    return combined;
   }
 
   async function fetchEspnInjuriesByName(
@@ -4125,7 +4150,7 @@ export function createScoutingEngine(deps: ScoutingEngineDeps) {
     eventId: string,
     forceRefresh = false
   ): Promise<GameNarrativePayload> {
-    const cacheKey = `game_narrative_v8:${eventId}`;
+    const cacheKey = `game_narrative_v9:${eventId}`;
     if (!forceRefresh) {
       const cached = reportMemoryCache.get(cacheKey);
       if (cached && cached.expiresAt > Date.now()) {
@@ -4576,33 +4601,77 @@ export function createScoutingEngine(deps: ScoutingEngineDeps) {
 
     const clavesList: ChronicleKeyItem[] = [];
     if (mvp) {
+      const mvpMatch = gd.matchups.find(
+        (m) => m.away.abbr === mvp.teamAbbr || m.home.abbr === mvp.teamAbbr
+      );
+      const mvpScoreNote = mvpMatch
+        ? ` en el ${mvpMatch.away.score}-${mvpMatch.home.score} ante **${mvp.opponentAbbr}**`
+        : ` frente a **${mvp.opponentAbbr}**`;
       clavesList.push({
-        title: `MVP nocturno (${mvp.teamAbbr})`,
-        detail: `**${mvp.playerName}** **marcó el techo individual de la jornada** con ${mvp.points} puntos, ${mvp.rebounds} rebotes, ${mvp.assists} asistencias y ${mvp.gameScore.toFixed(
-          1
-        )} de valoración Game Score.`,
+        title: `Impacto estelar de ${mvp.playerName}`,
+        detail: sanitizeEditorialSpanishGrammar(
+          `**${mvp.playerName}** (${mvp.teamAbbr}) **inclinó el encuentro desde la generación ofensiva**${mvpScoreNote}, produciendo ${mvp.points} puntos, ${mvp.rebounds} rebotes y ${mvp.assists} asistencias con ${mvp.tsPct.toFixed(
+            0
+          )}% de eficiencia real.`
+        ),
       });
     }
     if (stmt) {
+      const cleanStmt = sanitizeEditorialSpanishGrammar(
+        stmt.summarySimple || `${stmt.scoreDisplay} ante ${stmt.opponentAbbr}`
+      );
       clavesList.push({
-        title: `Autoridad colectiva de ${stmt.teamAbbr}`,
-        detail: `**${stmt.teamName}** **firmó el golpe táctico más contundente** por ${stmt.scoreDisplay} ante **${stmt.opponentAbbr}** respaldado por +${stmt.netRtg.toFixed(
-          1
-        )} de Net Rating y ${stmt.efgPct.toFixed(1)}% en tiro efectivo.`,
+        title: `Pizarra dominante de ${stmt.teamAbbr}`,
+        detail: sanitizeEditorialSpanishGrammar(
+          `**${stmt.teamName}** **marcó la mayor superioridad táctica de la fecha** (${stmt.scoreDisplay} frente a **${stmt.opponentAbbr}**), sosteniendo +${stmt.netRtg.toFixed(
+            1
+          )} puntos por cada 100 posesiones y un ${stmt.efgPct.toFixed(
+            1
+          )}% en tiro efectivo (${cleanStmt.replace(/\*\*/g, '')}).`
+        ),
       });
     }
     if (topExp) {
       clavesList.push({
-        title: `Explosión fuera de guion`,
-        detail: `**${topExp.playerName}** (${topExp.teamAbbr}) **disparó su producción ofensiva** hasta ${topExp.points} puntos (+${topExp.ptsDelta.toFixed(
-          1
-        )} sobre su media de temporada).`,
+        title: `Factor X: ${topExp.playerName}`,
+        detail: sanitizeEditorialSpanishGrammar(
+          `**${topExp.playerName}** (${topExp.teamAbbr}) **rompió el plan defensivo rival** escalando hasta ${topExp.points} puntos (+${topExp.ptsDelta.toFixed(
+            1
+          )} sobre su media habitual de ${topExp.ptsAvg.toFixed(1)}) impulsado por ${topExp.driverTag.toLowerCase()}.`
+        ),
       });
     }
-    clavesList.push({
-      title: `Termómetro de marcadores`,
-      detail: `La cartelera dejó **máxima igualdad en los cierres apretados** con ${gd.pulse.closeGamesCount} duelos decididos por 5 o menos puntos y ${gd.pulse.roadWinsCount}/${gd.pulse.gamesCount} victorias visitantes.`,
-    });
+    const closestGame = [...gd.matchups].sort(
+      (a, b) => a.margin - b.margin
+    )[0];
+    if (closestGame) {
+      const winnerSide =
+        closestGame.away.score > closestGame.home.score
+          ? closestGame.away
+          : closestGame.home;
+      const loserSide =
+        closestGame.away.score > closestGame.home.score
+          ? closestGame.home
+          : closestGame.away;
+      const primaryKey = (closestGame.keyTakeawaysSimple[0] || '')
+        .replace(/^\*\*[^*]+\*\*\s*/, '')
+        .trim();
+      clavesList.push({
+        title:
+          closestGame.margin <= 5
+            ? `Ejecución en el clutch (${winnerSide.abbr})`
+            : `Lectura global de la cartelera`,
+        detail: sanitizeEditorialSpanishGrammar(
+          closestGame.margin <= 5 && primaryKey
+            ? `**${winnerSide.name}** **resolvió el duelo más cerrado de la noche** ante **${loserSide.name}** (${closestGame.away.score}-${closestGame.home.score}): ${
+                primaryKey.charAt(0).toLowerCase() + primaryKey.slice(1)
+              }`
+            : `La jornada dejó **${gd.pulse.closeGamesCount} desenlaces decididos en el alambre** y ${gd.pulse.roadWinsCount} triunfos visitantes en ${gd.pulse.gamesCount} partidos, con un ritmo medio de ${gd.pulse.avgPace.toFixed(
+                1
+              )} posesiones.`
+        ),
+      });
+    }
 
     return {
       date: gd.selectedDate,
@@ -4610,12 +4679,12 @@ export function createScoutingEngine(deps: ScoutingEngineDeps) {
       gamesCount: gd.pulse.gamesCount,
       generatedAt: new Date().toISOString(),
       engineMode: 'empirical_fallback',
-      headline,
-      lead,
+      headline: sanitizeEditorialSpanishGrammar(headline),
+      lead: sanitizeEditorialSpanishGrammar(lead),
       dynamicSections,
-      pizarrasSection,
-      hitosSection: hitosSection || lead,
-      espanolesSection,
+      pizarrasSection: sanitizeEditorialSpanishGrammar(pizarrasSection),
+      hitosSection: sanitizeEditorialSpanishGrammar(hitosSection || lead),
+      espanolesSection: sanitizeEditorialSpanishGrammar(espanolesSection),
       clavesList: clavesList.slice(0, 4),
       spanishPlayersSummary:
         spanishNightNotes.length > 0
@@ -4633,7 +4702,7 @@ export function createScoutingEngine(deps: ScoutingEngineDeps) {
     forceRefresh = false
   ): Promise<GameDayChroniclePayload> {
     const gd = await deps.getGameDayPayload(requestedDate, forceRefresh);
-    const cacheKey = `gameday_chronicle_v7:${gd.selectedDate}`;
+    const cacheKey = `gameday_chronicle_v8:${gd.selectedDate}`;
 
     if (!forceRefresh) {
       const cached = reportMemoryCache.get(cacheKey);
@@ -4836,7 +4905,7 @@ export function createScoutingEngine(deps: ScoutingEngineDeps) {
         '1. RIGOR EMPÍRICO TOTAL: Todos los marcadores, puntos, porcentajes, récords y rachas que cites deben coincidir al 100% con el dossier adjunto. Jamás inventes resultados, cifras ni jugadas concretas no descritas.',
         '2. PROHIBICIÓN TOTAL DE DAR DATOS POR SUPUESTOS O USAR MEMORIA PREENTRENADA: Tu conocimiento interno previo está desactualizado respecto a la temporada actual. Tienes TERMINANTEMENTE PROHIBIDO dar por supuesto o mencionar: (a) nombres propios o apodos de entrenadores, asistentes o directivos (ej. Tom Thibodeau dejó los NY Knicks hace años; NUNCA cites nombres de entrenadores, habla SIEMPRE de "el cuerpo técnico de [Equipo]", "la dirección técnica de [Equipo]" o "la pizarra de [Equipo]"); (b) antigüedad, edad, rondas de Draft, condición de rookie, contratos, exequipos o traspasos de jugadores; (c) premios pasados, anillos, "vigente campeón" o series de temporadas anteriores; (d) puestos exactos en la clasificación (ej. "4º del Este") o próximos rivales del calendario; (e) causas o plazos de lesiones no escritos literalmente en el dossier.',
         '3. PROSA DE REVISTA DE AUTOR + CERO LISTAS MECÁNICAS DE ESTADÍSTICAS: Queda terminantemente prohibido soltar oraciones del tipo "X firmó N puntos, N rebotes y N asistencias" enumerando jugadores como si fuera una base de datos o un parte de estadísticas. Esos datos ya se muestran en las tarjetas visuales de la interfaz. Escribe un relato periodístico de alta calidad y profundidad táctica (estilo artículo de fondo de Gigantes o The Athletic), analizando dinámicas colectivas, alternativas en el marcador, lectura de espacios y sensaciones de la jornada con total naturalidad humana.',
-        '4. JERARQUÍA VISUAL Y ÉNFASIS EN NEGRITA (**...**): En todos los párrafos del cuerpo (ENTRADILLA, párrafos de CAPITULOS_DINAMICOS, PIZARRAS, HITOS, ESPANOLES y la explicación tras :: en CLAVES), utiliza negrita Markdown (**texto**) EXCLUSIVAMENTE para estos tres elementos: (a) nombres de jugadores (ej. **Nikola Jokić**, **#34 Giannis Antetokounmpo**), (b) nombres o apodos oficiales de equipos/franquicias (ej. **Boston Celtics**, **Thunder**, **Lakers**), y (c) UNA sola idea táctica clave por párrafo (frase breve de 4 a 10 palabras que resuma la clave del juego, ej. **castigando la zona desde la esquina débil**). PROHIBIDO poner en negrita cifras o estadísticas aisladas (como "49 puntos", "14 rebotes" o "61.2%"): intégralas en texto normal sin formato especial. PROHIBIDO poner ** en TITULAR, en el título del capítulo previo a :: o en el título corto previo a :: en CLAVES.',
+        '4. GRAMÁTICA ESPAÑOLA IMPECABLE + JERARQUÍA EN NEGRITA (**...**): JAMÁS dupliques el artículo delante de franquicias que ya empiezan por "Los" (PROHIBIDO escribir "Los Los Angeles Lakers" o "los Los Angeles Clippers"; escribe siempre "**Los Angeles Lakers**" o "los **Lakers**"). En todos los párrafos del cuerpo (ENTRADILLA, CAPITULOS_DINAMICOS, PIZARRAS, HITOS, ESPANOLES y la explicación tras :: en CLAVES), utiliza negrita Markdown (**texto**) EXCLUSIVAMENTE para: (a) nombres de jugadores (ej. **Nikola Jokić**), (b) nombres o apodos oficiales de equipos (ej. **Boston Celtics**, **Lakers**), y (c) UNA sola idea táctica clave por párrafo (frase breve de 4 a 10 palabras que explique el porqué del juego, ej. **colapsando la pintura para forzar pérdidas**). PROHIBIDO poner en negrita cifras aisladas y PROHIBIDO poner ** en TITULAR o antes de ::.',
         '5. FORMATO EXACTO CON ESTAS 7 ETIQUETAS EN MAYÚSCULAS:',
         '===TITULAR===',
         '(Titular periodístico potente de portada en 1 sola línea, sin # ni **).',
@@ -4851,7 +4920,7 @@ export function createScoutingEngine(deps: ScoutingEngineDeps) {
         '===ESPANOLES===',
         '(Epígrafe fijo Españoles: si jugaron españoles, 1 párrafo analizando con precisión sus minutos, producción e impacto real; si ninguno sumó minutos en esta fecha, 1 frase sobria, directa y natural confirmándolo).',
         '===CLAVES===',
-        '(Epígrafe fijo Claves: exactamente 4 claves rápidas para quedarse con lo esencial del día, una por línea con el formato exacto "Título corto sin ** :: Explicación directa con cifra verificada en 1-2 frases aplicando negritas", sin numeración inicial).',
+        '(Epígrafe fijo Claves: exactamente 4 claves analíticas reales que expliquen POR QUÉ se ganaron o perdieron los partidos más relevantes de la jornada, una por línea con formato exacto "Título analítico corto sin ** :: Análisis táctico claro en 1-2 frases respaldado por cifras comprensibles aplicando negritas", sin numeración inicial. Criterio obligatorio de las 4 claves: [1] la gran exhibición individual de la noche y cómo generó ventaja para su equipo; [2] la pizarra colectiva o factor táctico más determinante de la jornada —puntería y volumen en triples, cerrojo defensivo, control de pérdidas, dominio en la pintura o rebote ofensivo—; [3] el cierre apretado, irrupción de banquillo o factor X más decisivo; [4] lectura táctica global de la cartelera. PROHIBIDO usar ratios opacos que no expliquen el juego como "tasa de tiros libres" / FTR% o citar datos sueltos sin causa-efecto baloncestístico).',
       ].join('\n');
 
       try {

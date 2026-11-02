@@ -9,6 +9,11 @@ import type {
   TeamGameLog,
   TeamSummary,
 } from '../types/nba.ts';
+import {
+  STATIC_SCHEDULE_2027,
+  addDaysIso,
+  getEasternTodayIso,
+} from '../utils/staticSchedule.ts';
 import { NBA_TEAMS_MAP } from '../utils/teamLogos.ts';
 import type { PlayerBioRecord } from './scoutingEngine.ts';
 
@@ -373,49 +378,85 @@ async function fetchCdnJsonWithTimeout<T>(
 interface CdnCompletedGameRef {
   gameId: string;
   dateIso: string;
+  dateTimeUtc?: string;
   awayAbbr: string;
   homeAbbr: string;
+  confirmedFinal?: boolean;
 }
 
-let cachedCdnCompleted2027: {
-  expiresAt: number;
-  games: CdnCompletedGameRef[];
-} | null = null;
+const ESPN_ABBR_TO_NBA: Record<string, string> = {
+  GS: 'GSW',
+  NY: 'NYK',
+  NO: 'NOP',
+  SA: 'SAS',
+  UTAH: 'UTA',
+  WSH: 'WAS',
+};
 
-async function fetchCompletedRegularSeason2027FromCdn(
-  timeoutMs: number,
-  forceRefresh = false
+function normalizeEspnTricode(raw: unknown): string {
+  const up = String(raw || '').trim().toUpperCase();
+  return ESPN_ABBR_TO_NBA[up] || up;
+}
+
+function normalizeLookupNamePlain(raw: string): string {
+  return (raw || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .replace(/\b(jr|sr|ii|iii|iv)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+async function discoverCandidateCompletedGames2027(
+  timeoutMs: number
 ): Promise<CdnCompletedGameRef[]> {
-  if (
-    !forceRefresh &&
-    cachedCdnCompleted2027 &&
-    cachedCdnCompleted2027.expiresAt > Date.now()
-  ) {
-    return cachedCdnCompleted2027.games;
+  const todayIso = getEasternTodayIso();
+  const nowMs = Date.now();
+  const byGameId = new Map<string, CdnCompletedGameRef>();
+  const liveNotFinalIds = new Set<string>();
+
+  for (const sg of STATIC_SCHEDULE_2027) {
+    if (!/^00226\d{5}$/.test(sg.gameId)) continue;
+    if (sg.dateIso > todayIso) continue;
+    if (sg.dateIso === todayIso && sg.dateTimeUtc) {
+      const tipMs = Date.parse(sg.dateTimeUtc);
+      if (!Number.isNaN(tipMs) && nowMs - tipMs < 95 * 60 * 1000) {
+        continue;
+      }
+    }
+    byGameId.set(sg.gameId, {
+      gameId: sg.gameId,
+      dateIso: sg.dateIso,
+      dateTimeUtc: sg.dateTimeUtc,
+      awayAbbr: sg.awayAbbr,
+      homeAbbr: sg.homeAbbr,
+      confirmedFinal: false,
+    });
   }
 
-  const raw = await fetchCdnJsonWithTimeout<Record<string, any>>(
-    'https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_1.json',
-    timeoutMs
-  );
-
-  const gameDates = Array.isArray(raw?.leagueSchedule?.gameDates)
-    ? raw.leagueSchedule.gameDates
-    : [];
-
-  const completed: CdnCompletedGameRef[] = [];
-  for (const gd of gameDates) {
-    const gamesArr = Array.isArray(gd?.games) ? gd.games : [];
-    for (const g of gamesArr) {
+  // Fast 15 KB live scoreboard check to catch today's exact Final status and avoid polling pre-game/live games
+  try {
+    const sb = await fetchCdnJsonWithTimeout<Record<string, any>>(
+      'https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json',
+      Math.min(2000, Math.max(900, timeoutMs))
+    );
+    const sbDateRaw = String(sb?.scoreboard?.gameDate || '').slice(0, 10);
+    const sbGames = Array.isArray(sb?.scoreboard?.games)
+      ? sb.scoreboard.games
+      : [];
+    for (const g of sbGames) {
       const gameId = String(g?.gameId || '').trim();
-      // Strictly 2026-27 NBA Regular Season games (00226xxxxx)
       if (!/^00226\d{5}$/.test(gameId)) continue;
-
       const statusNum = Number(g?.gameStatus) || 0;
       const statusTxt = String(g?.gameStatusText || '').trim();
       const isFinal = statusNum === 3 || /^final/i.test(statusTxt);
-      if (!isFinal) continue;
-
+      if (!isFinal) {
+        liveNotFinalIds.add(gameId);
+        byGameId.delete(gameId);
+        continue;
+      }
       const awayAbbr = String(g?.awayTeam?.teamTricode || '')
         .trim()
         .toUpperCase();
@@ -423,40 +464,264 @@ async function fetchCompletedRegularSeason2027FromCdn(
         .trim()
         .toUpperCase();
       if (!NBA_TEAMS_MAP[awayAbbr] || !NBA_TEAMS_MAP[homeAbbr]) continue;
+      const utcStr = String(g?.gameTimeUTC || g?.gameEt || '').trim();
+      const dateIso = /^\d{4}-\d{2}-\d{2}$/.test(sbDateRaw)
+        ? sbDateRaw
+        : normalizeScheduleDateToEasternIso('', '', utcStr) || todayIso;
 
-      const utcStr = String(g?.gameDateTimeUTC || g?.gameDateUTC || '').trim();
-      const dateIso = normalizeScheduleDateToEasternIso(
-        g?.gameDateEst,
-        gd?.gameDate,
-        utcStr
-      );
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateIso)) continue;
-
-      completed.push({
+      byGameId.set(gameId, {
         gameId,
         dateIso,
+        dateTimeUtc: utcStr,
         awayAbbr,
         homeAbbr,
+        confirmedFinal: true,
       });
+    }
+  } catch {
+    // Scoreboard optional; static schedule already seeded all candidate gameIds
+  }
+
+  for (const openId of liveNotFinalIds) {
+    byGameId.delete(openId);
+  }
+
+  const list = [...byGameId.values()];
+  list.sort((a, b) =>
+    (b.dateIso + 'T' + (b.dateTimeUtc || '')).localeCompare(
+      a.dateIso + 'T' + (a.dateTimeUtc || '')
+    )
+  );
+  return list;
+}
+
+async function fetchEspnFallbackForMissingRefs(
+  stillMissing: CdnCompletedGameRef[],
+  biosMap: Map<string, PlayerBioRecord>,
+  remainingBudgetMs: number
+): Promise<Array<{ ref: CdnCompletedGameRef; cdnGame: Record<string, any> }>> {
+  if (stillMissing.length === 0 || remainingBudgetMs < 900) return [];
+  const todayIso = getEasternTodayIso();
+  const minDateIso = addDaysIso(todayIso, -3);
+  const recentMissing = stillMissing.filter((r) => r.dateIso >= minDateIso);
+  if (recentMissing.length === 0) return [];
+
+  const bioByNormAndTeam = new Map<string, PlayerBioRecord>();
+  const bioByNormOnly = new Map<string, PlayerBioRecord>();
+  for (const b of biosMap.values()) {
+    const n = normalizeLookupNamePlain(b.name);
+    if (!n) continue;
+    bioByNormAndTeam.set(`${n}|${b.teamAbbr}`, b);
+    if (!bioByNormOnly.has(n)) bioByNormOnly.set(n, b);
+  }
+
+  const datesToQuery = Array.from(
+    new Set(recentMissing.map((r) => r.dateIso))
+  ).slice(0, 3);
+  const startedAt = Date.now();
+  const recovered: Array<{
+    ref: CdnCompletedGameRef;
+    cdnGame: Record<string, any>;
+  }> = [];
+
+  for (const dateIso of datesToQuery) {
+    const budgetLeft = remainingBudgetMs - (Date.now() - startedAt);
+    if (budgetLeft < 700) break;
+    const ymd = dateIso.replace(/-/g, '');
+    try {
+      const sb = await fetchCdnJsonWithTimeout<Record<string, any>>(
+        `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${ymd}`,
+        Math.min(1800, budgetLeft)
+      );
+      const events = Array.isArray(sb?.events) ? sb.events : [];
+      const matchingPairs: Array<{
+        ref: CdnCompletedGameRef;
+        espnEventId: string;
+      }> = [];
+
+      for (const ev of events) {
+        const comp = ev?.competitions?.[0];
+        const completed = Boolean(
+          comp?.status?.type?.completed || ev?.status?.type?.completed
+        );
+        if (!completed) continue;
+        const competitors = Array.isArray(comp?.competitors)
+          ? comp.competitors
+          : [];
+        const awayComp = competitors.find((c: any) => c?.homeAway === 'away');
+        const homeComp = competitors.find((c: any) => c?.homeAway === 'home');
+        const awayAbbr = normalizeEspnTricode(awayComp?.team?.abbreviation);
+        const homeAbbr = normalizeEspnTricode(homeComp?.team?.abbreviation);
+        const refMatch = recentMissing.find(
+          (r) =>
+            r.dateIso === dateIso &&
+            r.awayAbbr === awayAbbr &&
+            r.homeAbbr === homeAbbr
+        );
+        const espnEventId = String(ev?.id || '').trim();
+        if (refMatch && espnEventId) {
+          matchingPairs.push({ ref: refMatch, espnEventId });
+        }
+      }
+
+      if (matchingPairs.length === 0) continue;
+
+      const summaries = await Promise.allSettled(
+        matchingPairs.map(async ({ ref, espnEventId }) => {
+          const sumRaw = await fetchCdnJsonWithTimeout<Record<string, any>>(
+            `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${espnEventId}`,
+            Math.min(2200, Math.max(800, remainingBudgetMs - (Date.now() - startedAt)))
+          );
+          const bsPlayers = Array.isArray(sumRaw?.boxscore?.players)
+            ? sumRaw.boxscore.players
+            : [];
+          const headerComps =
+            sumRaw?.header?.competitions?.[0]?.competitors || [];
+
+          const buildCdnSide = (targetAbbr: string) => {
+            const pBlock = bsPlayers.find(
+              (b: any) =>
+                normalizeEspnTricode(b?.team?.abbreviation) === targetAbbr
+            );
+            const hComp = headerComps.find(
+              (c: any) =>
+                normalizeEspnTricode(c?.team?.abbreviation) === targetAbbr
+            );
+            const statGroup = pBlock?.statistics?.[0] || {};
+            const labels: string[] = Array.isArray(statGroup.labels)
+              ? statGroup.labels.map((l: any) => String(l || '').toUpperCase())
+              : [];
+            const athletes = Array.isArray(statGroup.athletes)
+              ? statGroup.athletes
+              : [];
+
+            const idxOf = (lbl: string) => labels.indexOf(lbl);
+            const parseMadeAtt = (val: string | undefined): [number, number] => {
+              const m = String(val || '').match(/^(\d+)-(\d+)$/);
+              return m ? [Number(m[1]) || 0, Number(m[2]) || 0] : [0, 0];
+            };
+
+            const playersOut: Record<string, any>[] = [];
+            for (const athEntry of athletes) {
+              if (athEntry?.didNotPlay) continue;
+              const statsArr: string[] = Array.isArray(athEntry?.stats)
+                ? athEntry.stats.map(String)
+                : [];
+              if (statsArr.length === 0) continue;
+
+              const rawName = String(
+                athEntry?.athlete?.displayName || ''
+              ).trim();
+              const normName = normalizeLookupNamePlain(rawName);
+              const matchedBio =
+                bioByNormAndTeam.get(`${normName}|${targetAbbr}`) ||
+                bioByNormOnly.get(normName);
+              const personId =
+                matchedBio?.id ||
+                `espn_${String(athEntry?.athlete?.id || normName)}`;
+
+              const minStr = statsArr[idxOf('MIN')] || '0';
+              const mins = parseCdnIsoMinutes(minStr);
+              if (mins <= 0) continue;
+
+              const [fgm, fga] = parseMadeAtt(statsArr[idxOf('FG')]);
+              const [fg3m, fg3a] = parseMadeAtt(statsArr[idxOf('3PT')]);
+              const [ftm, fta] = parseMadeAtt(statsArr[idxOf('FT')]);
+              const oreb = Number(statsArr[idxOf('OREB')]) || 0;
+              const dreb = Number(statsArr[idxOf('DREB')]) || 0;
+              const reb = Number(statsArr[idxOf('REB')]) || oreb + dreb;
+              const ast = Number(statsArr[idxOf('AST')]) || 0;
+              const stl = Number(statsArr[idxOf('STL')]) || 0;
+              const blk = Number(statsArr[idxOf('BLK')]) || 0;
+              const tov = Number(statsArr[idxOf('TO')]) || 0;
+              const pf = Number(statsArr[idxOf('PF')]) || 0;
+              const pm = Number(statsArr[idxOf('+/-')]) || 0;
+              const pts = Number(statsArr[idxOf('PTS')]) || 0;
+
+              playersOut.push({
+                personId,
+                name: matchedBio?.name || rawName,
+                position:
+                  matchedBio?.position ||
+                  String(athEntry?.athlete?.position?.abbreviation || 'G-F'),
+                jerseyNum:
+                  matchedBio?.jersey ||
+                  String(athEntry?.athlete?.jersey || ''),
+                played: '1',
+                statistics: {
+                  minutes: minStr,
+                  points: pts,
+                  fieldGoalsMade: fgm,
+                  fieldGoalsAttempted: fga,
+                  threePointersMade: fg3m,
+                  threePointersAttempted: fg3a,
+                  freeThrowsMade: ftm,
+                  freeThrowsAttempted: fta,
+                  reboundsOffensive: oreb,
+                  reboundsDefensive: dreb,
+                  reboundsTotal: reb,
+                  assists: ast,
+                  steals: stl,
+                  blocks: blk,
+                  turnovers: tov,
+                  foulsPersonal: pf,
+                  plusMinusPoints: pm,
+                },
+              });
+            }
+
+            const scoreNum =
+              Number(hComp?.score) ||
+              playersOut.reduce(
+                (acc, p) => acc + (Number(p.statistics.points) || 0),
+                0
+              );
+
+            return {
+              teamTricode: targetAbbr,
+              score: scoreNum,
+              statistics: {},
+              players: playersOut,
+            };
+          };
+
+          const awaySide = buildCdnSide(ref.awayAbbr);
+          const homeSide = buildCdnSide(ref.homeAbbr);
+          if (awaySide.score <= 0 || homeSide.score <= 0) {
+            throw new Error('Incomplete ESPN boxscore');
+          }
+
+          const synthesized: Record<string, any> = {
+            gameId: ref.gameId,
+            gameStatus: 3,
+            gameStatusText: 'Final',
+            awayTeam: awaySide,
+            homeTeam: homeSide,
+          };
+          cdnBoxscorePermanentCache.set(ref.gameId, synthesized);
+          return { ref, cdnGame: synthesized };
+        })
+      );
+
+      for (const s of summaries) {
+        if (s.status === 'fulfilled') {
+          recovered.push(s.value);
+        }
+      }
+    } catch {
+      // Ignore ESPN fallback failure for this date
     }
   }
 
-  // Sort newest-first so if a cap is applied at runtime, the most recent slate is prioritized
-  completed.sort((a, b) => b.dateIso.localeCompare(a.dateIso));
-
-  cachedCdnCompleted2027 = {
-    expiresAt: Date.now() + 4 * 60 * 1000,
-    games: completed,
-  };
-  return completed;
+  return recovered;
 }
 
 const cdnBoxscorePermanentCache = new Map<string, Record<string, any>>();
+const cdnNotYetFinalCooldown = new Map<string, number>();
 
 /**
  * Hydrates any completed 2026-27 Regular Season games present on NBA's public CDN
- * (`cdn.nba.com`) that are not yet present in `dataset` (e.g., games finished after
- * the last persisted snapshot or before `stats.nba.com` indexes them).
+ * (`cdn.nba.com`) or ESPN fallback that are not yet present in `dataset`.
  */
 export async function applyCdnDeltaGamesTo2027(
   dataset: HydratedSeasonMaps,
@@ -467,22 +732,15 @@ export async function applyCdnDeltaGamesTo2027(
     forceRefresh?: boolean;
   }
 ): Promise<number> {
-  const maxGamesToFetch = options?.maxGamesToFetch ?? 24;
-  const timeoutBudgetMs = options?.timeoutBudgetMs ?? 5000;
+  const maxGamesToFetch = options?.maxGamesToFetch ?? 32;
+  const timeoutBudgetMs = options?.timeoutBudgetMs ?? 5500;
   const forceRefresh = options?.forceRefresh ?? false;
   const startedAt = Date.now();
 
-  let completedRefs: CdnCompletedGameRef[] = [];
-  try {
-    completedRefs = await fetchCompletedRegularSeason2027FromCdn(
-      Math.min(4000, timeoutBudgetMs),
-      forceRefresh
-    );
-  } catch {
-    return 0;
-  }
-
-  if (completedRefs.length === 0) return 0;
+  const candidateRefs = await discoverCandidateCompletedGames2027(
+    Math.min(2000, timeoutBudgetMs)
+  );
+  if (candidateRefs.length === 0) return 0;
 
   const existingEventIds = new Set<string>();
   for (const tm of dataset.teamsByAbbr.values()) {
@@ -491,21 +749,34 @@ export async function applyCdnDeltaGamesTo2027(
     }
   }
 
-  const missingRefs = completedRefs
-    .filter((ref) => !existingEventIds.has(ref.gameId))
+  const nowMs = Date.now();
+  const missingRefs = candidateRefs
+    .filter((ref) => {
+      if (existingEventIds.has(ref.gameId)) return false;
+      if (!forceRefresh && !ref.confirmedFinal) {
+        const coolUntil = cdnNotYetFinalCooldown.get(ref.gameId) || 0;
+        if (coolUntil > nowMs) return false;
+      }
+      return true;
+    })
     .slice(0, maxGamesToFetch);
 
   if (missingRefs.length === 0) return 0;
 
-  // Fetch missing boxscores in controlled parallel batches of 8
-  const fetchedGames: Array<{ ref: CdnCompletedGameRef; cdnGame: Record<string, any> }> =
-    [];
+  const fetchedGames: Array<{
+    ref: CdnCompletedGameRef;
+    cdnGame: Record<string, any>;
+  }> = [];
+  const failedRefs: CdnCompletedGameRef[] = [];
   const batchSize = 8;
 
   for (let i = 0; i < missingRefs.length; i += batchSize) {
     const elapsed = Date.now() - startedAt;
     const remainingMs = timeoutBudgetMs - elapsed;
-    if (remainingMs < 600) break;
+    if (remainingMs < 600) {
+      failedRefs.push(...missingRefs.slice(i));
+      break;
+    }
 
     const slice = missingRefs.slice(i, i + batchSize);
     const settled = await Promise.allSettled(
@@ -514,20 +785,47 @@ export async function applyCdnDeltaGamesTo2027(
         if (memHit) return { ref, cdnGame: memHit };
         const raw = await fetchCdnJsonWithTimeout<Record<string, any>>(
           `https://cdn.nba.com/static/json/liveData/boxscore/boxscore_${ref.gameId}.json`,
-          Math.min(3500, Math.max(900, remainingMs))
+          Math.min(2800, Math.max(850, remainingMs))
         );
-        if (!raw?.game) {
+        const gameObj = raw?.game;
+        if (!gameObj) {
           throw new Error(`Empty CDN boxscore for ${ref.gameId}`);
         }
-        cdnBoxscorePermanentCache.set(ref.gameId, raw.game);
-        return { ref, cdnGame: raw.game as Record<string, any> };
+        const statusNum = Number(gameObj.gameStatus) || 0;
+        const statusTxt = String(gameObj.gameStatusText || '').trim();
+        const isFinal = statusNum === 3 || /^final/i.test(statusTxt);
+        if (!isFinal) {
+          cdnNotYetFinalCooldown.set(ref.gameId, Date.now() + 3 * 60 * 1000);
+          throw new Error(`Game ${ref.gameId} not yet Final (${statusTxt})`);
+        }
+        cdnBoxscorePermanentCache.set(ref.gameId, gameObj);
+        return { ref, cdnGame: gameObj as Record<string, any> };
       })
     );
 
-    for (const s of settled) {
+    for (let idx = 0; idx < settled.length; idx++) {
+      const s = settled[idx];
       if (s.status === 'fulfilled') {
         fetchedGames.push(s.value);
+      } else {
+        const reason = String((s as PromiseRejectedResult).reason || '');
+        if (!reason.includes('not yet Final')) {
+          failedRefs.push(slice[idx]);
+        }
       }
+    }
+  }
+
+  // Automatic ESPN fallback if any recent game failed to download from NBA CDN
+  if (failedRefs.length > 0) {
+    const remainingForEspn = timeoutBudgetMs - (Date.now() - startedAt);
+    if (remainingForEspn >= 900) {
+      const espnRecovered = await fetchEspnFallbackForMissingRefs(
+        failedRefs,
+        biosMap,
+        remainingForEspn
+      );
+      fetchedGames.push(...espnRecovered);
     }
   }
 

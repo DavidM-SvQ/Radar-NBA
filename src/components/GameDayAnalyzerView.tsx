@@ -13,7 +13,6 @@ import {
   Flame,
   RefreshCw,
   Star,
-  Swords,
   TrendingDown,
   TrendingUp,
   Trophy,
@@ -39,7 +38,6 @@ interface GameDayAnalyzerViewProps {
   watchlistIds: Set<string>;
   onToggleWatchlist: (entityKey: string) => void;
   onInspectEntity: (entityType: 'player' | 'team', entityId: string) => void;
-  onOpenInDuel: (playerId: string) => void;
   externalRefreshCounter: number;
   selectedDateParam?: string | null;
   onChangeDateParam?: (date: string, mode: 'push' | 'replace') => void;
@@ -89,7 +87,6 @@ export function GameDayAnalyzerView({
   watchlistIds,
   onToggleWatchlist,
   onInspectEntity,
-  onOpenInDuel,
   externalRefreshCounter,
   selectedDateParam,
   onChangeDateParam,
@@ -564,18 +561,6 @@ export function GameDayAnalyzerView({
                   }`}
             </p>
           </div>
-          <button
-            type="button"
-            title="Comparar en Duelo 1v1"
-            aria-label={`Enviar a ${p.playerName} al Duelo 1v1`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenInDuel(p.playerId);
-            }}
-            className="min-w-[34px] min-h-[34px] flex items-center justify-center rounded-md border border-[#1E293B] bg-[#0B1120] text-slate-300 hover:text-orange-400 hover:border-orange-500/40 transition-colors shrink-0"
-          >
-            <Swords className="w-3.5 h-3.5" />
-          </button>
         </div>
       </div>
     );
@@ -1785,37 +1770,38 @@ export function GameDayAnalyzerView({
             </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden divide-y sm:divide-y-0 sm:divide-x divide-[#1E293B]">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2.5">
             {data.idealFive.map((p, idx) => {
               const watched = watchlistIds.has(`player:${p.playerId}`);
               return (
                 <div
                   key={p.playerId}
                   onClick={() => onInspectEntity('player', p.playerId)}
-                  className="p-3.5 sm:p-4 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors flex flex-col justify-between gap-3"
+                  className="min-w-0 bg-[#131C2E] border border-[#1E293B] hover:border-orange-500/40 hover:bg-[#182338] active:bg-[#182338] rounded-lg p-3 cursor-pointer transition-colors flex flex-col justify-between gap-2.5"
                 >
-                  <div>
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="min-w-0">
+                    <div className="flex items-start justify-between gap-1.5 min-w-0">
+                      <div className="flex items-center gap-2 min-w-0">
                         <PlayerAvatar
                           playerId={p.playerId}
                           name={p.playerName}
                           teamAbbr={p.teamAbbr}
                           showTeamBadge
-                          size="md"
+                          size="sm"
                           accentTone={idx === 0 ? 'orange' : 'default'}
                         />
                         <div className="min-w-0">
-                          <p className="font-mono text-[11px] text-orange-400 font-semibold truncate">
-                            #{idx + 1}{' '}
-                            {idx === 0 ? '· MVP Noche' : '· Quinteto'}
+                          <p className="font-mono text-[10px] text-orange-400 font-semibold truncate">
+                            #{idx + 1} {idx === 0 ? '· MVP Noche' : '· Quinteto'}
                           </p>
-                          <p className="mt-0.5 text-sm font-semibold text-slate-100 truncate">
+                          <p
+                            title={p.playerName}
+                            className="text-xs font-semibold text-slate-100 truncate"
+                          >
                             {p.playerName}
                           </p>
-                          <p className="text-xs text-slate-400 truncate">
-                            {p.teamAbbr} · {p.position} ·{' '}
-                            {p.isHome ? 'vs' : '@'} {p.opponentAbbr} ({p.result})
+                          <p className="text-[11px] text-slate-400 truncate">
+                            {p.teamAbbr} · {p.isHome ? 'vs' : '@'} {p.opponentAbbr} ({p.result})
                           </p>
                         </div>
                       </div>
@@ -1826,47 +1812,37 @@ export function GameDayAnalyzerView({
                           e.stopPropagation();
                           onToggleWatchlist(`player:${p.playerId}`);
                         }}
-                        className="min-w-[38px] min-h-[38px] -m-1.5 flex items-center justify-center rounded-lg text-slate-400 hover:text-orange-400 shrink-0"
+                        className="w-7 h-7 -m-1 flex items-center justify-center rounded-md text-slate-400 hover:text-orange-400 shrink-0"
                       >
                         <Star
-                          className={`w-4 h-4 ${
+                          className={`w-3.5 h-3.5 ${
                             watched ? 'fill-orange-400 text-orange-400' : ''
                           }`}
                         />
                       </button>
                     </div>
 
-                    <div className="mt-3 pt-2.5 border-t border-[#1E293B] font-mono tabular-nums">
-                      <p className="text-base font-bold text-slate-100 whitespace-nowrap">
+                    <div className="mt-2.5 pt-2 border-t border-[#1E293B] font-mono tabular-nums min-w-0">
+                      <p className="text-sm font-bold text-slate-100 truncate">
                         {p.points}P · {p.rebounds}R · {p.assists}A
                       </p>
-                      <p className="mt-1 text-[11px] text-slate-300 whitespace-nowrap">
+                      <p className="mt-0.5 text-[11px] text-slate-300 truncate">
                         GmSc {p.gameScore.toFixed(1)} · {p.tsPct.toFixed(0)}% TS ·{' '}
                         {p.plusMinus >= 0 ? `+${p.plusMinus}` : p.plusMinus}
                       </p>
-                      <p className="mt-0.5 text-[11px] text-emerald-400 whitespace-nowrap">
+                      <p className="mt-0.5 text-[11px] text-emerald-400 truncate">
                         {p.ptsDelta >= 0
-                          ? `▲ +${p.ptsDelta.toFixed(1)} vs su media (${p.ptsBaselineAvg.toFixed(
+                          ? `▲ +${p.ptsDelta.toFixed(1)} vs media (${p.ptsBaselineAvg.toFixed(
                               1
                             )})`
-                          : `Media habitual: ${p.ptsBaselineAvg.toFixed(1)} PTS`}
+                          : `Media: ${p.ptsBaselineAvg.toFixed(1)} PTS`}
                       </p>
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between gap-2 pt-1 text-xs">
-                    <span className="text-slate-400">Ver ficha →</span>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onOpenInDuel(p.playerId);
-                      }}
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[#1E293B] bg-[#0B1120] text-slate-300 hover:text-orange-400 hover:border-orange-500/40 transition-colors whitespace-nowrap"
-                    >
-                      <Swords className="w-3 h-3" />
-                      <span>Duelo 1v1</span>
-                    </button>
+                  <div className="flex items-center justify-between pt-0.5 text-[11px] text-slate-400">
+                    <span className="truncate">{p.position} · {p.minutes.toFixed(0)} MIN</span>
+                    <span className="text-orange-400/90 font-medium shrink-0">Ficha →</span>
                   </div>
                 </div>
               );
@@ -2466,7 +2442,6 @@ export function GameDayAnalyzerView({
         experienceMode={experienceMode}
         onClose={() => handleSetReportEventId(null)}
         onInspectEntity={onInspectEntity}
-        onOpenInDuel={onOpenInDuel}
       />
     </div>
   );

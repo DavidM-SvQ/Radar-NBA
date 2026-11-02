@@ -724,30 +724,6 @@ export default function App() {
     [commitRoute]
   );
 
-  const handleOpenInDuel = useCallback(
-    (playerId: string) => {
-      setMobileMenuOpen(false);
-      void ensurePlayerInMemory(playerId);
-      commitRoute(
-        (prev) => ({
-          ...prev,
-          section: 'duel',
-          duelPlayerAId: playerId,
-          duelPlayerBId:
-            prev.duelPlayerAId && prev.duelPlayerAId !== playerId
-              ? prev.duelPlayerAId
-              : prev.duelPlayerBId,
-          inspectedType: null,
-          inspectedId: null,
-          gamedayReportId: null,
-        }),
-        'push',
-        null
-      );
-    },
-    [commitRoute, ensurePlayerInMemory]
-  );
-
   const handleDuelPairChange = useCallback(
     (playerAId: string, playerBId: string) => {
       if (routeRef.current.section !== 'duel') return;
@@ -1681,7 +1657,7 @@ export default function App() {
                   <div className="w-12 h-12 bg-orange-500/10 border border-orange-500/30 rounded-full flex items-center justify-center mx-auto text-orange-400 mb-2">
                     <Shield className="w-6 h-6" />
                   </div>
-                  <h3 className="text-lg font-bold text-slate-100">Zona Privada y Asistente Fantasy</h3>
+                  <h3 className="text-lg font-bold text-slate-100">Zona Privada · Administración</h3>
                   <p className="text-xs text-slate-400">
                     Introduce la clave de acceso para desbloquear tu panel privado.
                   </p>
@@ -1761,24 +1737,26 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setAdminZoneSection('fantasy')}
-                        className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-2 ${
+                        className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-2 whitespace-nowrap ${
                           adminZoneSection === 'fantasy'
                             ? 'bg-orange-500 text-slate-950 shadow-sm'
                             : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
                         }`}
                       >
-                        <span>🏀 Zona Fantasy & Asistente</span>
+                        <Trophy className="w-3.5 h-3.5 shrink-0" />
+                        <span>Zona Fantasy y Asistente</span>
                       </button>
                       <button
                         type="button"
                         onClick={() => setAdminZoneSection('web_config')}
-                        className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-2 ${
+                        className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-2 whitespace-nowrap ${
                           adminZoneSection === 'web_config'
                             ? 'bg-orange-500 text-slate-950 shadow-sm'
                             : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
                         }`}
                       >
-                        <span>🛡️ Configuración de la Web</span>
+                        <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" />
+                        <span>Configuración de la Web</span>
                       </button>
                     </div>
                   </div>
@@ -1803,7 +1781,6 @@ export default function App() {
                     players={players}
                     teams={teams}
                     onInspectEntity={handleInspectEntity}
-                    onOpenInDuel={handleOpenInDuel}
                     initialTab={fantasyTab}
                     onTabChange={handleFantasyTabChange}
                   />
@@ -1824,7 +1801,6 @@ export default function App() {
               watchlistIds={watchlistIds}
               onToggleWatchlist={handleToggleWatchlist}
               onInspectEntity={handleInspectEntity}
-              onOpenInDuel={handleOpenInDuel}
               externalRefreshCounter={gamedayRefreshCounter}
               selectedDateParam={gamedayDateParam}
               onChangeDateParam={handleGamedayDateChange}
@@ -2092,7 +2068,6 @@ export default function App() {
         onToggleWatchlist={handleToggleWatchlist}
         onClose={handleCloseInspector}
         onOpenInComparator={handleOpenInComparator}
-        onOpenInDuel={handleOpenInDuel}
         onSelectRosterPlayer={handleAddExternalPlayer}
       />
     </div>

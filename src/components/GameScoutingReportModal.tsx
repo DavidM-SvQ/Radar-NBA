@@ -10,7 +10,6 @@ import {
   Newspaper,
   RefreshCw,
   Scale,
-  Swords,
   X,
 } from 'lucide-react';
 import type {
@@ -31,7 +30,6 @@ interface GameScoutingReportModalProps {
   experienceMode: ExperienceMode;
   onClose: () => void;
   onInspectEntity: (entityType: 'player' | 'team', entityId: string) => void;
-  onOpenInDuel: (playerId: string) => void;
 }
 
 type ModalTabId = 'scouting' | 'headToHead' | 'boxscore';
@@ -594,7 +592,6 @@ export function GameScoutingReportModal({
   experienceMode,
   onClose,
   onInspectEntity,
-  onOpenInDuel,
 }: GameScoutingReportModalProps) {
   const [activeTab, setActiveTab] = useState<ModalTabId>('scouting');
   const [boxTeamFilter, setBoxTeamFilter] = useState<'both' | 'away' | 'home'>('both');
@@ -1492,26 +1489,11 @@ export function GameScoutingReportModal({
             })}
           </>
         )}
-        <td className="py-2 pl-1 pr-3 text-right whitespace-nowrap">
-          <button
-            type="button"
-            title="Enviar a Duelo 1v1"
-            onClick={(e) => {
-              e.stopPropagation();
-              setHoveredSeasonHigh(null);
-              onClose();
-              onOpenInDuel(p.playerId);
-            }}
-            className="min-w-[30px] min-h-[30px] inline-flex items-center justify-center rounded border border-[#1E293B] bg-[#0B1120] text-slate-400 hover:text-orange-400 hover:border-orange-500/40 transition-colors"
-          >
-            <Swords className="w-3 h-3" />
-          </button>
-        </td>
       </tr>
     );
 
     const t = side.totals;
-    const colCount = boxscoreColsMode === 'all' ? 25 : 23;
+    const colCount = boxscoreColsMode === 'all' ? 24 : 22;
 
     return (
       <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden">
@@ -1589,7 +1571,6 @@ export function GameScoutingReportModal({
                     <th className="py-1.5 px-1.5 font-medium text-center align-middle">USG%</th>
                   </>
                 )}
-                <th className="py-1.5 pl-1 pr-3 font-medium text-center align-middle">1v1</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#1E293B]/80">
@@ -1640,7 +1621,6 @@ export function GameScoutingReportModal({
                     <td className="py-2.5 px-2 text-right text-slate-300">100.0%</td>
                   </>
                 )}
-                <td className="py-2.5 pl-1 pr-3" />
               </tr>
             </tbody>
           </table>
@@ -3797,20 +3777,6 @@ export function GameScoutingReportModal({
                                             {awayNameDisplay}
                                           </span>
                                         </button>
-
-                                        <button
-                                          type="button"
-                                          title={`Comparar a ${
-                                            row.awayPlayerName || awayNameDisplay
-                                          } en Duelo 1v1`}
-                                          onClick={() => {
-                                            onClose();
-                                            onOpenInDuel(row.awayPlayerId);
-                                          }}
-                                          className="p-0.5 text-slate-500 hover:text-orange-400 transition-colors shrink-0"
-                                        >
-                                          <Swords className="w-3 h-3" />
-                                        </button>
                                       </div>
 
                                       <div className="flex flex-col items-end justify-center leading-none shrink-0">
@@ -3923,20 +3889,6 @@ export function GameScoutingReportModal({
                                           >
                                             {homeNameDisplay}
                                           </span>
-                                        </button>
-
-                                        <button
-                                          type="button"
-                                          title={`Comparar a ${
-                                            row.homePlayerName || homeNameDisplay
-                                          } en Duelo 1v1`}
-                                          onClick={() => {
-                                            onClose();
-                                            onOpenInDuel(row.homePlayerId);
-                                          }}
-                                          className="p-0.5 text-slate-500 hover:text-orange-400 transition-colors shrink-0"
-                                        >
-                                          <Swords className="w-3 h-3" />
                                         </button>
                                       </div>
 

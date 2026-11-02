@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, Search, TrendingUp } from 'lucide-react';
 import type { PlayerGameLog, PlayerSummary } from '../types/nba';
 import { formatShortDate, normalizeSearchText } from '../utils/analytics';
-import { computeOfficialGameFpts } from '../utils/fantasyScoring';
 import { PlayerAvatar } from './NbaVisuals';
 
 interface PlayerStreakHistoryChartProps {
@@ -33,7 +32,7 @@ interface ChartMetricDef {
 }
 
 const CHART_METRICS: ChartMetricDef[] = [
-  // Principales & Fantasy
+  // Principales
   {
     id: 'pts',
     shortLabel: 'PTS',
@@ -69,19 +68,6 @@ const CHART_METRICS: ChartMetricDef[] = [
     decimals: 0,
     unit: '',
     getValue: (g) => g.assists,
-  },
-  {
-    id: 'fpts',
-    shortLabel: 'FPTS',
-    label: 'Puntos Liga Fantasy',
-    category: 'core',
-    strokeHex: '#FDE047',
-    dotClass: 'bg-yellow-300',
-    textClass: 'text-yellow-300',
-    decimals: 1,
-    unit: '',
-    allowNegative: true,
-    getValue: (g) => computeOfficialGameFpts(g),
   },
   {
     id: 'pra',
@@ -326,7 +312,6 @@ export function PlayerStreakHistoryChart({
     'pts',
     'reb',
     'ast',
-    'fpts',
   ]);
   const [scaleMode, setScaleMode] = useState<ScaleMode>('auto');
   const [hoveredGameIndex, setHoveredGameIndex] = useState<number | null>(null);
@@ -676,10 +661,10 @@ export function PlayerStreakHistoryChart({
             </button>
             <button
               type="button"
-              onClick={() => applyPreset(['fpts', 'pts', 'reb', 'ast'])}
-              className="px-2.5 py-1 text-[11px] font-medium rounded bg-[#0B1120] border border-[#1E293B] text-yellow-300 hover:border-yellow-400/50 transition-colors whitespace-nowrap"
+              onClick={() => applyPreset(['pts', 'pra', 'gmsc'])}
+              className="px-2.5 py-1 text-[11px] font-medium rounded bg-[#0B1120] border border-[#1E293B] text-slate-300 hover:text-white hover:border-slate-600 transition-colors whitespace-nowrap"
             >
-              Fantasy + Base
+              Impacto (PRA · GmSc)
             </button>
             <button
               type="button"

@@ -50,6 +50,7 @@ import {
   readNbaSnapshotFromDisk,
   serializeSeasonDatasetForSnapshot,
   writeNbaSnapshotToDisk,
+  type HydratedSeasonMaps,
   type NbaPersistedSnapshot,
 } from './nbaSnapshotStore.ts';
 
@@ -433,16 +434,63 @@ async function buildSingleSeasonDataset(
     });
 
     // Serverless / Snapshot-First mode for 2026-27: bypass blocked stats.nba.com and merge live NBA CDN boxscores
-    if (
-      seasonCode === '2026-27' &&
-      isSnapshotOnlyRuntime() &&
-      !forceLive &&
-      snap?.s2027
-    ) {
-      const hydrated27 = hydrateSeasonDatasetFromSnapshot(snap.s2027);
+    if (seasonCode === '2026-27' && isSnapshotOnlyRuntime() && !forceLive) {
+      const hydrated27: HydratedSeasonMaps = snap?.s2027
+        ? hydrateSeasonDatasetFromSnapshot(snap.s2027)
+        : {
+            seasonCode: '2026-27',
+            dataSource: 'nba_official_hybrid',
+            teamsByAbbr: new Map<string, TeamSummary>(
+              Object.values(NBA_TEAMS_MAP).map((tm) => [
+                tm.abbr,
+                {
+                  id: tm.id,
+                  name: tm.name,
+                  shortName:
+                    tm.abbr === 'POR'
+                      ? 'Trail Blazers'
+                      : tm.name.split(' ').slice(-1)[0] || tm.name,
+                  abbreviation: tm.abbr,
+                  conference: [
+                    'ATL',
+                    'BOS',
+                    'BKN',
+                    'CHA',
+                    'CHI',
+                    'CLE',
+                    'DET',
+                    'IND',
+                    'MIA',
+                    'MIL',
+                    'NYK',
+                    'ORL',
+                    'PHI',
+                    'TOR',
+                    'WAS',
+                  ].includes(tm.abbr)
+                    ? 'Este'
+                    : 'Oeste',
+                  wins: 0,
+                  losses: 0,
+                  winPct: 0,
+                  playoffSeed: 0,
+                  gamesBehind: '-',
+                  streakCode: '-',
+                  homeRecord: '0-0',
+                  roadRecord: '0-0',
+                  lastTenRecord: '0-0',
+                  avgPointsFor: 0,
+                  avgPointsAgainst: 0,
+                  differential: 0,
+                  games: [],
+                },
+              ])
+            ),
+            playersById: new Map(),
+          };
       await applyCdnDeltaGamesTo2027(hydrated27, biosMap, {
         maxGamesToFetch: options?.cdnMaxGames ?? 45,
-        timeoutBudgetMs: options?.cdnTimeoutMs ?? 9000,
+        timeoutBudgetMs: options?.cdnTimeoutMs ?? 5800,
         forceRefresh,
       });
       seasonDatasetCache.set(seasonCode, {
@@ -1814,14 +1862,17 @@ function buildIndividualMatchupKeys(params: {
     });
   }
 
-  // 3. FREE THROW LINE / PAINT FOUL PRESSURE
-  if (ftmDiff >= 8 || (margin <= 6 && ftmDiff >= 5 && winnerLog.fta >= 20)) {
+  // 3. FREE THROW LINE / PAINT FOUL PRESSURE (only when disparity genuinely swings the game)
+  if (ftmDiff >= 11 || (margin <= 6 && ftmDiff >= 7 && winnerLog.fta >= 22)) {
     candidates.push({
       family: 'free_throw_disparity',
       axis: 'free_throws',
-      score: 10.5 + ftmDiff * 0.78 + (margin <= 6 ? 2.8 : 0),
-      simple: `**Castigo constante hacia la personal:** ${winner.shortName} sacó +${ftmDiff} puntos de ventaja en tiros libres (${winnerLog.ftm}/${winnerLog.fta} por ${loserLog.ftm}/${loserLog.fta} de ${loser.shortName}) cargando de faltas la zona rival.`,
-      advanced: `**Desequilibrio de Free Throw Rate:** ${winner.abbr} disparó su FTR al ${winnerFtr.toFixed(1)}% (${winnerLog.ftm}/${winnerLog.fta} FT, +${ftmDiff} pts netos desde el 4,60m) frente al ${loserFtr.toFixed(1)}% FTR (${loserLog.ftm}/${loserLog.fta}) de ${loser.abbr}.`,
+      score:
+        9.2 +
+        Math.min(4.5, Math.max(0, ftmDiff - 8) * 0.45) +
+        (margin <= 6 ? 1.8 : 0),
+      simple: `**Castigo constante hacia la personal:** ${winner.shortName} sacó +${ftmDiff} puntos de ventaja en tiros libres (${winnerLog.ftm}/${winnerLog.fta} al ${winnerLog.ftPct.toFixed(0)}% frente al ${loserLog.ftm}/${loserLog.fta} de ${loser.shortName}) atacando la pintura con agresividad.`,
+      advanced: `**Agresividad hacia la línea (+${ftmDiff} pts en libres):** ${winner.abbr} convirtió ${winnerLog.ftm}/${winnerLog.fta} en tiros libres (${winnerLog.ftPct.toFixed(0)}%) frente al ${loserLog.ftm}/${loserLog.fta} (${loserLog.ftPct.toFixed(0)}%) de ${loser.abbr}, forzando faltas en penetración y juego interior.`,
     });
   }
 
@@ -2276,13 +2327,13 @@ function buildIndividualMatchupKeys(params: {
         },
       },
       {
-        val: ftmDiff * 1.4,
+        val: ftmDiff * 1.15,
         cand: {
           family: 'micro_ft_edge',
           axis: 'free_throws',
           score: 8.0,
-          simple: `**Renta desde el tiro libre:** ${winner.shortName} supo sacar viajes al 4,60m (${winnerLog.ftm}/${winnerLog.fta} en libres por ${loserLog.ftm}/${loserLog.fta} de ${loser.shortName}) para amarrar +${ftmDiff} puntos.`,
-          advanced: `**Ventaja en tiros libres:** +${ftmDiff} FTM netos para ${winner.abbr} (${winnerLog.ftm}/${winnerLog.fta}, ${winnerFtr.toFixed(1)}% FTR vs ${loserLog.ftm}/${loserLog.fta} de ${loser.abbr}).`,
+          simple: `**Renta desde el tiro libre:** ${winner.shortName} supo forzar personales (${winnerLog.ftm}/${winnerLog.fta} en libres por ${loserLog.ftm}/${loserLog.fta} de ${loser.shortName}) para amarrar +${ftmDiff} puntos.`,
+          advanced: `**Renta en tiros libres (+${ftmDiff} pts):** ${winner.abbr} convirtió ${winnerLog.ftm}/${winnerLog.fta} TL (${winnerLog.ftPct.toFixed(0)}%) frente al ${loserLog.ftm}/${loserLog.fta} (${loserLog.ftPct.toFixed(0)}%) de ${loser.abbr}.`,
         },
       },
       {
@@ -4890,9 +4941,23 @@ export const scoutingEngine = createScoutingEngine({
 export async function getFantasyEspnSyncPayload(
   forceRefresh = false
 ): Promise<FantasyEspnSyncPayload> {
-  const full = await getFullLeagueMemory(false);
+  const biosMap = await getPlayerBiosMap(false);
+  const lightweightPlayers: PlayerSummary[] = [...biosMap.values()].map(
+    (b) => ({
+      id: b.id,
+      name: b.name,
+      teamId: b.teamId,
+      teamAbbr: b.teamAbbr,
+      teamName: NBA_TEAMS_MAP[b.teamAbbr]?.name || b.teamAbbr,
+      position: b.position || 'G-F',
+      jersey: b.jersey || undefined,
+      height: b.height || undefined,
+      country: b.country || undefined,
+      games: [],
+    })
+  );
   return buildFantasyEspnSyncPayload({
-    allPlayers: full.allPlayers,
+    allPlayers: lightweightPlayers,
     fetchLeagueScheduleGames: scoutingEngine.fetchLeagueScheduleGames,
     fetchEspnInjuriesByName: scoutingEngine.fetchEspnInjuriesByName,
     forceRefresh,

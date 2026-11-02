@@ -10,7 +10,6 @@ import {
   Search,
   ShieldAlert,
   Sparkles,
-  Swords,
   Trash2,
   TrendingUp,
   Upload,
@@ -43,6 +42,7 @@ import {
 } from '../utils/fantasyScoring';
 import { PlayerAvatar, TeamLogo } from './NbaVisuals';
 import { buildAdminAuthHeaders } from '../utils/adminAuthClient';
+import { buildStaticFantasyWeeks } from '../utils/staticSchedule';
 
 export type FantasyTab = 'lineup' | 'waivers' | 'trades' | 'injuries_rules' | 'rules';
 
@@ -50,7 +50,6 @@ interface FantasyEspnAssistantViewProps {
   players: PlayerSummary[];
   teams: TeamSummary[];
   onInspectEntity: (entityType: 'player' | 'team', entityId: string) => void;
-  onOpenInDuel: (playerId: string) => void;
   initialTab?: FantasyTab;
   onTabChange?: (tab: FantasyTab) => void;
 }
@@ -213,7 +212,6 @@ function loadInitialFantasyLeagueState(): FantasyManualLeagueState {
 export function FantasyEspnAssistantView({
   players,
   onInspectEntity,
-  onOpenInDuel,
   initialTab = 'lineup',
   onTabChange,
 }: FantasyEspnAssistantViewProps) {
@@ -463,14 +461,24 @@ export function FantasyEspnAssistantView({
     return map;
   }, [effectivePlayers]);
 
+  const staticFallbackWeeks = useMemo(() => buildStaticFantasyWeeks(), []);
+
+  const effectiveWeeks: FantasyWeekWindow[] = useMemo(
+    () =>
+      nbaContext && nbaContext.weeks.length > 0
+        ? nbaContext.weeks
+        : staticFallbackWeeks,
+    [nbaContext, staticFallbackWeeks]
+  );
+
   const activeWeek: FantasyWeekWindow | null = useMemo(() => {
-    if (!nbaContext || nbaContext.weeks.length === 0) return null;
+    if (effectiveWeeks.length === 0) return null;
     return (
-      nbaContext.weeks.find((w) => w.id === selectedWeekId) ||
-      nbaContext.weeks.find((w) => w.id === 'current') ||
-      nbaContext.weeks[0]
+      effectiveWeeks.find((w) => w.id === selectedWeekId) ||
+      effectiveWeeks.find((w) => w.id === 'current') ||
+      effectiveWeeks[0]
     );
-  }, [nbaContext, selectedWeekId]);
+  }, [effectiveWeeks, selectedWeekId]);
 
   const getPlayerInjury = useCallback(
     (p: PlayerSummary): FantasyPlayerInjuryAlert | null => {
@@ -1437,7 +1445,7 @@ export function FantasyEspnAssistantView({
         </div>
 
         {/* Week Selector Bar (Monday Lock Horizon) */}
-        {nbaContext && nbaContext.weeks.length > 0 && (
+        {effectiveWeeks.length > 0 && (
           <div className="pt-3 border-t border-[#1E293B] flex flex-col lg:flex-row lg:items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
               <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-300 whitespace-nowrap">
@@ -1445,7 +1453,7 @@ export function FantasyEspnAssistantView({
                 <span>Semana de bloqueo (Lun–Dom):</span>
               </span>
               <div className="flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
-                {nbaContext.weeks.map((wk) => {
+                {effectiveWeeks.map((wk) => {
                   const active = activeWeek?.id === wk.id;
                   return (
                     <button
@@ -2222,15 +2230,6 @@ export function FantasyEspnAssistantView({
 
                       <td className="py-2.5 pl-2 pr-4 text-right whitespace-nowrap">
                         <div className="inline-flex items-center gap-1.5">
-                          <button
-                            type="button"
-                            title="Comparar en Duelo 1v1"
-                            onClick={() => onOpenInDuel(item.player.id)}
-                            className="px-2 py-1 rounded bg-[#0B1120] border border-[#1E293B] text-slate-300 hover:text-orange-400 transition-colors"
-                          >
-                            <Swords className="w-3.5 h-3.5 inline" />
-                          </button>
-
                           <select
                             aria-label={`Asignar ${item.player.name} a un equipo rival`}
                             value=""

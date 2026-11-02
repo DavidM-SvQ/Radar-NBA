@@ -10,7 +10,6 @@ import {
   RotateCcw,
   Sliders,
   Star,
-  Swords,
   X,
 } from 'lucide-react';
 import type {
@@ -133,7 +132,6 @@ interface EntityInspectorDrawerProps {
   onToggleWatchlist: (entityKey: string) => void;
   onClose: () => void;
   onOpenInComparator: (entityType: 'player' | 'team', entityId: string) => void;
-  onOpenInDuel?: (playerId: string) => void;
   onSelectRosterPlayer: (item: SearchPlayerResult) => Promise<void>;
 }
 
@@ -334,7 +332,6 @@ export function EntityInspectorDrawer({
   onToggleWatchlist,
   onClose,
   onOpenInComparator,
-  onOpenInDuel,
   onSelectRosterPlayer,
 }: EntityInspectorDrawerProps) {
   // Player Inspector configurable state
@@ -1397,20 +1394,6 @@ export function EntityInspectorDrawer({
                 <span>{isWatched ? 'En seguimiento' : 'Seguir'}</span>
               </button>
 
-              {player && onOpenInDuel && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    onOpenInDuel(player.id);
-                    onClose();
-                  }}
-                  className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#131C2E] hover:bg-[#182338] border border-[#1E293B] text-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0"
-                >
-                  <Swords className="w-3.5 h-3.5 text-orange-400" />
-                  <span>Duelo 1v1</span>
-                </button>
-              )}
-
               <button
                 type="button"
                 onClick={() => {
@@ -1435,11 +1418,7 @@ export function EntityInspectorDrawer({
           </div>
 
           {/* Mobile Action Row (< sm) */}
-          <div
-            className={`grid ${
-              player && onOpenInDuel ? 'grid-cols-3' : 'grid-cols-2'
-            } gap-1.5 sm:hidden pt-1`}
-          >
+          <div className="grid grid-cols-2 gap-1.5 sm:hidden pt-1">
             <button
               type="button"
               onClick={() => onToggleWatchlist(wKey)}
@@ -1456,20 +1435,6 @@ export function EntityInspectorDrawer({
               />
               <span>{isWatched ? 'Favorito' : 'Seguir'}</span>
             </button>
-
-            {player && onOpenInDuel && (
-              <button
-                type="button"
-                onClick={() => {
-                  onOpenInDuel(player.id);
-                  onClose();
-                }}
-                className="min-h-[40px] inline-flex items-center justify-center gap-1 px-2 py-1.5 text-xs font-medium bg-[#131C2E] border border-[#1E293B] text-slate-100 rounded-lg active:bg-[#182338] transition-colors whitespace-nowrap"
-              >
-                <Swords className="w-3.5 h-3.5 text-orange-400 shrink-0" />
-                <span>Duelo 1v1</span>
-              </button>
-            )}
 
             <button
               type="button"
