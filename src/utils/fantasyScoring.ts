@@ -295,10 +295,34 @@ export function computePlayerOfficialFantasyStats(
     };
   }
 
-  // Strictly evaluate 2026-27 season games whenever the player has played >= 1 game in 2026-27
+  // Strictly evaluate 2026-27 current season games
   const g2027 = allGames.filter((g) => g.seasonLabel === '2026-27');
-  const evalGames = g2027.length >= 1 ? g2027 : allGames.slice(0, 30);
+  if (g2027.length === 0) {
+    return {
+      gamesPlayed: 0,
+      currentSeasonGamesPlayed: 0,
+      minutesAvg: 0,
+      seasonTotalFpts: 0,
+      seasonAvgFpts: 0,
+      last5AvgFpts: 0,
+      last10AvgFpts: 0,
+      formDeltaLast5: 0,
+      weightedFptsPerGame: 0,
+      stdDevFpts: 0,
+      floorFpts: 0,
+      ceilingFpts: 0,
+      avgShootingMakePts: 0,
+      avgShootingMissPenaltyPts: 0,
+      avgReboundPts: 0,
+      avgOreb: 0,
+      avgDreb: 0,
+      avgPlaymakingDefensePts: 0,
+      avgNegativeDisciplinePts: 0,
+      avgTurnovers: 0,
+    };
+  }
 
+  const evalGames = g2027;
   const breakdowns = evalGames.map((g) => computeOfficialGameFptsBreakdown(g, 0));
   const ejPenaltyTotal =
     seasonEjections > 0 ? seasonEjections * OFFICIAL_LEAGUE_RULES.weights.ej : 0;
@@ -310,7 +334,7 @@ export function computePlayerOfficialFantasyStats(
   const gameTotals = breakdowns.map((b) => round2(b.totalFpts + ejPenaltyPerGame));
   const gp = evalGames.length;
   const rawSum = breakdowns.reduce((s, b) => s + b.totalFpts, 0) + ejPenaltyTotal;
-  const seasonTotalFpts = g2027.length >= 1 ? round2(rawSum) : 0;
+  const seasonTotalFpts = round2(rawSum);
 
   const meanVal = (arr: number[]) =>
     arr.length === 0 ? 0 : arr.reduce((s, x) => s + x, 0) / arr.length;
@@ -375,6 +399,7 @@ export function computeWeeklyLockProjection(params: {
   scheduledGames: number;
   stats: PlayerOfficialFantasyStats;
   injurySeverity?: FantasyInjurySeverity;
+  injuryDetailEs?: string;
 }): {
   rawFormulaFpts: number; // Exact rule: Partidos en la Semana × Media FPTS/Partido
   playableGamesEst: number;
@@ -382,29 +407,56 @@ export function computeWeeklyLockProjection(params: {
   healthMultiplier: number;
   riskWarningEs: string | null;
 } {
-  const { scheduledGames, stats, injurySeverity = 'healthy' } = params;
+  const { scheduledGames, stats, injurySeverity = 'healthy', injuryDetailEs = '' } = params;
   const rawFormulaFpts = round1(scheduledGames * stats.seasonAvgFpts);
 
   let healthMultiplier = 1.0;
+  let playableGamesEst = scheduledGames;
   let riskWarningEs: string | null = null;
 
-  if (injurySeverity === 'out') {
-    healthMultiplier = 0.0;
-    riskWarningEs = 'Baja médica: riesgo directo de 0.0 FPTS bajo cierre semanal';
-  } else if (injurySeverity === 'suspended') {
-    healthMultiplier = 0.0;
-    riskWarningEs = 'Sancionado: suma 0.0 FPTS sin relevo entre semana';
+  if (
+    injurySeverity === 'out' ||
+    injurySeverity === 'suspended' ||
+    injurySeverity === 'ir'
+  ) {
+    const detail = (injuryDetailEs || '').toLowerCase();
+    // Keywords indicating a long-term absence or significant recovery time
+    const isLongTerm =
+      /cirug|rotura|cruzado|fractur|meses|indefinid|temporada|prolongad|aquiles|8-10|6-8|4-6/i.test(
+        detail
+      ) ||
+      // Also treat as long-term if specifically mentioned "semanas" (plural) unless it's just "esta semana"
+      (detail.includes('semana') && !detail.includes('esta semana') && !detail.includes('proxima semana'));
+
+    if (isLongTerm || scheduledGames <= 1 || injurySeverity === 'ir' || injurySeverity === 'suspended') {
+      playableGamesEst = 0;
+      healthMultiplier = 0.0;
+      riskWarningEs =
+        injurySeverity === 'suspended'
+          ? 'Sancionado: suma 0.0 FPTS sin relevo entre semana'
+          : injurySeverity === 'ir'
+          ? 'En lista IR: baja prolongada confirmada (0.0 FPTS)'
+          : 'Baja médica definitiva/larga duración: 0.0 FPTS proyectados';
+    } else {
+      // Short-term / Day-to-Day style OUT (e.g. "Baja hoy contra...")
+      // We estimate they miss the first game but might play the rest of the week
+      playableGamesEst = Math.max(0, scheduledGames - 1);
+      healthMultiplier = scheduledGames > 0 ? playableGamesEst / scheduledGames : 0;
+      riskWarningEs = `Baja confirmada hoy (estimación: se pierde 1 de ${scheduledGames} PJ; ${playableGamesEst} PJ probables restantes)`;
+    }
   } else if (injurySeverity === 'doubtful') {
     healthMultiplier = 0.35;
+    playableGamesEst = round1(scheduledGames * healthMultiplier);
     riskWarningEs = 'Muy dudoso: alto peligro de perder partidos tras el bloqueo';
-  } else if (injurySeverity === 'questionable') {
-    healthMultiplier = 0.78;
+  } else if (injurySeverity === 'questionable' || injurySeverity === 'dtd') {
+    healthMultiplier = 0.75;
+    playableGamesEst = round1(scheduledGames * healthMultiplier);
     riskWarningEs = 'Cuestionable / Día a día: vigilar antes del cierre del lunes';
   } else if (injurySeverity === 'probable') {
     healthMultiplier = 0.95;
+    playableGamesEst = round1(scheduledGames * healthMultiplier);
   }
 
-  const playableGamesEst = round1(scheduledGames * healthMultiplier);
   const lockAdjustedFpts = round1(playableGamesEst * stats.weightedFptsPerGame);
 
   return {

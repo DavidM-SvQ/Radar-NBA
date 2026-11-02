@@ -25,6 +25,7 @@ import type {
   FantasyManualLeagueState,
   FantasyPlayerInjuryAlert,
   FantasyRosterContract,
+  FantasyTeamGameSlot,
   FantasyWeekWindow,
   PlayerSummary,
   TeamSummary,
@@ -209,6 +210,57 @@ function loadInitialFantasyLeagueState(): FantasyManualLeagueState {
   };
 }
 
+function ColumnSortHeader({
+  label,
+  active,
+  asc,
+  onClick,
+  align = 'left',
+}: {
+  label: string;
+  active: boolean;
+  asc: boolean;
+  onClick: () => void;
+  align?: 'left' | 'right' | 'center';
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`group inline-flex items-center gap-1 font-semibold hover:text-orange-400 transition-colors select-none ${
+        align === 'right' ? 'ml-auto justify-end' : align === 'center' ? 'mx-auto justify-center' : ''
+      } ${active ? 'text-orange-400 font-bold' : 'text-slate-400'}`}
+    >
+      <span>{label}</span>
+      <span className="text-[10px] font-mono text-orange-400">
+        {active ? (asc ? '▲' : '▼') : '↕'}
+      </span>
+    </button>
+  );
+}
+
+function renderScheduleBadges(teamSched: { gamesCount: number; b2bCount: number; games: FantasyTeamGameSlot[] }) {
+  if (!teamSched || !teamSched.games || teamSched.games.length === 0) {
+    return <span className="text-[11px] text-slate-500 font-mono mt-0.5 block">Sin partidos</span>;
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1 mt-1">
+      {teamSched.games.map((g, idx) => (
+        <span
+          key={`${g.gameId || idx}-${g.dateIso}-${g.opponentAbbr}`}
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#182338] border border-[#1E293B] text-[10px] font-mono whitespace-nowrap"
+          title={`${g.dateIso}: ${g.isHome ? 'En casa vs' : 'A domicilio @'} ${g.opponentAbbr}`}
+        >
+          <span className="text-slate-400 font-normal">{g.dayShortEs}</span>
+          <span className={g.isHome ? 'text-emerald-400 font-semibold' : 'text-slate-200 font-medium'}>
+            {g.isHome ? 'vs' : '@'}{g.opponentAbbr}
+          </span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export function FantasyEspnAssistantView({
   players,
   onInspectEntity,
@@ -333,6 +385,51 @@ export function FantasyEspnAssistantView({
   );
   const [selectedDropPlayerId, setSelectedDropPlayerId] = useState<string>('');
   const [actionBannerMsg, setActionBannerMsg] = useState<string | null>(null);
+
+  // Table Column Interactive Sorting State
+  type RosterSortKey =
+    | 'name'
+    | 'severity'
+    | 'gamesCount'
+    | 'seasonTotalFpts'
+    | 'seasonAvgFpts'
+    | 'last5AvgFpts'
+    | 'rawFormulaFpts'
+    | 'lockAdjustedFpts';
+  const [rosterSortKey, setRosterSortKey] = useState<RosterSortKey>('lockAdjustedFpts');
+  const [rosterSortAsc, setRosterSortAsc] = useState<boolean>(false);
+
+  const handleRosterSort = (key: RosterSortKey) => {
+    if (rosterSortKey === key) {
+      setRosterSortAsc(!rosterSortAsc);
+    } else {
+      setRosterSortKey(key);
+      setRosterSortAsc(key === 'name' || key === 'severity');
+    }
+  };
+
+  type WaiverSortKey =
+    | 'name'
+    | 'severity'
+    | 'gamesCount'
+    | 'seasonTotalFpts'
+    | 'seasonAvgFpts'
+    | 'last5AvgFpts'
+    | 'lockAdjustedFpts'
+    | 'netWeekGain';
+  const [waiverTableSortKey, setWaiverTableSortKey] = useState<WaiverSortKey>('lockAdjustedFpts');
+  const [waiverTableSortAsc, setWaiverTableSortAsc] = useState<boolean>(false);
+
+  const handleWaiverTableSort = (key: WaiverSortKey) => {
+    if (waiverTableSortKey === key) {
+      setWaiverTableSortAsc(!waiverTableSortAsc);
+      setWaiverTableSortKey(key);
+      setWaiverTableSortAsc(key === 'name' || key === 'severity');
+    }
+  };
+
+  // Player Game Logs Breakdown Modal State
+  const [inspectedPlayerForLogsId, setInspectedPlayerForLogsId] = useState<string | null>(null);
 
   // Trade Analyzer State
   const [tradeSendIds, setTradeSendIds] = useState<string[]>([]);
@@ -506,6 +603,7 @@ export function FantasyEspnAssistantView({
         scheduledGames: teamSched.gamesCount,
         stats,
         injurySeverity: severity,
+        injuryDetailEs: injury?.detailEs || injury?.statusLabelEs || '',
       });
 
       return {
@@ -566,20 +664,53 @@ export function FantasyEspnAssistantView({
     );
   }, [myRosterEnriched]);
 
+  const sortRosterItems = useCallback(
+    <T extends (typeof myRosterEnriched)[number]>(items: T[]) => {
+      const copy = [...items];
+      copy.sort((a, b) => {
+        let cmp = 0;
+        switch (rosterSortKey) {
+          case 'name':
+            cmp = a.player.name.localeCompare(b.player.name);
+            break;
+          case 'severity':
+            cmp = (a.severity || '').localeCompare(b.severity || '');
+            break;
+          case 'gamesCount':
+            cmp = a.teamSched.gamesCount - b.teamSched.gamesCount;
+            break;
+          case 'seasonTotalFpts':
+            cmp = a.stats.seasonTotalFpts - b.stats.seasonTotalFpts;
+            break;
+          case 'seasonAvgFpts':
+            cmp = a.stats.seasonAvgFpts - b.stats.seasonAvgFpts;
+            break;
+          case 'last5AvgFpts':
+            cmp = a.stats.last5AvgFpts - b.stats.last5AvgFpts;
+            break;
+          case 'rawFormulaFpts':
+            cmp = a.weekly.rawFormulaFpts - b.weekly.rawFormulaFpts;
+            break;
+          case 'lockAdjustedFpts':
+          default:
+            cmp = a.weekly.lockAdjustedFpts - b.weekly.lockAdjustedFpts;
+            break;
+        }
+        return rosterSortAsc ? cmp : -cmp;
+      });
+      return copy;
+    },
+    [rosterSortKey, rosterSortAsc]
+  );
+
   const myStarters = useMemo(
-    () =>
-      myRosterEnriched
-        .filter((x) => x.slot === 'starter')
-        .sort((a, b) => b.weekly.lockAdjustedFpts - a.weekly.lockAdjustedFpts),
-    [myRosterEnriched]
+    () => sortRosterItems(myRosterEnriched.filter((x) => x.slot === 'starter')),
+    [myRosterEnriched, sortRosterItems]
   );
 
   const myBench = useMemo(
-    () =>
-      myRosterEnriched
-        .filter((x) => x.slot === 'bench')
-        .sort((a, b) => b.weekly.lockAdjustedFpts - a.weekly.lockAdjustedFpts),
-    [myRosterEnriched]
+    () => sortRosterItems(myRosterEnriched.filter((x) => x.slot === 'bench')),
+    [myRosterEnriched, sortRosterItems]
   );
 
   const lineupTotals = useMemo(() => {
@@ -701,19 +832,43 @@ export function FantasyEspnAssistantView({
     }));
 
     withDeltas.sort((a, b) => {
-      if (waiverSortBy === 'formDelta') {
-        return (
-          b.stats.formDeltaLast5 - a.stats.formDeltaLast5 ||
-          b.weekly.lockAdjustedFpts - a.weekly.lockAdjustedFpts
-        );
+      let cmp = 0;
+      switch (waiverTableSortKey) {
+        case 'name':
+          cmp = a.player.name.localeCompare(b.player.name);
+          break;
+        case 'severity':
+          cmp = (a.severity || '').localeCompare(b.severity || '');
+          break;
+        case 'gamesCount':
+          cmp = a.teamSched.gamesCount - b.teamSched.gamesCount;
+          break;
+        case 'seasonTotalFpts':
+          cmp = a.stats.seasonTotalFpts - b.stats.seasonTotalFpts;
+          break;
+        case 'seasonAvgFpts':
+          cmp = a.stats.seasonAvgFpts - b.stats.seasonAvgFpts;
+          break;
+        case 'last5AvgFpts':
+          cmp = a.stats.last5AvgFpts - b.stats.last5AvgFpts;
+          break;
+        case 'netWeekGain':
+          cmp = a.netWeekGain - b.netWeekGain;
+          break;
+        case 'lockAdjustedFpts':
+        default:
+          if (waiverSortBy === 'formDelta') {
+            cmp = a.stats.formDeltaLast5 - b.stats.formDeltaLast5;
+          } else if (waiverSortBy === 'seasonAvg') {
+            cmp = a.stats.seasonAvgFpts - b.stats.seasonAvgFpts;
+          } else {
+            cmp =
+              a.netWeekGain - b.netWeekGain ||
+              a.weekly.lockAdjustedFpts - b.weekly.lockAdjustedFpts;
+          }
+          break;
       }
-      if (waiverSortBy === 'seasonAvg') {
-        return b.stats.seasonAvgFpts - a.stats.seasonAvgFpts;
-      }
-      return (
-        b.netWeekGain - a.netWeekGain ||
-        b.stats.weightedFptsPerGame - a.stats.weightedFptsPerGame
-      );
+      return waiverTableSortAsc ? cmp : -cmp;
     });
 
     return withDeltas;
@@ -724,6 +879,8 @@ export function FantasyEspnAssistantView({
     waiverMinGames,
     waiverPosFilter,
     waiverSortBy,
+    waiverTableSortKey,
+    waiverTableSortAsc,
     effectiveDropMember,
   ]);
 
@@ -1701,25 +1858,74 @@ export function FantasyEspnAssistantView({
                   <thead>
                     <tr className="border-b border-[#1E293B] text-[11px] text-slate-400 bg-[#0B1120]/60">
                       <th className="py-2.5 pl-4 pr-2 font-medium">Puesto</th>
-                      <th className="py-2.5 px-3 font-medium">Jugador</th>
-                      <th className="py-2.5 px-3 font-medium">Salud / Parte</th>
                       <th className="py-2.5 px-3 font-medium">
-                        Calendario ({activeWeek?.label})
+                        <ColumnSortHeader
+                          label="Jugador"
+                          active={rosterSortKey === 'name'}
+                          asc={rosterSortAsc}
+                          onClick={() => handleRosterSort('name')}
+                        />
+                      </th>
+                      <th className="py-2.5 px-3 font-medium">
+                        <ColumnSortHeader
+                          label="Salud / Parte"
+                          active={rosterSortKey === 'severity'}
+                          asc={rosterSortAsc}
+                          onClick={() => handleRosterSort('severity')}
+                        />
+                      </th>
+                      <th className="py-2.5 px-3 font-medium">
+                        <ColumnSortHeader
+                          label={`Calendario (${activeWeek?.label || 'Semana'})`}
+                          active={rosterSortKey === 'gamesCount'}
+                          asc={rosterSortAsc}
+                          onClick={() => handleRosterSort('gamesCount')}
+                        />
                       </th>
                       <th className="py-2.5 px-3 font-medium text-right">
-                        Total FPTS
+                        <ColumnSortHeader
+                          label="Total FPTS"
+                          active={rosterSortKey === 'seasonTotalFpts'}
+                          asc={rosterSortAsc}
+                          onClick={() => handleRosterSort('seasonTotalFpts')}
+                          align="right"
+                        />
                       </th>
                       <th className="py-2.5 px-3 font-medium text-right">
-                        Media FPTS
+                        <ColumnSortHeader
+                          label="Media FPTS"
+                          active={rosterSortKey === 'seasonAvgFpts'}
+                          asc={rosterSortAsc}
+                          onClick={() => handleRosterSort('seasonAvgFpts')}
+                          align="right"
+                        />
                       </th>
                       <th className="py-2.5 px-3 font-medium text-right">
-                        Últ. 5 PJ
+                        <ColumnSortHeader
+                          label="Últ. 5 PJ"
+                          active={rosterSortKey === 'last5AvgFpts'}
+                          asc={rosterSortAsc}
+                          onClick={() => handleRosterSort('last5AvgFpts')}
+                          align="right"
+                        />
                       </th>
                       <th className="py-2.5 px-3 font-medium text-right">
-                        PJ × Media
+                        <ColumnSortHeader
+                          label="PJ × Media"
+                          active={rosterSortKey === 'rawFormulaFpts'}
+                          asc={rosterSortAsc}
+                          onClick={() => handleRosterSort('rawFormulaFpts')}
+                          align="right"
+                        />
                       </th>
                       <th className="py-2.5 px-3 font-medium text-right">
-                        Proy. Cierre
+                        <ColumnSortHeader
+                          label="Proy. Cierre"
+                          active={rosterSortKey === 'lockAdjustedFpts'}
+                          asc={rosterSortAsc}
+                          onClick={() => handleRosterSort('lockAdjustedFpts')}
+                          align="right"
+                        />
                       </th>
                       <th className="py-2.5 pl-2 pr-4 font-medium text-right">
                         Acción
@@ -1771,9 +1977,17 @@ export function FantasyEspnAssistantView({
                                 >
                                   {item.player.name}
                                 </button>
-                                <div className="text-[11px] text-slate-400 font-mono">
-                                  {item.player.teamAbbr} · {item.player.position} ·{' '}
-                                  {item.stats.currentSeasonGamesPlayed} PJ
+                                <div className="text-[11px] text-slate-400 font-mono flex items-center gap-1.5">
+                                  <span>{item.player.teamAbbr} · {item.player.position}</span>
+                                  <span>·</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setInspectedPlayerForLogsId(item.player.id)}
+                                    className="text-orange-400 hover:text-orange-300 font-semibold hover:underline"
+                                    title="Ver desglose de partidos y FPTS obtenidas"
+                                  >
+                                    {item.stats.currentSeasonGamesPlayed} PJ (Ver partidos)
+                                  </button>
                                 </div>
                               </div>
                             </div>
@@ -1791,25 +2005,14 @@ export function FantasyEspnAssistantView({
                               </div>
                             )}
                           </td>
-                          <td className="py-2.5 px-3">
+                          <td className="py-2.5 px-3 min-w-[210px]">
                             <div className="font-mono tabular-nums font-semibold text-slate-200">
                               {item.teamSched.gamesCount} PJ
                               {item.teamSched.b2bCount > 0
                                 ? ` · ${item.teamSched.b2bCount} B2B`
                                 : ''}
                             </div>
-                            <div className="text-[11px] text-slate-400 font-mono truncate max-w-[230px]">
-                              {item.teamSched.games.length === 0
-                                ? 'Sin partidos programados'
-                                : item.teamSched.games
-                                    .map(
-                                      (g) =>
-                                        `${g.dayShortEs} ${
-                                          g.isHome ? 'vs' : '@'
-                                        }${g.opponentAbbr}`
-                                    )
-                                    .join(' · ')}
-                            </div>
+                            {renderScheduleBadges(item.teamSched)}
                           </td>
                           <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-slate-100">
                             {formatFptsExact(item.stats.seasonTotalFpts)}
@@ -1887,9 +2090,17 @@ export function FantasyEspnAssistantView({
                                 >
                                   {item.player.name}
                                 </button>
-                                <div className="text-[11px] text-slate-500 font-mono">
-                                  {item.player.teamAbbr} · {item.player.position} ·{' '}
-                                  {item.stats.currentSeasonGamesPlayed} PJ
+                                <div className="text-[11px] text-slate-500 font-mono flex items-center gap-1.5">
+                                  <span>{item.player.teamAbbr} · {item.player.position}</span>
+                                  <span>·</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setInspectedPlayerForLogsId(item.player.id)}
+                                    className="text-orange-400 hover:text-orange-300 font-semibold hover:underline"
+                                    title="Ver desglose de partidos y FPTS obtenidas"
+                                  >
+                                    {item.stats.currentSeasonGamesPlayed} PJ (Ver partidos)
+                                  </button>
                                 </div>
                               </div>
                             </div>
@@ -1907,20 +2118,11 @@ export function FantasyEspnAssistantView({
                               </div>
                             )}
                           </td>
-                          <td className="py-2.5 px-3">
-                            <div className="font-mono tabular-nums text-slate-300">
+                          <td className="py-2.5 px-3 min-w-[210px]">
+                            <div className="font-mono tabular-nums text-slate-300 font-semibold">
                               {item.teamSched.gamesCount} PJ
                             </div>
-                            <div className="text-[11px] text-slate-500 font-mono truncate max-w-[230px]">
-                              {item.teamSched.games
-                                .map(
-                                  (g) =>
-                                    `${g.dayShortEs} ${
-                                      g.isHome ? 'vs' : '@'
-                                    }${g.opponentAbbr}`
-                                )
-                                .join(' · ') || 'Sin partidos'}
-                            </div>
+                            {renderScheduleBadges(item.teamSched)}
                           </td>
                           <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-200">
                             {formatFptsExact(item.stats.seasonTotalFpts)}
@@ -2099,26 +2301,73 @@ export function FantasyEspnAssistantView({
                 <thead>
                   <tr className="border-b border-[#1E293B] text-[11px] text-slate-400 bg-[#0B1120]/60">
                     <th className="py-2.5 pl-4 pr-3 font-medium">
-                      Agente Libre Disponible
+                      <ColumnSortHeader
+                        label="Agente Libre Disponible"
+                        active={waiverTableSortKey === 'name'}
+                        asc={waiverTableSortAsc}
+                        onClick={() => handleWaiverTableSort('name')}
+                      />
                     </th>
-                    <th className="py-2.5 px-3 font-medium">Salud</th>
                     <th className="py-2.5 px-3 font-medium">
-                      Partidos ({activeWeek?.label})
+                      <ColumnSortHeader
+                        label="Salud"
+                        active={waiverTableSortKey === 'severity'}
+                        asc={waiverTableSortAsc}
+                        onClick={() => handleWaiverTableSort('severity')}
+                      />
+                    </th>
+                    <th className="py-2.5 px-3 font-medium">
+                      <ColumnSortHeader
+                        label={`Partidos (${activeWeek?.label || 'Semana'})`}
+                        active={waiverTableSortKey === 'gamesCount'}
+                        asc={waiverTableSortAsc}
+                        onClick={() => handleWaiverTableSort('gamesCount')}
+                      />
                     </th>
                     <th className="py-2.5 px-3 font-medium text-right">
-                      Total FPTS
+                      <ColumnSortHeader
+                        label="Total FPTS"
+                        active={waiverTableSortKey === 'seasonTotalFpts'}
+                        asc={waiverTableSortAsc}
+                        onClick={() => handleWaiverTableSort('seasonTotalFpts')}
+                        align="right"
+                      />
                     </th>
                     <th className="py-2.5 px-3 font-medium text-right">
-                      Media FPTS
+                      <ColumnSortHeader
+                        label="Media FPTS"
+                        active={waiverTableSortKey === 'seasonAvgFpts'}
+                        asc={waiverTableSortAsc}
+                        onClick={() => handleWaiverTableSort('seasonAvgFpts')}
+                        align="right"
+                      />
                     </th>
                     <th className="py-2.5 px-3 font-medium text-right">
-                      Últ. 5 PJ
+                      <ColumnSortHeader
+                        label="Últ. 5 PJ"
+                        active={waiverTableSortKey === 'last5AvgFpts'}
+                        asc={waiverTableSortAsc}
+                        onClick={() => handleWaiverTableSort('last5AvgFpts')}
+                        align="right"
+                      />
                     </th>
                     <th className="py-2.5 px-3 font-medium text-right">
-                      Proy. Semana
+                      <ColumnSortHeader
+                        label="Proy. Semana"
+                        active={waiverTableSortKey === 'lockAdjustedFpts'}
+                        asc={waiverTableSortAsc}
+                        onClick={() => handleWaiverTableSort('lockAdjustedFpts')}
+                        align="right"
+                      />
                     </th>
                     <th className="py-2.5 px-3 font-medium text-right">
-                      Ganancia vs Corte
+                      <ColumnSortHeader
+                        label="Ganancia vs Corte"
+                        active={waiverTableSortKey === 'netWeekGain'}
+                        asc={waiverTableSortAsc}
+                        onClick={() => handleWaiverTableSort('netWeekGain')}
+                        align="right"
+                      />
                     </th>
                     <th className="py-2.5 pl-2 pr-4 font-medium text-right">
                       Acciones de Mercado
@@ -2149,9 +2398,17 @@ export function FantasyEspnAssistantView({
                             >
                               {item.player.name}
                             </button>
-                            <div className="text-[11px] text-slate-400 font-mono">
-                              {item.player.teamAbbr} · {item.player.position} ·{' '}
-                              {item.stats.minutesAvg.toFixed(1)} MIN
+                            <div className="text-[11px] text-slate-400 font-mono flex items-center gap-1.5">
+                              <span>{item.player.teamAbbr} · {item.player.position} · {item.stats.minutesAvg.toFixed(1)} MIN</span>
+                              <span>·</span>
+                              <button
+                                type="button"
+                                onClick={() => setInspectedPlayerForLogsId(item.player.id)}
+                                className="text-orange-400 hover:text-orange-300 font-semibold hover:underline"
+                                title="Ver desglose de partidos y FPTS obtenidas"
+                              >
+                                Ver partidos ({item.stats.currentSeasonGamesPlayed})
+                              </button>
                             </div>
                           </div>
                         </div>
@@ -2164,15 +2421,14 @@ export function FantasyEspnAssistantView({
                         )}
                       </td>
 
-                      <td className="py-2.5 px-3">
+                      <td className="py-2.5 px-3 min-w-[210px]">
                         <div className="font-mono tabular-nums font-semibold text-slate-200">
                           {item.teamSched.gamesCount} PJ
+                          {item.teamSched.b2bCount > 0
+                            ? ` · ${item.teamSched.b2bCount} B2B`
+                            : ''}
                         </div>
-                        <div className="text-[11px] text-slate-400 font-mono truncate max-w-[180px]">
-                          {item.teamSched.games
-                            .map((g) => `${g.isHome ? 'vs' : '@'}${g.opponentAbbr}`)
-                            .join(' · ') || '—'}
-                        </div>
+                        {renderScheduleBadges(item.teamSched)}
                       </td>
 
                       <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-200">
@@ -3840,6 +4096,143 @@ export function FantasyEspnAssistantView({
           </div>
         </div>
       )}
+
+      {/* MODAL 3: PLAYER GAME-BY-GAME FPTS AUDIT BREAKDOWN */}
+      {inspectedPlayerForLogsId && (() => {
+        const item = enrichedById.get(inspectedPlayerForLogsId);
+        if (!item) return null;
+        const g2027 = (item.player.games || []).filter((g) => g.seasonLabel === '2026-27');
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div
+              className="fixed inset-0 bg-black/75 backdrop-blur-[2px]"
+              onClick={() => setInspectedPlayerForLogsId(null)}
+              aria-hidden="true"
+            />
+            <div className="relative z-10 w-full max-w-4xl bg-[#0F172A] border border-[#1E293B] rounded-xl p-5 space-y-4 shadow-2xl max-h-[90vh] flex flex-col">
+              {/* Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-[#1E293B]">
+                <div className="flex items-center gap-3">
+                  <PlayerAvatar
+                    playerId={item.player.id}
+                    name={item.player.name}
+                    teamAbbr={item.player.teamAbbr}
+                    size="md"
+                  />
+                  <div>
+                    <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                      <span>{item.player.name}</span>
+                      <span className="text-xs px-2 py-0.5 bg-[#182338] text-orange-400 font-mono rounded">
+                        {item.player.teamAbbr} · {item.player.position}
+                      </span>
+                    </h3>
+                    <p className="text-xs text-slate-400 font-mono mt-0.5">
+                      {g2027.length} PJ disputados en 2026-27 · Total Acumulado:{' '}
+                      <span className="font-bold text-emerald-400">
+                        {formatFptsExact(item.stats.seasonTotalFpts)} FPTS
+                      </span>{' '}
+                      · Media:{' '}
+                      <span className="font-bold text-orange-400">
+                        {item.stats.seasonAvgFpts.toFixed(1)} FPTS/PJ
+                      </span>
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setInspectedPlayerForLogsId(null)}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-[#1E293B] transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Game Log Table */}
+              <div className="overflow-y-auto flex-1 pr-1 space-y-2">
+                {g2027.length === 0 ? (
+                  <div className="py-12 text-center text-xs text-slate-400">
+                    No hay partidos oficiales registrados para {item.player.name} en la temporada 2026-27.
+                  </div>
+                ) : (
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-[#1E293B] text-[11px] text-slate-400 bg-[#0B1120]/80 sticky top-0 z-10">
+                        <th className="py-2.5 pl-3 pr-2 font-medium">Fecha</th>
+                        <th className="py-2.5 px-2 font-medium">Rival</th>
+                        <th className="py-2.5 px-2 font-medium">Min</th>
+                        <th className="py-2.5 px-2 font-medium">PTS</th>
+                        <th className="py-2.5 px-2 font-medium">TC (FGM/A)</th>
+                        <th className="py-2.5 px-2 font-medium">3P (3PM/A)</th>
+                        <th className="py-2.5 px-2 font-medium">TL (FTM/A)</th>
+                        <th className="py-2.5 px-2 font-medium">REB (O/D)</th>
+                        <th className="py-2.5 px-2 font-medium">AST</th>
+                        <th className="py-2.5 px-2 font-medium">ROB</th>
+                        <th className="py-2.5 px-2 font-medium">TAP</th>
+                        <th className="py-2.5 px-2 font-medium">PER</th>
+                        <th className="py-2.5 pr-3 font-medium text-right">FPTS Obtenidos</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#1E293B]/70 font-mono text-[11px]">
+                      {g2027.map((g) => {
+                        const breakdown = computeOfficialGameFptsBreakdown(g, 0);
+                        return (
+                          <tr key={`${g.eventId}-${g.date}`} className="hover:bg-[#182338] transition-colors">
+                            <td className="py-2.5 pl-3 pr-2 whitespace-nowrap text-slate-300 font-sans font-medium">
+                              {g.date}
+                            </td>
+                            <td className="py-2.5 px-2 whitespace-nowrap">
+                              <span className={g.isHome ? 'text-emerald-400 font-semibold' : 'text-slate-300'}>
+                                {g.isHome ? 'vs' : '@'}{g.opponentAbbr}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-2 text-slate-300">{g.minutes}m</td>
+                            <td className="py-2.5 px-2 font-bold text-slate-100">{g.points}</td>
+                            <td className="py-2.5 px-2 text-slate-400">
+                              {g.fgm}/{g.fga}
+                            </td>
+                            <td className="py-2.5 px-2 text-slate-400">
+                              {g.fg3m}/{g.fg3a}
+                            </td>
+                            <td className="py-2.5 px-2 text-slate-400">
+                              {g.ftm}/{g.fta}
+                            </td>
+                            <td className="py-2.5 px-2 text-slate-300">
+                              {g.rebounds} ({g.oreb}/{g.dreb})
+                            </td>
+                            <td className="py-2.5 px-2 text-slate-300">{g.assists}</td>
+                            <td className="py-2.5 px-2 text-emerald-400 font-semibold">{g.steals}</td>
+                            <td className="py-2.5 px-2 text-emerald-400 font-semibold">{g.blocks}</td>
+                            <td className="py-2.5 px-2 text-rose-400">{g.turnovers}</td>
+                            <td className="py-2.5 pr-3 text-right font-bold tabular-nums text-orange-400 text-xs">
+                              {formatFptsExact(breakdown.totalFpts)} FPTS
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {/* Explanatory Footer */}
+              <div className="pt-3 border-t border-[#1E293B] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-slate-400 font-sans">
+                <p>
+                  Desglose exacto de regla ESPN: FGM +2, FGMI -1, FTM +1, FTMI -1, 3PM +1, 3PMI +0.5, OREB +1.5, DREB +0.75, AST +1.5, STL +2.5, BLK +2.5, TO -2.0.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setInspectedPlayerForLogsId(null)}
+                  className="px-4 py-1.5 bg-[#182338] hover:bg-slate-700 text-slate-200 font-semibold rounded-lg shrink-0 transition-colors"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
