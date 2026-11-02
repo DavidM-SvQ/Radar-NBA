@@ -314,7 +314,7 @@ export async function getPlayerBiosMap(
     }
   }
 
-  if (isSnapshotOnlyRuntime() && !forceLive && map.size > 0) {
+  if (isSnapshotOnlyRuntime() && !forceLive) {
     cachedBios = {
       expiresAt: Date.now() + 60 * 60 * 1000,
       map,
@@ -433,64 +433,65 @@ async function buildSingleSeasonDataset(
       forceLiveStats: forceLive,
     });
 
-    // Serverless / Snapshot-First mode for 2026-27: bypass blocked stats.nba.com and merge live NBA CDN boxscores
-    if (seasonCode === '2026-27' && isSnapshotOnlyRuntime() && !forceLive) {
+    // Serverless / Snapshot-First mode: NEVER call blocked stats.nba.com from cloud IPs
+    if (isSnapshotOnlyRuntime() && !forceLive) {
+      const createEmptyTeamsMap = () =>
+        new Map<string, TeamSummary>(
+          Object.values(NBA_TEAMS_MAP).map((tm) => [
+            tm.abbr,
+            {
+              id: tm.id,
+              name: tm.name,
+              shortName:
+                tm.abbr === 'POR'
+                  ? 'Trail Blazers'
+                  : tm.name.split(' ').slice(-1)[0] || tm.name,
+              abbreviation: tm.abbr,
+              conference: EAST_TEAM_ABBRS.has(tm.abbr) ? 'Este' : 'Oeste',
+              wins: 0,
+              losses: 0,
+              winPct: 0,
+              playoffSeed: 0,
+              gamesBehind: '-',
+              streakCode: '-',
+              homeRecord: '0-0',
+              roadRecord: '0-0',
+              lastTenRecord: '0-0',
+              avgPointsFor: 0,
+              avgPointsAgainst: 0,
+              differential: 0,
+              games: [],
+            },
+          ])
+        );
+
+      if (seasonCode === '2025-26') {
+        const fallback26: HydratedSeasonMaps = snap?.s2026
+          ? hydrateSeasonDatasetFromSnapshot(snap.s2026)
+          : {
+              seasonCode: '2025-26',
+              dataSource: 'espn_fallback',
+              teamsByAbbr: createEmptyTeamsMap(),
+              playersById: new Map(),
+            };
+        seasonDatasetCache.set(seasonCode, {
+          expiresAt: Date.now() + ttlMs,
+          data: fallback26,
+        });
+        return fallback26;
+      }
+
       const hydrated27: HydratedSeasonMaps = snap?.s2027
         ? hydrateSeasonDatasetFromSnapshot(snap.s2027)
         : {
             seasonCode: '2026-27',
             dataSource: 'nba_official_hybrid',
-            teamsByAbbr: new Map<string, TeamSummary>(
-              Object.values(NBA_TEAMS_MAP).map((tm) => [
-                tm.abbr,
-                {
-                  id: tm.id,
-                  name: tm.name,
-                  shortName:
-                    tm.abbr === 'POR'
-                      ? 'Trail Blazers'
-                      : tm.name.split(' ').slice(-1)[0] || tm.name,
-                  abbreviation: tm.abbr,
-                  conference: [
-                    'ATL',
-                    'BOS',
-                    'BKN',
-                    'CHA',
-                    'CHI',
-                    'CLE',
-                    'DET',
-                    'IND',
-                    'MIA',
-                    'MIL',
-                    'NYK',
-                    'ORL',
-                    'PHI',
-                    'TOR',
-                    'WAS',
-                  ].includes(tm.abbr)
-                    ? 'Este'
-                    : 'Oeste',
-                  wins: 0,
-                  losses: 0,
-                  winPct: 0,
-                  playoffSeed: 0,
-                  gamesBehind: '-',
-                  streakCode: '-',
-                  homeRecord: '0-0',
-                  roadRecord: '0-0',
-                  lastTenRecord: '0-0',
-                  avgPointsFor: 0,
-                  avgPointsAgainst: 0,
-                  differential: 0,
-                  games: [],
-                },
-              ])
-            ),
+            teamsByAbbr: createEmptyTeamsMap(),
             playersById: new Map(),
           };
       await applyCdnDeltaGamesTo2027(hydrated27, biosMap, {
-        maxGamesToFetch: options?.cdnMaxGames ?? 45,
-        timeoutBudgetMs: options?.cdnTimeoutMs ?? 5800,
+        maxGamesToFetch: options?.cdnMaxGames ?? 32,
+        timeoutBudgetMs: options?.cdnTimeoutMs ?? 3800,
         forceRefresh,
       });
       seasonDatasetCache.set(seasonCode, {
@@ -1305,7 +1306,7 @@ export async function fetchLiveScoreboardGames(
       `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard${qs}`,
       2 * 60 * 1000,
       {},
-      7000,
+      isSnapshotOnlyRuntime() ? 3500 : 7000,
       forceRefresh
     );
     const events = Array.isArray(raw?.events) ? raw.events : [];

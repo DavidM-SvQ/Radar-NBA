@@ -334,7 +334,23 @@ export function validateRequest<
     }
 
     if (schemas.query) {
-      const r = schemas.query.safeParse(req.query ?? {});
+      const rawQueryObj =
+        req.query && typeof req.query === 'object'
+          ? (req.query as Record<string, unknown>)
+          : {};
+      const cleanedQuery: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(rawQueryObj)) {
+        if (
+          k === '__api_path' ||
+          k === 'path' ||
+          k.startsWith('__vercel') ||
+          k.startsWith('nxtP')
+        ) {
+          continue;
+        }
+        cleanedQuery[k] = v;
+      }
+      const r = schemas.query.safeParse(cleanedQuery);
       if (!r.success) {
         for (const iss of r.error.issues) {
           const subPath = iss.path.map(String).join('.');

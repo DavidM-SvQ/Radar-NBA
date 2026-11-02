@@ -25,7 +25,11 @@ import { translateMedicalDetailEs } from './scoutingEngine.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.resolve(__dirname, '../../data');
+const DATA_DIR = [
+  path.resolve(process.cwd(), 'data'),
+  path.resolve(__dirname, '../data'),
+  path.resolve(__dirname, '../../data'),
+].find((p) => fs.existsSync(p)) || path.resolve(process.cwd(), 'data');
 const MANUAL_STATE_FILE = path.join(DATA_DIR, 'fantasy-manual-league.json');
 const SERVERLESS_TMP_STATE_FILE = '/tmp/radarnba-fantasy-manual-league.json';
 

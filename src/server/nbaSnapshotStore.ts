@@ -195,12 +195,21 @@ function normalizeScheduleDateToEasternIso(
 }
 
 export function getSnapshotCandidatePaths(): string[] {
-  const fromCwd = path.resolve(process.cwd(), 'data', 'nba-snapshot.json.gz');
-  const fromModule = path.resolve(__dirname, '../../data/nba-snapshot.json.gz');
-  return Array.from(new Set([fromCwd, fromModule]));
+  const candidates = [
+    path.resolve(process.cwd(), 'data', 'nba-snapshot.json.gz'),
+    path.resolve(__dirname, 'data', 'nba-snapshot.json.gz'),
+    path.resolve(__dirname, '..', 'data', 'nba-snapshot.json.gz'),
+    path.resolve(__dirname, '..', '..', 'data', 'nba-snapshot.json.gz'),
+    path.resolve(__dirname, '..', '..', '..', 'data', 'nba-snapshot.json.gz'),
+  ];
+  return Array.from(new Set(candidates));
 }
 
 export function getPrimarySnapshotWritePath(): string {
+  const cwdData = path.resolve(process.cwd(), 'data');
+  if (fs.existsSync(cwdData)) {
+    return path.join(cwdData, 'nba-snapshot.json.gz');
+  }
   return path.resolve(__dirname, '../../data/nba-snapshot.json.gz');
 }
 
@@ -738,7 +747,7 @@ export async function applyCdnDeltaGamesTo2027(
   const startedAt = Date.now();
 
   const candidateRefs = await discoverCandidateCompletedGames2027(
-    Math.min(2000, timeoutBudgetMs)
+    Math.min(1600, timeoutBudgetMs)
   );
   if (candidateRefs.length === 0) return 0;
 
@@ -785,7 +794,7 @@ export async function applyCdnDeltaGamesTo2027(
         if (memHit) return { ref, cdnGame: memHit };
         const raw = await fetchCdnJsonWithTimeout<Record<string, any>>(
           `https://cdn.nba.com/static/json/liveData/boxscore/boxscore_${ref.gameId}.json`,
-          Math.min(2800, Math.max(850, remainingMs))
+          Math.min(2200, Math.max(650, remainingMs))
         );
         const gameObj = raw?.game;
         if (!gameObj) {

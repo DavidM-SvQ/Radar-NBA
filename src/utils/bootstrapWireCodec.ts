@@ -601,16 +601,50 @@ export function clearBootstrapClientCache(): void {
 async function fetchJsonWithSingleRetry(url: string): Promise<any> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
+    let statusCode = 0;
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, {
+        headers: { Accept: 'application/json' },
+      });
+      statusCode = res.status;
+      const text = await res.text();
+
       if (!res.ok) {
-        throw new Error('Respuesta no válida del servidor de estadísticas.');
+        let serverError = '';
+        try {
+          const errJson = JSON.parse(text);
+          if (typeof errJson?.error === 'string' && errJson.error.trim()) {
+            serverError = errJson.error.trim();
+          }
+        } catch {
+          // Ignore non-JSON error body
+        }
+        throw new Error(
+          serverError ||
+            `Respuesta no válida del servidor de estadísticas (HTTP ${res.status}).`
+        );
       }
-      return await res.json();
+
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new Error(
+          'El servidor devolvió un formato inesperado en lugar de datos JSON.'
+        );
+      }
     } catch (err) {
       lastErr = err;
+      // Do not retry deterministic client/rate-limit statuses
+      if (
+        statusCode === 400 ||
+        statusCode === 401 ||
+        statusCode === 403 ||
+        statusCode === 429
+      ) {
+        break;
+      }
       if (attempt === 0) {
-        await new Promise((r) => setTimeout(r, 250));
+        await new Promise((r) => setTimeout(r, 350));
       }
     }
   }
@@ -708,13 +742,35 @@ export async function fetchBootstrapClient(
     return b2026;
   }
 
-  // 'continuous': fetch 2027 (refreshable) and 2026 (cached archive if already loaded) in parallel
-  const [b2027, b2026] = await Promise.all([
+  // 'continuous': fetch 2027 (refreshable) and 2026 (cached archive) in parallel with graceful partial fallback
+  const [res2027, res2026] = await Promise.allSettled([
     loadSingleSeasonSliceClient('2027', forceRefresh),
     loadSingleSeasonSliceClient('2026', false),
   ]);
 
-  const merged = mergeBootstrapSeasonsClient(b2027, b2026);
-  clientBootstrapStore.continuous = merged;
-  return merged;
+  if (res2027.status === 'fulfilled' && res2026.status === 'fulfilled') {
+    const merged = mergeBootstrapSeasonsClient(res2027.value, res2026.value);
+    clientBootstrapStore.continuous = merged;
+    return merged;
+  }
+
+  if (res2027.status === 'fulfilled') {
+    scheduleBackgroundSliceWarmup('2026');
+    return {
+      ...res2027.value,
+      seasonMode: 'continuous',
+    };
+  }
+
+  if (res2026.status === 'fulfilled') {
+    scheduleBackgroundSliceWarmup('2027');
+    return {
+      ...res2026.value,
+      seasonMode: 'continuous',
+    };
+  }
+
+  throw res2027.reason instanceof Error
+    ? res2027.reason
+    : new Error('No se pudo conectar con el servidor de estadísticas NBA.');
 }
