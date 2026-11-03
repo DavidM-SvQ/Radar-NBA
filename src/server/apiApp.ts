@@ -4,7 +4,7 @@ import express from "express";
 import helmet from "helmet";
 import { getBootstrapPayload, getBootstrapWireBuffers, getFantasyEspnSyncPayload, getGameDayPayload, getMilestonesPayload, getPlayerInspectorDossier, getSinglePlayerSummary, getTeamRoster, scoutingEngine, searchLeaguePlayers } from "./nbaDataService.ts";
 import { readNbaSnapshotFromDisk } from "./nbaSnapshotStore.ts";
-import { readManualFantasyStateFromDisk, writeManualFantasyStateToDisk } from "./fantasyEspnService.ts";
+import { getFantasyStorageBackendInfo, readManualFantasyState, writeManualFantasyState } from "./fantasyEspnService.ts";
 import { ADMIN_COOKIE_NAME, DEFAULT_ADMIN_SECURITY_VALUES, adminBruteForceLimiter, adminEndpointFloodLimiter, extractAdminTokenFromRequest, getAdminSecurityConfig, issueAdminSessionToken, nbaApiRateLimiter, nbaHeavyRefreshLimiter, requireAdminAuth, resetAdminBruteForceForRequest, resetAdminSecurityConfigToDefaults, resetAllRateLimitCounters, saveAdminSecurityConfig, verifyAdminPasscodeConstantTime, verifyAdminSessionToken } from "./securityMiddleware.ts";
 import { ADMIN_SECURITY_BOUNDS, adminLoginBodySchema, adminSecurityConfigBodySchema, bootstrapQuerySchema, emptyQuerySchema, gameEventParamsSchema, gamedayQuerySchema, getValidated, manualFantasyStateBodySchema, playerParamsSchema, playerSummaryQuerySchema, refreshOnlyQuerySchema, searchQuerySchema, teamParamsSchema, validateRequest } from "./validationSchemas.ts";
 const isProduction = process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL);
@@ -238,6 +238,7 @@ app.get("/api/nba/game/:eventId/narrative", validateRequest({ params: gameEventP
 });
 app.get(["/api/nba/fantasy/context", "/api/nba/fantasy/espn"], requireAdminAuth, validateRequest({ query: refreshOnlyQuerySchema }), async (req, res) => {
   try {
+    res.setHeader("Cache-Control", "no-store");
     const { query } = getValidated(req);
     const payload = await getFantasyEspnSyncPayload(Boolean(query.refresh));
     res.json(payload);
@@ -246,27 +247,31 @@ app.get(["/api/nba/fantasy/context", "/api/nba/fantasy/espn"], requireAdminAuth,
     res.status(500).json({ error: err?.message || "Error al cargar calendario y partes NBA para Fantasy." });
   }
 });
-app.get("/api/nba/fantasy/manual-state", requireAdminAuth, validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+app.get("/api/nba/fantasy/manual-state", requireAdminAuth, validateRequest({ query: emptyQuerySchema }), async (_req, res) => {
   try {
-    const state = readManualFantasyStateFromDisk();
-    res.json({ state });
+    res.setHeader("Cache-Control", "no-store");
+    const state = await readManualFantasyState();
+    const backendInfo = getFantasyStorageBackendInfo();
+    res.json({ state, ...backendInfo });
   } catch (err) {
     console.error("Error reading manual fantasy state:", err);
     res.status(500).json({ error: "Error al leer estado guardado de la liga Fantasy." });
   }
 });
-app.put("/api/nba/fantasy/manual-state", requireAdminAuth, validateRequest({ query: emptyQuerySchema, body: manualFantasyStateBodySchema }), (req, res) => {
+app.put("/api/nba/fantasy/manual-state", requireAdminAuth, validateRequest({ query: emptyQuerySchema, body: manualFantasyStateBodySchema }), async (req, res) => {
   try {
+    res.setHeader("Cache-Control", "no-store");
     const { body } = getValidated(req);
-    const saved = writeManualFantasyStateToDisk(body);
+    const saved = await writeManualFantasyState(body);
     if (!saved) {
       res.status(400).json({ error: "Formato de datos de liga Fantasy no v\xE1lido." });
       return;
     }
-    res.json({ ok: true, state: saved });
+    const backendInfo = getFantasyStorageBackendInfo();
+    res.json({ ok: true, state: saved, ...backendInfo });
   } catch (err) {
     console.error("Error saving manual fantasy state:", err);
-    res.status(500).json({ error: "Error al guardar permanentemente la liga Fantasy." });
+    res.status(500).json({ error: err?.message || "Error al guardar permanentemente la liga Fantasy." });
   }
 });
 app.use("/api", (_req, res) => {

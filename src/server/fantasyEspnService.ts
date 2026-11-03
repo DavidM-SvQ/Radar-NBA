@@ -11,6 +11,87 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = [path.resolve(process.cwd(), "data"), path.resolve(__dirname, "../data"), path.resolve(__dirname, "../../data")].find((p) => fs.existsSync(p)) || path.resolve(process.cwd(), "data");
 const MANUAL_STATE_FILE = path.join(DATA_DIR, "fantasy-manual-league.json");
 const SERVERLESS_TMP_STATE_FILE = "/tmp/radarnba-fantasy-manual-league.json";
+const FANTASY_REDIS_KEY = "radarnba:fantasy:manual_league_v1";
+
+function getRedisRestConfig() {
+  const explicitPairs = [
+    [process.env.UPSTASH_REDIS_REST_URL, process.env.UPSTASH_REDIS_REST_TOKEN],
+    [process.env.KV_REST_API_URL, process.env.KV_REST_API_TOKEN],
+    [process.env.REDIS_REST_URL, process.env.REDIS_REST_TOKEN],
+    [process.env.FANTASY_REDIS_REST_URL, process.env.FANTASY_REDIS_REST_TOKEN],
+  ];
+  for (const [rawUrl, rawToken] of explicitPairs) {
+    if (
+      typeof rawUrl === "string" &&
+      rawUrl.trim().startsWith("https://") &&
+      typeof rawToken === "string" &&
+      rawToken.trim()
+    ) {
+      return {
+        url: rawUrl.trim().replace(/\/+$/, ""),
+        token: rawToken.trim(),
+      };
+    }
+  }
+  for (const [key, val] of Object.entries(process.env)) {
+    if (typeof val !== "string" || !val.trim().startsWith("https://")) continue;
+    if (key.endsWith("_REDIS_REST_URL")) {
+      const prefix = key.slice(0, -"_REDIS_REST_URL".length);
+      const tok = process.env[`${prefix}_REDIS_REST_TOKEN`];
+      if (typeof tok === "string" && tok.trim()) {
+        return { url: val.trim().replace(/\/+$/, ""), token: tok.trim() };
+      }
+    }
+    if (key.endsWith("_KV_REST_API_URL")) {
+      const prefix = key.slice(0, -"_KV_REST_API_URL".length);
+      const tok = process.env[`${prefix}_KV_REST_API_TOKEN`];
+      if (typeof tok === "string" && tok.trim()) {
+        return { url: val.trim().replace(/\/+$/, ""), token: tok.trim() };
+      }
+    }
+  }
+  return null;
+}
+
+function getFantasyStorageBackendInfo() {
+  const redisCfg = getRedisRestConfig();
+  if (redisCfg) {
+    return { storageMode: "upstash-redis", cloudConfigured: true };
+  }
+  if (process.env.VERCEL) {
+    return { storageMode: "tmp-ephemeral", cloudConfigured: false };
+  }
+  return { storageMode: "local-disk", cloudConfigured: false };
+}
+
+async function executeUpstashCommand(redisCfg, commandArgs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  try {
+    const res = await fetch(redisCfg.url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${redisCfg.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(commandArgs),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      throw new Error(`Upstash HTTP ${res.status}: ${errText.slice(0, 160)}`);
+    }
+    const payload = await res.json();
+    if (payload && payload.error) {
+      throw new Error(`Upstash Redis error: ${String(payload.error)}`);
+    }
+    return payload ? payload.result : null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function sanitizeManualFantasyState(raw) {
   if (!raw || typeof raw !== "object") return null;
   const obj = raw;
@@ -23,7 +104,7 @@ function sanitizeManualFantasyState(raw) {
       if (!item || typeof item !== "object") continue;
       const r = item;
       const pid = String(r.playerId || "").trim();
-      const slot = r.slot === "bench" ? "bench" : "starter";
+      const slot = r.slot === "bench" ? "bench" : r.slot === "ir" ? "ir" : "starter";
       if (pid && !seenRoster.has(pid) && roster.length < OFFICIAL_LEAGUE_RULES.maxContracts) {
         seenRoster.add(pid);
         roster.push({ playerId: pid, slot });
@@ -63,10 +144,7 @@ function readManualFantasyStateFromDisk() {
   }
   return null;
 }
-function writeManualFantasyStateToDisk(rawState) {
-  const sanitized = sanitizeManualFantasyState(rawState);
-  if (!sanitized) return null;
-  const toSave = { ...sanitized, updatedAt: Math.max(sanitized.updatedAt, Date.now()) };
+function persistNormalizedStateToLocalDisk(toSave) {
   try {
     if (process.env.VERCEL) {
       const tmpTarget = `${SERVERLESS_TMP_STATE_FILE}.tmp`;
@@ -80,6 +158,40 @@ function writeManualFantasyStateToDisk(rawState) {
     }
   } catch (err) {
     console.error("Error writing fantasy-manual-league.json:", err);
+  }
+}
+function writeManualFantasyStateToDisk(rawState) {
+  const sanitized = sanitizeManualFantasyState(rawState);
+  if (!sanitized) return null;
+  const toSave = { ...sanitized, updatedAt: Math.max(sanitized.updatedAt, Date.now()) };
+  persistNormalizedStateToLocalDisk(toSave);
+  return toSave;
+}
+async function readManualFantasyState() {
+  const redisCfg = getRedisRestConfig();
+  if (redisCfg) {
+    try {
+      const rawResult = await executeUpstashCommand(redisCfg, ["GET", FANTASY_REDIS_KEY]);
+      if (rawResult !== null && rawResult !== void 0) {
+        const parsed = typeof rawResult === "string" ? JSON.parse(rawResult) : rawResult;
+        const valid = sanitizeManualFantasyState(parsed);
+        if (valid) return valid;
+      }
+      return null;
+    } catch (err) {
+      console.error("Error reading Fantasy state from Upstash Redis:", err);
+    }
+  }
+  return readManualFantasyStateFromDisk();
+}
+async function writeManualFantasyState(rawState) {
+  const sanitized = sanitizeManualFantasyState(rawState);
+  if (!sanitized) return null;
+  const toSave = { ...sanitized, updatedAt: Math.max(sanitized.updatedAt, Date.now()) };
+  persistNormalizedStateToLocalDisk(toSave);
+  const redisCfg = getRedisRestConfig();
+  if (redisCfg) {
+    await executeUpstashCommand(redisCfg, ["SET", FANTASY_REDIS_KEY, JSON.stringify(toSave)]);
   }
   return toSave;
 }
@@ -111,9 +223,12 @@ function mapInjuryStatusToSpanish(rawStatus, rawDetail) {
 let cachedNbaContext = null;
 async function buildFantasyEspnSyncPayload(params) {
   const { allPlayers, fetchLeagueScheduleGames, fetchEspnInjuriesByName, forceRefresh = false } = params;
-  const savedState = readManualFantasyStateFromDisk();
+  const [savedState, backendInfo] = await Promise.all([
+    readManualFantasyState(),
+    Promise.resolve(getFantasyStorageBackendInfo()),
+  ]);
   if (!forceRefresh && cachedNbaContext && cachedNbaContext.expiresAt > Date.now()) {
-    return { ...cachedNbaContext.payloadBase, savedState };
+    return { ...cachedNbaContext.payloadBase, savedState, ...backendInfo };
   }
   const playersByNorm = /* @__PURE__ */ new Map();
   const playersByRawNorm = /* @__PURE__ */ new Map();
@@ -157,11 +272,14 @@ async function buildFantasyEspnSyncPayload(params) {
   }
   const payloadBase = { generatedAt: (/* @__PURE__ */ new Date()).toISOString(), injuriesByNormName, injuriesByPlayerId, weeks, defaultWeekId: "current" };
   cachedNbaContext = { expiresAt: Date.now() + 5 * 60 * 1e3, payloadBase };
-  return { ...payloadBase, savedState };
+  return { ...payloadBase, savedState, ...backendInfo };
 }
 export {
   buildFantasyEspnSyncPayload,
+  getFantasyStorageBackendInfo,
+  readManualFantasyState,
   readManualFantasyStateFromDisk,
   sanitizeManualFantasyState,
+  writeManualFantasyState,
   writeManualFantasyStateToDisk
 };

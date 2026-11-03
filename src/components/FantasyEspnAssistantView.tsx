@@ -4,6 +4,7 @@ import {
   Calendar,
   Check,
   ClipboardPaste,
+  Cloud,
   Download,
   Plus,
   RefreshCw,
@@ -25,6 +26,7 @@ import type {
   FantasyManualLeagueState,
   FantasyPlayerInjuryAlert,
   FantasyRosterContract,
+  FantasyStorageMode,
   FantasyTeamGameSlot,
   FantasyWeekWindow,
   PlayerSummary,
@@ -317,26 +319,60 @@ export function FantasyEspnAssistantView({
     return fallbackPlayers2027 && fallbackPlayers2027.length > 0 ? fallbackPlayers2027 : players;
   }, [has2027GamesInProp, fallbackPlayers2027, players]);
 
-  // Permanent Manual League State (Browser LocalStorage + Server Disk JSON)
+  // Permanent Manual League State (Browser LocalStorage + Upstash Redis Cloud / Server Disk)
   const [leagueState, setLeagueState] = useState<FantasyManualLeagueState>(() =>
     loadInitialFantasyLeagueState()
   );
-  const [diskSaveStatus, setDiskSaveStatus] = useState<'saved' | 'saving'>('saved');
+  const [diskSaveStatus, setDiskSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
+  const [storageMode, setStorageMode] = useState<FantasyStorageMode | null>(null);
+  const [cloudSyncFeedback, setCloudSyncFeedback] = useState<string | null>(null);
   const reconciledWithDiskRef = useRef<boolean>(false);
+  const savingInFlightCountRef = useRef<number>(0);
+  const lastVisibilityCheckRef = useRef<number>(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const persistStateToServerDisk = useCallback(async (stateToSave: FantasyManualLeagueState) => {
+  const persistStateToServerDisk = useCallback(async (stateToSave: FantasyManualLeagueState): Promise<boolean> => {
+    savingInFlightCountRef.current += 1;
     setDiskSaveStatus('saving');
     try {
-      await fetch('/api/nba/fantasy/manual-state', {
+      const res = await fetch('/api/nba/fantasy/manual-state', {
         method: 'PUT',
         headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(stateToSave),
       });
+      if (!res.ok) {
+        setDiskSaveStatus('error');
+        return false;
+      }
+      const data = (await res.json()) as {
+        ok?: boolean;
+        state?: FantasyManualLeagueState;
+        storageMode?: FantasyStorageMode;
+      };
+      if (data.storageMode) {
+        setStorageMode(data.storageMode);
+      }
+      const serverUpdatedAt = data.state?.updatedAt;
+      if (typeof serverUpdatedAt === 'number' && serverUpdatedAt >= stateToSave.updatedAt) {
+        setLeagueState((curr) => {
+          if (curr.updatedAt > serverUpdatedAt) return curr;
+          const aligned = { ...curr, updatedAt: serverUpdatedAt };
+          try {
+            localStorage.setItem(STORAGE_FANTASY_PERMANENT_KEY, JSON.stringify(aligned));
+          } catch {
+            // Ignore storage errors
+          }
+          return aligned;
+        });
+      }
+      setDiskSaveStatus('saved');
+      return true;
     } catch {
       // LocalStorage already holds the exact copy if offline
+      setDiskSaveStatus('error');
+      return false;
     } finally {
-      setDiskSaveStatus('saved');
+      savingInFlightCountRef.current = Math.max(0, savingInFlightCountRef.current - 1);
     }
   }, []);
 
@@ -423,6 +459,7 @@ export function FantasyEspnAssistantView({
   const handleWaiverTableSort = (key: WaiverSortKey) => {
     if (waiverTableSortKey === key) {
       setWaiverTableSortAsc(!waiverTableSortAsc);
+    } else {
       setWaiverTableSortKey(key);
       setWaiverTableSortAsc(key === 'name' || key === 'severity');
     }
@@ -443,6 +480,128 @@ export function FantasyEspnAssistantView({
   const [auditPlayerId, setAuditPlayerId] = useState<string>('');
   const [auditSearch, setAuditSearch] = useState<string>('');
 
+  const reconcileIncomingServerState = useCallback(
+    (serverState: FantasyManualLeagueState | null | undefined, allowInitialLocalUpload: boolean) => {
+      if (savingInFlightCountRef.current > 0) return;
+
+      setLeagueState((currentLocal) => {
+        const localHas = hasAnyUserLeagueData(currentLocal);
+        const serverHas = hasAnyUserLeagueData(serverState);
+
+        if (
+          serverState &&
+          ((!localHas && serverHas) || serverState.updatedAt > currentLocal.updatedAt)
+        ) {
+          const hydrated: FantasyManualLeagueState = {
+            ...serverState,
+            roster: normalizeRosterSlots(serverState.roster || []),
+          };
+          try {
+            localStorage.setItem(STORAGE_FANTASY_PERMANENT_KEY, JSON.stringify(hydrated));
+          } catch {
+            // Ignore storage errors
+          }
+          return hydrated;
+        }
+
+        if (
+          allowInitialLocalUpload &&
+          localHas &&
+          (!serverState || !serverHas || currentLocal.updatedAt > serverState.updatedAt)
+        ) {
+          const syncedLocal: FantasyManualLeagueState = {
+            ...currentLocal,
+            updatedAt: currentLocal.updatedAt || Date.now(),
+          };
+          try {
+            localStorage.setItem(STORAGE_FANTASY_PERMANENT_KEY, JSON.stringify(syncedLocal));
+          } catch {
+            // Ignore storage errors
+          }
+          void persistStateToServerDisk(syncedLocal);
+          return syncedLocal;
+        }
+
+        return currentLocal;
+      });
+    },
+    [persistStateToServerDisk]
+  );
+
+  const pullLatestManualStateFromServer = useCallback(
+    async (manualTrigger = false) => {
+      if (savingInFlightCountRef.current > 0) return;
+      try {
+        const res = await fetch('/api/nba/fantasy/manual-state', {
+          headers: buildAdminAuthHeaders(),
+          cache: 'no-store',
+        });
+        if (!res.ok) {
+          if (manualTrigger) {
+            setCloudSyncFeedback('No se pudo conectar con el servidor para consultar la nube.');
+          }
+          return;
+        }
+        const data = (await res.json()) as {
+          state: FantasyManualLeagueState | null;
+          storageMode?: FantasyStorageMode;
+        };
+        if (data.storageMode) {
+          setStorageMode(data.storageMode);
+        }
+        if (manualTrigger) {
+          if (data.state && hasAnyUserLeagueData(data.state)) {
+            const hydrated: FantasyManualLeagueState = {
+              ...data.state,
+              roster: normalizeRosterSlots(data.state.roster || []),
+            };
+            setLeagueState(hydrated);
+            try {
+              localStorage.setItem(STORAGE_FANTASY_PERMANENT_KEY, JSON.stringify(hydrated));
+            } catch {
+              // Ignore storage errors
+            }
+            setCloudSyncFeedback('Datos descargados y sincronizados desde la nube.');
+          } else {
+            setCloudSyncFeedback('La nube aún no tiene equipos guardados. Pulsa "Subir este navegador a la nube".');
+          }
+          return;
+        }
+        reconcileIncomingServerState(data.state, false);
+      } catch {
+        if (manualTrigger) {
+          setCloudSyncFeedback('Error de red al consultar la nube.');
+        }
+      }
+    },
+    [reconcileIncomingServerState]
+  );
+
+  const handleForcePushToCloud = useCallback(async () => {
+    setCloudSyncFeedback(null);
+    const stamped: FantasyManualLeagueState = {
+      ...leagueState,
+      roster: normalizeRosterSlots(leagueState.roster),
+      updatedAt: Date.now(),
+    };
+    setLeagueState(stamped);
+    try {
+      localStorage.setItem(STORAGE_FANTASY_PERMANENT_KEY, JSON.stringify(stamped));
+    } catch {
+      // Ignore storage errors
+    }
+    const ok = await persistStateToServerDisk(stamped);
+    if (ok) {
+      setCloudSyncFeedback(
+        storageMode === 'upstash-redis'
+          ? 'Plantilla y rivales subidos correctamente a Upstash Redis (disponibles en todos tus dispositivos).'
+          : 'Guardado en el servidor actual. Conecta Upstash Redis en Vercel para que sea permanente entre dispositivos.'
+      );
+    } else {
+      setCloudSyncFeedback('Error al subir los datos al servidor. Revisa tu sesión de administrador.');
+    }
+  }, [leagueState, persistStateToServerDisk, storageMode]);
+
   const fetchNbaFantasyContext = useCallback(
     async (forceRefresh = false) => {
       if (forceRefresh) {
@@ -456,62 +615,18 @@ export function FantasyEspnAssistantView({
           : '/api/nba/fantasy/context';
         const res = await fetch(url, {
           headers: buildAdminAuthHeaders(),
+          cache: 'no-store',
         });
         if (res.ok) {
           const payload = (await res.json()) as FantasyEspnSyncPayload;
           setNbaContext(payload);
-
-          // Reconcile once on startup between browser storage and server disk file
-          if (!reconciledWithDiskRef.current) {
-            reconciledWithDiskRef.current = true;
-            const diskState = payload.savedState;
-            setLeagueState((currentLocal) => {
-              const localHas = hasAnyUserLeagueData(currentLocal);
-              const diskHas = hasAnyUserLeagueData(diskState);
-
-              if (
-                diskState &&
-                ((!localHas && diskHas) ||
-                  (diskHas && diskState.updatedAt > currentLocal.updatedAt))
-              ) {
-                const hydrated: FantasyManualLeagueState = {
-                  ...diskState,
-                  roster: normalizeRosterSlots(diskState.roster || []),
-                };
-                try {
-                  localStorage.setItem(
-                    STORAGE_FANTASY_PERMANENT_KEY,
-                    JSON.stringify(hydrated)
-                  );
-                } catch {
-                  // Ignore storage errors
-                }
-                return hydrated;
-              }
-
-              if (
-                localHas &&
-                (!diskState || !diskHas || currentLocal.updatedAt > diskState.updatedAt)
-              ) {
-                const syncedLocal: FantasyManualLeagueState = {
-                  ...currentLocal,
-                  updatedAt: currentLocal.updatedAt || Date.now(),
-                };
-                try {
-                  localStorage.setItem(
-                    STORAGE_FANTASY_PERMANENT_KEY,
-                    JSON.stringify(syncedLocal)
-                  );
-                } catch {
-                  // Ignore storage errors
-                }
-                void persistStateToServerDisk(syncedLocal);
-                return syncedLocal;
-              }
-
-              return currentLocal;
-            });
+          if (payload.storageMode) {
+            setStorageMode(payload.storageMode);
           }
+
+          const isFirstMountReconcile = !reconciledWithDiskRef.current;
+          reconciledWithDiskRef.current = true;
+          reconcileIncomingServerState(payload.savedState, isFirstMountReconcile);
         }
       } catch {
         // Keep permanent local state active
@@ -520,12 +635,28 @@ export function FantasyEspnAssistantView({
         setContextRefreshing(false);
       }
     },
-    [persistStateToServerDisk]
+    [reconcileIncomingServerState]
   );
 
   useEffect(() => {
     void fetchNbaFantasyContext(false);
   }, [fetchNbaFantasyContext]);
+
+  useEffect(() => {
+    const checkCloudOnFocus = () => {
+      if (document.visibilityState === 'hidden') return;
+      const now = Date.now();
+      if (now - lastVisibilityCheckRef.current < 10_000) return;
+      lastVisibilityCheckRef.current = now;
+      void pullLatestManualStateFromServer(false);
+    };
+    window.addEventListener('focus', checkCloudOnFocus);
+    document.addEventListener('visibilitychange', checkCloudOnFocus);
+    return () => {
+      window.removeEventListener('focus', checkCloudOnFocus);
+      document.removeEventListener('visibilitychange', checkCloudOnFocus);
+    };
+  }, [pullLatestManualStateFromServer]);
 
   const rivalSlotKeys = useMemo(() => {
     let maxSlot = Math.max(DEFAULT_RIVAL_COUNT, extraRivalSlotsCount);
@@ -1545,11 +1676,24 @@ export function FantasyEspnAssistantView({
                 {activeRivalTeamsCount} equipos rivales registrados ({totalRivalPlayersCount} jug. ocupados)
               </span>
               <span aria-hidden="true">·</span>
-              <span className="text-emerald-400 font-medium">
-                {diskSaveStatus === 'saving'
-                  ? 'Guardando cambios...'
-                  : 'Guardado permanente activo'}
-              </span>
+              {diskSaveStatus === 'saving' ? (
+                <span className="text-amber-300 font-medium">Sincronizando cambios...</span>
+              ) : diskSaveStatus === 'error' ? (
+                <span className="text-rose-400 font-medium">
+                  Guardado en navegador (sin conexión a nube)
+                </span>
+              ) : storageMode === 'upstash-redis' ? (
+                <span className="inline-flex items-center gap-1 text-emerald-400 font-medium">
+                  <Cloud className="w-3.5 h-3.5" />
+                  <span>Nube activa · Sincronizado en todos tus dispositivos</span>
+                </span>
+              ) : storageMode === 'tmp-ephemeral' ? (
+                <span className="text-amber-400 font-medium">
+                  Solo este navegador · Conecta Upstash Redis en Vercel
+                </span>
+              ) : (
+                <span className="text-emerald-400 font-medium">Guardado local activo</span>
+              )}
             </div>
 
             <h1 className="text-xl sm:text-2xl font-bold text-slate-100 tracking-tight">
@@ -3394,14 +3538,17 @@ export function FantasyEspnAssistantView({
               </button>
               <button
                 type="button"
-                onClick={() => setManagerTab('backup')}
+                onClick={() => {
+                  setManagerTab('backup');
+                  setCloudSyncFeedback(null);
+                }}
                 className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
                   managerTab === 'backup'
                     ? 'bg-orange-500 text-slate-950'
                     : 'bg-[#0B1120] text-slate-300 hover:text-white'
                 }`}
               >
-                3. Copia de Seguridad y Ocupados Sueltos
+                3. Sincronización Nube y Copia (.json)
               </button>
             </div>
 
@@ -3896,16 +4043,85 @@ export function FantasyEspnAssistantView({
                   );
                 })()}
 
-              {/* SUB-TAB 3: BACKUP EXPORT/IMPORT & STANDALONE OCCUPIED PLAYERS */}
+              {/* SUB-TAB 3: CLOUD SYNC, BACKUP EXPORT/IMPORT & STANDALONE OCCUPIED PLAYERS */}
               {managerTab === 'backup' && (
                 <div className="space-y-5">
                   <div className="p-4 bg-[#0B1120] border border-[#1E293B] rounded-lg space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Cloud
+                          className={`w-4 h-4 ${
+                            storageMode === 'upstash-redis' ? 'text-emerald-400' : 'text-amber-400'
+                          }`}
+                        />
+                        <h4 className="text-sm font-semibold text-slate-100">
+                          Sincronización Multidispositivo en la Nube (Upstash Redis)
+                        </h4>
+                      </div>
+                      <span
+                        className={`text-[11px] font-semibold px-2 py-0.5 rounded border ${
+                          storageMode === 'upstash-redis'
+                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                            : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                        }`}
+                      >
+                        {storageMode === 'upstash-redis'
+                          ? 'Conectado a Upstash Redis'
+                          : storageMode === 'tmp-ephemeral'
+                            ? 'Pendiente conectar Redis en Vercel'
+                            : 'Modo disco local'}
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                      {storageMode === 'upstash-redis'
+                        ? 'Todos los cambios en tu plantilla y equipos rivales se sincronizan automáticamente con tu base de datos Upstash Redis. Cualquier navegador, móvil o PC en el que abras sesión verá exactamente los mismos equipos.'
+                        : 'Actualmente los cambios se mantienen en este navegador. Al conectar Upstash Redis en la pestaña Storage de Vercel, este navegador subirá automáticamente tu liga a la nube para compartirla con tu móvil, tablet u otros ordenadores.'}
+                    </p>
+
+                    {leagueState.updatedAt > 0 && (
+                      <p className="text-[11px] font-mono text-slate-500">
+                        Última marca de actualización:{' '}
+                        {new Date(leagueState.updatedAt).toLocaleString('es-ES')}
+                      </p>
+                    )}
+
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <button
+                        type="button"
+                        disabled={diskSaveStatus === 'saving'}
+                        onClick={() => void handleForcePushToCloud()}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg transition-colors disabled:opacity-60"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>Subir este navegador a la nube</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCloudSyncFeedback(null);
+                          void pullLatestManualStateFromServer(true);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium bg-[#131C2E] border border-[#1E293B] hover:border-slate-500 text-slate-200 rounded-lg transition-colors"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Descargar desde la nube ahora</span>
+                      </button>
+                    </div>
+
+                    {cloudSyncFeedback && (
+                      <p className="text-xs text-emerald-400 font-medium">{cloudSyncFeedback}</p>
+                    )}
+                  </div>
+
+                  <div className="p-4 bg-[#0B1120] border border-[#1E293B] rounded-lg space-y-3">
                     <div className="space-y-1">
                       <h4 className="text-sm font-semibold text-slate-100">
-                        Persistencia Permanente y Copia en Archivo (.json)
+                        Copia Manual en Archivo (.json)
                       </h4>
                       <p className="text-xs text-slate-400 leading-relaxed">
-                        Tus equipos, nombres personalizados y plantillas rivales se guardan automáticamente tanto en la base local del servidor como en tu navegador para no perderse jamás entre inicios. Además, puedes descargar o restaurar una copia en fichero cuando quieras:
+                        También puedes descargar o restaurar una copia completa de tus equipos y plantillas rivales en un archivo local cuando quieras:
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2.5">

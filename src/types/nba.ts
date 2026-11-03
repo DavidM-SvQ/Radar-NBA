@@ -885,6 +885,8 @@ export interface FantasyManualLeagueState {
   rivalTeamNames: Record<string, string>;
 }
 
+export type FantasyStorageMode = 'upstash-redis' | 'local-disk' | 'tmp-ephemeral';
+
 export interface FantasyEspnSyncPayload {
   generatedAt: string;
   injuriesByNormName: Record<string, FantasyPlayerInjuryAlert>;
@@ -892,4 +894,7 @@ export interface FantasyEspnSyncPayload {
   weeks: FantasyWeekWindow[];
   defaultWeekId: string;
   savedState: FantasyManualLeagueState | null;
+  storageMode?: FantasyStorageMode;
+  cloudConfigured?: boolean;
 }
+
