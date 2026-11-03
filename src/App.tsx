@@ -77,7 +77,9 @@ import {
 } from './utils/urlRouting';
 import {
   fetchBootstrapClient,
+  getCachedSeasonSlicesClient,
   peekCachedBootstrapClient,
+  subscribeBootstrapSlicesClient,
 } from './utils/bootstrapWireCodec';
 import {
   getStoredAdminToken,
@@ -194,6 +196,7 @@ export default function App() {
 
   const [teams, setTeams] = useState<TeamSummary[]>([]);
   const [players, setPlayers] = useState<PlayerSummary[]>([]);
+  const [seasonSliceTick, setSeasonSliceTick] = useState(0);
   const [totalLeaguePlayersAvailable, setTotalLeaguePlayersAvailable] = useState(0);
   const [allPlayersLoaded, setAllPlayersLoaded] = useState(false);
   const [loadingAllPlayers, setLoadingAllPlayers] = useState(false);
@@ -305,6 +308,12 @@ export default function App() {
       // Ignore storage quota errors
     }
   }, [experienceMode]);
+
+  useEffect(() => {
+    return subscribeBootstrapSlicesClient(() => {
+      setSeasonSliceTick((t) => t + 1);
+    });
+  }, []);
 
   useEffect(() => {
     const timers = new Map<Element, number>();
@@ -945,15 +954,27 @@ export default function App() {
     [importExternalPlayer]
   );
 
+  const seasonReferenceSlices = useMemo(() => {
+    void seasonSliceTick;
+    const { s2027, s2026 } = getCachedSeasonSlicesClient();
+    return {
+      players2027: s2027?.players,
+      players2026: s2026?.players,
+      teams2027: s2027?.teams,
+      teams2026: s2026?.teams,
+    };
+  }, [seasonSliceTick]);
+
   const streaks = useMemo(
     () =>
       detectActiveStreaks(
         players,
         teams,
         settings.minStreakGames,
-        settings.windowSize
+        settings.windowSize,
+        seasonReferenceSlices
       ),
-    [players, teams, settings.minStreakGames, settings.windowSize]
+    [players, teams, settings.minStreakGames, settings.windowSize, seasonReferenceSlices]
   );
 
   const anomalies = useMemo(
@@ -2046,6 +2067,8 @@ export default function App() {
               {activeSection === 'streaks' && (
                 <StreaksConsistencyView
                   players={players}
+                  players2027={seasonReferenceSlices.players2027}
+                  players2026={seasonReferenceSlices.players2026}
                   streaks={streaks}
                   consistencyRows={consistencyRows}
                   trendBreakouts={trendBreakouts}

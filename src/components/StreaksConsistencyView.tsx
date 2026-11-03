@@ -30,6 +30,8 @@ import { PlayerStreakHistoryChart } from './PlayerStreakHistoryChart';
 
 interface StreaksConsistencyViewProps {
   players: PlayerSummary[];
+  players2027?: PlayerSummary[];
+  players2026?: PlayerSummary[];
   streaks: StreakEntry[];
   consistencyRows: ConsistencyEntry[];
   trendBreakouts: TrendBreakoutAlert[];
@@ -51,7 +53,18 @@ type SubTab = 'streaks' | 'consistency' | 'history';
 type StreakEvalMode = 'custom' | 'auto';
 type StreakSpanMode = 'active' | 'best';
 type ThresholdOperator = 'gt' | 'gte' | 'lte' | 'lt';
-type CustomStreakSort = 'count' | 'streakAvg' | 'windowAvg' | 'seasonAvg';
+type CustomStreakSort =
+  | 'count'
+  | 'streakAvg'
+  | 'windowAvg'
+  | 'currentSeasonAvg'
+  | 'prevSeasonAvg';
+type AutoStreakSort =
+  | 'count'
+  | 'windowAvgDuringStreak'
+  | 'windowDeltaVsSeason'
+  | 'currentSeasonAvg'
+  | 'prevSeasonAvg';
 type ConsistencySort =
   | 'consistencyScore'
   | 'ptsAvg'
@@ -1125,6 +1138,26 @@ function humanThresholdLabel(st: StreakEntry, mode: ExperienceMode): string {
   return st.thresholdLabel;
 }
 
+const CURRENT_SEASON_COLUMN_HELP = {
+  title: 'Temporada actual (2026-27)',
+  simpleDesc:
+    'Promedio habitual del jugador o equipo únicamente en los partidos disputados durante la campaña actual 2026-27.',
+  calculation:
+    'Media en partidos 2026-27 (ponderada por volumen real de tiros en 3P% y TS%)',
+  benchmarkText:
+    'Permite comprobar si la racha supera su nivel real de este curso sin mezclar el año anterior.',
+};
+
+const PREV_SEASON_COLUMN_HELP = {
+  title: 'Temporada pasada (2025-26)',
+  simpleDesc:
+    'Promedio registrado a lo largo de la campaña anterior completa 2025-26.',
+  calculation:
+    'Media en partidos 2025-26 (muestra — en rookies o jugadores sin partidos en 2025-26)',
+  benchmarkText:
+    'Referencia estructural de largo plazo para distinguir saltos reales frente a su nivel del curso pasado.',
+};
+
 interface CustomEvaluatedRow {
   playerId: string;
   playerName: string;
@@ -1135,6 +1168,8 @@ interface CustomEvaluatedRow {
   streakAvg: number;
   windowAvg: number;
   seasonAvg: number;
+  currentSeasonAvg: number | null;
+  prevSeasonAvg: number | null;
   recentSequence: number[];
   lastGameVal: number;
   lastGameDate: string;
@@ -1144,6 +1179,8 @@ interface CustomEvaluatedRow {
 
 export function StreaksConsistencyView({
   players,
+  players2027,
+  players2026,
   streaks,
   consistencyRows,
   trendBreakouts,
@@ -1162,7 +1199,7 @@ export function StreaksConsistencyView({
 }: StreaksConsistencyViewProps) {
   const [subTab, setSubTab] = useState<SubTab>('streaks');
   const [streakEvalMode, setStreakEvalMode] =
-    useState<StreakEvalMode>('custom');
+    useState<StreakEvalMode>('auto');
   const [streakSpanMode, setStreakSpanMode] = useState<StreakSpanMode>('active');
   const [useSecondaryCondition, setUseSecondaryCondition] = useState<boolean>(false);
   const [secondaryMetricId, setSecondaryMetricId] = useState<string>('points');
@@ -1177,6 +1214,8 @@ export function StreaksConsistencyView({
   );
   const [customSort, setCustomSort] = useState<CustomStreakSort>('count');
   const [customAsc, setCustomAsc] = useState<boolean>(false);
+  const [autoSort, setAutoSort] = useState<AutoStreakSort>('count');
+  const [autoAsc, setAutoAsc] = useState<boolean>(false);
 
   const [streakFilter, setStreakFilter] = useState<'all' | 'player' | 'team'>(
     'all'
@@ -1195,7 +1234,7 @@ export function StreaksConsistencyView({
   const [mobileSlidersOpen, setMobileSlidersOpen] = useState<boolean>(true);
   const [historyPlayerId, setHistoryPlayerId] = useState<string | null>(null);
   const [showInlineHistoryChart, setShowInlineHistoryChart] =
-    useState<boolean>(true);
+    useState<boolean>(false);
 
 
   const activeMetric = useMemo(
@@ -1256,6 +1295,22 @@ export function StreaksConsistencyView({
     return true;
   };
 
+  const players2027ById = useMemo(() => {
+    const map = new Map<string, PlayerGameLog[]>();
+    if (players2027) {
+      for (const p of players2027) map.set(p.id, p.games);
+    }
+    return map;
+  }, [players2027]);
+
+  const players2026ById = useMemo(() => {
+    const map = new Map<string, PlayerGameLog[]>();
+    if (players2026) {
+      for (const p of players2026) map.set(p.id, p.games);
+    }
+    return map;
+  }, [players2026]);
+
   // Real-time evaluation of consecutive games with active vs best historical span and parlay support
   const customEvaluatedRows = useMemo<CustomEvaluatedRow[]>(() => {
     const q = normalizeSearchText(query);
@@ -1306,23 +1361,30 @@ export function StreaksConsistencyView({
 
       if (count < minConsecutive) continue;
 
-      const qualifiedSeasonGames = activeMetric.qualifies
-        ? player.games.filter(activeMetric.qualifies)
-        : player.games;
-      const seasonVals = (
-        qualifiedSeasonGames.length > 0 ? qualifiedSeasonGames : player.games
-      ).map((g) => activeMetric.getValue(g));
+      const evalQualifiedMean = (arr: PlayerGameLog[]): number | null => {
+        if (arr.length === 0) return null;
+        const qual = activeMetric.qualifies ? arr.filter(activeMetric.qualifies) : arr;
+        const target = qual.length > 0 ? qual : arr;
+        return target.length > 0 ? mean(target.map((g) => activeMetric.getValue(g))) : null;
+      };
+
+      const p27Games =
+        players2027ById.get(player.id) ??
+        player.games.filter((g) => g.seasonLabel === '2026-27');
+      const p26Games =
+        players2026ById.get(player.id) ??
+        player.games.filter((g) => g.seasonLabel === '2025-26');
+
+      const currentSeasonAvg = evalQualifiedMean(p27Games);
+      const prevSeasonAvg = evalQualifiedMean(p26Games);
+      const fallbackSeasonAvg = evalQualifiedMean(player.games) ?? 0;
+      const refSeasonAvg = currentSeasonAvg ?? prevSeasonAvg ?? fallbackSeasonAvg;
 
       const winSliceRaw = player.games.slice(
         0,
         Math.min(windowSize, player.games.length)
       );
-      const qualifiedWinGames = activeMetric.qualifies
-        ? winSliceRaw.filter(activeMetric.qualifies)
-        : winSliceRaw;
-      const winVals = (
-        qualifiedWinGames.length > 0 ? qualifiedWinGames : winSliceRaw
-      ).map((g) => activeMetric.getValue(g));
+      const winAvgVal = evalQualifiedMean(winSliceRaw) ?? 0;
 
       const latest = player.games[0];
       out.push({
@@ -1333,8 +1395,10 @@ export function StreaksConsistencyView({
         gamesPlayed: player.games.length,
         count,
         streakAvg: mean(streakVals),
-        windowAvg: mean(winVals),
-        seasonAvg: mean(seasonVals),
+        windowAvg: winAvgVal,
+        seasonAvg: refSeasonAvg,
+        currentSeasonAvg,
+        prevSeasonAvg,
         recentSequence: streakVals.slice(0, 6),
         lastGameVal: streakVals[0] ?? activeMetric.getValue(latest),
         lastGameDate: latest.date,
@@ -1344,8 +1408,13 @@ export function StreaksConsistencyView({
     }
 
     out.sort((a, b) => {
-      const diff = a[customSort] - b[customSort];
-      if (diff !== 0) return customAsc ? diff : -diff;
+      const valA = a[customSort];
+      const valB = b[customSort];
+      if (valA === null && valB !== null) return 1;
+      if (valA !== null && valB === null) return -1;
+      if (valA !== null && valB !== null && valA !== valB) {
+        return customAsc ? valA - valB : valB - valA;
+      }
       if (b.count !== a.count) return b.count - a.count;
       return b.streakAvg - a.streakAvg;
     });
@@ -1353,6 +1422,8 @@ export function StreaksConsistencyView({
     return out;
   }, [
     players,
+    players2027ById,
+    players2026ById,
     onlyWatchlist,
     watchlistIds,
     query,
@@ -1416,27 +1487,52 @@ export function StreaksConsistencyView({
 
   const filteredStreaks = useMemo(() => {
     const q = normalizeSearchText(query);
-    return streaks.filter((s) => {
-      const wKey = `${s.entityType}:${s.entityId}`;
-      if (onlyWatchlist && !watchlistIds.has(wKey)) return false;
-      if (streakFilter !== 'all' && s.entityType !== streakFilter) return false;
-      if (autoSignFilter === 'positive' && !s.isPositive) return false;
-      if (autoSignFilter === 'negative' && s.isPositive) return false;
-      if (autoAxisFilter !== 'all') {
-        if (autoAxisFilter === 'counting') {
-          if (s.breakoutAxis) return false;
-        } else if (s.breakoutAxis !== autoAxisFilter) {
-          return false;
+    return streaks
+      .filter((s) => {
+        const wKey = `${s.entityType}:${s.entityId}`;
+        if (onlyWatchlist && !watchlistIds.has(wKey)) return false;
+        if (streakFilter !== 'all' && s.entityType !== streakFilter) return false;
+        if (autoSignFilter === 'positive' && !s.isPositive) return false;
+        if (autoSignFilter === 'negative' && s.isPositive) return false;
+        if (autoAxisFilter !== 'all') {
+          if (autoAxisFilter === 'counting') {
+            if (s.breakoutAxis) return false;
+          } else if (s.breakoutAxis !== autoAxisFilter) {
+            return false;
+          }
         }
-      }
-      if (q) {
-        const hay = normalizeSearchText(
-          `${s.entityName} ${s.teamAbbr} ${s.thresholdLabel} ${s.metricLabel}`
-        );
-        if (!hay.includes(q)) return false;
-      }
-      return true;
-    });
+        if (q) {
+          const hay = normalizeSearchText(
+            `${s.entityName} ${s.teamAbbr} ${s.thresholdLabel} ${s.metricLabel}`
+          );
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const resolveAutoVal = (st: StreakEntry): number | null => {
+          if (autoSort === 'windowDeltaVsSeason') {
+            return st.windowDeltaVsSeason ?? 0;
+          }
+          if (autoSort === 'currentSeasonAvg') {
+            return st.currentSeasonAvg !== undefined ? st.currentSeasonAvg : st.seasonBaseline;
+          }
+          if (autoSort === 'prevSeasonAvg') {
+            return st.prevSeasonAvg !== undefined ? st.prevSeasonAvg : null;
+          }
+          return st[autoSort];
+        };
+
+        const valA = resolveAutoVal(a);
+        const valB = resolveAutoVal(b);
+        if (valA === null && valB !== null) return 1;
+        if (valA !== null && valB === null) return -1;
+        if (valA !== null && valB !== null && valA !== valB) {
+          return autoAsc ? valA - valB : valB - valA;
+        }
+        if (b.count !== a.count) return b.count - a.count;
+        return b.windowAvgDuringStreak - a.windowAvgDuringStreak;
+      });
   }, [
     streaks,
     watchlistIds,
@@ -1445,6 +1541,8 @@ export function StreaksConsistencyView({
     autoSignFilter,
     autoAxisFilter,
     query,
+    autoSort,
+    autoAsc,
   ]);
 
   const filteredConsistency = useMemo(() => {
@@ -1497,6 +1595,15 @@ export function StreaksConsistencyView({
     } else {
       setCustomSort(field);
       setCustomAsc(false);
+    }
+  };
+
+  const toggleAutoSort = (field: AutoStreakSort) => {
+    if (autoSort === field) {
+      setAutoAsc((prev) => !prev);
+    } else {
+      setAutoSort(field);
+      setAutoAsc(false);
     }
   };
 
@@ -1765,26 +1872,26 @@ export function StreaksConsistencyView({
             <div className="flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
               <button
                 type="button"
+                onClick={() => setStreakEvalMode('auto')}
+                className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  streakEvalMode === 'auto'
+                    ? 'bg-[#1E293B] text-orange-300 font-semibold'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Tabla rachas activas ({streaks.length})
+              </button>
+              <button
+                type="button"
                 onClick={() => setStreakEvalMode('custom')}
                 className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                   streakEvalMode === 'custom'
-                    ? 'bg-[#1E293B] text-white'
+                    ? 'bg-[#1E293B] text-orange-300 font-semibold'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
                 <SlidersHorizontal className="w-3.5 h-3.5 text-orange-400" />
-                <span>Evaluador ratios y sliders</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setStreakEvalMode('auto')}
-                className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                  streakEvalMode === 'auto'
-                    ? 'bg-[#1E293B] text-white'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Multi-racha ({streaks.length})
+                <span>Buscador a medida (38 ratios)</span>
               </button>
             </div>
           )}
@@ -2293,7 +2400,13 @@ export function StreaksConsistencyView({
         <PlayerStreakHistoryChart
           players={players}
           selectedPlayerId={
-            historyPlayerId || topCustomRow?.playerId || players[0]?.id || null
+            historyPlayerId ||
+            (streakEvalMode === 'auto'
+              ? filteredStreaks.find((s) => s.entityType === 'player')?.entityId
+              : topCustomRow?.playerId) ||
+            topCustomRow?.playerId ||
+            players[0]?.id ||
+            null
           }
           onSelectPlayerId={(pid) => setHistoryPlayerId(pid)}
           onInspectPlayer={(pid) => onInspectEntity('player', pid)}
@@ -2330,7 +2443,8 @@ export function StreaksConsistencyView({
                       [
                         { id: 'count', label: 'PJ seguidos' },
                         { id: 'streakAvg', label: 'Media racha' },
-                        { id: 'seasonAvg', label: 'Media habitual' },
+                        { id: 'currentSeasonAvg', label: 'Temp. actual' },
+                        { id: 'prevSeasonAvg', label: 'Temp. pasada' },
                       ] as const
                     ).map((opt) => {
                       const active = customSort === opt.id;
@@ -2427,14 +2541,23 @@ export function StreaksConsistencyView({
                                   activeMetric.decimals,
                                   activeMetric.unit === '%' ? '%' : ''
                                 )}{' '}
-                                <span className="text-slate-500">
-                                  (Base{' '}
-                                  {formatMetricNumber(
-                                    row.seasonAvg,
-                                    activeMetric.decimals,
-                                    activeMetric.unit === '%' ? '%' : ''
-                                  )}
-                                  )
+                                <span className="text-slate-400">
+                                  · Act{' '}
+                                  {row.currentSeasonAvg !== null
+                                    ? formatMetricNumber(
+                                        row.currentSeasonAvg,
+                                        activeMetric.decimals,
+                                        activeMetric.unit === '%' ? '%' : ''
+                                      )
+                                    : '—'}{' '}
+                                  · Pas{' '}
+                                  {row.prevSeasonAvg !== null
+                                    ? formatMetricNumber(
+                                        row.prevSeasonAvg,
+                                        activeMetric.decimals,
+                                        activeMetric.unit === '%' ? '%' : ''
+                                      )
+                                    : '—'}
                                 </span>
                               </div>
                             </div>
@@ -2517,12 +2640,22 @@ export function StreaksConsistencyView({
                       </th>
                       <th className="py-3 px-3 font-medium text-right">
                         <ColumnHelpHeader
-                          label="Temporada"
-                          helpKey="baselineAvg"
+                          label="Temporada actual"
+                          customHelp={CURRENT_SEASON_COLUMN_HELP}
                           sortable
-                          activeSort={customSort === 'seasonAvg'}
+                          activeSort={customSort === 'currentSeasonAvg'}
                           sortAsc={customAsc}
-                          onSort={() => toggleCustomSort('seasonAvg')}
+                          onSort={() => toggleCustomSort('currentSeasonAvg')}
+                        />
+                      </th>
+                      <th className="py-3 px-3 font-medium text-right">
+                        <ColumnHelpHeader
+                          label="Temporada pasada"
+                          customHelp={PREV_SEASON_COLUMN_HELP}
+                          sortable
+                          activeSort={customSort === 'prevSeasonAvg'}
+                          sortAsc={customAsc}
+                          onSort={() => toggleCustomSort('prevSeasonAvg')}
                         />
                       </th>
                       <th className="py-3 pl-3 pr-4 font-medium text-right">
@@ -2536,7 +2669,7 @@ export function StreaksConsistencyView({
                   <tbody className="divide-y divide-[#1E293B] text-sm">
                     {customTopSpacerHeight > 0 && (
                       <tr style={{ height: `${customTopSpacerHeight}px` }}>
-                        <td colSpan={8} className="p-0 border-0" />
+                        <td colSpan={9} className="p-0 border-0" />
                       </tr>
                     )}
                     {customVisibleRows.map((row) => {
@@ -2652,11 +2785,26 @@ export function StreaksConsistencyView({
                               ({formatSigned(winDelta, activeMetric.decimals)})
                             </span>
                           </td>
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-200 whitespace-nowrap">
+                            {row.currentSeasonAvg !== null ? (
+                              formatMetricNumber(
+                                row.currentSeasonAvg,
+                                activeMetric.decimals,
+                                activeMetric.unit === '%' ? '%' : ''
+                              )
+                            ) : (
+                              <span className="text-slate-600">—</span>
+                            )}
+                          </td>
                           <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-400 whitespace-nowrap">
-                            {formatMetricNumber(
-                              row.seasonAvg,
-                              activeMetric.decimals,
-                              activeMetric.unit === '%' ? '%' : ''
+                            {row.prevSeasonAvg !== null ? (
+                              formatMetricNumber(
+                                row.prevSeasonAvg,
+                                activeMetric.decimals,
+                                activeMetric.unit === '%' ? '%' : ''
+                              )
+                            ) : (
+                              <span className="text-slate-600">—</span>
                             )}
                           </td>
                           <td className="py-2.5 pl-3 pr-4 text-right font-mono tabular-nums text-xs text-slate-300 whitespace-nowrap">
@@ -2694,7 +2842,7 @@ export function StreaksConsistencyView({
                     })}
                     {customBottomSpacerHeight > 0 && (
                       <tr style={{ height: `${customBottomSpacerHeight}px` }}>
-                        <td colSpan={8} className="p-0 border-0" />
+                        <td colSpan={9} className="p-0 border-0" />
                       </tr>
                     )}
                   </tbody>
@@ -2705,94 +2853,136 @@ export function StreaksConsistencyView({
           ) : filteredStreaks.length === 0 ? (
             <div className="py-14 px-6 text-center">
               <p className="text-sm font-medium text-slate-200">
-                No se encontraron rachas automáticas de {minStreakGames} o más
-                partidos seguidos.
+                No se encontraron rachas activas de {minStreakGames} o más
+                partidos seguidos con la combinación de filtros actual.
               </p>
               <p className="mt-1 text-xs text-slate-400">
-                Usa el modo &ldquo;Evaluador por ratios y sliders&rdquo; arriba o
-                elige &ldquo;Amplio (Ver más)&rdquo;.
+                Baja el corte de &ldquo;Partidos seguidos en racha&rdquo; en los filtros superiores o usa el &ldquo;Buscador a medida (38 ratios)&rdquo;.
               </p>
             </div>
           ) : (
             <>
-              {/* Mobile Auto-Streaks Cards (< md) */}
-              <div className="md:hidden divide-y divide-[#1E293B]">
-                {filteredStreaks.map((st) => {
-                  const wKey = `${st.entityType}:${st.entityId}`;
-                  const watched = watchlistIds.has(wKey);
-                  const rowHelpKey = resolveAutoStreakHelpKey(st);
-                  return (
-                    <div
-                      key={st.id}
-                      onClick={() => onInspectEntity(st.entityType, st.entityId)}
-                      className="p-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-2"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <button
-                            type="button"
-                            aria-label="Alternar seguimiento"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onToggleWatchlist(wKey);
-                            }}
-                            className="p-2 -m-1.5 rounded text-slate-400 hover:text-orange-400 shrink-0 touch-manipulation"
-                          >
-                            <Star
-                              className={`w-4 h-4 ${
-                                watched ? 'fill-orange-400 text-orange-400' : ''
-                              }`}
+              {/* Mobile Auto-Streaks Sort + Cards (< md) */}
+              <div className="md:hidden">
+                <div className="px-3.5 py-2 bg-[#0F172A]/70 border-b border-[#1E293B] flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                  <span className="text-[11px] text-slate-400 whitespace-nowrap shrink-0">
+                    Ordenar ({filteredStreaks.length}):
+                  </span>
+                  {(
+                    [
+                      { id: 'count', label: 'PJ seguidos' },
+                      { id: 'windowAvgDuringStreak', label: 'Media racha' },
+                      { id: 'windowDeltaVsSeason', label: `Desv. Últ. ${windowSize} PJ` },
+                      { id: 'currentSeasonAvg', label: 'Temp. actual' },
+                      { id: 'prevSeasonAvg', label: 'Temp. pasada' },
+                    ] as const
+                  ).map((opt) => {
+                    const active = autoSort === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => toggleAutoSort(opt.id)}
+                        className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                          active
+                            ? 'bg-[#1E293B] text-orange-400 font-semibold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        {opt.label}
+                        {active ? (autoAsc ? ' ↑' : ' ↓') : ''}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="divide-y divide-[#1E293B]">
+                  {filteredStreaks.map((st) => {
+                    const wKey = `${st.entityType}:${st.entityId}`;
+                    const watched = watchlistIds.has(wKey);
+                    const rowHelpKey = resolveAutoStreakHelpKey(st);
+                    const unitSuf = st.unit === '%' ? '%' : '';
+                    const curAvg =
+                      st.currentSeasonAvg !== undefined
+                        ? st.currentSeasonAvg
+                        : st.seasonBaseline;
+                    const prvAvg =
+                      st.prevSeasonAvg !== undefined ? st.prevSeasonAvg : null;
+                    return (
+                      <div
+                        key={st.id}
+                        onClick={() => onInspectEntity(st.entityType, st.entityId)}
+                        className="p-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-2"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <button
+                              type="button"
+                              aria-label="Alternar seguimiento"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onToggleWatchlist(wKey);
+                              }}
+                              className="p-2 -m-1.5 rounded text-slate-400 hover:text-orange-400 shrink-0 touch-manipulation"
+                            >
+                              <Star
+                                className={`w-4 h-4 ${
+                                  watched ? 'fill-orange-400 text-orange-400' : ''
+                                }`}
+                              />
+                            </button>
+                            <EntityBadge
+                              entityType={st.entityType}
+                              entityId={st.entityId}
+                              name={st.entityName}
+                              teamAbbr={st.teamAbbr}
+                              showTeamBadge={st.entityType === 'player'}
+                              size="sm"
                             />
-                          </button>
-                          <EntityBadge
-                            entityType={st.entityType}
-                            entityId={st.entityId}
-                            name={st.entityName}
-                            teamAbbr={st.teamAbbr}
-                            showTeamBadge={st.entityType === 'player'}
-                            size="sm"
+                            <div className="min-w-0">
+                              <div className="font-semibold text-sm text-slate-100 truncate">
+                                {st.entityName}
+                              </div>
+                              <div className="text-xs text-slate-400 truncate">
+                                {st.subtitle} · Últ. {formatShortDate(st.lastGameDate)}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="text-right font-mono tabular-nums shrink-0">
+                            <div className="text-sm font-bold text-orange-400">
+                              {st.count} PJ seguidos
+                            </div>
+                            <div className="text-[11px] text-slate-200">
+                              Media {st.windowAvgDuringStreak.toFixed(1)}
+                              {unitSuf}
+                            </div>
+                            <div className="text-[10.5px] text-slate-400">
+                              Act {curAvg !== null ? `${curAvg.toFixed(1)}${unitSuf}` : '—'} · Pas{' '}
+                              {prvAvg !== null ? `${prvAvg.toFixed(1)}${unitSuf}` : '—'}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="inline-flex items-center gap-1.5 text-xs">
+                          <span
+                            className={`font-medium ${
+                              st.isPositive ? 'text-emerald-400' : 'text-rose-400'
+                            }`}
+                          >
+                            {st.isPositive ? '▲ ' : '▼ '}
+                            {humanThresholdLabel(st, experienceMode)}
+                          </span>
+                          <MetricInfoTooltip
+                            helpKey={rowHelpKey}
+                            align="left"
+                            iconClassName="w-3 h-3"
                           />
-                          <div className="min-w-0">
-                            <div className="font-semibold text-sm text-slate-100 truncate">
-                              {st.entityName}
-                            </div>
-                            <div className="text-xs text-slate-400 truncate">
-                              {st.subtitle} · Últ. {formatShortDate(st.lastGameDate)}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="text-right font-mono tabular-nums shrink-0">
-                          <div className="text-sm font-bold text-orange-400">
-                            {st.count} PJ seguidos
-                          </div>
-                          <div className="text-[11px] text-slate-300">
-                            Media {st.windowAvgDuringStreak.toFixed(1)}{' '}
-                            <span className="text-slate-500">
-                              (Base {st.seasonBaseline.toFixed(1)})
-                            </span>
-                          </div>
                         </div>
                       </div>
-
-                      <div className="inline-flex items-center gap-1.5 text-xs">
-                        <span
-                          className={`font-medium ${
-                            st.isPositive ? 'text-emerald-400' : 'text-rose-400'
-                          }`}
-                        >
-                          {st.isPositive ? '▲ ' : '▼ '}
-                          {humanThresholdLabel(st, experienceMode)}
-                        </span>
-                        <MetricInfoTooltip
-                          helpKey={rowHelpKey}
-                          align="left"
-                          iconClassName="w-3 h-3"
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
 
               {/* Desktop Auto-Streaks Table (md+) */}
@@ -2813,24 +3003,50 @@ export function StreaksConsistencyView({
                       <ColumnHelpHeader
                         label="Partidos seguidos"
                         helpKey="consecutiveStreak"
+                        sortable
+                        activeSort={autoSort === 'count'}
+                        sortAsc={autoAsc}
+                        onSort={() => toggleAutoSort('count')}
                       />
                     </th>
                     <th className="py-3 px-3 font-medium text-right">
                       <ColumnHelpHeader
                         label="Media en racha"
                         helpKey="windowAvg"
+                        sortable
+                        activeSort={autoSort === 'windowAvgDuringStreak'}
+                        sortAsc={autoAsc}
+                        onSort={() => toggleAutoSort('windowAvgDuringStreak')}
                       />
                     </th>
                     <th className="py-3 px-3 font-medium text-right">
                       <ColumnHelpHeader
                         label={`Últ. ${windowSize} PJ vs Base`}
                         helpKey="windowAvg"
+                        sortable
+                        activeSort={autoSort === 'windowDeltaVsSeason'}
+                        sortAsc={autoAsc}
+                        onSort={() => toggleAutoSort('windowDeltaVsSeason')}
                       />
                     </th>
                     <th className="py-3 px-3 font-medium text-right">
                       <ColumnHelpHeader
-                        label="Temporada"
-                        helpKey="baselineAvg"
+                        label="Temporada actual"
+                        customHelp={CURRENT_SEASON_COLUMN_HELP}
+                        sortable
+                        activeSort={autoSort === 'currentSeasonAvg'}
+                        sortAsc={autoAsc}
+                        onSort={() => toggleAutoSort('currentSeasonAvg')}
+                      />
+                    </th>
+                    <th className="py-3 px-3 font-medium text-right">
+                      <ColumnHelpHeader
+                        label="Temporada pasada"
+                        customHelp={PREV_SEASON_COLUMN_HELP}
+                        sortable
+                        activeSort={autoSort === 'prevSeasonAvg'}
+                        sortAsc={autoAsc}
+                        onSort={() => toggleAutoSort('prevSeasonAvg')}
                       />
                     </th>
                     <th className="py-3 pl-3 pr-4 font-medium text-right">
@@ -2950,12 +3166,50 @@ export function StreaksConsistencyView({
                             <span className="text-slate-500">—</span>
                           )}
                         </td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-200 whitespace-nowrap">
+                          {(st.currentSeasonAvg !== undefined
+                            ? st.currentSeasonAvg
+                            : st.seasonBaseline) !== null ? (
+                            <>
+                              {(st.currentSeasonAvg !== undefined
+                                ? st.currentSeasonAvg!
+                                : st.seasonBaseline
+                              ).toFixed(1)}
+                              {unitSuf}
+                            </>
+                          ) : (
+                            <span className="text-slate-600">—</span>
+                          )}
+                        </td>
                         <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-400 whitespace-nowrap">
-                          {st.seasonBaseline.toFixed(1)}
-                          {unitSuf}
+                          {st.prevSeasonAvg !== undefined &&
+                          st.prevSeasonAvg !== null ? (
+                            <>
+                              {st.prevSeasonAvg.toFixed(1)}
+                              {unitSuf}
+                            </>
+                          ) : (
+                            <span className="text-slate-600">—</span>
+                          )}
                         </td>
                         <td className="py-2.5 pl-3 pr-4 text-right font-mono tabular-nums text-xs text-slate-400 whitespace-nowrap">
-                          {formatShortDate(st.lastGameDate)}
+                          <div className="inline-flex items-center justify-end gap-2">
+                            <span>{formatShortDate(st.lastGameDate)}</span>
+                            {st.entityType === 'player' && (
+                              <button
+                                type="button"
+                                title="Ver evolución últimos 10 partidos en el gráfico"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setHistoryPlayerId(st.entityId);
+                                  setShowInlineHistoryChart(true);
+                                }}
+                                className="px-2 py-1 rounded bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/50 text-[11px] font-sans font-medium text-orange-300 hover:text-orange-200 transition-colors"
+                              >
+                                10 PJ
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );

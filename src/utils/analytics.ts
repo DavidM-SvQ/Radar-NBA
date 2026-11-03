@@ -1359,18 +1359,51 @@ export function detectAnomalies(
   return signals.sort((a, b) => Math.abs(b.zScore) - Math.abs(a.zScore));
 }
 
+export interface SeasonReferenceSlices {
+  players2027?: PlayerSummary[];
+  players2026?: PlayerSummary[];
+  teams2027?: TeamSummary[];
+  teams2026?: TeamSummary[];
+}
+
 export function detectActiveStreaks(
   players: PlayerSummary[],
   teams: TeamSummary[],
   minStreakGames: number,
-  windowSize: WindowSize = 5
+  windowSize: WindowSize = 5,
+  seasonSlices?: SeasonReferenceSlices
 ): StreakEntry[] {
   const streaks: StreakEntry[] = [];
+
+  const p27Map = new Map<string, PlayerGameLog[]>();
+  if (seasonSlices?.players2027) {
+    for (const p of seasonSlices.players2027) p27Map.set(p.id, p.games);
+  }
+  const p26Map = new Map<string, PlayerGameLog[]>();
+  if (seasonSlices?.players2026) {
+    for (const p of seasonSlices.players2026) p26Map.set(p.id, p.games);
+  }
+
+  const t27Map = new Map<string, TeamGameLog[]>();
+  if (seasonSlices?.teams2027) {
+    for (const t of seasonSlices.teams2027) t27Map.set(t.abbreviation, t.games);
+  }
+  const t26Map = new Map<string, TeamGameLog[]>();
+  if (seasonSlices?.teams2026) {
+    for (const t of seasonSlices.teams2026) t26Map.set(t.abbreviation, t.games);
+  }
 
   for (const player of players) {
     const games = player.games;
     if (games.length < minStreakGames) continue;
     const winSlice = games.slice(0, Math.min(windowSize, games.length));
+
+    const games2027 =
+      p27Map.get(player.id) ??
+      games.filter((g) => g.seasonLabel === '2026-27');
+    const games2026 =
+      p26Map.get(player.id) ??
+      games.filter((g) => g.seasonLabel === '2025-26');
 
     const checks: Array<{
       id: string;
@@ -1382,6 +1415,7 @@ export function detectActiveStreaks(
       unit?: string;
       test: (g: PlayerGameLog) => boolean;
       extract: (g: PlayerGameLog) => number;
+      sliceAvg?: (arr: PlayerGameLog[]) => number | null;
     }> = [
       {
         id: 'pts30',
@@ -1462,6 +1496,10 @@ export function detectActiveStreaks(
         unit: '%',
         test: (g) => g.fg3a >= 5 && g.fg3Pct >= 42,
         extract: (g) => g.fg3Pct,
+        sliceAvg: (arr) => {
+          const att = arr.reduce((s, g) => s + g.fg3a, 0);
+          return att > 0 ? round1(calcWeighted3Pct(arr)) : null;
+        },
       },
       {
         id: 'cold_3pct',
@@ -1472,6 +1510,10 @@ export function detectActiveStreaks(
         unit: '%',
         test: (g) => g.fg3a >= 5 && g.fg3Pct < 25,
         extract: (g) => g.fg3Pct,
+        sliceAvg: (arr) => {
+          const att = arr.reduce((s, g) => s + g.fg3a, 0);
+          return att > 0 ? round1(calcWeighted3Pct(arr)) : null;
+        },
       },
       {
         id: 'min35',
@@ -1502,6 +1544,10 @@ export function detectActiveStreaks(
         unit: '%',
         test: (g) => g.fga >= 10 && g.tsPct >= 64,
         extract: (g) => g.tsPct,
+        sliceAvg: (arr) => {
+          const tsa = arr.reduce((s, g) => s + g.fga + 0.44 * g.fta, 0);
+          return tsa > 0 ? round1(calcWeightedTsPct(arr)) : null;
+        },
       },
       {
         id: 'gmsc22',
@@ -1522,6 +1568,10 @@ export function detectActiveStreaks(
         unit: '%',
         test: (g) => g.fga >= 12 && g.tsPct < 46,
         extract: (g) => g.tsPct,
+        sliceAvg: (arr) => {
+          const tsa = arr.reduce((s, g) => s + g.fga + 0.44 * g.fta, 0);
+          return tsa > 0 ? round1(calcWeightedTsPct(arr)) : null;
+        },
       },
     ];
 
@@ -1535,9 +1585,20 @@ export function detectActiveStreaks(
       }
       if (count >= minStreakGames) {
         if (c.groupSingle) capturedGroups.add(c.groupSingle);
+        const evalSlice =
+          c.sliceAvg ||
+          ((arr: PlayerGameLog[]) =>
+            arr.length > 0 ? round1(mean(arr.map(c.extract))) : null);
+
         const streakSlice = games.slice(0, count);
-        const seasonBase = round1(mean(games.map(c.extract)));
-        const winRef = round1(mean(winSlice.map(c.extract)));
+        const streakVal = evalSlice(streakSlice) ?? round1(mean(streakSlice.map(c.extract)));
+        const winRef = evalSlice(winSlice) ?? round1(mean(winSlice.map(c.extract)));
+        const currentSeasonAvg = evalSlice(games2027);
+        const prevSeasonAvg = evalSlice(games2026);
+        const fallbackBase =
+          evalSlice(games) ?? round1(mean(games.map(c.extract)));
+        const seasonBase = currentSeasonAvg ?? prevSeasonAvg ?? fallbackBase;
+
         streaks.push({
           id: `streak-p-${player.id}-${c.id}`,
           entityType: 'player',
@@ -1549,8 +1610,12 @@ export function detectActiveStreaks(
           metricLabel: c.metricLabel,
           thresholdLabel: c.thresholdLabel,
           count,
-          windowAvgDuringStreak: round1(mean(streakSlice.map(c.extract))),
+          windowAvgDuringStreak: streakVal,
           seasonBaseline: seasonBase,
+          currentSeasonAvg,
+          currentSeasonGames: games2027.length,
+          prevSeasonAvg,
+          prevSeasonGames: games2026.length,
           isPositive: c.isPositive,
           lastGameDate: games[0]?.date || '',
           breakoutAxis: c.breakoutAxis,
@@ -1575,8 +1640,25 @@ export function detectActiveStreaks(
     if (resCount >= minStreakGames) {
       const slice = games.slice(0, resCount);
       const winSlice = games.slice(0, Math.min(windowSize, games.length));
-      const seasonBase = round1(mean(games.map((g) => g.netRtg)));
+      const tGames2027 =
+        t27Map.get(team.abbreviation) ??
+        games.filter((g) => g.seasonLabel === '2026-27');
+      const tGames2026 =
+        t26Map.get(team.abbreviation) ??
+        games.filter((g) => g.seasonLabel === '2025-26');
+
+      const currentSeasonAvg =
+        tGames2027.length > 0
+          ? round1(mean(tGames2027.map((g) => g.netRtg)))
+          : null;
+      const prevSeasonAvg =
+        tGames2026.length > 0
+          ? round1(mean(tGames2026.map((g) => g.netRtg)))
+          : null;
+      const fallbackBase = round1(mean(games.map((g) => g.netRtg)));
+      const seasonBase = currentSeasonAvg ?? prevSeasonAvg ?? fallbackBase;
       const winRef = round1(mean(winSlice.map((g) => g.netRtg)));
+
       streaks.push({
         id: `streak-t-${team.id}-wl`,
         entityType: 'team',
@@ -1591,6 +1673,10 @@ export function detectActiveStreaks(
         count: resCount,
         windowAvgDuringStreak: round1(mean(slice.map((g) => g.netRtg))),
         seasonBaseline: seasonBase,
+        currentSeasonAvg,
+        currentSeasonGames: tGames2027.length,
+        prevSeasonAvg,
+        prevSeasonGames: tGames2026.length,
         isPositive: firstRes === 'W',
         lastGameDate: games[0]?.date || '',
         windowAvgRef: winRef,

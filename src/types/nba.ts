@@ -387,6 +387,10 @@ export interface StreakEntry {
   count: number;
   windowAvgDuringStreak: number;
   seasonBaseline: number;
+  currentSeasonAvg?: number | null;
+  currentSeasonGames?: number;
+  prevSeasonAvg?: number | null;
+  prevSeasonGames?: number;
   isPositive: boolean;
   lastGameDate: string;
   breakoutAxis?: TrendBreakoutAxis;

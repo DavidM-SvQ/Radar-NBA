@@ -570,6 +570,34 @@ const clientBootstrapStore: Partial<Record<SeasonMode, BootstrapPayload>> = {};
 const clientInflightRequests: Partial<
   Record<'2027' | '2026', Promise<BootstrapPayload>>
 > = {};
+const sliceSubscribers = new Set<() => void>();
+
+function notifySliceSubscribers(): void {
+  sliceSubscribers.forEach((cb) => {
+    try {
+      cb();
+    } catch {
+      // Ignore subscriber errors
+    }
+  });
+}
+
+export function getCachedSeasonSlicesClient(): {
+  s2027: BootstrapPayload | null;
+  s2026: BootstrapPayload | null;
+} {
+  return {
+    s2027: clientBootstrapStore['2027'] || null,
+    s2026: clientBootstrapStore['2026'] || null,
+  };
+}
+
+export function subscribeBootstrapSlicesClient(listener: () => void): () => void {
+  sliceSubscribers.add(listener);
+  return () => {
+    sliceSubscribers.delete(listener);
+  };
+}
 
 export function peekCachedBootstrapClient(
   mode: SeasonMode
@@ -596,6 +624,7 @@ export function clearBootstrapClientCache(): void {
   delete clientBootstrapStore['2027'];
   delete clientBootstrapStore['2026'];
   delete clientBootstrapStore.continuous;
+  notifySliceSubscribers();
 }
 
 async function fetchJsonWithSingleRetry(url: string): Promise<any> {
@@ -685,6 +714,7 @@ async function loadSingleSeasonSliceClient(
         clientBootstrapStore['2026']!
       );
     }
+    notifySliceSubscribers();
     return unpacked;
   })();
 
