@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   ArrowLeftRight,
+  Award,
   BookOpen,
   CalendarDays,
   Check,
@@ -23,21 +24,26 @@ import {
 } from 'lucide-react';
 import type {
   ActiveSection,
+  AwardCategoryId,
+  AwardSeasonScope,
   BootstrapPayload,
   ExperienceMode,
   MilestonesPayload,
   PlayerSummary,
   ScoreboardGame,
   SearchPlayerResult,
+  SeasonAwardsPayload,
   SeasonMode,
   TeamSummary,
   ThresholdSettings,
+  TrendBreakoutAxis,
   WindowSize,
 } from './types/nba';
 import {
   computeConsistencyTable,
   detectActiveStreaks,
   detectAnomalies,
+  detectTrendBreakouts,
 } from './utils/analytics';
 import {
   FILTER_PRESETS,
@@ -54,6 +60,8 @@ import { RangeComparatorView } from './components/RangeComparatorView';
 import { TeamsExplorerView } from './components/TeamsExplorerView';
 import { PlayersExplorerView } from './components/PlayersExplorerView';
 import { SeasonMilestonesView } from './components/SeasonMilestonesView';
+import { SeasonAwardsView } from './components/SeasonAwardsView';
+import { LiveGamedayBanner } from './components/LiveGamedayBanner';
 import { GlossaryView } from './components/GlossaryView';
 import { FantasyEspnAssistantView } from './components/FantasyEspnAssistantView';
 import { AdminSecurityConfigPanel } from './components/AdminSecurityConfigPanel';
@@ -198,6 +206,15 @@ export default function App() {
   const [milestonesData, setMilestonesData] = useState<MilestonesPayload | null>(null);
   const [milestonesLoading, setMilestonesLoading] = useState(false);
   const [milestonesError, setMilestonesError] = useState<string | null>(null);
+  const [awardsByScope, setAwardsByScope] = useState<
+    Record<AwardSeasonScope, SeasonAwardsPayload | null>
+  >({
+    '2027': null,
+    '2026': null,
+  });
+  const [awardsSeasonScope, setAwardsSeasonScope] = useState<AwardSeasonScope>('2027');
+  const [awardsLoading, setAwardsLoading] = useState(false);
+  const [awardsError, setAwardsError] = useState<string | null>(null);
   const [gamedayRefreshCounter, setGamedayRefreshCounter] = useState(0);
   const [copiedLink, setCopiedLink] = useState(false);
   const [isPrivateUnlocked, setIsPrivateUnlocked] = useState<boolean>(() =>
@@ -246,6 +263,13 @@ export default function App() {
   const [fantasyTab, setFantasyTab] = useState<FantasyUrlTab>(
     initialRoute.fantasyTab
   );
+
+  const [awardCategory, setAwardCategory] = useState<AwardCategoryId>(
+    initialRoute.awardCategory
+  );
+  const [requestedBreakoutAxis, setRequestedBreakoutAxis] = useState<
+    'all' | TrendBreakoutAxis
+  >('all');
 
   useEffect(() => {
     try {
@@ -335,6 +359,7 @@ export default function App() {
       playerBId: next.duelPlayerBId || undefined,
     });
     setFantasyTab(next.fantasyTab);
+    setAwardCategory(next.awardCategory);
   }, []);
 
   const commitRoute = useCallback(
@@ -406,6 +431,18 @@ export default function App() {
       }
     },
     [commitRoute]
+  );
+
+  const handleChangeWindowSize = useCallback((w: WindowSize) => {
+    setSettings((prev) => ({ ...prev, windowSize: w }));
+  }, []);
+
+  const handleOpenBreakoutAxis = useCallback(
+    (axis: 'all' | TrendBreakoutAxis) => {
+      setRequestedBreakoutAxis(axis);
+      handleNavigateSection('anomalies');
+    },
+    [handleNavigateSection]
   );
 
   const importedDirectoryPlayersRef = useRef<Map<string, PlayerSummary>>(
@@ -513,6 +550,45 @@ export default function App() {
     }
   }, []);
 
+  const fetchAwards = useCallback(
+    async (scope: AwardSeasonScope, isManualRefresh = false) => {
+      if (isManualRefresh) {
+        setRefreshing(true);
+      } else {
+        setAwardsLoading(true);
+      }
+      setAwardsError(null);
+
+      try {
+        const params = new URLSearchParams({ season: scope });
+        if (isManualRefresh) {
+          params.set('refresh', '1');
+        }
+        const res = await fetch(`/api/nba/awards?${params.toString()}`);
+        if (!res.ok) {
+          throw new Error('No se pudieron obtener las clasificaciones de Premios NBA.');
+        }
+        const payload = (await res.json()) as SeasonAwardsPayload;
+        setAwardsByScope((prev) => ({
+          ...prev,
+          [scope]: payload,
+        }));
+      } catch (err) {
+        setAwardsError(
+          err instanceof Error
+            ? err.message
+            : 'Error al conectar con el motor de premios NBA.'
+        );
+      } finally {
+        setAwardsLoading(false);
+        if (isManualRefresh) {
+          setRefreshing(false);
+        }
+      }
+    },
+    []
+  );
+
   useEffect(() => {
     void fetchBootstrap(seasonMode, false, false);
   }, [seasonMode, fetchBootstrap]);
@@ -521,11 +597,29 @@ export default function App() {
     void fetchMilestones(false);
   }, [fetchMilestones]);
 
+  useEffect(() => {
+    if (activeSection !== 'awards') return;
+    if (awardsByScope[awardsSeasonScope]) return;
+    void fetchAwards(awardsSeasonScope, false);
+  }, [activeSection, awardsSeasonScope, awardsByScope, fetchAwards]);
+
   const handleManualRefresh = useCallback(() => {
     void fetchBootstrap(seasonMode, true, allPlayersLoaded);
     void fetchMilestones(true);
+    if (activeSection === 'awards' || awardsByScope[awardsSeasonScope]) {
+      void fetchAwards(awardsSeasonScope, true);
+    }
     setGamedayRefreshCounter((c) => c + 1);
-  }, [fetchBootstrap, fetchMilestones, seasonMode, allPlayersLoaded]);
+  }, [
+    fetchBootstrap,
+    fetchMilestones,
+    fetchAwards,
+    seasonMode,
+    allPlayersLoaded,
+    activeSection,
+    awardsByScope,
+    awardsSeasonScope,
+  ]);
 
   const handleLoadAllPlayers = useCallback(() => {
     void fetchBootstrap(seasonMode, false, true);
@@ -760,6 +854,20 @@ export default function App() {
     [commitRoute]
   );
 
+  const handleAwardCategoryChange = useCallback(
+    (category: AwardCategoryId) => {
+      commitRoute(
+        (prev) => ({
+          ...prev,
+          awardCategory: category,
+        }),
+        'push',
+        null
+      );
+    },
+    [commitRoute]
+  );
+
   const handleCopyShareUrl = useCallback(async () => {
     if (typeof window === 'undefined') return;
     const url = window.location.href;
@@ -837,19 +945,31 @@ export default function App() {
     [importExternalPlayer]
   );
 
-  const anomalies = useMemo(
-    () => detectAnomalies(players, teams, settings),
-    [players, teams, settings]
+  const streaks = useMemo(
+    () =>
+      detectActiveStreaks(
+        players,
+        teams,
+        settings.minStreakGames,
+        settings.windowSize
+      ),
+    [players, teams, settings.minStreakGames, settings.windowSize]
   );
 
-  const streaks = useMemo(
-    () => detectActiveStreaks(players, teams, settings.minStreakGames),
-    [players, teams, settings.minStreakGames]
+  const anomalies = useMemo(
+    () => detectAnomalies(players, teams, settings, streaks),
+    [players, teams, settings, streaks]
+  );
+
+  const trendBreakouts = useMemo(
+    () => detectTrendBreakouts(players, settings, streaks),
+    [players, settings, streaks]
   );
 
   const consistencyRows = useMemo(
-    () => computeConsistencyTable(players, settings.minMinutes),
-    [players, settings.minMinutes]
+    () =>
+      computeConsistencyTable(players, settings.minMinutes, settings.windowSize),
+    [players, settings.minMinutes, settings.windowSize]
   );
 
   const benchmarks = useMemo(
@@ -896,6 +1016,12 @@ export default function App() {
       id: 'comparator',
       label: 'Comparador de Tramos',
       icon: ArrowLeftRight,
+    },
+    {
+      id: 'awards',
+      label: 'Premios de Temporada',
+      count: 8,
+      icon: Award,
     },
     {
       id: 'milestones',
@@ -1279,7 +1405,7 @@ export default function App() {
 
             <button
               type="button"
-              disabled={loading || refreshing || milestonesLoading}
+              disabled={loading || refreshing || milestonesLoading || awardsLoading}
               onClick={handleManualRefresh}
               aria-label="Actualizar datos"
               className="inline-flex items-center justify-center gap-2 min-w-[40px] min-h-[36px] sm:min-w-0 px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold bg-orange-500 hover:bg-orange-400 active:scale-[0.98] disabled:opacity-60 text-slate-950 rounded-lg transition-all whitespace-nowrap shrink-0"
@@ -1296,9 +1422,16 @@ export default function App() {
 
         {/* Workspace Body */}
         <main className="flex-1 px-3 sm:px-6 pt-3.5 sm:pt-5 pb-24 lg:pb-6 max-w-[1440px] w-full mx-auto space-y-4 sm:space-y-5">
+          {/* Top Live Gameday Banner (shown only when NBA games are live; zero background polling) */}
+          <LiveGamedayBanner
+            scoreboard={scoreboard}
+            activeSection={activeSection}
+            onOpenGameday={() => handleNavigateSection('gameday')}
+          />
 
           {/* Homogeneous Global Parameter & Threshold Strip (shown on rolling-window analytical views) */}
           {activeSection !== 'milestones' &&
+            activeSection !== 'awards' &&
             activeSection !== 'glossary' &&
             activeSection !== 'fantasy_espn' &&
             activeSection !== 'duel' &&
@@ -1630,7 +1763,10 @@ export default function App() {
           )}
 
           {/* Error Recovery State */}
-          {errorMsg && activeSection !== 'milestones' && activeSection !== 'glossary' && (
+          {errorMsg &&
+            activeSection !== 'milestones' &&
+            activeSection !== 'awards' &&
+            activeSection !== 'glossary' && (
             <div className="bg-[#131C2E] border border-rose-500/40 rounded-lg p-5 flex flex-wrap items-center justify-between gap-4">
               <div>
                 <p className="text-sm font-semibold text-rose-300">
@@ -1780,6 +1916,10 @@ export default function App() {
                   <FantasyEspnAssistantView
                     players={players}
                     teams={teams}
+                    trendBreakouts={trendBreakouts}
+                    onOpenRadarMinutesUsage={() =>
+                      handleOpenBreakoutAxis('minutes_usage')
+                    }
                     onInspectEntity={handleInspectEntity}
                     initialTab={fantasyTab}
                     onTabChange={handleFantasyTabChange}
@@ -1806,6 +1946,23 @@ export default function App() {
               onChangeDateParam={handleGamedayDateChange}
               selectedReportEventIdProp={gamedayReportId}
               onChangeReportEventId={handleGamedayReportChange}
+            />
+          ) : activeSection === 'awards' ? (
+            <SeasonAwardsView
+              data={awardsByScope[awardsSeasonScope]}
+              loading={awardsLoading && !awardsByScope[awardsSeasonScope]}
+              errorMsg={awardsError}
+              seasonScope={awardsSeasonScope}
+              onChangeSeasonScope={setAwardsSeasonScope}
+              activeCategory={awardCategory}
+              onChangeCategory={handleAwardCategoryChange}
+              experienceMode={experienceMode}
+              watchlistIds={watchlistIds}
+              onlyWatchlist={onlyWatchlist}
+              onToggleOnlyWatchlist={() => setOnlyWatchlist((prev) => !prev)}
+              onToggleWatchlist={handleToggleWatchlist}
+              onInspectEntity={handleInspectEntity}
+              onRetry={() => void fetchAwards(awardsSeasonScope, false)}
             />
           ) : activeSection === 'milestones' ? (
             <SeasonMilestonesView
@@ -1849,9 +2006,12 @@ export default function App() {
                   players={players}
                   teams={teams}
                   anomalies={anomalies}
+                  trendBreakouts={trendBreakouts}
                   streaks={streaks}
                   benchmarks={benchmarks}
                   windowSize={settings.windowSize}
+                  onChangeWindowSize={handleChangeWindowSize}
+                  onOpenBreakoutAxis={handleOpenBreakoutAxis}
                   experienceMode={experienceMode}
                   watchlistIds={watchlistIds}
                   onlyWatchlist={onlyWatchlist}
@@ -1864,6 +2024,7 @@ export default function App() {
               {activeSection === 'anomalies' && (
                 <AnomalyRadarView
                   signals={anomalies}
+                  trendBreakouts={trendBreakouts}
                   benchmarks={benchmarks}
                   experienceMode={experienceMode}
                   watchlistIds={watchlistIds}
@@ -1875,6 +2036,10 @@ export default function App() {
                     setOnlyWatchlist(false);
                   }}
                   windowSize={settings.windowSize}
+                  onChangeWindowSize={handleChangeWindowSize}
+                  initialBreakoutAxis={requestedBreakoutAxis}
+                  onConsumeInitialAxis={() => setRequestedBreakoutAxis('all')}
+                  onNavigateStreaks={() => handleNavigateSection('streaks')}
                 />
               )}
 
@@ -1883,6 +2048,9 @@ export default function App() {
                   players={players}
                   streaks={streaks}
                   consistencyRows={consistencyRows}
+                  trendBreakouts={trendBreakouts}
+                  windowSize={settings.windowSize}
+                  onChangeWindowSize={handleChangeWindowSize}
                   experienceMode={experienceMode}
                   watchlistIds={watchlistIds}
                   onlyWatchlist={onlyWatchlist}
@@ -2030,6 +2198,7 @@ export default function App() {
               activeSection === 'streaks' ||
               activeSection === 'duel' ||
               activeSection === 'comparator' ||
+              activeSection === 'awards' ||
               activeSection === 'milestones' ||
               activeSection === 'teams' ||
               activeSection === 'fantasy_espn' ||

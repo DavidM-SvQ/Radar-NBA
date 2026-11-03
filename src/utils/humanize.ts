@@ -28,6 +28,7 @@ export interface LeagueBenchmarks {
     ast: MetricBenchmark;
     pra: MetricBenchmark;
     fg3m: MetricBenchmark;
+    fg3Pct: MetricBenchmark;
     stocks: MetricBenchmark;
     tsPct: MetricBenchmark;
     usgPct: MetricBenchmark;
@@ -185,6 +186,13 @@ export function computeLeagueBenchmarks(
   const pAst = pPool.map((p) => mean(p.games.map((g) => g.assists)));
   const pPra = pPool.map((p) => mean(p.games.map((g) => g.pra)));
   const pFg3m = pPool.map((p) => mean(p.games.map((g) => g.fg3m)));
+  const pFg3Pct = pPool
+    .map((p) => {
+      const m = p.games.reduce((s, g) => s + g.fg3m, 0);
+      const a = p.games.reduce((s, g) => s + g.fg3a, 0);
+      return a >= 10 ? (m / a) * 100 : null;
+    })
+    .filter((v): v is number => v !== null);
   const pStocks = pPool.map((p) => mean(p.games.map((g) => g.stocks)));
   const pMin = pPool.map((p) => mean(p.games.map((g) => g.minutes)));
   const pGmSc = pPool.map((p) => mean(p.games.map((g) => g.gameScore)));
@@ -252,6 +260,7 @@ export function computeLeagueBenchmarks(
       ast: buildStat(pAst, 3.2, 2.1),
       pra: buildStat(pPra, 21.9, 9.2),
       fg3m: buildStat(pFg3m, 1.8, 1.1),
+      fg3Pct: buildStat(pFg3Pct, 36.5, 4.8, { suffix: '%' }),
       stocks: buildStat(pStocks, 1.4, 0.6),
       tsPct: buildStat(pTs, 58.0, 4.8, { suffix: '%' }),
       usgPct: buildStat(pUsg, 19.6, 5.4, { suffix: '%' }),
@@ -440,6 +449,12 @@ export function plainMetricName(metricKey: string, fallback: string): string {
       return 'Acierto real de tiro';
     case 'efgPct':
       return 'Puntería en tiros de campo';
+    case 'fg3m':
+      return 'Triples anotados por partido';
+    case 'fg3Pct':
+      return 'Acierto desde el triple';
+    case 'fg3a':
+      return 'Triples intentados por partido';
     case 'netRtg':
       return 'Dominio real del equipo';
     case 'offRtg':
@@ -607,6 +622,13 @@ export function resolveSignalBenchmark(
         showValueLabel: `${val.toFixed(1)} 3PM`,
         shortUnit: '3PM',
       };
+    case 'fg3Pct':
+      return {
+        value: val,
+        benchmark: { ...benchmarks.player.fg3Pct, suffix: '% 3P' },
+        showValueLabel: `${val.toFixed(1)}% 3P`,
+        shortUnit: '3P%',
+      };
     case 'points':
     case 'pts':
     default:
@@ -657,12 +679,36 @@ export function resolveStreakBenchmark(
       shortUnit: 'AST',
     };
   }
+  if (st.id.includes('-3pct') || st.metricLabel === 'Acierto Triple') {
+    return {
+      value: val,
+      benchmark: { ...benchmarks.player.fg3Pct, suffix: '% 3P' },
+      showValueLabel: `${val.toFixed(1)}% 3P`,
+      shortUnit: '3P%',
+    };
+  }
   if (st.id.includes('-3pm') || st.metricLabel === 'Triples') {
     return {
       value: val,
       benchmark: { ...benchmarks.player.fg3m, suffix: ' 3PM' },
       showValueLabel: `${val.toFixed(1)} 3PM`,
       shortUnit: '3PM',
+    };
+  }
+  if (st.id.includes('-min') || st.metricLabel === 'Minutos') {
+    return {
+      value: val,
+      benchmark: { ...benchmarks.player.min, suffix: ' MIN' },
+      showValueLabel: `${val.toFixed(1)} MIN`,
+      shortUnit: 'MIN',
+    };
+  }
+  if (st.id.includes('-usg') || st.metricLabel === 'Uso Ofensivo') {
+    return {
+      value: val,
+      benchmark: { ...benchmarks.player.usgPct, suffix: '% USG' },
+      showValueLabel: `${val.toFixed(1)}% USG`,
+      shortUnit: 'USG%',
     };
   }
   if (st.id.includes('-gmsc') || st.metricLabel === 'Game Score') {
@@ -673,12 +719,24 @@ export function resolveStreakBenchmark(
       shortUnit: 'GmSc',
     };
   }
-  if (st.id.includes('-cold_ts') || st.metricLabel === 'Tiro Verdadero') {
+  if (
+    st.id.includes('-cold_ts') ||
+    st.id.includes('-hot_ts') ||
+    st.metricLabel === 'Tiro Verdadero'
+  ) {
     return {
       value: val,
       benchmark: { ...benchmarks.player.tsPct, suffix: '% TS' },
       showValueLabel: `${val.toFixed(1)}% TS`,
       shortUnit: 'TS%',
+    };
+  }
+  if (st.id.includes('-efg') || st.metricLabel === 'Tiro Efectivo') {
+    return {
+      value: val,
+      benchmark: { ...benchmarks.player.efgPct, suffix: '% eFG' },
+      showValueLabel: `${val.toFixed(1)}% eFG`,
+      shortUnit: 'eFG%',
     };
   }
 
@@ -699,6 +757,43 @@ export function plainAnomalyExplanation(sig: AnomalySignal): {
   const isGood = isInverse ? !isUp : isUp;
 
   if (sig.entityType === 'player') {
+    if (sig.category === 'exterior_shift') {
+      if (sig.metricKey === 'fg3Pct') {
+        return isUp
+          ? {
+              headline: 'Muñeca ardiendo desde la línea de tres puntos',
+              detail: `Acierta el ${sig.windowAvg.toFixed(
+                1
+              )}% de sus triples en los últimos ${sig.sampleGames} partidos frente al ${sig.baselineAvg.toFixed(
+                1
+              )}% de su temporada.`,
+            }
+          : {
+              headline: 'Sequía desde el perímetro en los últimos partidos',
+              detail: `Baja al ${sig.windowAvg.toFixed(
+                1
+              )}% de acierto en triples recientemente (su media habitual es ${sig.baselineAvg.toFixed(
+                1
+              )}%).`,
+            };
+      }
+      return isUp
+        ? {
+            headline: 'Explosión de triples anotados por partido',
+            detail: `Encesta ${sig.windowAvg.toFixed(
+              1
+            )} triples por noche en sus últimos ${sig.sampleGames} encuentros frente a ${sig.baselineAvg.toFixed(
+              1
+            )} habituales.`,
+          }
+        : {
+            headline: 'Frenazo en su producción desde el triple',
+            detail: `Pasa de convertir ${sig.baselineAvg.toFixed(
+              1
+            )} triples por noche a solo ${sig.windowAvg.toFixed(1)} en el tramo reciente.`,
+          };
+    }
+
     if (sig.category === 'shooting_variance') {
       return isUp
         ? {
@@ -1139,6 +1234,51 @@ export function computePlainComparisonInsights(
 }
 
 export const COLUMN_HELP: Record<string, ColumnHelpEntry> = {
+  trendBreakouts: {
+    title: 'Alertas de Rupturas de Tendencia',
+    simpleDesc:
+      'Detecta automáticamente jugadores que acaban de romper su guion habitual de la temporada en tres ejes clave: tiro exterior, minutos/uso y eficiencia.',
+    calculation:
+      'Compara el tramo reciente configurable (Últimos 3, 5 o 10 partidos) frente a su línea base de temporada filtrando muestras sin volumen real.',
+    benchmarkText:
+      'Distingue cambios estructurales (más minutos/tiros) de rachas de puntería sujetas a regresión.',
+  },
+  breakoutExterior: {
+    title: 'Ruptura en Tiro Exterior (3P% · 3PM · 3PA)',
+    simpleDesc:
+      'Identifica explosiones o sequías desde el triple combinando triples anotados (3PM), volumen lanzado (3PA) y precisión agregada (3P%).',
+    calculation:
+      'Porcentaje ponderado real (∑3PM / ∑3PA) y promedio 3PM/PJ en la ventana reciente frente al acumulado de temporada (con filtro mínimo de volumen exterior).',
+    benchmarkText:
+      'Si sube 3PA + 3P% hay luz verde táctica; si sube solo 3P% sin más tiros suele haber regresión.',
+  },
+  breakoutMinutesUsage: {
+    title: 'Ruptura en Minutos y Uso (MIN · USG% · TCI)',
+    simpleDesc:
+      'Señala qué jugadores están ganando o perdiendo protagonismo real en la rotación del entrenador y en el balón ofensivo.',
+    calculation:
+      'Cruza la variación de Minutos (MIN/PJ), Ratio de Uso Ofensivo (USG%) y Tiros de Campo Intentados (TCI/PJ) respecto a su media de temporada.',
+    benchmarkText:
+      'El indicador más fiable para anticipar subidas o bajadas duraderas de producción.',
+  },
+  breakoutEfficiency: {
+    title: 'Ruptura en Eficiencia Anotadora (TS% · eFG% · GmSc)',
+    simpleDesc:
+      'Mide picos de estado de gracia o baches profundos convirtiendo posesiones de tiro en puntos.',
+    calculation:
+      'True Shooting ponderado real ∑PTS / (2 × (∑FGA + 0.44 × ∑FTA)) y eFG% de la ventana reciente frente a la temporada.',
+    benchmarkText:
+      'Baches fuertes de TS% manteniendo minutos y USG% intactos señalan candidatos claros a rebote positivo.',
+  },
+  multiWindowCompare: {
+    title: 'Trayectoria Multi-Ventana (Temp → 10PJ → 5PJ → 3PJ)',
+    simpleDesc:
+      'Muestra de un vistazo cómo evoluciona el dato desde su media de temporada hasta sus últimos 10, 5 y 3 partidos.',
+    calculation:
+      'Calcula la métrica exacta sobre toda la temporada cargada y sobre los subconjuntos de los últimos 10, 5 y 3 partidos disputados.',
+    benchmarkText:
+      'Si 10PJ → 5PJ → 3PJ acelera en la misma dirección, la ruptura está ganando fuerza.',
+  },
   baselineAvg: {
     title: 'Media habitual de temporada',
     simpleDesc:

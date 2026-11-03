@@ -200,25 +200,106 @@ function buildWeeklyWindows(scheduleGames, referenceTodayIso) {
   return buildWeeklyWindowsFromSchedule(effectiveGames, referenceTodayIso);
 }
 function mapInjuryStatusToSpanish(rawStatus, rawDetail) {
-  const stLow = (rawStatus || "").toLowerCase();
-  const detLow = (rawDetail || "").toLowerCase();
+  const stLow = (rawStatus || "").toLowerCase().trim();
+  const detLow = (rawDetail || "").toLowerCase().trim();
   const translated = translateMedicalDetailEs(rawDetail);
+  const combinedText = `${detLow} ${(translated || "").toLowerCase()}`;
+
+  const hasRestKeywords = /\b(?:rest|load management|injury management|recovery|descanso|dosificaci|gesti[oó]n de cargas)\b/i.test(
+    combinedText
+  );
+  const hasLongTermKeywords =
+    /\b(?:surgery|fracture|torn|acl|mcl|achilles|meniscus|indefinitely|months|season-ending|out for season|re-evaluated|extended|cirug|rotura|cruzado|fractur|meses|indefinid|temporada|prolongad|aquiles|menisco|8-10|6-8|4-6|3-4|2-4)\b/i.test(
+      combinedText
+    ) ||
+    ((combinedText.includes("semanas") || combinedText.includes("weeks")) &&
+      !combinedText.includes("esta semana") &&
+      !combinedText.includes("this week") &&
+      !combinedText.includes("proxima semana") &&
+      !combinedText.includes("next week"));
+
   if (stLow.includes("suspension") || detLow.includes("suspension")) {
-    return { severity: "suspended", statusLabelEs: "Sancionado", detailEs: translated || "Sanci\xF3n disciplinaria oficial NBA" };
+    return {
+      severity: "suspended",
+      absenceTier: "long_term",
+      statusLabelEs: "Sancionado",
+      detailEs: translated || "Sanci\xF3n disciplinaria oficial NBA",
+    };
   }
-  if (stLow.includes("out") || stLow.includes("injured reserve") || stLow === "ir") {
-    return { severity: "out", statusLabelEs: "Baja confirmada", detailEs: translated || "Baja m\xE9dica confirmada en parte oficial" };
+  if (
+    stLow.includes("injured reserve") ||
+    stLow === "ir" ||
+    /\b(?:out for season|season-ending)\b/i.test(detLow)
+  ) {
+    return {
+      severity: "ir",
+      absenceTier: "long_term",
+      statusLabelEs: "Lista IR (Larga duraci\xF3n)",
+      detailEs: translated || "En reserva de lesionados de larga duraci\xF3n",
+    };
+  }
+  if (stLow.includes("out")) {
+    if (hasLongTermKeywords) {
+      return {
+        severity: "out",
+        absenceTier: "long_term",
+        statusLabelEs: "Baja larga duraci\xF3n",
+        detailEs: translated || "Baja m\xE9dica prolongada confirmada",
+      };
+    }
+    if (hasRestKeywords) {
+      return {
+        severity: "out",
+        absenceTier: "b2b_rest",
+        statusLabelEs: "Baja por descanso",
+        detailEs: translated || "Descanso puntual / gesti\xF3n de cargas",
+      };
+    }
+    return {
+      severity: "out",
+      absenceTier: "punctual",
+      statusLabelEs: "Baja puntual (Corto plazo)",
+      detailEs: translated || "Baja puntual confirmada en parte oficial",
+    };
   }
   if (stLow.includes("doubtful")) {
-    return { severity: "doubtful", statusLabelEs: "Muy dudoso", detailEs: translated || "Participaci\xF3n muy improbable por molestias" };
+    return {
+      severity: "doubtful",
+      absenceTier: "punctual",
+      statusLabelEs: "Muy dudoso (Puntual)",
+      detailEs: translated || "Participaci\xF3n muy improbable en el pr\xF3ximo partido",
+    };
+  }
+  if (stLow.includes("day-to-day") || stLow.includes("dtd")) {
+    return {
+      severity: "dtd",
+      absenceTier: hasRestKeywords ? "b2b_rest" : "punctual",
+      statusLabelEs: hasRestKeywords ? "DTD (Gesti\xF3n cargas)" : "D\xEDa a d\xEDa (DTD)",
+      detailEs: translated || "Seguimiento diario previo al partido",
+    };
   }
   if (stLow.includes("probable")) {
-    return { severity: "probable", statusLabelEs: "Probable", detailEs: translated || "Molestias leves, previsto disponible" };
+    return {
+      severity: "probable",
+      absenceTier: hasRestKeywords ? "b2b_rest" : "punctual",
+      statusLabelEs: "Probable",
+      detailEs: translated || "Molestias leves, previsto disponible",
+    };
   }
-  if (stLow.includes("questionable") || stLow.includes("day-to-day") || stLow.includes("dtd")) {
-    return { severity: "questionable", statusLabelEs: "Duda (D\xEDa a d\xEDa)", detailEs: translated || "En evaluaci\xF3n m\xE9dica previa al partido" };
+  if (stLow.includes("questionable")) {
+    return {
+      severity: "questionable",
+      absenceTier: hasRestKeywords ? "b2b_rest" : "punctual",
+      statusLabelEs: hasRestKeywords ? "Duda (Descanso/B2B)" : "Cuestionable (Puntual)",
+      detailEs: translated || "En evaluaci\xF3n m\xE9dica previa al partido",
+    };
   }
-  return { severity: "questionable", statusLabelEs: "Seguimiento m\xE9dico", detailEs: translated || "Observaci\xF3n m\xE9dica en parte de equipo" };
+  return {
+    severity: "questionable",
+    absenceTier: "punctual",
+    statusLabelEs: "Seguimiento m\xE9dico",
+    detailEs: translated || "Observaci\xF3n m\xE9dica en parte de equipo",
+  };
 }
 let cachedNbaContext = null;
 async function buildFantasyEspnSyncPayload(params) {
@@ -259,7 +340,14 @@ async function buildFantasyEspnSyncPayload(params) {
   const injuriesByPlayerId = {};
   for (const [normKey, rawInj] of rawInjuriesMap.entries()) {
     const mapped = mapInjuryStatusToSpanish(rawInj.status, rawInj.detail);
-    const alert = { playerNameNorm: normKey, displayName: normKey, severity: mapped.severity, statusLabelEs: mapped.statusLabelEs, detailEs: mapped.detailEs };
+    const alert = {
+      playerNameNorm: normKey,
+      displayName: normKey,
+      severity: mapped.severity,
+      absenceTier: mapped.absenceTier,
+      statusLabelEs: mapped.statusLabelEs,
+      detailEs: mapped.detailEs,
+    };
     injuriesByNormName[normKey] = alert;
     const matchedNbaId = resolveNbaPlayerId(normKey);
     if (matchedNbaId) {

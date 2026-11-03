@@ -8,6 +8,7 @@ import {
   Star,
   TrendingDown,
   TrendingUp,
+  Zap,
 } from 'lucide-react';
 import type {
   ActiveSection,
@@ -16,6 +17,8 @@ import type {
   PlayerSummary,
   StreakEntry,
   TeamSummary,
+  TrendBreakoutAlert,
+  TrendBreakoutAxis,
   WindowSize,
 } from '../types/nba';
 import { formatSigned, mean, round1 } from '../utils/analytics';
@@ -34,15 +37,18 @@ import {
   MetricInfoTooltip,
   NbaComparisonBar,
 } from './MetricUiHelpers';
-import { EntityBadge, TeamLogo } from './NbaVisuals';
+import { EntityBadge, PlayerAvatar, TeamLogo } from './NbaVisuals';
 
 interface GuidedHomeViewProps {
   players: PlayerSummary[];
   teams: TeamSummary[];
   anomalies: AnomalySignal[];
+  trendBreakouts: TrendBreakoutAlert[];
   streaks: StreakEntry[];
   benchmarks: LeagueBenchmarks;
   windowSize: WindowSize;
+  onChangeWindowSize: (w: WindowSize) => void;
+  onOpenBreakoutAxis: (axis: 'all' | TrendBreakoutAxis) => void;
   experienceMode: ExperienceMode;
   watchlistIds: Set<string>;
   onlyWatchlist: boolean;
@@ -54,9 +60,12 @@ interface GuidedHomeViewProps {
 export function GuidedHomeView({
   teams,
   anomalies,
+  trendBreakouts,
   streaks,
   benchmarks,
   windowSize,
+  onChangeWindowSize,
+  onOpenBreakoutAxis,
   experienceMode,
   watchlistIds,
   onlyWatchlist,
@@ -91,6 +100,54 @@ export function GuidedHomeView({
       watchlistIds.has(`${s.entityType}:${s.entityId}`)
     );
   }, [streaks, onlyWatchlist, watchlistIds]);
+
+  const scopedBreakouts = useMemo(() => {
+    if (!onlyWatchlist) return trendBreakouts;
+    return trendBreakouts.filter((b) =>
+      watchlistIds.has(`player:${b.playerId}`)
+    );
+  }, [trendBreakouts, onlyWatchlist, watchlistIds]);
+
+  const breakoutAxesSummary = useMemo(() => {
+    const axesMeta: Array<{
+      id: TrendBreakoutAxis;
+      label: string;
+      subtitle: string;
+      helpKey: string;
+    }> = [
+      {
+        id: 'exterior',
+        label: 'Tiro Exterior',
+        subtitle: 'Puntería de tres (3P%), triples anotados y volumen exterior',
+        helpKey: 'breakoutExterior',
+      },
+      {
+        id: 'minutes_usage',
+        label: 'Minutos y Uso',
+        subtitle: 'Expansión o recorte de rol en pista (MIN, USG% y tiros)',
+        helpKey: 'breakoutMinutesUsage',
+      },
+      {
+        id: 'efficiency',
+        label: 'Eficiencia Real',
+        subtitle: 'Conversión ponderada de tiro (TS%, eFG% y Game Score)',
+        helpKey: 'breakoutEfficiency',
+      },
+    ];
+
+    return axesMeta.map((meta) => {
+      const items = scopedBreakouts.filter((b) => b.axis === meta.id);
+      const posCount = items.filter((b) => b.direction === 'positive').length;
+      const negCount = items.filter((b) => b.direction === 'negative').length;
+      return {
+        ...meta,
+        totalCount: items.length,
+        posCount,
+        negCount,
+        topAlert: items[0] || null,
+      };
+    });
+  }, [scopedBreakouts]);
 
   // Global pulse counts & hero items for Row 1 KPI strip
   const radarPulse = useMemo(() => {
@@ -530,7 +587,219 @@ export function GuidedHomeView({
         </div>
       </div>
 
-      {/* BLOCK 01: Protagonistas del Día (Positive & Negative Statistical Anomalies for Players & Teams) */}
+      {/* BLOCK 01: Alertas de Rupturas de Tendencia (Tiro Exterior, Minutos/Uso y Eficiencia) */}
+      <section className="space-y-3">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Zap className="w-4 h-4 text-orange-400 shrink-0" />
+              <h2 className="text-sm font-semibold text-slate-100">
+                01. Alertas de Rupturas de Tendencia (Últimos {windowSize} PJ vs Temporada)
+              </h2>
+              <MetricInfoTooltip helpKey="trendBreakouts" align="left" />
+            </div>
+
+            <button
+              type="button"
+              onClick={() => onOpenBreakoutAxis('all')}
+              className="lg:hidden inline-flex items-center gap-1 text-xs font-medium text-orange-400 hover:text-orange-300 transition-colors whitespace-nowrap shrink-0"
+            >
+              <span>Ver ({scopedBreakouts.length})</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between lg:justify-end gap-2">
+            <div className="inline-flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg">
+              {([3, 5, 10] as WindowSize[]).map((w) => (
+                <button
+                  key={w}
+                  type="button"
+                  onClick={() => onChangeWindowSize(w)}
+                  className={`px-2.5 py-1 text-xs font-mono tabular-nums rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                    windowSize === w
+                      ? 'bg-orange-500 text-slate-950 font-semibold'
+                      : 'text-slate-300 hover:text-white hover:bg-[#182338]'
+                  }`}
+                >
+                  Últ. {w} PJ
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => onOpenBreakoutAxis('all')}
+              className="hidden lg:inline-flex items-center gap-1 text-xs font-medium text-orange-400 hover:text-orange-300 transition-colors whitespace-nowrap shrink-0 ml-1"
+            >
+              <span>Ver todas las rupturas ({scopedBreakouts.length})</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg divide-y md:divide-y-0 md:divide-x divide-[#1E293B]">
+          {breakoutAxesSummary.map((axis) => {
+            const top = axis.topAlert;
+            const isPos = top?.direction === 'positive';
+            const suffix = top?.unit === '%' ? '%' : '';
+            return (
+              <div
+                key={axis.id}
+                onClick={() => onOpenBreakoutAxis(axis.id)}
+                className="p-4 hover:bg-[#182338] active:bg-[#182338] transition-colors cursor-pointer flex flex-col justify-between gap-3 group"
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="inline-flex items-center gap-1.5 min-w-0">
+                      <span className="text-sm font-semibold text-slate-100 group-hover:text-orange-300 transition-colors truncate">
+                        {axis.label}
+                      </span>
+                      <span onClick={(e) => e.stopPropagation()}>
+                        <MetricInfoTooltip helpKey={axis.helpKey} align="left" />
+                      </span>
+                    </div>
+                    <span className="font-mono tabular-nums text-xs whitespace-nowrap shrink-0">
+                      <span className="text-emerald-400 font-semibold">
+                        ▲ {axis.posCount}
+                      </span>
+                      <span className="mx-1 text-slate-600">/</span>
+                      <span className="text-rose-400 font-semibold">
+                        ▼ {axis.negCount}
+                      </span>
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    {axis.subtitle}
+                  </p>
+                </div>
+
+                <div className="pt-3 border-t border-[#1E293B]/80 space-y-2">
+                  {top ? (
+                    <>
+                      <div
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onInspectEntity('player', top.playerId);
+                        }}
+                        title="Abrir expediente completo del jugador"
+                        className="flex items-center justify-between gap-2 rounded-md -mx-1.5 px-1.5 py-1 hover:bg-[#0B1120]/60 transition-colors"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <PlayerAvatar
+                            playerId={top.playerId}
+                            name={top.playerName}
+                            teamAbbr={top.teamAbbr}
+                            showTeamBadge
+                            size="sm"
+                          />
+                          <div className="min-w-0">
+                            <div className="text-sm font-semibold text-slate-100 truncate">
+                              {top.playerName}
+                            </div>
+                            <div className="text-xs truncate">
+                              <span className="text-slate-400">
+                                {top.teamAbbr}
+                                {top.position ? ` · ${top.position}` : ''}
+                                {' · '}
+                              </span>
+                              <span
+                                className={
+                                  isPos
+                                    ? 'text-emerald-400 font-medium'
+                                    : 'text-rose-400 font-medium'
+                                }
+                              >
+                                {isPos ? '▲' : '▼'} {top.badgeLabel}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="text-right font-mono tabular-nums shrink-0">
+                          <div className="text-sm font-semibold text-slate-100">
+                            {top.windowAvg.toFixed(top.decimals)}
+                            {suffix}{' '}
+                            <span className="text-[11px] font-normal text-slate-400">
+                              vs {top.baselineAvg.toFixed(top.decimals)}
+                              {suffix}
+                            </span>
+                          </div>
+                          <div
+                            className={`text-xs font-semibold ${
+                              isPos ? 'text-emerald-400' : 'text-rose-400'
+                            }`}
+                          >
+                            {isPos ? '▲' : '▼'}{' '}
+                            {formatSigned(
+                              top.unit === '%' ? top.absDelta : top.pctDelta,
+                              top.unit === '%' ? 1 : 0,
+                              top.unit === '%' ? ' pt' : '%'
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2 text-[11px] font-mono tabular-nums text-slate-400 px-0.5">
+                        <span className="truncate">
+                          Temp {top.windows.season.toFixed(top.decimals)}
+                          {suffix}
+                          {' · '}
+                          <span
+                            className={
+                              windowSize === 10
+                                ? 'text-orange-300 font-semibold'
+                                : ''
+                            }
+                          >
+                            10P {top.windows.l10.toFixed(top.decimals)}
+                            {suffix}
+                          </span>
+                          {' · '}
+                          <span
+                            className={
+                              windowSize === 5
+                                ? 'text-orange-300 font-semibold'
+                                : ''
+                            }
+                          >
+                            5P {top.windows.l5.toFixed(top.decimals)}
+                            {suffix}
+                          </span>
+                          {' · '}
+                          <span
+                            className={
+                              windowSize === 3
+                                ? 'text-orange-300 font-semibold'
+                                : ''
+                            }
+                          >
+                            3P {top.windows.l3.toFixed(top.decimals)}
+                            {suffix}
+                          </span>
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-xs text-slate-500 py-2">
+                      Sin rupturas activas en este eje con el filtro actual.
+                    </p>
+                  )}
+                </div>
+
+                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-orange-400 group-hover:text-orange-300 whitespace-nowrap">
+                  <span>
+                    Explorar {axis.label.toLowerCase()} ({axis.totalCount})
+                  </span>
+                  <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* BLOCK 02: Protagonistas del Día (Positive & Negative Statistical Anomalies for Players & Teams) */}
       <section className="space-y-3">
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-2.5">
           <div className="flex items-center justify-between gap-2">
@@ -543,7 +812,7 @@ export function GuidedHomeView({
                 <Activity className="w-4 h-4 text-orange-400 shrink-0" />
               )}
               <h2 className="text-sm font-semibold text-slate-100">
-                01. Protagonistas del Día: Anomalías Estadísticas Positivas y Negativas
+                02. Protagonistas del Día: Anomalías Estadísticas Positivas y Negativas
               </h2>
             </div>
 
@@ -935,7 +1204,7 @@ export function GuidedHomeView({
             <div className="flex items-center gap-2 min-w-0">
               <Shield className="w-4 h-4 text-orange-400 shrink-0" />
               <h2 className="text-sm font-semibold text-slate-100">
-                02. Equipos Destacados (Últimos {windowSize} PJ)
+                03. Equipos Destacados (Últimos {windowSize} PJ)
               </h2>
             </div>
 
@@ -1166,7 +1435,7 @@ export function GuidedHomeView({
             <div className="flex items-center gap-2 min-w-0">
               <Flame className="w-4 h-4 text-orange-400 shrink-0" />
               <h2 className="text-sm font-semibold text-slate-100 truncate">
-                03. Rachas Estadísticas Activas Hoy
+                04. Rachas Estadísticas Activas Hoy
               </h2>
             </div>
 
@@ -1389,7 +1658,7 @@ export function GuidedHomeView({
         <div className="flex items-center gap-2">
           <Compass className="w-4 h-4 text-orange-400 shrink-0" />
           <h2 className="text-sm font-semibold text-slate-100">
-            04. Profundiza en un Clic: Anomalías, Rachas, Jornadas y Duelos
+            05. Profundiza en un Clic: Anomalías, Rachas, Jornadas y Duelos
           </h2>
         </div>
 

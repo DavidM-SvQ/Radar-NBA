@@ -238,10 +238,10 @@ async function discoverCandidateCompletedGames2027(timeoutMs) {
   list.sort((a, b) => (b.dateIso + "T" + (b.dateTimeUtc || "")).localeCompare(a.dateIso + "T" + (a.dateTimeUtc || "")));
   return list;
 }
-async function fetchEspnFallbackForMissingRefs(stillMissing, biosMap, remainingBudgetMs) {
+async function fetchEspnFallbackForMissingRefs(stillMissing, biosMap, remainingBudgetMs, lookbackDays = 3) {
   if (stillMissing.length === 0 || remainingBudgetMs < 900) return [];
   const todayIso = getEasternTodayIso();
-  const minDateIso = addDaysIso(todayIso, -3);
+  const minDateIso = addDaysIso(todayIso, -Math.max(3, lookbackDays));
   const recentMissing = stillMissing.filter((r) => r.dateIso >= minDateIso);
   if (recentMissing.length === 0) return [];
   const bioByNormAndTeam = /* @__PURE__ */ new Map();
@@ -252,7 +252,8 @@ async function fetchEspnFallbackForMissingRefs(stillMissing, biosMap, remainingB
     bioByNormAndTeam.set(`${n}|${b.teamAbbr}`, b);
     if (!bioByNormOnly.has(n)) bioByNormOnly.set(n, b);
   }
-  const datesToQuery = Array.from(new Set(recentMissing.map((r) => r.dateIso))).slice(0, 3);
+  const maxDates = lookbackDays > 3 ? 12 : 3;
+  const datesToQuery = Array.from(new Set(recentMissing.map((r) => r.dateIso))).slice(0, maxDates);
   const startedAt = Date.now();
   const recovered = [];
   for (const dateIso of datesToQuery) {
@@ -319,7 +320,8 @@ async function fetchEspnFallbackForMissingRefs(stillMissing, biosMap, remainingB
             const pf = Number(statsArr[idxOf("PF")]) || 0;
             const pm = Number(statsArr[idxOf("+/-")]) || 0;
             const pts = Number(statsArr[idxOf("PTS")]) || 0;
-            playersOut.push({ personId, name: matchedBio?.name || rawName, position: matchedBio?.position || String(athEntry?.athlete?.position?.abbreviation || "G-F"), jerseyNum: matchedBio?.jersey || String(athEntry?.athlete?.jersey || ""), played: "1", statistics: { minutes: minStr, points: pts, fieldGoalsMade: fgm, fieldGoalsAttempted: fga, threePointersMade: fg3m, threePointersAttempted: fg3a, freeThrowsMade: ftm, freeThrowsAttempted: fta, reboundsOffensive: oreb, reboundsDefensive: dreb, reboundsTotal: reb, assists: ast, steals: stl, blocks: blk, turnovers: tov, foulsPersonal: pf, plusMinusPoints: pm } });
+            const starterFlag = athEntry?.starter === true ? "1" : "0";
+            playersOut.push({ personId, name: matchedBio?.name || rawName, position: matchedBio?.position || String(athEntry?.athlete?.position?.abbreviation || "G-F"), jerseyNum: matchedBio?.jersey || String(athEntry?.athlete?.jersey || ""), starter: starterFlag, played: "1", statistics: { minutes: minStr, points: pts, fieldGoalsMade: fgm, fieldGoalsAttempted: fga, threePointersMade: fg3m, threePointersAttempted: fg3a, freeThrowsMade: ftm, freeThrowsAttempted: fta, reboundsOffensive: oreb, reboundsDefensive: dreb, reboundsTotal: reb, assists: ast, steals: stl, blocks: blk, turnovers: tov, foulsPersonal: pf, plusMinusPoints: pm } });
           }
           const scoreNum = Number(hComp?.score) || playersOut.reduce((acc, p) => acc + (Number(p.statistics.points) || 0), 0);
           return { teamTricode: targetAbbr, score: scoreNum, statistics: {}, players: playersOut };
@@ -412,7 +414,8 @@ async function applyCdnDeltaGamesTo2027(dataset, biosMap, options) {
   if (failedRefs.length > 0) {
     const remainingForEspn = timeoutBudgetMs - (Date.now() - startedAt);
     if (remainingForEspn >= 900) {
-      const espnRecovered = await fetchEspnFallbackForMissingRefs(failedRefs, biosMap, remainingForEspn);
+      const lookbackDays = options?.lookbackDays ?? (timeoutBudgetMs >= 15e3 ? 14 : 3);
+      const espnRecovered = await fetchEspnFallbackForMissingRefs(failedRefs, biosMap, remainingForEspn, lookbackDays);
       fetchedGames.push(...espnRecovered);
     }
   }
@@ -534,7 +537,8 @@ async function applyCdnDeltaGamesTo2027(dataset, biosMap, options) {
         const plPoss = fga + 0.44 * fta + tov;
         const usgEst = minutes > 0 && poss > 0 ? round1(Math.min(55, Math.max(0, plPoss / (poss * (minutes / gameMins)) * 100))) : 0;
         const gmSc = computeHollingerGameScore({ pts, fgm, fga, ftm, fta, oreb, dreb, stl, ast, blk, pf, tov });
-        const pLog = { eventId: ref.gameId, date: ref.dateIso, seasonLabel: "2026-27", teamAbbr: sideInfo.teamAbbr, teamId: teamMeta?.id || pSummary.teamId, opponentAbbr: sideInfo.oppAbbr, opponentName: NBA_TEAMS_MAP[sideInfo.oppAbbr]?.name || sideInfo.oppAbbr, isHome: sideInfo.isHome, result: sideInfo.result, scoreDisplay, restDays: null, isBackToBack: false, minutes, points: pts, rebounds: reb, oreb, dreb, assists: ast, steals: stl, blocks: blk, stocks: stl + blk, turnovers: tov, fouls: pf, plusMinus: pm, fgm, fga, fgPct, fg3m, fg3a, fg3Pct, ftm, fta, ftPct, pra: pts + reb + ast, tsPct, efgPct, usgEst, gameScore: gmSc };
+        const isStarter = cp?.starter === "1" || cp?.starter === true || cp?.starter === 1;
+        const pLog = { eventId: ref.gameId, date: ref.dateIso, seasonLabel: "2026-27", teamAbbr: sideInfo.teamAbbr, teamId: teamMeta?.id || pSummary.teamId, opponentAbbr: sideInfo.oppAbbr, opponentName: NBA_TEAMS_MAP[sideInfo.oppAbbr]?.name || sideInfo.oppAbbr, isHome: sideInfo.isHome, result: sideInfo.result, scoreDisplay, restDays: null, isBackToBack: false, isStarter, minutes, points: pts, rebounds: reb, oreb, dreb, assists: ast, steals: stl, blocks: blk, stocks: stl + blk, turnovers: tov, fouls: pf, plusMinus: pm, fgm, fga, fgPct, fg3m, fg3a, fg3Pct, ftm, fta, ftPct, pra: pts + reb + ast, tsPct, efgPct, usgEst, gameScore: gmSc };
         pSummary.games.push(pLog);
         touchedPlayers.add(pid);
       }

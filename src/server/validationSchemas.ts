@@ -20,6 +20,7 @@ const isoDateSchema = z.string({ error: "Fecha no v\xE1lida." }).trim().regex(/^
 }, "Fecha fuera de rango o inexistente en el calendario.");
 const emptyQuerySchema = z.strictObject({});
 const refreshOnlyQuerySchema = z.strictObject({ refresh: booleanQueryFlagSchema });
+const awardsQuerySchema = z.strictObject({ season: z.enum(["2027", "2026"], { error: "Temporada de premios no v\xE1lida (permitidos: 2027, 2026)." }).optional().default("2027"), refresh: booleanQueryFlagSchema });
 const bootstrapQuerySchema = z.strictObject({ seasonMode: seasonModeSchema.optional(), season: seasonModeSchema.optional(), refresh: booleanQueryFlagSchema, wire: z.enum(["compact", "v2", "legacy"], { error: "Formato wire no v\xE1lido (permitidos: compact, v2, legacy)." }).optional(), full: booleanQueryFlagSchema }).transform((q) => ({ seasonMode: q.seasonMode ?? q.season ?? "continuous", refresh: Boolean(q.refresh), wire: q.wire ?? "compact" }));
 const searchQuerySchema = z.strictObject({ q: z.string({ error: "Par\xE1metro de b\xFAsqueda no v\xE1lido." }).max(80, "La b\xFAsqueda no puede superar 80 caracteres.").transform(stripControlChars).refine((s) => !/[<>${}\\]/.test(s), "La b\xFAsqueda contiene caracteres especiales no permitidos.").optional().default("") });
 const playerParamsSchema = z.strictObject({ playerId: safeEntityIdSchema });
@@ -98,6 +99,7 @@ export {
   ADMIN_SECURITY_BOUNDS,
   adminLoginBodySchema,
   adminSecurityConfigBodySchema,
+  awardsQuerySchema,
   booleanQueryFlagSchema,
   bootstrapQuerySchema,
   emptyQuerySchema,

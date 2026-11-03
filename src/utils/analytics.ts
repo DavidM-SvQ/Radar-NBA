@@ -9,6 +9,9 @@ import type {
   TeamGameLog,
   TeamSummary,
   ThresholdSettings,
+  TrendBreakoutAlert,
+  TrendBreakoutAxis,
+  WindowComparisonStrip,
   WindowSize,
 } from '../types/nba';
 
@@ -261,28 +264,558 @@ export function computeTeamTakeaways(
   return notes;
 }
 
-export function detectAnomalies(
-  players: PlayerSummary[],
-  teams: TeamSummary[],
-  settings: ThresholdSettings
-): AnomalySignal[] {
-  const signals: AnomalySignal[] = [];
-  const { windowSize, minZScore, minPctDelta, minMinutes } = settings;
+export function resolveEffectiveWindowSize(
+  totalGames: number,
+  windowSize: WindowSize
+): number {
+  if (totalGames <= 1) return totalGames;
+  if (totalGames > windowSize) return windowSize;
+  return Math.max(2, Math.min(totalGames - 1, Math.ceil(totalGames * 0.55)));
+}
 
-  // 1. Player anomalies (Basic Production + Role/Usage + Advanced Efficiency/Impact)
+export function calcWeighted3Pct(games: PlayerGameLog[]): number {
+  if (games.length === 0) return 0;
+  let fg3m = 0;
+  let fg3a = 0;
+  for (let i = 0; i < games.length; i++) {
+    fg3m += games[i].fg3m;
+    fg3a += games[i].fg3a;
+  }
+  return fg3a > 0 ? (fg3m / fg3a) * 100 : 0;
+}
+
+export function calcWeightedTsPct(games: PlayerGameLog[]): number {
+  if (games.length === 0) return 0;
+  let pts = 0;
+  let fga = 0;
+  let fta = 0;
+  for (let i = 0; i < games.length; i++) {
+    pts += games[i].points;
+    fga += games[i].fga;
+    fta += games[i].fta;
+  }
+  const denom = 2 * (fga + 0.44 * fta);
+  return denom > 0 ? (pts / denom) * 100 : 0;
+}
+
+export function calcWeightedEfgPct(games: PlayerGameLog[]): number {
+  if (games.length === 0) return 0;
+  let fgm = 0;
+  let fg3m = 0;
+  let fga = 0;
+  for (let i = 0; i < games.length; i++) {
+    fgm += games[i].fgm;
+    fg3m += games[i].fg3m;
+    fga += games[i].fga;
+  }
+  return fga > 0 ? ((fgm + 0.5 * fg3m) / fga) * 100 : 0;
+}
+
+function buildWindowStrip<T>(
+  games: T[],
+  calcSlice: (arr: T[]) => number
+): WindowComparisonStrip {
+  return {
+    season: round1(calcSlice(games)),
+    l3: round1(calcSlice(games.slice(0, Math.min(3, games.length)))),
+    l5: round1(calcSlice(games.slice(0, Math.min(5, games.length)))),
+    l10: round1(calcSlice(games.slice(0, Math.min(10, games.length)))),
+  };
+}
+
+function pickBestStreakForEntity(
+  streaksByEntity: Map<string, StreakEntry[]>,
+  entityKey: string,
+  preferredAxis?: TrendBreakoutAxis
+): StreakEntry | null {
+  const list = streaksByEntity.get(entityKey);
+  if (!list || list.length === 0) return null;
+  if (preferredAxis) {
+    const axisMatch = list.find((s) => s.breakoutAxis === preferredAxis);
+    if (axisMatch) return axisMatch;
+  }
+  return list[0];
+}
+
+export function detectTrendBreakouts(
+  players: PlayerSummary[],
+  settings: ThresholdSettings,
+  activeStreaks: StreakEntry[] = []
+): TrendBreakoutAlert[] {
+  const alerts: TrendBreakoutAlert[] = [];
+  const { windowSize, minZScore, minMinutes } = settings;
+  const sensScale = Math.max(0.68, Math.min(1.55, minZScore / 1.2));
+
+  const streaksByEntity = new Map<string, StreakEntry[]>();
+  for (const st of activeStreaks) {
+    if (st.entityType !== 'player') continue;
+    const key = `player:${st.entityId}`;
+    const bucket = streaksByEntity.get(key);
+    if (bucket) bucket.push(st);
+    else streaksByEntity.set(key, [st]);
+  }
+
   for (const player of players) {
     const games = player.games;
     if (games.length < 3) continue;
 
-    const avgMin = mean(games.map((g) => g.minutes));
-    if (avgMin < minMinutes) continue;
-
-    const effWinSize = Math.min(windowSize, Math.max(2, games.length - 1));
+    const effWinSize = resolveEffectiveWindowSize(games.length, windowSize);
     const winGames = games.slice(0, effWinSize);
+
+    const baseMin = mean(games.map((g) => g.minutes));
+    const winMin = mean(winGames.map((g) => g.minutes));
+    // Allow players who meet minMinutes either across season OR in recent rotation expansion
+    if (baseMin < minMinutes && winMin < minMinutes) continue;
+
+    const minDelta = winMin - baseMin;
+    const baseUsg = mean(games.map((g) => g.usgEst));
+    const winUsg = mean(winGames.map((g) => g.usgEst));
+    const usgDelta = winUsg - baseUsg;
+
+    const baseFga = mean(games.map((g) => g.fga));
+    const winFga = mean(winGames.map((g) => g.fga));
+    const fgaDelta = winFga - baseFga;
+
+    const baseTsa = mean(games.map((g) => g.fga + 0.44 * g.fta));
+    const winTsa = mean(winGames.map((g) => g.fga + 0.44 * g.fta));
+
+    // =========================================================================
+    // AXIS 1: TIRO EXTERIOR (3P%, 3PM y Volumen 3PA)
+    // =========================================================================
+    const base3pa = mean(games.map((g) => g.fg3a));
+    const win3pa = mean(winGames.map((g) => g.fg3a));
+    const delta3pa = win3pa - base3pa;
+    const win3paTotal = winGames.reduce((s, g) => s + g.fg3a, 0);
+    const base3paTotal = games.reduce((s, g) => s + g.fg3a, 0);
+
+    if (
+      (base3pa >= 3.2 || win3pa >= 4.0) &&
+      win3paTotal >= Math.max(8, effWinSize * 2.8) &&
+      base3paTotal >= 12
+    ) {
+      const base3pm = mean(games.map((g) => g.fg3m));
+      const win3pm = mean(winGames.map((g) => g.fg3m));
+      const delta3pm = win3pm - base3pm;
+
+      const base3Pct = calcWeighted3Pct(games);
+      const win3Pct = calcWeighted3Pct(winGames);
+      const delta3Pct = win3Pct - base3Pct;
+
+      const sd3pm = Math.max(stdDev(games.map((g) => g.fg3m)), 0.9);
+      const z3pm = delta3pm / sd3pm;
+
+      const qual3Games = games.filter((g) => g.fg3a >= 3);
+      const sd3Pct = Math.max(
+        qual3Games.length >= 3 ? stdDev(qual3Games.map((g) => g.fg3Pct)) * 0.62 : 10.5,
+        9.2
+      );
+      const z3Pct = delta3Pct / sd3Pct;
+
+      const passesMakes =
+        Math.abs(delta3pm) >= 1.15 * sensScale && Math.abs(z3pm) >= 0.95 * sensScale;
+      const passesPct =
+        Math.abs(delta3Pct) >= 9.5 * sensScale && Math.abs(delta3pm) >= 0.7;
+      const passesVolShift =
+        Math.abs(delta3pa) >= 2.2 * sensScale && Math.abs(delta3pm) >= 0.85;
+
+      if (passesMakes || passesPct || passesVolShift) {
+        const usePctPrimary =
+          Math.abs(z3Pct) >= Math.abs(z3pm) * 1.08 && Math.abs(delta3Pct) >= 9.0;
+        const primaryZ = usePctPrimary ? z3Pct : z3pm;
+        const isPos = (usePctPrimary ? delta3Pct : delta3pm) >= 0;
+        const absZ = Math.abs(primaryZ);
+        const severity: TrendBreakoutAlert['severity'] =
+          absZ >= 2.0 ? 'extreme' : absZ >= 1.45 ? 'high' : 'notable';
+
+        let sustainabilityLabel = 'Cambio sostenido por volumen';
+        let sustainabilityTone: TrendBreakoutAlert['sustainabilityTone'] = 'solid';
+        if (isPos) {
+          if (delta3pa >= 1.3) {
+            sustainabilityLabel = `Luz verde exterior (${formatSigned(delta3pa, 1, ' 3PA')})`;
+            sustainabilityTone = 'solid';
+          } else if (delta3Pct >= 11.5) {
+            sustainabilityLabel = 'Muñeca muy caliente (vigilar regresión)';
+            sustainabilityTone = 'warning';
+          } else {
+            sustainabilityLabel = 'Alza sólida en el perímetro';
+            sustainabilityTone = 'solid';
+          }
+        } else {
+          if (delta3pa >= -0.8 && win3pa >= 4.0) {
+            sustainabilityLabel = 'Sequía con volumen intacto (rebote probable)';
+            sustainabilityTone = 'warning';
+          } else {
+            sustainabilityLabel = 'Frenazo en volumen y acierto triple';
+            sustainabilityTone = 'negative';
+          }
+        }
+
+        const matchedStreak = pickBestStreakForEntity(
+          streaksByEntity,
+          `player:${player.id}`,
+          'exterior'
+        );
+
+        const baseVal = usePctPrimary ? base3Pct : base3pm;
+        const winVal = usePctPrimary ? win3Pct : win3pm;
+        const absDelta = winVal - baseVal;
+        const pctDelta = (absDelta / Math.max(usePctPrimary ? 25 : 1.0, baseVal)) * 100;
+
+        alerts.push({
+          id: `brk-${player.id}-exterior`,
+          playerId: player.id,
+          playerName: player.name,
+          teamAbbr: player.teamAbbr,
+          position: player.position || '—',
+          axis: 'exterior',
+          axisLabel: 'Tiro Exterior',
+          direction: isPos ? 'positive' : 'negative',
+          severity,
+          badgeLabel: isPos ? 'Explosión exterior' : 'Sequía exterior',
+          metricKey: usePctPrimary ? 'fg3Pct' : 'fg3m',
+          metricLabel: usePctPrimary ? 'Acierto Triple (3P%)' : 'Triples / PJ (3PM)',
+          unit: usePctPrimary ? '%' : ' 3PM',
+          decimals: 1,
+          baselineAvg: round1(baseVal),
+          windowAvg: round1(winVal),
+          absDelta: round1(absDelta),
+          pctDelta: round1(pctDelta),
+          zScore: round1(primaryZ),
+          breakoutScore: round1(absZ + Math.min(0.65, win3pa / 14)),
+          sampleGames: effWinSize,
+          baselineGames: games.length,
+          windows: usePctPrimary
+            ? buildWindowStrip(games, calcWeighted3Pct)
+            : buildWindowStrip(games, (arr) => mean(arr.map((g) => g.fg3m))),
+          secondaryLabel: `${win3pm.toFixed(1)}/${win3pa.toFixed(1)} 3PM-A (${win3Pct.toFixed(
+            1
+          )}%) · Base ${base3pm.toFixed(1)}/${base3pa.toFixed(1)} (${base3Pct.toFixed(1)}%)`,
+          headlineSimple: isPos
+            ? 'Racha encendida desde el triple'
+            : 'Atasco reciente desde la línea de tres',
+          detailSimple: isPos
+            ? `Mete ${win3pm.toFixed(1)} triples por noche al ${win3Pct.toFixed(
+                1
+              )}% en sus últimos ${effWinSize} PJ (su media era ${base3pm.toFixed(
+                1
+              )} al ${base3Pct.toFixed(1)}%).`
+            : `Cae a ${win3pm.toFixed(1)} triples por partido (${win3Pct.toFixed(
+                1
+              )}%) frente a ${base3pm.toFixed(1)} (${base3Pct.toFixed(1)}%) en la temporada.`,
+          headlineAdvanced: isPos
+            ? `Ruptura al alza en perímetro (${formatSigned(delta3Pct, 1, ' pp')} 3P% · ${formatSigned(
+                delta3pa,
+                1,
+                ' 3PA'
+              )})`
+            : `Ruptura a la baja en perímetro (${formatSigned(delta3Pct, 1, ' pp')} 3P% · ${formatSigned(
+                delta3pa,
+                1,
+                ' 3PA'
+              )})`,
+          detailAdvanced: `Pasa de ${base3pm.toFixed(1)}/${base3pa.toFixed(1)} (${base3Pct.toFixed(
+            1
+          )}%) a ${win3pm.toFixed(1)}/${win3pa.toFixed(1)} (${win3Pct.toFixed(
+            1
+          )}%) en ${effWinSize} PJ.`,
+          sustainabilityLabel,
+          sustainabilityTone,
+          activeStreakLabel: matchedStreak ? matchedStreak.thresholdLabel : null,
+          activeStreakCount: matchedStreak ? matchedStreak.count : 0,
+        });
+      }
+    }
+
+    // =========================================================================
+    // AXIS 2: MINUTOS Y USO (MIN, USG%, TCI / TSA)
+    // =========================================================================
+    const sdMin = Math.max(stdDev(games.map((g) => g.minutes)), 2.5);
+    const zMin = minDelta / sdMin;
+    const sdUsg = Math.max(stdDev(games.map((g) => g.usgEst)), 3.1);
+    const zUsg = usgDelta / sdUsg;
+
+    const passesMinShift =
+      Math.abs(minDelta) >= 3.8 * sensScale && Math.abs(zMin) >= 0.95 * sensScale;
+    const passesUsgShift =
+      (baseUsg >= 13 || winUsg >= 18) &&
+      Math.abs(usgDelta) >= 3.6 * sensScale &&
+      Math.abs(zUsg) >= 0.92 * sensScale;
+    const passesDualRoleShift =
+      (minDelta >= 2.6 * sensScale &&
+        (usgDelta >= 2.4 * sensScale || fgaDelta >= 2.2 * sensScale)) ||
+      (minDelta <= -2.6 * sensScale &&
+        (usgDelta <= -2.4 * sensScale || fgaDelta <= -2.2 * sensScale));
+
+    if (passesMinShift || passesUsgShift || passesDualRoleShift) {
+      const useUsgPrimary =
+        passesUsgShift && Math.abs(zUsg) >= Math.abs(zMin) * 0.98;
+      const primaryZ = useUsgPrimary ? zUsg : zMin;
+      const isPos = (useUsgPrimary ? usgDelta : minDelta) >= 0;
+      const absZ = Math.max(Math.abs(zMin), Math.abs(zUsg));
+      const severity: TrendBreakoutAlert['severity'] =
+        absZ >= 2.0 ? 'extreme' : absZ >= 1.45 ? 'high' : 'notable';
+
+      const baseVal = useUsgPrimary ? baseUsg : baseMin;
+      const winVal = useUsgPrimary ? winUsg : winMin;
+      const absDelta = winVal - baseVal;
+      const pctDelta = (absDelta / Math.max(12, baseVal)) * 100;
+
+      const matchedStreak = pickBestStreakForEntity(
+        streaksByEntity,
+        `player:${player.id}`,
+        'minutes_usage'
+      );
+
+      let sustainabilityLabel = isPos
+        ? `Expansión estructural (${formatSigned(fgaDelta, 1, ' TCI')})`
+        : `Contracción de rol (${formatSigned(fgaDelta, 1, ' TCI')})`;
+      const sustainabilityTone: TrendBreakoutAlert['sustainabilityTone'] = isPos
+        ? 'solid'
+        : 'negative';
+
+      if (isPos && minDelta >= 3.0 && usgDelta >= 2.2) {
+        sustainabilityLabel = 'Doble salto: más minutos y más balón';
+      } else if (!isPos && minDelta <= -3.0 && usgDelta <= -2.0) {
+        sustainabilityLabel = 'Pierde minutos y cuota de tiros';
+      }
+
+      alerts.push({
+        id: `brk-${player.id}-minutes_usage`,
+        playerId: player.id,
+        playerName: player.name,
+        teamAbbr: player.teamAbbr,
+        position: player.position || '—',
+        axis: 'minutes_usage',
+        axisLabel: 'Minutos y Uso',
+        direction: isPos ? 'positive' : 'negative',
+        severity,
+        badgeLabel: isPos ? 'Salto de rol y uso' : 'Recorte de rol/uso',
+        metricKey: useUsgPrimary ? 'usgEst' : 'minutes',
+        metricLabel: useUsgPrimary ? 'Uso Ofensivo (USG%)' : 'Minutos (MIN)',
+        unit: useUsgPrimary ? '%' : ' MIN',
+        decimals: 1,
+        baselineAvg: round1(baseVal),
+        windowAvg: round1(winVal),
+        absDelta: round1(absDelta),
+        pctDelta: round1(pctDelta),
+        zScore: round1(primaryZ),
+        breakoutScore: round1(absZ + (Math.abs(fgaDelta) >= 2.5 ? 0.45 : 0.15)),
+        sampleGames: effWinSize,
+        baselineGames: games.length,
+        windows: useUsgPrimary
+          ? buildWindowStrip(games, (arr) => mean(arr.map((g) => g.usgEst)))
+          : buildWindowStrip(games, (arr) => mean(arr.map((g) => g.minutes))),
+        secondaryLabel: `${winMin.toFixed(1)} MIN (${formatSigned(
+          minDelta,
+          1
+        )}) · ${winUsg.toFixed(1)}% USG (${formatSigned(
+          usgDelta,
+          1,
+          ' pp'
+        )}) · ${winFga.toFixed(1)} TCI`,
+        headlineSimple: isPos
+          ? 'Gana peso claro en pista y en ataque'
+          : 'Pierde minutos o protagonismo con balón',
+        detailSimple: isPos
+          ? `Juega ${winMin.toFixed(1)} min (${formatSigned(
+              minDelta,
+              1
+            )}) y lanza ${winFga.toFixed(1)} tiros por noche en sus últimos ${effWinSize} PJ.`
+          : `Baja a ${winMin.toFixed(1)} min (${formatSigned(
+              minDelta,
+              1
+            )}) y ${winFga.toFixed(1)} tiros intentados en el tramo reciente.`,
+        headlineAdvanced: isPos
+          ? `Expansión de rotación/uso (${formatSigned(minDelta, 1, ' MIN')} · ${formatSigned(
+              usgDelta,
+              1,
+              ' pp USG'
+            )})`
+          : `Contracción de rotación/uso (${formatSigned(minDelta, 1, ' MIN')} · ${formatSigned(
+              usgDelta,
+              1,
+              ' pp USG'
+            )})`,
+        detailAdvanced: `Promedia ${winMin.toFixed(1)} MIN, ${winUsg.toFixed(
+          1
+        )}% USG y ${winFga.toFixed(1)} FGA frente a ${baseMin.toFixed(
+          1
+        )} MIN / ${baseUsg.toFixed(1)}% USG base.`,
+        sustainabilityLabel,
+        sustainabilityTone,
+        activeStreakLabel: matchedStreak ? matchedStreak.thresholdLabel : null,
+        activeStreakCount: matchedStreak ? matchedStreak.count : 0,
+      });
+    }
+
+    // =========================================================================
+    // AXIS 3: EFICIENCIA (TS%, eFG% y Conversión anotadora)
+    // =========================================================================
+    const winTsaSum = winGames.reduce((s, g) => s + g.fga + 0.44 * g.fta, 0);
+    if (
+      (baseTsa >= 7.5 || winTsa >= 8.5) &&
+      winTsaSum >= Math.max(20, effWinSize * 7.2)
+    ) {
+      const baseTs = calcWeightedTsPct(games);
+      const winTs = calcWeightedTsPct(winGames);
+      const tsDelta = winTs - baseTs;
+
+      const baseEfg = calcWeightedEfgPct(games);
+      const winEfg = calcWeightedEfgPct(winGames);
+      const efgDelta = winEfg - baseEfg;
+
+      const qualTsGames = games.filter((g) => g.fga + 0.44 * g.fta >= 5);
+      const sdTs = Math.max(
+        qualTsGames.length >= 3 ? stdDev(qualTsGames.map((g) => g.tsPct)) * 0.72 : 7.5,
+        6.8
+      );
+      const zTs = tsDelta / sdTs;
+
+      const passesTs =
+        Math.abs(tsDelta) >= 7.2 * sensScale && Math.abs(zTs) >= 0.9 * sensScale;
+      const passesEfg =
+        Math.abs(efgDelta) >= 7.8 * sensScale && Math.abs(tsDelta) >= 5.5;
+
+      if (passesTs || passesEfg) {
+        const isPos = tsDelta >= 0;
+        const absZ = Math.abs(zTs);
+        const severity: TrendBreakoutAlert['severity'] =
+          absZ >= 2.0 ? 'extreme' : absZ >= 1.45 ? 'high' : 'notable';
+
+        let sustainabilityLabel = 'Cambio en selección de tiro';
+        let sustainabilityTone: TrendBreakoutAlert['sustainabilityTone'] = 'warning';
+        if (isPos) {
+          if (usgDelta >= 1.5 || minDelta >= 2.2) {
+            sustainabilityLabel = 'Eficiencia alta asumiendo más volumen';
+            sustainabilityTone = 'solid';
+          } else {
+            sustainabilityLabel = 'Varianza alta en tiro (vigilar regresión)';
+            sustainabilityTone = 'warning';
+          }
+        } else {
+          if (usgDelta >= -1.2 && minDelta >= -1.5) {
+            sustainabilityLabel = 'Mantiene rol intacto (candidato a rebote)';
+            sustainabilityTone = 'warning';
+          } else {
+            sustainabilityLabel = 'Caída conjunta de eficiencia y peso ofensivo';
+            sustainabilityTone = 'negative';
+          }
+        }
+
+        const matchedStreak = pickBestStreakForEntity(
+          streaksByEntity,
+          `player:${player.id}`,
+          'efficiency'
+        );
+
+        const winGmSc = mean(winGames.map((g) => g.gameScore));
+        const baseGmSc = mean(games.map((g) => g.gameScore));
+        const pctDelta = (tsDelta / Math.max(38, baseTs)) * 100;
+
+        alerts.push({
+          id: `brk-${player.id}-efficiency`,
+          playerId: player.id,
+          playerName: player.name,
+          teamAbbr: player.teamAbbr,
+          position: player.position || '—',
+          axis: 'efficiency',
+          axisLabel: 'Eficiencia',
+          direction: isPos ? 'positive' : 'negative',
+          severity,
+          badgeLabel: isPos ? 'Pico de eficiencia' : 'Bache de eficiencia',
+          metricKey: 'tsPct',
+          metricLabel: 'Tiro Verdadero (TS%)',
+          unit: '%',
+          decimals: 1,
+          baselineAvg: round1(baseTs),
+          windowAvg: round1(winTs),
+          absDelta: round1(tsDelta),
+          pctDelta: round1(pctDelta),
+          zScore: round1(zTs),
+          breakoutScore: round1(absZ + Math.min(0.55, winTsa / 32)),
+          sampleGames: effWinSize,
+          baselineGames: games.length,
+          windows: buildWindowStrip(games, calcWeightedTsPct),
+          secondaryLabel: `eFG% ${winEfg.toFixed(1)}% (${formatSigned(
+            efgDelta,
+            1,
+            ' pp'
+          )}) · GmSc ${winGmSc.toFixed(1)} (${formatSigned(
+            winGmSc - baseGmSc,
+            1
+          )}) · ${winTsa.toFixed(1)} TSA`,
+          headlineSimple: isPos
+            ? 'Estado de gracia convirtiendo sus tiros'
+            : 'Mala racha de puntería global',
+          detailSimple: isPos
+            ? `Sube al ${winTs.toFixed(1)}% de acierto real (TS%) en sus últimos ${effWinSize} PJ frente al ${baseTs.toFixed(
+                1
+              )}% de su temporada.`
+            : `Baja al ${winTs.toFixed(1)}% de acierto real (TS%) en sus últimos ${effWinSize} PJ (su media habitual es ${baseTs.toFixed(
+                1
+              )}%).`,
+          headlineAdvanced: isPos
+            ? `Pico de eficiencia verdadera (${formatSigned(tsDelta, 1, ' pp')} TS% · ${formatSigned(
+                efgDelta,
+                1,
+                ' pp'
+              )} eFG%)`
+            : `Regresión negativa de eficiencia (${formatSigned(tsDelta, 1, ' pp')} TS% · ${formatSigned(
+                efgDelta,
+                1,
+                ' pp'
+              )} eFG%)`,
+          detailAdvanced: `Firma ${winTs.toFixed(1)}% TS y ${winEfg.toFixed(
+            1
+          )}% eFG sobre ${winTsa.toFixed(1)} posesiones de tiro/PJ (base ${baseTs.toFixed(
+            1
+          )}% TS).`,
+          sustainabilityLabel,
+          sustainabilityTone,
+          activeStreakLabel: matchedStreak ? matchedStreak.thresholdLabel : null,
+          activeStreakCount: matchedStreak ? matchedStreak.count : 0,
+        });
+      }
+    }
+  }
+
+  return alerts.sort((a, b) => b.breakoutScore - a.breakoutScore);
+}
+
+export function detectAnomalies(
+  players: PlayerSummary[],
+  teams: TeamSummary[],
+  settings: ThresholdSettings,
+  activeStreaks: StreakEntry[] = []
+): AnomalySignal[] {
+  const signals: AnomalySignal[] = [];
+  const { windowSize, minZScore, minPctDelta, minMinutes } = settings;
+
+  const streaksByEntity = new Map<string, StreakEntry[]>();
+  for (const st of activeStreaks) {
+    const key = `${st.entityType}:${st.entityId}`;
+    const bucket = streaksByEntity.get(key);
+    if (bucket) bucket.push(st);
+    else streaksByEntity.set(key, [st]);
+  }
+
+  // 1. Player anomalies (Basic Production + Exterior Shooting + Role/Usage + Efficiency)
+  for (const player of players) {
+    const games = player.games;
+    if (games.length < 3) continue;
+
+    const effWinSize = resolveEffectiveWindowSize(games.length, windowSize);
+    const winGames = games.slice(0, effWinSize);
+
+    const avgMin = mean(games.map((g) => g.minutes));
+    const winMin = mean(winGames.map((g) => g.minutes));
+    if (avgMin < minMinutes && winMin < minMinutes) continue;
+
     const takeaways = computePlayerTakeaways(player, windowSize);
     const subtitle = `${player.teamAbbr} · ${player.position} · Base ${games.length} PJ`;
+    const entityStreakKey = `player:${player.id}`;
+    const generalStreak = pickBestStreakForEntity(streaksByEntity, entityStreakKey);
 
-    const winMin = mean(winGames.map((g) => g.minutes));
     const minDelta = winMin - avgMin;
     const baseFga = mean(games.map((g) => g.fga));
     const winFga = mean(winGames.map((g) => g.fga));
@@ -292,8 +825,8 @@ export function detectAnomalies(
     const winUsg = mean(winGames.map((g) => g.usgEst));
     const usgDelta = winUsg - baseUsg;
 
-    const baseTs = mean(games.map((g) => g.tsPct));
-    const winTs = mean(winGames.map((g) => g.tsPct));
+    const baseTs = calcWeightedTsPct(games);
+    const winTs = calcWeightedTsPct(winGames);
     const tsDelta = winTs - baseTs;
 
     // A) Primary Boxscore & Game Score impact outlier
@@ -377,6 +910,9 @@ export function detectAnomalies(
         sustainabilityTone,
         contextNote: takeaways[0] || '',
         takeaways,
+        windows: buildWindowStrip(games, (arr) => mean(arr.map((g) => g[m.key]))),
+        activeStreakLabel: generalStreak ? generalStreak.thresholdLabel : null,
+        activeStreakCount: generalStreak ? generalStreak.count : 0,
       };
 
       if (
@@ -396,10 +932,15 @@ export function detectAnomalies(
     const usgSd = Math.max(stdDev(usgSeries), 3.2);
     const usgZ = usgDelta / usgSd;
     const usgPctChange = (usgDelta / Math.max(12, baseUsg)) * 100;
+    const roleStreak = pickBestStreakForEntity(
+      streaksByEntity,
+      entityStreakKey,
+      'minutes_usage'
+    );
 
     if (
       baseUsg >= 14 &&
-      Math.abs(usgDelta) >= 4.2 &&
+      Math.abs(usgDelta) >= 4.0 &&
       (Math.abs(usgZ) >= minZScore * 0.9 || Math.abs(usgPctChange) >= minPctDelta * 0.95)
     ) {
       signals.push({
@@ -413,6 +954,7 @@ export function detectAnomalies(
         categoryLabel: usgDelta > 0 ? 'Salto en Uso de balón' : 'Pérdida de Uso ofensivo',
         metricKey: 'usgEst',
         metricLabel: 'Uso Ofensivo (USG%)',
+        unit: '%',
         baselineAvg: round1(baseUsg),
         windowAvg: round1(winUsg),
         absDelta: round1(usgDelta),
@@ -422,11 +964,15 @@ export function detectAnomalies(
         baselineGames: games.length,
         sustainabilityLabel:
           usgDelta > 0
-            ? `Absorbe ${formatSigned(fgaDelta)} tiros/PJ`
-            : `Cede ${formatSigned(fgaDelta)} tiros/PJ`,
+            ? `Absorbe ${formatSigned(fgaDelta)} tiros/PJ (${formatSigned(minDelta, 1, ' MIN')})`
+            : `Cede ${formatSigned(fgaDelta)} tiros/PJ (${formatSigned(minDelta, 1, ' MIN')})`,
         sustainabilityTone: usgDelta > 0 ? 'solid' : 'negative',
         contextNote: takeaways[0] || '',
         takeaways,
+        breakoutAxis: 'minutes_usage',
+        windows: buildWindowStrip(games, (arr) => mean(arr.map((g) => g.usgEst))),
+        activeStreakLabel: roleStreak ? roleStreak.thresholdLabel : null,
+        activeStreakCount: roleStreak ? roleStreak.count : 0,
       });
     } else {
       const minSeries = games.map((g) => g.minutes);
@@ -434,8 +980,8 @@ export function detectAnomalies(
       const minZ = minDelta / minSd;
       const minPct = (minDelta / Math.max(1, avgMin)) * 100;
       if (
-        Math.abs(minDelta) >= 4.5 &&
-        (Math.abs(minZ) >= minZScore * 0.92 || Math.abs(minPct) >= minPctDelta * 0.9)
+        Math.abs(minDelta) >= 4.2 &&
+        (Math.abs(minZ) >= minZScore * 0.9 || Math.abs(minPct) >= minPctDelta * 0.88)
       ) {
         signals.push({
           id: `player-${player.id}-minutes`,
@@ -448,6 +994,7 @@ export function detectAnomalies(
           categoryLabel: 'Cambio de rotación / MIN',
           metricKey: 'minutes',
           metricLabel: 'Minutos (MIN)',
+          unit: ' MIN',
           baselineAvg: round1(avgMin),
           windowAvg: round1(winMin),
           absDelta: round1(minDelta),
@@ -457,21 +1004,134 @@ export function detectAnomalies(
           baselineGames: games.length,
           sustainabilityLabel:
             minDelta > 0
-              ? `Uso ${formatSigned(usgDelta, 1, '% USG')}`
-              : `Recorte de rotación`,
+              ? `Uso ${formatSigned(usgDelta, 1, '% USG')} · ${formatSigned(fgaDelta, 1, ' TCI')}`
+              : 'Recorte de rotación',
           sustainabilityTone: minDelta > 0 ? 'solid' : 'negative',
           contextNote: takeaways[0] || '',
           takeaways,
+          breakoutAxis: 'minutes_usage',
+          windows: buildWindowStrip(games, (arr) => mean(arr.map((g) => g.minutes))),
+          activeStreakLabel: roleStreak ? roleStreak.thresholdLabel : null,
+          activeStreakCount: roleStreak ? roleStreak.count : 0,
         });
       }
     }
 
-    // C) True Shooting (TS%) / 3P% Efficiency Divergence
-    const winFgaSum = winGames.reduce((s, g) => s + g.fga, 0);
-    if (winFgaSum >= 28 && games.length >= 5) {
-      if (Math.abs(tsDelta) >= Math.max(9.5, minPctDelta * 0.6)) {
-        const tsZ = tsDelta / Math.max(stdDev(games.map((g) => g.tsPct)), 7.5);
+    // C) Exterior 3-Point Shooting Divergence (3PM / 3P% with real volume guard)
+    const base3pa = mean(games.map((g) => g.fg3a));
+    const win3pa = mean(winGames.map((g) => g.fg3a));
+    const win3paSum = winGames.reduce((s, g) => s + g.fg3a, 0);
+    if (
+      (base3pa >= 3.5 || win3pa >= 4.5) &&
+      win3paSum >= Math.max(9, effWinSize * 3.0)
+    ) {
+      const base3pm = mean(games.map((g) => g.fg3m));
+      const win3pm = mean(winGames.map((g) => g.fg3m));
+      const delta3pm = win3pm - base3pm;
+      const base3Pct = calcWeighted3Pct(games);
+      const win3Pct = calcWeighted3Pct(winGames);
+      const delta3Pct = win3Pct - base3Pct;
+      const z3pm = delta3pm / Math.max(stdDev(games.map((g) => g.fg3m)), 0.95);
+      const z3Pct = delta3Pct / 10.2;
+      const extStreak = pickBestStreakForEntity(
+        streaksByEntity,
+        entityStreakKey,
+        'exterior'
+      );
+
+      if (
+        Math.abs(delta3Pct) >= Math.max(10.0, minPctDelta * 0.62) &&
+        Math.abs(delta3pm) >= 0.8 &&
+        Math.abs(z3Pct) >= minZScore * 0.85
+      ) {
+        signals.push({
+          id: `player-${player.id}-fg3Pct`,
+          entityType: 'player',
+          entityId: player.id,
+          entityName: player.name,
+          subtitle,
+          teamAbbr: player.teamAbbr,
+          category: 'exterior_shift',
+          categoryLabel:
+            delta3Pct > 0 ? 'Ruptura en Tiro Exterior' : 'Sequía en Tiro Exterior',
+          metricKey: 'fg3Pct',
+          metricLabel: 'Acierto Triple (3P%)',
+          unit: '%',
+          baselineAvg: round1(base3Pct),
+          windowAvg: round1(win3Pct),
+          absDelta: round1(delta3Pct),
+          pctDelta: round1((delta3Pct / Math.max(25, base3Pct)) * 100),
+          zScore: round1(z3Pct),
+          sampleGames: effWinSize,
+          baselineGames: games.length,
+          sustainabilityLabel:
+            delta3Pct > 0
+              ? win3pa - base3pa >= 1.3
+                ? `Luz verde (${win3pm.toFixed(1)}/${win3pa.toFixed(1)} 3PM-A)`
+                : `Racha caliente (${win3pm.toFixed(1)}/${win3pa.toFixed(1)} 3PM-A)`
+              : win3pa >= base3pa - 0.8
+              ? `Mantiene ${win3pa.toFixed(1)} 3PA/PJ (rebote)`
+              : 'Caída de volumen exterior',
+          sustainabilityTone:
+            delta3Pct > 0 && win3pa - base3pa >= 1.3 ? 'solid' : 'warning',
+          contextNote: `Convierte ${win3pm.toFixed(1)} de ${win3pa.toFixed(
+            1
+          )} triples/PJ frente a ${base3pm.toFixed(1)} de ${base3pa.toFixed(1)} en su base.`,
+          takeaways,
+          breakoutAxis: 'exterior',
+          windows: buildWindowStrip(games, calcWeighted3Pct),
+          activeStreakLabel: extStreak ? extStreak.thresholdLabel : null,
+          activeStreakCount: extStreak ? extStreak.count : 0,
+        });
+      } else if (
+        Math.abs(delta3pm) >= 1.25 &&
+        Math.abs(z3pm) >= minZScore * 0.92
+      ) {
+        signals.push({
+          id: `player-${player.id}-fg3m`,
+          entityType: 'player',
+          entityId: player.id,
+          entityName: player.name,
+          subtitle,
+          teamAbbr: player.teamAbbr,
+          category: 'exterior_shift',
+          categoryLabel:
+            delta3pm > 0 ? 'Explosión de Triples (3PM)' : 'Bajón de Triples (3PM)',
+          metricKey: 'fg3m',
+          metricLabel: 'Triples Anotados (3PM)',
+          unit: ' 3PM',
+          baselineAvg: round1(base3pm),
+          windowAvg: round1(win3pm),
+          absDelta: round1(delta3pm),
+          pctDelta: round1((delta3pm / Math.max(1.0, base3pm)) * 100),
+          zScore: round1(z3pm),
+          sampleGames: effWinSize,
+          baselineGames: games.length,
+          sustainabilityLabel: `${win3Pct.toFixed(1)}% 3P sobre ${win3pa.toFixed(
+            1
+          )} 3PA/PJ`,
+          sustainabilityTone: delta3pm > 0 ? 'solid' : 'negative',
+          contextNote: takeaways[0] || '',
+          takeaways,
+          breakoutAxis: 'exterior',
+          windows: buildWindowStrip(games, (arr) => mean(arr.map((g) => g.fg3m))),
+          activeStreakLabel: extStreak ? extStreak.thresholdLabel : null,
+          activeStreakCount: extStreak ? extStreak.count : 0,
+        });
+      }
+    }
+
+    // D) True Shooting (TS%) Efficiency Divergence (weighted across window)
+    const winTsaSum = winGames.reduce((s, g) => s + g.fga + 0.44 * g.fta, 0);
+    if (winTsaSum >= Math.max(20, effWinSize * 7.2) && games.length >= 3) {
+      if (Math.abs(tsDelta) >= Math.max(8.2, minPctDelta * 0.55)) {
+        const tsZ = tsDelta / Math.max(stdDev(games.map((g) => g.tsPct)) * 0.78, 7.2);
         if (Math.abs(tsZ) >= minZScore * 0.85) {
+          const effStreak = pickBestStreakForEntity(
+            streaksByEntity,
+            entityStreakKey,
+            'efficiency'
+          );
           signals.push({
             id: `player-${player.id}-tsPct`,
             entityType: 'player',
@@ -484,6 +1144,7 @@ export function detectAnomalies(
               tsDelta > 0 ? 'Fiebre de eficiencia TS%' : 'Hundimiento en TS%',
             metricKey: 'tsPct',
             metricLabel: 'Tiro Verdadero (TS%)',
+            unit: '%',
             baselineAvg: round1(baseTs),
             windowAvg: round1(winTs),
             absDelta: round1(tsDelta),
@@ -493,11 +1154,20 @@ export function detectAnomalies(
             baselineGames: games.length,
             sustainabilityLabel:
               tsDelta > 0
-                ? 'Varianza alta (probable regresión)'
-                : 'Candidato a rebote de acierto',
-            sustainabilityTone: 'warning',
+                ? usgDelta >= 1.5
+                  ? 'Eficiencia + más volumen'
+                  : 'Varianza alta (probable regresión)'
+                : usgDelta >= -1.2
+                ? 'Candidato a rebote de acierto'
+                : 'Caída de eficiencia y uso',
+            sustainabilityTone:
+              tsDelta > 0 && usgDelta >= 1.5 ? 'solid' : 'warning',
             contextNote: takeaways[0] || '',
             takeaways,
+            breakoutAxis: 'efficiency',
+            windows: buildWindowStrip(games, calcWeightedTsPct),
+            activeStreakLabel: effStreak ? effStreak.thresholdLabel : null,
+            activeStreakCount: effStreak ? effStreak.count : 0,
           });
         }
       }
@@ -508,10 +1178,11 @@ export function detectAnomalies(
   for (const team of teams) {
     const games = team.games;
     if (games.length < 3) continue;
-    const effWinSize = Math.min(windowSize, Math.max(2, games.length - 1));
+    const effWinSize = resolveEffectiveWindowSize(games.length, windowSize);
     const winGames = games.slice(0, effWinSize);
     const takeaways = computeTeamTakeaways(team, windowSize);
     const subtitle = `Conf. ${team.conference} · Balance ${team.wins}-${team.losses}`;
+    const teamStreak = pickBestStreakForEntity(streaksByEntity, `team:${team.id}`);
 
     // A) Net Rating shift (pts per 100 possessions)
     const netSeries = games.map((g) => g.netRtg);
@@ -551,6 +1222,9 @@ export function detectAnomalies(
         sustainabilityTone: netDelta > 0 ? 'solid' : 'negative',
         contextNote: takeaways[0] || '',
         takeaways,
+        windows: buildWindowStrip(games, (arr) => mean(arr.map((g) => g.netRtg))),
+        activeStreakLabel: teamStreak ? teamStreak.streakLabel : null,
+        activeStreakCount: teamStreak ? teamStreak.count : 0,
       });
     }
 
@@ -590,6 +1264,9 @@ export function detectAnomalies(
         sustainabilityTone: offDelta > 0 ? 'solid' : 'negative',
         contextNote: takeaways[0] || '',
         takeaways,
+        windows: buildWindowStrip(games, (arr) => mean(arr.map((g) => g.offRtg))),
+        activeStreakLabel: teamStreak ? teamStreak.streakLabel : null,
+        activeStreakCount: teamStreak ? teamStreak.count : 0,
       });
     }
 
@@ -630,6 +1307,9 @@ export function detectAnomalies(
         sustainabilityTone: defDelta < 0 ? 'solid' : 'negative',
         contextNote: takeaways[0] || '',
         takeaways,
+        windows: buildWindowStrip(games, (arr) => mean(arr.map((g) => g.defRtg))),
+        activeStreakLabel: teamStreak ? teamStreak.streakLabel : null,
+        activeStreakCount: teamStreak ? teamStreak.count : 0,
       });
     }
 
@@ -669,6 +1349,9 @@ export function detectAnomalies(
         sustainabilityTone: 'warning',
         contextNote: takeaways[0] || '',
         takeaways,
+        windows: buildWindowStrip(games, (arr) => mean(arr.map((g) => g.pace))),
+        activeStreakLabel: teamStreak ? teamStreak.streakLabel : null,
+        activeStreakCount: teamStreak ? teamStreak.count : 0,
       });
     }
   }
@@ -679,43 +1362,54 @@ export function detectAnomalies(
 export function detectActiveStreaks(
   players: PlayerSummary[],
   teams: TeamSummary[],
-  minStreakGames: number
+  minStreakGames: number,
+  windowSize: WindowSize = 5
 ): StreakEntry[] {
   const streaks: StreakEntry[] = [];
 
   for (const player of players) {
     const games = player.games;
     if (games.length < minStreakGames) continue;
+    const winSlice = games.slice(0, Math.min(windowSize, games.length));
 
     const checks: Array<{
       id: string;
+      groupSingle?: string;
       metricLabel: string;
       thresholdLabel: string;
       isPositive: boolean;
+      breakoutAxis?: TrendBreakoutAxis;
+      unit?: string;
       test: (g: PlayerGameLog) => boolean;
       extract: (g: PlayerGameLog) => number;
     }> = [
       {
         id: 'pts30',
+        groupSingle: 'pts',
         metricLabel: 'Puntos',
         thresholdLabel: '30+ PTS seguidos',
         isPositive: true,
+        unit: ' PTS',
         test: (g) => g.points >= 30,
         extract: (g) => g.points,
       },
       {
         id: 'pts25',
+        groupSingle: 'pts',
         metricLabel: 'Puntos',
         thresholdLabel: '25+ PTS seguidos',
         isPositive: true,
+        unit: ' PTS',
         test: (g) => g.points >= 25,
         extract: (g) => g.points,
       },
       {
         id: 'pts20',
+        groupSingle: 'pts',
         metricLabel: 'Puntos',
         thresholdLabel: '20+ PTS seguidos',
         isPositive: true,
+        unit: ' PTS',
         test: (g) => g.points >= 20,
         extract: (g) => g.points,
       },
@@ -724,6 +1418,7 @@ export function detectActiveStreaks(
         metricLabel: 'Rebotes',
         thresholdLabel: '10+ REB seguidos',
         isPositive: true,
+        unit: ' REB',
         test: (g) => g.rebounds >= 10,
         extract: (g) => g.rebounds,
       },
@@ -732,22 +1427,89 @@ export function detectActiveStreaks(
         metricLabel: 'Asistencias',
         thresholdLabel: '8+ AST seguidas',
         isPositive: true,
+        unit: ' AST',
         test: (g) => g.assists >= 8,
         extract: (g) => g.assists,
       },
       {
+        id: '3pm4',
+        groupSingle: '3pm',
+        metricLabel: 'Triples',
+        thresholdLabel: '4+ Triples anotados',
+        isPositive: true,
+        breakoutAxis: 'exterior',
+        unit: ' 3PM',
+        test: (g) => g.fg3m >= 4,
+        extract: (g) => g.fg3m,
+      },
+      {
         id: '3pm3',
+        groupSingle: '3pm',
         metricLabel: 'Triples',
         thresholdLabel: '3+ Triples anotados',
         isPositive: true,
+        breakoutAxis: 'exterior',
+        unit: ' 3PM',
         test: (g) => g.fg3m >= 3,
         extract: (g) => g.fg3m,
+      },
+      {
+        id: 'hot_3pct',
+        metricLabel: 'Acierto Triple',
+        thresholdLabel: '42%+ en Triples (≥5 3PA)',
+        isPositive: true,
+        breakoutAxis: 'exterior',
+        unit: '%',
+        test: (g) => g.fg3a >= 5 && g.fg3Pct >= 42,
+        extract: (g) => g.fg3Pct,
+      },
+      {
+        id: 'cold_3pct',
+        metricLabel: 'Acierto Triple',
+        thresholdLabel: 'Sequía <25% en Triples (≥5 3PA)',
+        isPositive: false,
+        breakoutAxis: 'exterior',
+        unit: '%',
+        test: (g) => g.fg3a >= 5 && g.fg3Pct < 25,
+        extract: (g) => g.fg3Pct,
+      },
+      {
+        id: 'min35',
+        metricLabel: 'Minutos',
+        thresholdLabel: '35+ MIN en pista seguidos',
+        isPositive: true,
+        breakoutAxis: 'minutes_usage',
+        unit: ' MIN',
+        test: (g) => g.minutes >= 35,
+        extract: (g) => g.minutes,
+      },
+      {
+        id: 'usg29',
+        metricLabel: 'Uso Ofensivo',
+        thresholdLabel: '29%+ USG uso de estrella',
+        isPositive: true,
+        breakoutAxis: 'minutes_usage',
+        unit: '%',
+        test: (g) => g.minutes >= 18 && g.usgEst >= 29,
+        extract: (g) => g.usgEst,
+      },
+      {
+        id: 'hot_ts',
+        metricLabel: 'Tiro Verdadero',
+        thresholdLabel: '64%+ TS eficiencia élite (≥10 TCI)',
+        isPositive: true,
+        breakoutAxis: 'efficiency',
+        unit: '%',
+        test: (g) => g.fga >= 10 && g.tsPct >= 64,
+        extract: (g) => g.tsPct,
       },
       {
         id: 'gmsc22',
         metricLabel: 'Game Score',
         thresholdLabel: '22+ GmSc impacto élite',
         isPositive: true,
+        breakoutAxis: 'efficiency',
+        unit: '',
         test: (g) => g.gameScore >= 22,
         extract: (g) => g.gameScore,
       },
@@ -756,22 +1518,26 @@ export function detectActiveStreaks(
         metricLabel: 'Tiro Verdadero',
         thresholdLabel: 'Menos de 46% TS (≥12 TCI)',
         isPositive: false,
+        breakoutAxis: 'efficiency',
+        unit: '%',
         test: (g) => g.fga >= 12 && g.tsPct < 46,
         extract: (g) => g.tsPct,
       },
     ];
 
-    let capturedPtsStreak = false;
+    const capturedGroups = new Set<string>();
     for (const c of checks) {
-      if (c.id.startsWith('pts') && capturedPtsStreak) continue;
+      if (c.groupSingle && capturedGroups.has(c.groupSingle)) continue;
       let count = 0;
       for (let i = 0; i < games.length; i++) {
         if (c.test(games[i])) count++;
         else break;
       }
       if (count >= minStreakGames) {
-        if (c.id.startsWith('pts')) capturedPtsStreak = true;
+        if (c.groupSingle) capturedGroups.add(c.groupSingle);
         const streakSlice = games.slice(0, count);
+        const seasonBase = round1(mean(games.map(c.extract)));
+        const winRef = round1(mean(winSlice.map(c.extract)));
         streaks.push({
           id: `streak-p-${player.id}-${c.id}`,
           entityType: 'player',
@@ -784,9 +1550,13 @@ export function detectActiveStreaks(
           thresholdLabel: c.thresholdLabel,
           count,
           windowAvgDuringStreak: round1(mean(streakSlice.map(c.extract))),
-          seasonBaseline: round1(mean(games.map(c.extract))),
+          seasonBaseline: seasonBase,
           isPositive: c.isPositive,
           lastGameDate: games[0]?.date || '',
+          breakoutAxis: c.breakoutAxis,
+          windowAvgRef: winRef,
+          windowDeltaVsSeason: round1(winRef - seasonBase),
+          unit: c.unit,
         });
       }
     }
@@ -804,6 +1574,9 @@ export function detectActiveStreaks(
     }
     if (resCount >= minStreakGames) {
       const slice = games.slice(0, resCount);
+      const winSlice = games.slice(0, Math.min(windowSize, games.length));
+      const seasonBase = round1(mean(games.map((g) => g.netRtg)));
+      const winRef = round1(mean(winSlice.map((g) => g.netRtg)));
       streaks.push({
         id: `streak-t-${team.id}-wl`,
         entityType: 'team',
@@ -817,9 +1590,12 @@ export function detectActiveStreaks(
           firstRes === 'W' ? 'Victorias consecutivas' : 'Derrotas consecutivas',
         count: resCount,
         windowAvgDuringStreak: round1(mean(slice.map((g) => g.netRtg))),
-        seasonBaseline: round1(mean(games.map((g) => g.netRtg))),
+        seasonBaseline: seasonBase,
         isPositive: firstRes === 'W',
         lastGameDate: games[0]?.date || '',
+        windowAvgRef: winRef,
+        windowDeltaVsSeason: round1(winRef - seasonBase),
+        unit: '',
       });
     }
   }
@@ -829,7 +1605,8 @@ export function detectActiveStreaks(
 
 export function computeConsistencyTable(
   players: PlayerSummary[],
-  minMinutes: number
+  minMinutes: number,
+  windowSize: WindowSize = 5
 ): ConsistencyEntry[] {
   const rows: ConsistencyEntry[] = [];
 
@@ -847,6 +1624,12 @@ export function computeConsistencyTable(
     const ptsSd = stdDev(ptsArr);
     const praAvg = mean(praArr);
     const praSd = stdDev(praArr);
+
+    const winSlice = games.slice(0, Math.min(windowSize, games.length));
+    const ptsWin = mean(winSlice.map((g) => g.points));
+    const praWin = mean(winSlice.map((g) => g.pra));
+    const tsBase = calcWeightedTsPct(games);
+    const tsWin = calcWeightedTsPct(winSlice);
 
     const cvPra = praSd / Math.max(10, praAvg);
     const rawScore = Math.round(100 - (cvPra - 0.12) * 210);
@@ -881,6 +1664,14 @@ export function computeConsistencyTable(
       consistencyScore,
       profileLabel,
       hitRate20Pts,
+      windowGames: winSlice.length,
+      ptsWindowAvg: round1(ptsWin),
+      ptsWindowDelta: round1(ptsWin - ptsAvg),
+      praWindowAvg: round1(praWin),
+      praWindowDelta: round1(praWin - praAvg),
+      tsSeasonAvg: round1(tsBase),
+      tsWindowAvg: round1(tsWin),
+      tsWindowDelta: round1(tsWin - tsBase),
     });
   }
 

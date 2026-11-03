@@ -7,6 +7,7 @@ import { buildFantasyEspnSyncPayload } from "./fantasyEspnService.ts";
 import zlib from "zlib";
 import { packBootstrapWirePayload } from "../utils/bootstrapWireCodec.ts";
 import { applyCdnDeltaGamesTo2027, hydrateSeasonDatasetFromSnapshot, readNbaSnapshotFromDisk, serializeSeasonDatasetForSnapshot, writeNbaSnapshotToDisk } from "./nbaSnapshotStore.ts";
+import { buildSeasonAwardsPayload, enrichBiosWithEspnRosters } from "./seasonAwardsService.ts";
 function isSnapshotOnlyRuntime() {
   return Boolean(process.env.VERCEL) || process.env.NBA_SNAPSHOT_ONLY === "1";
 }
@@ -160,19 +161,27 @@ async function getPlayerBiosMap(forceRefresh = false, options) {
   }
   requests.push(cachedFetchJson("https://stats.nba.com/stats/playerindex?College=&Country=&DraftPick=&DraftRound=&DraftYear=&Height=&Historical=0&LeagueID=00&Season=2026-27&SeasonType=Regular%20Season&TeamID=0&Weight=", 60 * 60 * 1e3, NBA_STATS_HEADERS, 12e3, forceRefresh || forceLive));
   const settledList = await Promise.allSettled(requests);
+  let statsRowsParsed = 0;
   for (const settled of settledList) {
     if (settled.status !== "fulfilled") continue;
     const rows = parseNbaResultSet(settled.value);
     for (const r of rows) {
       const id = String(r.PERSON_ID || "").trim();
       if (!id) continue;
+      statsRowsParsed++;
+      const prev = map.get(id);
       const first = String(r.PLAYER_FIRST_NAME || "").trim();
       const last = String(r.PLAYER_LAST_NAME || "").trim();
       const name = [first, last].filter(Boolean).join(" ").trim();
       const teamAbbr = String(r.TEAM_ABBREVIATION || "").trim().toUpperCase();
       const teamId = String(r.TEAM_ID || "").trim() || NBA_TEAMS_MAP[teamAbbr]?.id || "";
-      map.set(id, { id, name: name || id, teamId, teamAbbr: teamAbbr || "NBA", position: String(r.POSITION || "G-F").trim() || "G-F", jersey: String(r.JERSEY_NUMBER ?? "").trim(), height: String(r.HEIGHT || "").trim(), country: String(r.COUNTRY || "").trim() });
+      const fromYear = Number(r.FROM_YEAR) || prev?.fromYear;
+      const draftYear = Number(r.DRAFT_YEAR) || prev?.draftYear;
+      map.set(id, { id, name: name || prev?.name || id, teamId, teamAbbr: teamAbbr || "NBA", position: String(r.POSITION || prev?.position || "G-F").trim() || "G-F", jersey: String(r.JERSEY_NUMBER ?? prev?.jersey ?? "").trim(), height: String(r.HEIGHT || prev?.height || "").trim(), country: String(r.COUNTRY || prev?.country || "").trim(), ...(fromYear ? { fromYear } : {}), ...(draftYear ? { draftYear } : {}), ...(typeof prev?.experienceYears === "number" ? { experienceYears: prev.experienceYears } : {}) });
     }
+  }
+  if (forceLive) {
+    await enrichBiosWithEspnRosters(map, { forceRefresh: true, updateActiveTeams: statsRowsParsed === 0, timeoutMs: 6e3 });
   }
   cachedBios = { expiresAt: Date.now() + 60 * 60 * 1e3, map };
   return map;
@@ -1336,8 +1345,13 @@ async function getFantasyEspnSyncPayload(forceRefresh = false) {
   const lightweightPlayers = [...biosMap.values()].map((b) => ({ id: b.id, name: b.name, teamId: b.teamId, teamAbbr: b.teamAbbr, teamName: NBA_TEAMS_MAP[b.teamAbbr]?.name || b.teamAbbr, position: b.position || "G-F", jersey: b.jersey || void 0, height: b.height || void 0, country: b.country || void 0, games: [] }));
   return buildFantasyEspnSyncPayload({ allPlayers: lightweightPlayers, fetchLeagueScheduleGames: scoutingEngine.fetchLeagueScheduleGames, fetchEspnInjuriesByName: scoutingEngine.fetchEspnInjuriesByName, forceRefresh });
 }
+async function getSeasonAwardsPayload(seasonScope = "2027", forceRefresh = false) {
+  const [full, biosMap] = await Promise.all([getFullLeagueMemory(forceRefresh), getPlayerBiosMap(false)]);
+  return buildSeasonAwardsPayload({ full, biosMap, seasonScope, forceRefresh });
+}
 async function syncNbaSnapshotToDisk(options) {
   const existingSnap = readNbaSnapshotFromDisk();
+  const prevGames2027 = existingSnap?.s2027 ? Math.round(existingSnap.s2027.teams.reduce((acc, t) => acc + t.games.length, 0) / 2) : 0;
   const forceFull2026 = Boolean(options?.forceFull2026) || !existingSnap?.s2026;
   const biosMap = await getPlayerBiosMap(true, { forceLiveStats: true });
   const s2026 = forceFull2026 ? await buildSingleSeasonDataset("2025-26", true, { forceLiveStats: true }) : hydrateSeasonDatasetFromSnapshot(existingSnap.s2026);
@@ -1348,12 +1362,31 @@ async function syncNbaSnapshotToDisk(options) {
   } catch {
     statsLiveSucceeded = false;
   }
-  const s2027 = await buildSingleSeasonDataset("2026-27", true, { forceLiveStats: true, cdnMaxGames: 120, cdnTimeoutMs: 25e3 });
+  const s2027 = await buildSingleSeasonDataset("2026-27", true, { forceLiveStats: true, cdnMaxGames: 180, cdnTimeoutMs: 4e4 });
+  if (existingSnap?.s2027) {
+    const prevPlayersById = new Map(existingSnap.s2027.players.map((p) => [p.id, p]));
+    for (const [pid, curP] of s2027.playersById.entries()) {
+      if (!curP.advanced) {
+        const prevP = prevPlayersById.get(pid);
+        if (prevP?.advanced) curP.advanced = { ...prevP.advanced };
+      }
+    }
+    const prevTeamsByAbbr = new Map(existingSnap.s2027.teams.map((t) => [t.abbreviation, t]));
+    for (const [abbr, curT] of s2027.teamsByAbbr.entries()) {
+      if (!curT.advanced) {
+        const prevT = prevTeamsByAbbr.get(abbr);
+        if (prevT?.advanced) curT.advanced = { ...prevT.advanced };
+      }
+    }
+  }
   const lastSyncedSource = statsLiveSucceeded ? "nba_stats_live" : "cdn_delta_only";
   const snapshot = { version: 1, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), lastSyncedSource, bios: [...biosMap.values()], s2026: serializeSeasonDatasetForSnapshot(s2026), s2027: serializeSeasonDatasetForSnapshot(s2027) };
-  const written = writeNbaSnapshotToDisk(snapshot);
   const teamGames2026 = Math.round(snapshot.s2026.teams.reduce((acc, t) => acc + t.games.length, 0) / 2);
   const teamGames2027 = Math.round(snapshot.s2027.teams.reduce((acc, t) => acc + t.games.length, 0) / 2);
+  if (teamGames2027 < prevGames2027) {
+    throw new Error(`Guardia de no-regresi\xF3n activada: el nuevo snapshot ten\xEDa ${teamGames2027} partidos 2026-27 frente a ${prevGames2027} previos.`);
+  }
+  const written = writeNbaSnapshotToDisk(snapshot);
   return { ...written, lastSyncedSource, biosCount: snapshot.bios.length, players2026: snapshot.s2026.players.length, players2027: snapshot.s2027.players.length, teamGames2026, teamGames2027 };
 }
 export {
@@ -1368,6 +1401,7 @@ export {
   getMilestonesPayload,
   getPlayerBiosMap,
   getPlayerInspectorDossier,
+  getSeasonAwardsPayload,
   getSinglePlayerSummary,
   getTeamRoster,
   scoutingEngine,

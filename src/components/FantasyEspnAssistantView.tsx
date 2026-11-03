@@ -21,37 +21,49 @@ import {
   Zap,
 } from 'lucide-react';
 import type {
+  FantasyAbsenceTier,
   FantasyEspnSyncPayload,
   FantasyInjurySeverity,
   FantasyManualLeagueState,
   FantasyPlayerInjuryAlert,
+  FantasyProjectionMode,
   FantasyRosterContract,
   FantasyStorageMode,
   FantasyTeamGameSlot,
   FantasyWeekWindow,
   PlayerSummary,
   TeamSummary,
+  TrendBreakoutAlert,
 } from '../types/nba';
 import { formatShortDate, normalizeSearchText } from '../utils/analytics';
 import { fetchBootstrapClient } from '../utils/bootstrapWireCodec';
 import {
   OFFICIAL_LEAGUE_RULES,
+  analyzePlayerAvailabilityContext,
   computeOfficialGameFptsBreakdown,
   computePlayerOfficialFantasyStats,
   computeWeeklyLockProjection,
+  evaluateWaiverRoleBreakout,
   formatFptsExact,
   normalizePlayerLookupKey,
   parseCopiedEspnTextToPlayers,
 } from '../utils/fantasyScoring';
 import { PlayerAvatar, TeamLogo } from './NbaVisuals';
 import { buildAdminAuthHeaders } from '../utils/adminAuthClient';
-import { buildStaticFantasyWeeks } from '../utils/staticSchedule';
+import {
+  addDaysIso,
+  buildStaticFantasyWeeks,
+  formatDayShortEs,
+  getEasternTodayIso,
+} from '../utils/staticSchedule';
 
 export type FantasyTab = 'lineup' | 'waivers' | 'trades' | 'injuries_rules' | 'rules';
 
 interface FantasyEspnAssistantViewProps {
   players: PlayerSummary[];
   teams: TeamSummary[];
+  trendBreakouts?: TrendBreakoutAlert[];
+  onOpenRadarMinutesUsage?: () => void;
   onInspectEntity: (entityType: 'player' | 'team', entityId: string) => void;
   initialTab?: FantasyTab;
   onTabChange?: (tab: FantasyTab) => void;
@@ -265,6 +277,9 @@ function renderScheduleBadges(teamSched: { gamesCount: number; b2bCount: number;
 
 export function FantasyEspnAssistantView({
   players,
+  teams,
+  trendBreakouts = [],
+  onOpenRadarMinutesUsage,
   onInspectEntity,
   initialTab = 'lineup',
   onTabChange,
@@ -412,15 +427,22 @@ export function FantasyEspnAssistantView({
   const [rivalPasteBuffer, setRivalPasteBuffer] = useState<string>('');
   const [rivalPasteFeedback, setRivalPasteFeedback] = useState<string | null>(null);
 
+  // Smart Injury & B2B Weekly Projection Mode
+  const [projectionMode, setProjectionMode] = useState<FantasyProjectionMode>('smart');
+
   // Waiver Wire Filters & Add/Drop Simulator State
   const [waiverQuery, setWaiverQuery] = useState<string>('');
   const [waiverPosFilter, setWaiverPosFilter] = useState<'ALL' | 'G' | 'F' | 'C'>('ALL');
   const [waiverMinGames, setWaiverMinGames] = useState<number>(0);
-  const [waiverSortBy, setWaiverSortBy] = useState<'netGainWeek' | 'formDelta' | 'seasonAvg'>(
-    'netGainWeek'
-  );
+  const [waiverOnlyRoleBreakouts, setWaiverOnlyRoleBreakouts] = useState<boolean>(false);
+  const [waiverSortBy, setWaiverSortBy] = useState<
+    'netGainWeek' | 'streamingRole' | 'formDelta' | 'seasonAvg'
+  >('netGainWeek');
   const [selectedDropPlayerId, setSelectedDropPlayerId] = useState<string>('');
   const [actionBannerMsg, setActionBannerMsg] = useState<string | null>(null);
+  const [injuryTierFilter, setInjuryTierFilter] = useState<
+    'all' | 'punctual_b2b' | 'long_term'
+  >('all');
 
   // Table Column Interactive Sorting State
   type RosterSortKey =
@@ -719,7 +741,15 @@ export function FantasyEspnAssistantView({
     [nbaContext]
   );
 
-  // Precompute official Fantasy profile + weekly schedule projection for all NBA players
+  const teamsByAbbr = useMemo(() => {
+    const map = new Map<string, TeamSummary>();
+    for (const t of teams) {
+      if (t.abbreviation) map.set(t.abbreviation, t);
+    }
+    return map;
+  }, [teams]);
+
+  // Precompute official Fantasy profile + smart injury/B2B weekly schedule projection for all NBA players
   const enrichedCatalog = useMemo(() => {
     return effectivePlayers.map((p) => {
       const stats = computePlayerOfficialFantasyStats(p, 0);
@@ -730,11 +760,19 @@ export function FantasyEspnAssistantView({
       };
       const injury = getPlayerInjury(p);
       const severity: FantasyInjurySeverity = injury?.severity || 'healthy';
+      const availabilityContext = analyzePlayerAvailabilityContext(
+        p,
+        teamsByAbbr.get(p.teamAbbr)?.games
+      );
       const weekly = computeWeeklyLockProjection({
         scheduledGames: teamSched.gamesCount,
+        b2bGames: teamSched.b2bCount,
         stats,
         injurySeverity: severity,
+        injuryAbsenceTier: injury?.absenceTier,
         injuryDetailEs: injury?.detailEs || injury?.statusLabelEs || '',
+        availabilityContext,
+        projectionMode,
       });
 
       return {
@@ -743,10 +781,11 @@ export function FantasyEspnAssistantView({
         teamSched,
         injury,
         severity,
+        availabilityContext,
         weekly,
       };
     });
-  }, [effectivePlayers, activeWeek, getPlayerInjury]);
+  }, [effectivePlayers, activeWeek, getPlayerInjury, teamsByAbbr, projectionMode]);
 
   const enrichedById = useMemo(() => {
     const map = new Map<string, (typeof enrichedCatalog)[number]>();
@@ -846,10 +885,13 @@ export function FantasyEspnAssistantView({
 
   const lineupTotals = useMemo(() => {
     let totalGames = 0;
+    let playableGamesSum = 0;
     let rawFormulaSum = 0;
     let adjustedLockSum = 0;
     let seasonAccumulatedFpts = 0;
     let injuredStartersCount = 0;
+    let longTermStartersCount = 0;
+    let punctualOrB2BStartersCount = 0;
 
     for (const member of myRosterEnriched) {
       seasonAccumulatedFpts += member.stats.seasonTotalFpts;
@@ -857,14 +899,20 @@ export function FantasyEspnAssistantView({
 
     for (const st of myStarters) {
       totalGames += st.teamSched.gamesCount;
+      playableGamesSum += st.weekly.playableGamesEst;
       rawFormulaSum += st.weekly.rawFormulaFpts;
       adjustedLockSum += st.weekly.lockAdjustedFpts;
-      if (
-        st.severity === 'out' ||
-        st.severity === 'suspended' ||
-        st.severity === 'doubtful'
-      ) {
+      if (st.weekly.absenceTier === 'long_term') {
+        longTermStartersCount += 1;
         injuredStartersCount += 1;
+      } else if (
+        st.weekly.absenceTier === 'punctual' ||
+        st.weekly.absenceTier === 'b2b_rest'
+      ) {
+        punctualOrB2BStartersCount += 1;
+        if (st.severity !== 'healthy' && st.severity !== 'probable') {
+          injuredStartersCount += 1;
+        }
       }
     }
 
@@ -877,6 +925,7 @@ export function FantasyEspnAssistantView({
 
     return {
       totalGames,
+      playableGamesSum: Math.round(playableGamesSum * 10) / 10,
       seasonAccumulatedFpts: Math.round(seasonAccumulatedFpts * 100) / 100,
       rawFormulaSum: Math.round(rawFormulaSum * 10) / 10,
       adjustedLockSum: Math.round(adjustedLockSum * 10) / 10,
@@ -884,6 +933,8 @@ export function FantasyEspnAssistantView({
       potentialGainFromOptimization:
         Math.round((optimalAdjustedSum - adjustedLockSum) * 10) / 10,
       injuredStartersCount,
+      longTermStartersCount,
+      punctualOrB2BStartersCount,
     };
   }, [myStarters, myRosterEnriched, optimalStarterIds]);
 
@@ -931,6 +982,275 @@ export function FantasyEspnAssistantView({
     };
   }, [leagueState.roster, leagueState.takenRivalIds, leagueState.rivalRosters]);
 
+  // Daily Lineup Coverage & Gap Analyzer (Lun..Dom for activeWeek)
+  const weeklyLineupCoverage = useMemo(() => {
+    const todayIso = getEasternTodayIso();
+    if (!activeWeek) {
+      return {
+        days: [] as Array<{
+          dateIso: string;
+          dayShortLabel: string;
+          isRemaining: boolean;
+          scheduledStartersCount: number;
+          playableStartersEst: number;
+          atRiskOrOutCount: number;
+          isGapDay: boolean;
+        }>,
+        gapDateSet: new Set<string>(),
+        gapDaysSummaryLabel: 'Sin calendario',
+      };
+    }
+
+    const days = Array.from({ length: 7 }, (_, dIdx) => {
+      const dateIso = addDaysIso(activeWeek.startIso, dIdx);
+      const dayShortLabel = formatDayShortEs(dateIso);
+      const isRemaining =
+        activeWeek.id !== 'prev' &&
+        (activeWeek.id !== 'current' || dateIso >= todayIso);
+
+      let scheduledStartersCount = 0;
+      let playableStartersEst = 0;
+      let atRiskOrOutCount = 0;
+
+      for (const st of myStarters) {
+        const gameOnDay = st.teamSched.games.find((g) => g.dateIso === dateIso);
+        if (!gameOnDay) continue;
+        scheduledStartersCount += 1;
+
+        if (st.weekly.absenceTier === 'long_term') {
+          atRiskOrOutCount += 1;
+          continue;
+        }
+        let dayPlayProb = st.weekly.healthMultiplier;
+        if (gameOnDay.isBackToBack && st.weekly.b2bRestRiskGamesEst > 0) {
+          dayPlayProb = Math.max(0.25, dayPlayProb - 0.3);
+        }
+        playableStartersEst += dayPlayProb;
+        if (st.weekly.absenceTier !== 'healthy') {
+          atRiskOrOutCount += 1;
+        }
+      }
+
+      const roundedPlayable = Math.round(playableStartersEst * 10) / 10;
+      const isGapDay =
+        myStarters.length > 0
+          ? scheduledStartersCount < OFFICIAL_LEAGUE_RULES.activeStarters &&
+            (roundedPlayable <= Math.max(4.5, myStarters.length * 0.58) ||
+              atRiskOrOutCount > 0)
+          : isRemaining;
+
+      return {
+        dateIso,
+        dayShortLabel,
+        isRemaining,
+        scheduledStartersCount,
+        playableStartersEst: roundedPlayable,
+        atRiskOrOutCount,
+        isGapDay,
+      };
+    });
+
+    const gapDateSet = new Set(
+      days
+        .filter((d) => d.isGapDay && (activeWeek.id !== 'current' || d.isRemaining))
+        .map((d) => d.dateIso)
+    );
+    // Fallback if all remaining days were full: use all days with < 7 playable starters
+    if (gapDateSet.size === 0) {
+      for (const d of days) {
+        if (d.playableStartersEst < 7) gapDateSet.add(d.dateIso);
+      }
+    }
+
+    const gapLabels = days
+      .filter((d) => gapDateSet.has(d.dateIso))
+      .map((d) => d.dayShortLabel);
+
+    return {
+      days,
+      gapDateSet,
+      gapDaysSummaryLabel:
+        gapLabels.length > 0 ? gapLabels.join(', ') : 'Semana cubierta',
+    };
+  }, [activeWeek, myStarters]);
+
+  // Cross RadarNBA Minutes/Usage Positive Breakouts × League Free Agents × Lineup Gap Days
+  const { roleBreakoutByPlayerId, streamingRadarAlerts } = useMemo(() => {
+    const officialMinUsgByPlayerId = new Map<string, TrendBreakoutAlert>();
+    for (const br of trendBreakouts) {
+      if (br.axis !== 'minutes_usage' || br.direction !== 'positive') continue;
+      const existing = officialMinUsgByPlayerId.get(br.playerId);
+      if (!existing || br.breakoutScore > existing.breakoutScore) {
+        officialMinUsgByPlayerId.set(br.playerId, br);
+      }
+    }
+
+    // Track rotation players (20+ MIN) out/doubtful per NBA team to explain role promotions
+    const injuredRotationByTeam = new Map<string, Array<{ id: string; name: string }>>();
+    for (const item of enrichedCatalog) {
+      if (
+        item.stats.minutesAvg >= 20 &&
+        (item.weekly.absenceTier === 'long_term' ||
+          item.severity === 'out' ||
+          item.severity === 'ir' ||
+          item.severity === 'doubtful')
+      ) {
+        const list = injuredRotationByTeam.get(item.player.teamAbbr) || [];
+        list.push({ id: item.player.id, name: item.player.name });
+        injuredRotationByTeam.set(item.player.teamAbbr, list);
+      }
+    }
+
+    interface StreamingRoleBreakoutMeta {
+      playerId: string;
+      radarVerified: boolean;
+      radarZScore: number | null;
+      minSeason: number;
+      minRecent: number;
+      minDelta: number;
+      usgSeason: number;
+      usgRecent: number;
+      usgDelta: number;
+      promotedToStarter: boolean;
+      sustainabilityLabel: string;
+      teammateOutName: string | null;
+      gapGamesCount: number;
+      gapDayShortLabels: string[];
+      streamingPriorityScore: number;
+    }
+
+    const byPlayerId = new Map<string, StreamingRoleBreakoutMeta>();
+    const dropWeekFpts = effectiveDropMember?.weekly.lockAdjustedFpts ?? 0;
+    const dropPerGame = effectiveDropMember?.stats.weightedFptsPerGame ?? 0;
+
+    for (const item of enrichedCatalog) {
+      if (item.stats.gamesPlayed < 3) continue;
+      const official = officialMinUsgByPlayerId.get(item.player.id);
+      const waiverSig = evaluateWaiverRoleBreakout(item.player);
+      if (!official && !waiverSig) continue;
+
+      const minSeason =
+        waiverSig?.seasonMinAvg ??
+        (official?.metricKey === 'minutes'
+          ? official.baselineAvg
+          : item.stats.minutesAvg);
+      const minRecent =
+        waiverSig?.recentMinAvg ??
+        (official?.metricKey === 'minutes'
+          ? official.windowAvg
+          : item.stats.minutesAvg);
+      const minDelta =
+        waiverSig?.minDelta ??
+        (official?.metricKey === 'minutes'
+          ? Math.round(official.absDelta * 10) / 10
+          : Math.round((minRecent - minSeason) * 10) / 10);
+
+      const usgSeason =
+        waiverSig?.seasonUsgAvg ??
+        (official?.metricKey === 'usgEst'
+          ? official.baselineAvg
+          : item.player.usgAvg ?? 18);
+      const usgRecent =
+        waiverSig?.recentUsgAvg ??
+        (official?.metricKey === 'usgEst'
+          ? official.windowAvg
+          : usgSeason);
+      const usgDelta =
+        waiverSig?.usgDelta ??
+        (official?.metricKey === 'usgEst'
+          ? Math.round(official.absDelta * 10) / 10
+          : Math.round((usgRecent - usgSeason) * 10) / 10);
+
+      const promotedToStarter = Boolean(waiverSig?.promotedToStarter);
+      const teamInjuredList = injuredRotationByTeam.get(item.player.teamAbbr) || [];
+      const teammateOut =
+        teamInjuredList.find((tm) => tm.id !== item.player.id) || null;
+
+      const gapGames = item.teamSched.games.filter((g) =>
+        weeklyLineupCoverage.gapDateSet.has(g.dateIso)
+      );
+      const gapDayShortLabels = gapGames.map(
+        (g) => g.dayShortEs || formatDayShortEs(g.dateIso)
+      );
+
+      const streamingPriorityScore =
+        Math.round(
+          (gapGames.length * 6.5 +
+            Math.max(0, minDelta) * 2.2 +
+            Math.max(0, usgDelta) * 1.35 +
+            (promotedToStarter ? 5 : 0) +
+            (official ? 4 : 0) +
+            item.weekly.lockAdjustedFpts * 0.18) *
+            10
+        ) / 10;
+
+      byPlayerId.set(item.player.id, {
+        playerId: item.player.id,
+        radarVerified: Boolean(official),
+        radarZScore: official ? official.zScore : null,
+        minSeason: Math.round(minSeason * 10) / 10,
+        minRecent: Math.round(minRecent * 10) / 10,
+        minDelta: Math.round(minDelta * 10) / 10,
+        usgSeason: Math.round(usgSeason * 10) / 10,
+        usgRecent: Math.round(usgRecent * 10) / 10,
+        usgDelta: Math.round(usgDelta * 10) / 10,
+        promotedToStarter,
+        sustainabilityLabel:
+          official?.sustainabilityLabel ||
+          (promotedToStarter
+            ? 'Promoción al quinteto titular'
+            : 'Expansión sostenida de minutos y uso'),
+        teammateOutName: teammateOut?.name || null,
+        gapGamesCount: gapGames.length,
+        gapDayShortLabels,
+        streamingPriorityScore,
+      });
+    }
+
+    const alerts = enrichedCatalog
+      .filter((item) => {
+        if (unavailableIds.has(item.player.id)) return false;
+        if (!byPlayerId.has(item.player.id)) return false;
+        if (
+          item.weekly.absenceTier === 'long_term' ||
+          item.severity === 'out' ||
+          item.severity === 'ir' ||
+          item.severity === 'suspended' ||
+          item.severity === 'doubtful'
+        ) {
+          return false;
+        }
+        return item.weekly.playableGamesEst >= 1.5;
+      })
+      .map((item) => {
+        const meta = byPlayerId.get(item.player.id)!;
+        return {
+          item,
+          meta,
+          netWeekGain:
+            Math.round((item.weekly.lockAdjustedFpts - dropWeekFpts) * 10) / 10,
+          netPerGameGain:
+            Math.round((item.stats.weightedFptsPerGame - dropPerGame) * 10) / 10,
+        };
+      })
+      .sort(
+        (a, b) =>
+          b.meta.streamingPriorityScore - a.meta.streamingPriorityScore ||
+          b.netWeekGain - a.netWeekGain
+      );
+
+    return {
+      roleBreakoutByPlayerId: byPlayerId,
+      streamingRadarAlerts: alerts,
+    };
+  }, [
+    trendBreakouts,
+    enrichedCatalog,
+    unavailableIds,
+    weeklyLineupCoverage.gapDateSet,
+    effectiveDropMember,
+  ]);
+
   // Available Waiver / Free Agent Pool
   const availableWaiverPool = useMemo(() => {
     const q = normalizeSearchText(waiverQuery);
@@ -940,6 +1260,9 @@ export function FantasyEspnAssistantView({
     const filtered = enrichedCatalog.filter((item) => {
       if (unavailableIds.has(item.player.id)) return false;
       if (item.stats.gamesPlayed === 0) return false;
+      if (waiverOnlyRoleBreakouts && !roleBreakoutByPlayerId.has(item.player.id)) {
+        return false;
+      }
       if (waiverMinGames > 0 && item.teamSched.gamesCount < waiverMinGames) {
         return false;
       }
@@ -958,6 +1281,7 @@ export function FantasyEspnAssistantView({
 
     const withDeltas = filtered.map((item) => ({
       ...item,
+      roleBreakout: roleBreakoutByPlayerId.get(item.player.id) || null,
       netWeekGain: Math.round((item.weekly.lockAdjustedFpts - dropWeekFpts) * 10) / 10,
       netPerGameGain: Math.round((item.stats.weightedFptsPerGame - dropPerGame) * 10) / 10,
     }));
@@ -988,7 +1312,12 @@ export function FantasyEspnAssistantView({
           break;
         case 'lockAdjustedFpts':
         default:
-          if (waiverSortBy === 'formDelta') {
+          if (waiverSortBy === 'streamingRole') {
+            cmp =
+              (a.roleBreakout?.streamingPriorityScore ?? -999) -
+                (b.roleBreakout?.streamingPriorityScore ?? -999) ||
+              a.netWeekGain - b.netWeekGain;
+          } else if (waiverSortBy === 'formDelta') {
             cmp = a.stats.formDeltaLast5 - b.stats.formDeltaLast5;
           } else if (waiverSortBy === 'seasonAvg') {
             cmp = a.stats.seasonAvgFpts - b.stats.seasonAvgFpts;
@@ -1006,6 +1335,8 @@ export function FantasyEspnAssistantView({
   }, [
     enrichedCatalog,
     unavailableIds,
+    waiverOnlyRoleBreakouts,
+    roleBreakoutByPlayerId,
     waiverQuery,
     waiverMinGames,
     waiverPosFilter,
@@ -1531,24 +1862,40 @@ export function FantasyEspnAssistantView({
     return found;
   }, [enrichedCatalog, myRosterEnriched]);
 
-  // Injured Players & Same-Team Rotation Streamers (Tab 4)
+  // Injured & B2B-Risk Players + Same-Team Rotation Streamers (Tab 4)
   const injuryRotationCards = useMemo(() => {
     const injuredItems = enrichedCatalog
-      .filter(
-        (x) =>
-          x.injury &&
-          (x.severity === 'out' ||
-            x.severity === 'doubtful' ||
-            x.severity === 'questionable' ||
-            x.severity === 'suspended')
-      )
+      .filter((x) => {
+        const hasAlert =
+          x.weekly.absenceTier !== 'healthy' ||
+          Boolean(
+            x.injury &&
+              (x.severity === 'out' ||
+                x.severity === 'ir' ||
+                x.severity === 'doubtful' ||
+                x.severity === 'questionable' ||
+                x.severity === 'dtd' ||
+                x.severity === 'suspended')
+          );
+        if (!hasAlert) return false;
+        if (injuryTierFilter === 'long_term') {
+          return x.weekly.absenceTier === 'long_term';
+        }
+        if (injuryTierFilter === 'punctual_b2b') {
+          return (
+            x.weekly.absenceTier === 'punctual' ||
+            x.weekly.absenceTier === 'b2b_rest'
+          );
+        }
+        return true;
+      })
       .sort((a, b) => {
         const aMine = leagueState.roster.some((c) => c.playerId === a.player.id) ? 1 : 0;
         const bMine = leagueState.roster.some((c) => c.playerId === b.player.id) ? 1 : 0;
         if (aMine !== bMine) return bMine - aMine;
         return b.stats.seasonAvgFpts - a.stats.seasonAvgFpts;
       })
-      .slice(0, 14);
+      .slice(0, 16);
 
     return injuredItems.map((injItem) => {
       const isOnMyRoster = leagueState.roster.some(
@@ -1559,13 +1906,16 @@ export function FantasyEspnAssistantView({
           (cand) =>
             cand.player.teamAbbr === injItem.player.teamAbbr &&
             cand.player.id !== injItem.player.id &&
-            cand.severity === 'healthy' &&
+            cand.weekly.absenceTier === 'healthy' &&
             cand.stats.gamesPlayed >= 2
         )
         .sort((a, b) => {
           const aFree = !unavailableIds.has(a.player.id) ? 1 : 0;
           const bFree = !unavailableIds.has(b.player.id) ? 1 : 0;
           if (aFree !== bFree) return bFree - aFree;
+          const aBreak = roleBreakoutByPlayerId.has(a.player.id) ? 1 : 0;
+          const bBreak = roleBreakoutByPlayerId.has(b.player.id) ? 1 : 0;
+          if (aBreak !== bBreak) return bBreak - aBreak;
           return (
             b.stats.formDeltaLast5 - a.stats.formDeltaLast5 ||
             b.weekly.lockAdjustedFpts - a.weekly.lockAdjustedFpts
@@ -1579,7 +1929,13 @@ export function FantasyEspnAssistantView({
         beneficiaries,
       };
     });
-  }, [enrichedCatalog, leagueState.roster, unavailableIds]);
+  }, [
+    enrichedCatalog,
+    injuryTierFilter,
+    leagueState.roster,
+    unavailableIds,
+    roleBreakoutByPlayerId,
+  ]);
 
   const filteredModalSearchPlayers = useMemo(() => {
     const q = normalizeSearchText(rosterSearchQuery);
@@ -1624,25 +1980,40 @@ export function FantasyEspnAssistantView({
       .slice(0, 28);
   }, [tradePickerSide, tradeSearchQuery, myRosterEnriched, enrichedCatalog]);
 
-  const renderSeverityText = (severity: FantasyInjurySeverity, labelEs?: string) => {
-    if (severity === 'healthy') {
-      return <span className="text-emerald-400 font-medium">Sano</span>;
-    }
-    if (severity === 'out' || severity === 'suspended') {
+  const renderSeverityText = (
+    severity: FantasyInjurySeverity,
+    labelEs?: string,
+    absenceTier?: FantasyAbsenceTier,
+    absenceLabelEs?: string
+  ) => {
+    if (absenceTier === 'long_term' || severity === 'ir' || severity === 'suspended') {
       return (
         <span className="text-rose-400 font-semibold">
-          {labelEs || 'Baja (0 FPTS)'}
+          {absenceLabelEs || labelEs || 'Larga duración (0 PJ)'}
         </span>
       );
     }
-    if (severity === 'doubtful') {
+    if (absenceTier === 'b2b_rest') {
       return (
-        <span className="text-rose-300 font-semibold">
-          {labelEs || 'Muy dudoso'}
+        <span className="text-sky-300 font-semibold">
+          {absenceLabelEs || labelEs || 'Riesgo descanso B2B'}
         </span>
       );
     }
-    return <span className="text-amber-300 font-medium">{labelEs || 'Duda'}</span>;
+    if (absenceTier === 'punctual' || severity !== 'healthy') {
+      return (
+        <span
+          className={
+            severity === 'doubtful' || severity === 'out'
+              ? 'text-amber-300 font-semibold'
+              : 'text-amber-300 font-medium'
+          }
+        >
+          {absenceLabelEs || labelEs || 'Baja puntual (DTD)'}
+        </span>
+      );
+    }
+    return <span className="text-emerald-400 font-medium">Sano</span>;
   };
 
   const renderAvailabilityLabel = (playerId: string) => {
@@ -1774,18 +2145,47 @@ export function FantasyEspnAssistantView({
               </div>
             </div>
 
-            {activeWeek && (
-              <div className="text-xs text-slate-400 font-mono tabular-nums">
-                Cierre alineación: {activeWeek.lockDeadlineLabel} ·{' '}
-                <span
-                  className={
-                    activeWeek.isLocked ? 'text-amber-300' : 'text-emerald-400'
-                  }
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="inline-flex items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs">
+                <button
+                  type="button"
+                  onClick={() => setProjectionMode('smart')}
+                  title="Distingue bajas puntuales (DTD/Duda), descansos en Back-to-Back y bajas de larga duración (Out/IR)"
+                  className={`px-2.5 py-1 rounded-md font-medium transition-colors whitespace-nowrap shrink-0 ${
+                    projectionMode === 'smart'
+                      ? 'bg-[#1E293B] text-orange-400 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
                 >
-                  {activeWeek.isLocked ? 'Semana bloqueada' : 'Abierta a cambios'}
-                </span>
+                  Bajas: Inteligente (DTD/B2B vs IR)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProjectionMode('conservative')}
+                  title="Aplica recortes más estrictos ante dudas médicas o semanas con Back-to-Back"
+                  className={`px-2.5 py-1 rounded-md font-medium transition-colors whitespace-nowrap shrink-0 ${
+                    projectionMode === 'conservative'
+                      ? 'bg-[#1E293B] text-amber-300 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Conservador
+                </button>
               </div>
-            )}
+
+              {activeWeek && (
+                <div className="text-xs text-slate-400 font-mono tabular-nums">
+                  Cierre: {activeWeek.lockDeadlineLabel} ·{' '}
+                  <span
+                    className={
+                      activeWeek.isLocked ? 'text-amber-300' : 'text-emerald-400'
+                    }
+                  >
+                    {activeWeek.isLocked ? 'Semana bloqueada' : 'Abierta a cambios'}
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </section>
@@ -1836,8 +2236,8 @@ export function FantasyEspnAssistantView({
           <p className="mt-1 text-xl sm:text-2xl font-bold font-mono tabular-nums text-orange-400">
             {lineupTotals.rawFormulaSum.toFixed(1)} FPTS
           </p>
-          <p className="mt-1 text-xs text-slate-400">
-            Volumen bruto de tus 10 titulares ({activeWeek?.label || 'Semana'})
+          <p className="mt-1 text-xs text-slate-400 font-mono tabular-nums">
+            {lineupTotals.playableGamesSum.toFixed(1)} de {lineupTotals.totalGames} PJ reales est. ({activeWeek?.label || 'Semana'})
           </p>
         </div>
 
@@ -1851,8 +2251,9 @@ export function FantasyEspnAssistantView({
               ? `+${lineupTotals.potentialGainFromOptimization.toFixed(
                   1
                 )} FPTS posibles optimizando titulares`
-              : lineupTotals.injuredStartersCount > 0
-              ? `${lineupTotals.injuredStartersCount} titular(es) con alerta médica`
+              : lineupTotals.longTermStartersCount > 0 ||
+                lineupTotals.punctualOrB2BStartersCount > 0
+              ? `${lineupTotals.longTermStartersCount} larga dur. · ${lineupTotals.punctualOrB2BStartersCount} puntual/B2B`
               : 'Quinteto y rotación optimizados'}
           </p>
         </div>
@@ -1996,6 +2397,76 @@ export function FantasyEspnAssistantView({
                 </div>
               </div>
 
+              {/* Daily Coverage & Gap Strip + Streaming Radar Shortcut */}
+              {weeklyLineupCoverage.days.length > 0 && (
+                <div className="px-4 py-3 bg-[#0B1120]/45 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-x-2 text-slate-300">
+                      <span className="font-semibold text-slate-100">
+                        Cobertura diaria de tus 10 titulares
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span className="text-slate-400">
+                        Días con huecos o riesgo médico:{' '}
+                        <strong className="text-amber-300 font-mono">
+                          {weeklyLineupCoverage.gapDaysSummaryLabel}
+                        </strong>
+                      </span>
+                    </div>
+
+                    {streamingRadarAlerts.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWaiverOnlyRoleBreakouts(true);
+                          setWaiverSortBy('streamingRole');
+                          handleSelectFantasyTab('waivers');
+                        }}
+                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-orange-400 hover:text-orange-300 transition-colors whitespace-nowrap shrink-0"
+                      >
+                        <TrendingUp className="w-3.5 h-3.5" />
+                        <span>
+                          Ver {streamingRadarAlerts.length} alertas Streaming Min/Uso libres →
+                        </span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-1.5">
+                    {weeklyLineupCoverage.days.map((d) => (
+                      <div
+                        key={d.dateIso}
+                        className={`px-2.5 py-2 rounded-md border text-xs font-mono tabular-nums ${
+                          d.isGapDay
+                            ? 'bg-[#131C2E] border-amber-500/35'
+                            : 'bg-[#0F172A]/70 border-[#1E293B]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="font-semibold text-slate-200">
+                            {d.dayShortLabel}
+                          </span>
+                          <span
+                            className={
+                              d.isGapDay ? 'text-amber-300 font-semibold' : 'text-emerald-400'
+                            }
+                          >
+                            {d.playableStartersEst.toFixed(1)}/{d.scheduledStartersCount} PJ
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-[10px] font-sans text-slate-400 truncate">
+                          {d.atRiskOrOutCount > 0
+                            ? `${d.atRiskOrOutCount} baja/riesgo`
+                            : d.isGapDay
+                            ? 'Hueco alineación'
+                            : 'Carga sólida'}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Roster Table (Starters + Bench Split) */}
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
@@ -2136,16 +2607,21 @@ export function FantasyEspnAssistantView({
                               </div>
                             </div>
                           </td>
-                          <td className="py-2.5 px-3 max-w-[190px]">
+                          <td className="py-2.5 px-3 max-w-[215px]">
                             <div>
                               {renderSeverityText(
                                 item.severity,
-                                item.injury?.statusLabelEs
+                                item.injury?.statusLabelEs,
+                                item.weekly.absenceTier,
+                                item.weekly.absenceLabelEs
                               )}
                             </div>
-                            {item.injury?.detailEs && (
-                              <div className="text-[11px] text-slate-400 truncate">
-                                {item.injury.detailEs}
+                            {(item.weekly.riskWarningEs || item.injury?.detailEs) && (
+                              <div
+                                className="text-[11px] text-slate-400 truncate"
+                                title={item.weekly.riskWarningEs || item.injury?.detailEs}
+                              >
+                                {item.injury?.detailEs || item.weekly.riskWarningEs}
                               </div>
                             )}
                           </td>
@@ -2176,8 +2652,15 @@ export function FantasyEspnAssistantView({
                           <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-300">
                             {item.weekly.rawFormulaFpts.toFixed(1)}
                           </td>
-                          <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-orange-400">
-                            {item.weekly.lockAdjustedFpts.toFixed(1)}
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                            <span className="font-bold text-orange-400 block">
+                              {item.weekly.lockAdjustedFpts.toFixed(1)}
+                            </span>
+                            {item.weekly.playableGamesEst !== item.teamSched.gamesCount && (
+                              <span className="text-[10px] text-slate-400 block">
+                                {item.weekly.playableGamesEst}/{item.teamSched.gamesCount} PJ est.
+                              </span>
+                            )}
                           </td>
                           <td className="py-2.5 pl-2 pr-4 text-right whitespace-nowrap">
                             <button
@@ -2249,22 +2732,30 @@ export function FantasyEspnAssistantView({
                               </div>
                             </div>
                           </td>
-                          <td className="py-2.5 px-3 max-w-[190px]">
+                          <td className="py-2.5 px-3 max-w-[215px]">
                             <div>
                               {renderSeverityText(
                                 item.severity,
-                                item.injury?.statusLabelEs
+                                item.injury?.statusLabelEs,
+                                item.weekly.absenceTier,
+                                item.weekly.absenceLabelEs
                               )}
                             </div>
-                            {item.injury?.detailEs && (
-                              <div className="text-[11px] text-slate-400 truncate">
-                                {item.injury.detailEs}
+                            {(item.weekly.riskWarningEs || item.injury?.detailEs) && (
+                              <div
+                                className="text-[11px] text-slate-400 truncate"
+                                title={item.weekly.riskWarningEs || item.injury?.detailEs}
+                              >
+                                {item.injury?.detailEs || item.weekly.riskWarningEs}
                               </div>
                             )}
                           </td>
                           <td className="py-2.5 px-3 min-w-[210px]">
                             <div className="font-mono tabular-nums text-slate-300 font-semibold">
                               {item.teamSched.gamesCount} PJ
+                              {item.teamSched.b2bCount > 0
+                                ? ` · ${item.teamSched.b2bCount} B2B`
+                                : ''}
                             </div>
                             {renderScheduleBadges(item.teamSched)}
                           </td>
@@ -2280,8 +2771,15 @@ export function FantasyEspnAssistantView({
                           <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-400">
                             {item.weekly.rawFormulaFpts.toFixed(1)}
                           </td>
-                          <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-slate-300">
-                            {item.weekly.lockAdjustedFpts.toFixed(1)}
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                            <span className="font-semibold text-slate-300 block">
+                              {item.weekly.lockAdjustedFpts.toFixed(1)}
+                            </span>
+                            {item.weekly.playableGamesEst !== item.teamSched.gamesCount && (
+                              <span className="text-[10px] text-slate-500 block">
+                                {item.weekly.playableGamesEst}/{item.teamSched.gamesCount} PJ est.
+                              </span>
+                            )}
                           </td>
                           <td className="py-2.5 pl-2 pr-4 text-right whitespace-nowrap">
                             <button
@@ -2345,6 +2843,192 @@ export function FantasyEspnAssistantView({
             )}
           </section>
 
+          {/* Radar Minutes/Usage × League Free Agents × Lineup Gaps Streaming Panel */}
+          <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden divide-y divide-[#1E293B]">
+            <div className="px-4 py-3.5 bg-[#0F172A]/70 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <div className="flex flex-wrap items-center gap-x-2 text-xs text-slate-400">
+                  <span className="font-semibold text-emerald-400">
+                    Radar Minutos/Uso × Agentes Libres
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span>
+                    Días con huecos ({activeWeek?.label || 'Semana'}):{' '}
+                    <strong className="text-amber-300 font-mono">
+                      {weeklyLineupCoverage.gapDaysSummaryLabel}
+                    </strong>
+                  </span>
+                </div>
+                <h3 className="text-sm font-bold text-slate-100">
+                  Alertas de Streaming · Jugadores Libres que Acaban de Ganar Rol
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Cruza automáticamente los Agentes Libres de tu liga con las rupturas positivas de Minutos, Uso (USG%) y titularidades recientes priorizando tus días con menor cobertura.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setWaiverOnlyRoleBreakouts((prev) => !prev)
+                  }
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                    waiverOnlyRoleBreakouts
+                      ? 'bg-orange-500 border-orange-500 text-slate-950'
+                      : 'bg-[#0B1120] border-[#1E293B] hover:border-orange-500/60 text-slate-200'
+                  }`}
+                >
+                  {waiverOnlyRoleBreakouts
+                    ? 'Mostrando solo rupturas en tabla'
+                    : `Filtrar tabla (${streamingRadarAlerts.length})`}
+                </button>
+                {onOpenRadarMinutesUsage && (
+                  <button
+                    type="button"
+                    onClick={onOpenRadarMinutesUsage}
+                    className="px-3 py-1.5 text-xs font-medium bg-[#0B1120] border border-[#1E293B] hover:border-slate-600 text-slate-300 hover:text-white rounded-lg transition-colors whitespace-nowrap shrink-0"
+                  >
+                    Abrir Radar Minutos/Uso →
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {streamingRadarAlerts.length === 0 ? (
+              <div className="p-5 text-xs text-slate-400 text-center">
+                No se detectan agentes libres disponibles con ruptura positiva de Minutos/Uso en este momento. Revisa la tabla general inferior.
+              </div>
+            ) : (
+              <div className="divide-y divide-[#1E293B]/80">
+                {streamingRadarAlerts.slice(0, 6).map(({ item, meta, netWeekGain }) => (
+                  <div
+                    key={item.player.id}
+                    className="px-4 py-3 hover:bg-[#182338] transition-colors flex flex-col lg:flex-row lg:items-center justify-between gap-3 text-xs"
+                  >
+                    <div className="flex items-start sm:items-center gap-3 min-w-0">
+                      <PlayerAvatar
+                        playerId={item.player.id}
+                        name={item.player.name}
+                        teamAbbr={item.player.teamAbbr}
+                        size="sm"
+                      />
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onInspectEntity('player', item.player.id)
+                            }
+                            className="font-semibold text-sm text-slate-100 hover:text-orange-400 transition-colors text-left"
+                          >
+                            {item.player.name}
+                          </button>
+                          <span className="font-mono text-slate-400">
+                            {item.player.teamAbbr} · {item.player.position}
+                          </span>
+                          {meta.promotedToStarter && (
+                            <>
+                              <span className="text-slate-600">·</span>
+                              <span className="text-emerald-400 font-semibold">
+                                Nuevo titular
+                              </span>
+                            </>
+                          )}
+                          {meta.radarVerified && meta.radarZScore !== null && (
+                            <>
+                              <span className="text-slate-600">·</span>
+                              <span className="font-mono text-orange-400">
+                                Radar Z {meta.radarZScore >= 0 ? '+' : ''}
+                                {meta.radarZScore.toFixed(1)}
+                              </span>
+                            </>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-x-2 text-[11px] font-mono tabular-nums text-slate-300">
+                          <span>
+                            MIN {meta.minSeason.toFixed(1)} →{' '}
+                            <strong className="text-emerald-400">
+                              {meta.minRecent.toFixed(1)}
+                            </strong>{' '}
+                            ({meta.minDelta >= 0 ? '+' : ''}
+                            {meta.minDelta.toFixed(1)})
+                          </span>
+                          <span className="text-slate-600">·</span>
+                          <span>
+                            USG {meta.usgSeason.toFixed(1)}% →{' '}
+                            <strong className="text-slate-100">
+                              {meta.usgRecent.toFixed(1)}%
+                            </strong>{' '}
+                            ({meta.usgDelta >= 0 ? '+' : ''}
+                            {meta.usgDelta.toFixed(1)}%)
+                          </span>
+                          {meta.teammateOutName && (
+                            <>
+                              <span className="text-slate-600">·</span>
+                              <span className="font-sans text-amber-300">
+                                Relevo por baja de {meta.teammateOutName}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between lg:justify-end gap-4 shrink-0 font-mono tabular-nums">
+                      <div className="text-left lg:text-right">
+                        <span className="text-slate-200 font-semibold block">
+                          {item.weekly.playableGamesEst}/{item.teamSched.gamesCount} PJ est.
+                          {meta.gapGamesCount > 0 && (
+                            <span className="text-amber-300">
+                              {' '}
+                              · {meta.gapGamesCount} en huecos (
+                              {meta.gapDayShortLabels.join(', ')})
+                            </span>
+                          )}
+                        </span>
+                        <span className="text-[11px] text-slate-400 font-sans">
+                          {meta.sustainabilityLabel}
+                        </span>
+                      </div>
+
+                      <div className="text-right min-w-[92px]">
+                        <span className="font-bold text-orange-400 block">
+                          {item.weekly.lockAdjustedFpts.toFixed(1)} FPTS
+                        </span>
+                        <span
+                          className={`text-[11px] ${
+                            netWeekGain >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                          }`}
+                        >
+                          {netWeekGain >= 0 ? '+' : ''}
+                          {netWeekGain.toFixed(1)} vs corte
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleExecuteWaiverSwap(
+                            item.player.id,
+                            effectiveDropMember?.player.id
+                          )
+                        }
+                        className="px-3 py-1.5 rounded-lg bg-orange-500 hover:bg-orange-400 text-slate-950 font-sans font-semibold text-xs transition-colors whitespace-nowrap shrink-0"
+                      >
+                        {myRosterEnriched.length >=
+                        OFFICIAL_LEAGUE_RULES.maxContracts
+                          ? 'Alta × Corte'
+                          : 'Fichar'}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
           {/* Filters + Waiver Table */}
           <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
             <div className="p-4 border-b border-[#1E293B] bg-[#0F172A]/60 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
@@ -2391,11 +3075,25 @@ export function FantasyEspnAssistantView({
                   ))}
                 </div>
 
+                {/* Role Breakout Quick Toggle */}
+                <button
+                  type="button"
+                  onClick={() => setWaiverOnlyRoleBreakouts((prev) => !prev)}
+                  className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                    waiverOnlyRoleBreakouts
+                      ? 'bg-emerald-500 border-emerald-500 text-slate-950'
+                      : 'bg-[#0B1120] border-[#1E293B] text-emerald-400 hover:border-emerald-500/50'
+                  }`}
+                >
+                  ▲ Rupturas Min/Uso ({streamingRadarAlerts.length})
+                </button>
+
                 {/* Sort Mode */}
                 <div className="flex items-center p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg">
                   {(
                     [
                       { id: 'netGainWeek', label: 'Ganancia Semanal' },
+                      { id: 'streamingRole', label: 'Streaming Rol/Huecos' },
                       { id: 'formDelta', label: 'Explosión Últ. 5 PJ' },
                       { id: 'seasonAvg', label: 'Media FPTS/PJ' },
                     ] as const
@@ -2554,6 +3252,17 @@ export function FantasyEspnAssistantView({
                                 Ver partidos ({item.stats.currentSeasonGamesPlayed})
                               </button>
                             </div>
+                            {item.roleBreakout && (
+                              <div className="text-[11px] font-mono tabular-nums text-emerald-400 mt-0.5">
+                                ▲ Rol: {item.roleBreakout.minDelta >= 0 ? '+' : ''}
+                                {item.roleBreakout.minDelta.toFixed(1)} MIN ·{' '}
+                                {item.roleBreakout.usgDelta >= 0 ? '+' : ''}
+                                {item.roleBreakout.usgDelta.toFixed(1)}% USG
+                                {item.roleBreakout.gapGamesCount > 0
+                                  ? ` · ${item.roleBreakout.gapGamesCount} PJ en huecos`
+                                  : ''}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -2561,7 +3270,9 @@ export function FantasyEspnAssistantView({
                       <td className="py-2.5 px-3 whitespace-nowrap">
                         {renderSeverityText(
                           item.severity,
-                          item.injury?.statusLabelEs
+                          item.injury?.statusLabelEs,
+                          item.weekly.absenceTier,
+                          item.weekly.absenceLabelEs
                         )}
                       </td>
 
@@ -2599,8 +3310,15 @@ export function FantasyEspnAssistantView({
                         </span>
                       </td>
 
-                      <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-orange-400">
-                        {item.weekly.lockAdjustedFpts.toFixed(1)}
+                      <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                        <span className="font-bold text-orange-400 block">
+                          {item.weekly.lockAdjustedFpts.toFixed(1)}
+                        </span>
+                        {item.weekly.playableGamesEst !== item.teamSched.gamesCount && (
+                          <span className="text-[10px] text-slate-400 block">
+                            {item.weekly.playableGamesEst}/{item.teamSched.gamesCount} PJ est.
+                          </span>
+                        )}
                       </td>
 
                       <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
@@ -2985,18 +3703,43 @@ export function FantasyEspnAssistantView({
         <div className="space-y-5">
           {/* Panel A: Active Medical Alerts + Same-Team Rotation Streamers */}
           <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4">
-            <div>
-              <h3 className="text-base font-bold text-slate-100">
-                Alertas Médicas en Español & Relevos de Rotación (Riesgo de 0 FPTS)
-              </h3>
-              <p className="text-xs text-slate-400">
-                Al no existir sustituciones entre semana tras el bloqueo del lunes, revisa aquí las bajas confirmadas o dudas y qué compañeros sanos están libres en tu liga.
-              </p>
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-100">
+                  Clasificación Inteligente de Bajas & Relevos de Rotación (Riesgo Cierre Lunes)
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Distingue bajas puntuales (DTD / Cuestionable y descansos en Back-to-Back) frente a lesionados de larga duración (Out / IR · 0.0 PJ) y señala los relevos sanos con subida de rol.
+                </p>
+              </div>
+
+              <div className="inline-flex items-center p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs shrink-0">
+                {(
+                  [
+                    { id: 'all', label: 'Todas las alertas' },
+                    { id: 'punctual_b2b', label: 'Puntuales y B2B' },
+                    { id: 'long_term', label: 'Larga duración (Out/IR)' },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setInjuryTierFilter(opt.id)}
+                    className={`px-3 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap shrink-0 ${
+                      injuryTierFilter === opt.id
+                        ? 'bg-orange-500 text-slate-950 font-semibold'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {injuryRotationCards.length === 0 ? (
               <p className="text-xs text-slate-400 py-6 text-center">
-                No se registran partes médicos críticos en este momento.
+                No se registran partes médicos ni alertas de descanso en este filtro.
               </p>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
@@ -3033,7 +3776,7 @@ export function FantasyEspnAssistantView({
                                 </span>
                               )}
                             </div>
-                            <div className="text-xs text-slate-400 font-mono">
+                            <div className="text-xs text-slate-400 font-mono tabular-nums">
                               {injItem.player.teamAbbr} · {injItem.player.position} ·{' '}
                               {injItem.stats.seasonAvgFpts.toFixed(1)} FPTS/PJ
                             </div>
@@ -3043,17 +3786,22 @@ export function FantasyEspnAssistantView({
                         <div className="text-right text-xs shrink-0">
                           {renderSeverityText(
                             injItem.severity,
-                            injItem.injury?.statusLabelEs
+                            injItem.injury?.statusLabelEs,
+                            injItem.weekly.absenceTier,
+                            injItem.weekly.absenceLabelEs
                           )}
-                          <div className="text-[11px] text-slate-400 font-mono">
-                            {injItem.teamSched.gamesCount} PJ sem.
+                          <div className="text-[11px] text-slate-400 font-mono tabular-nums">
+                            {injItem.weekly.playableGamesEst}/{injItem.teamSched.gamesCount} PJ est. ·{' '}
+                            {injItem.weekly.lockAdjustedFpts.toFixed(1)} FPTS
                           </div>
                         </div>
                       </div>
 
-                      {injItem.injury?.detailEs && (
+                      {(injItem.injury?.detailEs || injItem.weekly.riskWarningEs) && (
                         <p className="text-xs text-slate-300">
-                          Parte médico: {injItem.injury.detailEs}
+                          {injItem.injury?.detailEs
+                            ? `Parte médico: ${injItem.injury.detailEs}`
+                            : injItem.weekly.riskWarningEs}
                         </p>
                       )}
 
@@ -3062,27 +3810,35 @@ export function FantasyEspnAssistantView({
                           <p className="text-[11px] text-slate-400">
                             Compañeros sanos que suben rotación ({injItem.player.teamAbbr}):
                           </p>
-                          {beneficiaries.map((ben) => (
-                            <div
-                              key={ben.player.id}
-                              className="flex items-center justify-between gap-2 text-xs"
-                            >
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onInspectEntity('player', ben.player.id)
-                                }
-                                className="text-slate-200 hover:text-orange-400 font-medium truncate text-left"
+                          {beneficiaries.map((ben) => {
+                            const benBreakout = roleBreakoutByPlayerId.get(ben.player.id);
+                            return (
+                              <div
+                                key={ben.player.id}
+                                className="flex items-center justify-between gap-2 text-xs"
                               >
-                                {ben.player.name} ({ben.player.position}) ·{' '}
-                                {renderAvailabilityLabel(ben.player.id)}
-                              </button>
-                              <span className="font-mono tabular-nums text-slate-300 shrink-0">
-                                {ben.stats.last5AvgFpts.toFixed(1)} FPTS (5P) ·{' '}
-                                {ben.teamSched.gamesCount} PJ
-                              </span>
-                            </div>
-                          ))}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onInspectEntity('player', ben.player.id)
+                                  }
+                                  className="text-slate-200 hover:text-orange-400 font-medium truncate text-left"
+                                >
+                                  {ben.player.name} ({ben.player.position}) ·{' '}
+                                  {renderAvailabilityLabel(ben.player.id)}
+                                  {benBreakout && (
+                                    <span className="text-emerald-400 font-mono ml-1">
+                                      · ▲ +{benBreakout.minDelta.toFixed(1)} MIN
+                                    </span>
+                                  )}
+                                </button>
+                                <span className="font-mono tabular-nums text-slate-300 shrink-0">
+                                  {ben.stats.last5AvgFpts.toFixed(1)} FPTS (5P) ·{' '}
+                                  {ben.teamSched.gamesCount} PJ
+                                </span>
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>

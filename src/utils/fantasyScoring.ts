@@ -1,7 +1,10 @@
 import type {
+  FantasyAbsenceTier,
   FantasyInjurySeverity,
+  FantasyProjectionMode,
   PlayerGameLog,
   PlayerSummary,
+  TeamGameLog,
 } from '../types/nba';
 
 /**
@@ -391,79 +394,424 @@ export function computePlayerOfficialFantasyStats(
   };
 }
 
+export interface PlayerAvailabilityContext {
+  recentConsecutiveTeamMisses: number;
+  eligibleB2Bs: number;
+  satOutB2Bs: number;
+  b2bRestRate: number;
+  hasB2BRestPattern: boolean;
+}
+
+/**
+ * Empirically inspects 2026-27 player logs against team game logs to separate:
+ * 1) Multi-week ongoing absences (missed >= 5 straight team games)
+ * 2) Punctual Back-to-Back load-management rest patterns (missed >= 45% of B2Bs while active in adjacent games)
+ */
+export function analyzePlayerAvailabilityContext(
+  player?: PlayerSummary,
+  teamGames?: TeamGameLog[]
+): PlayerAvailabilityContext {
+  if (!player || !Array.isArray(teamGames) || teamGames.length === 0) {
+    return {
+      recentConsecutiveTeamMisses: 0,
+      eligibleB2Bs: 0,
+      satOutB2Bs: 0,
+      b2bRestRate: 0,
+      hasB2BRestPattern: false,
+    };
+  }
+
+  const teamGames2027 = teamGames.filter((g) => g.seasonLabel === '2026-27');
+  const playerGames2027 = (player.games || []).filter((g) => g.seasonLabel === '2026-27');
+
+  if (teamGames2027.length === 0) {
+    return {
+      recentConsecutiveTeamMisses: 0,
+      eligibleB2Bs: 0,
+      satOutB2Bs: 0,
+      b2bRestRate: 0,
+      hasB2BRestPattern: false,
+    };
+  }
+
+  const playedDates = new Set<string>();
+  let minSum = 0;
+  for (const pg of playerGames2027) {
+    if (pg.minutes > 0) {
+      playedDates.add(pg.date);
+      minSum += pg.minutes;
+    }
+  }
+  const avgMin = playerGames2027.length > 0 ? minSum / playerGames2027.length : 0;
+
+  // teamGames2027 is ordered newest -> oldest
+  let recentConsecutiveTeamMisses = 0;
+  for (const tg of teamGames2027) {
+    if (!playedDates.has(tg.date)) {
+      recentConsecutiveTeamMisses += 1;
+    } else {
+      break;
+    }
+  }
+
+  let eligibleB2Bs = 0;
+  let satOutB2Bs = 0;
+
+  if (avgMin >= 18 && playerGames2027.length >= 4) {
+    for (let i = 0; i < teamGames2027.length; i += 1) {
+      const tg = teamGames2027[i];
+      if (!tg.isBackToBack) continue;
+      // Check adjacent games (i + 1 is the 1st leg of the B2B, i - 1 is the next game after the B2B)
+      const firstLeg = teamGames2027[i + 1];
+      const nextAfter = teamGames2027[i - 1];
+      const playedFirstLeg = firstLeg ? playedDates.has(firstLeg.date) : false;
+      const playedNextAfter = nextAfter ? playedDates.has(nextAfter.date) : false;
+
+      if (playedFirstLeg || playedNextAfter) {
+        eligibleB2Bs += 1;
+        if (!playedDates.has(tg.date)) {
+          satOutB2Bs += 1;
+        }
+      }
+    }
+  }
+
+  const b2bRestRate = eligibleB2Bs > 0 ? round2(satOutB2Bs / eligibleB2Bs) : 0;
+  const hasB2BRestPattern = eligibleB2Bs >= 2 && b2bRestRate >= 0.45;
+
+  return {
+    recentConsecutiveTeamMisses,
+    eligibleB2Bs,
+    satOutB2Bs,
+    b2bRestRate,
+    hasB2BRestPattern,
+  };
+}
+
+export interface WaiverRoleBreakoutSignal {
+  sampleGames: number;
+  seasonMinAvg: number;
+  recentMinAvg: number;
+  minDelta: number;
+  seasonUsgAvg: number;
+  recentUsgAvg: number;
+  usgDelta: number;
+  promotedToStarter: boolean;
+}
+
+/**
+ * Fantasy-tuned role breakout detector for Free Agents (catches emerging 17-26 MIN rotation
+ * players gaining minutes, usage, or a starting spot in their last 3-4 games).
+ */
+export function evaluateWaiverRoleBreakout(
+  player: PlayerSummary
+): WaiverRoleBreakoutSignal | null {
+  const g2027 = (player.games || []).filter(
+    (g) => g.seasonLabel === '2026-27' && g.minutes > 0
+  );
+  if (g2027.length < 4) return null;
+
+  const sampleGames = g2027.length >= 7 ? 4 : 3;
+  const recent = g2027.slice(0, sampleGames);
+  const prior = g2027.slice(sampleGames);
+  if (prior.length === 0) return null;
+
+  const mean = (arr: PlayerGameLog[], fn: (g: PlayerGameLog) => number) =>
+    arr.reduce((s, g) => s + fn(g), 0) / arr.length;
+
+  const seasonMinAvg = round1(mean(g2027, (g) => g.minutes));
+  const recentMinAvg = round1(mean(recent, (g) => g.minutes));
+  const priorMinAvg = round1(mean(prior, (g) => g.minutes));
+  const minDeltaVsSeason = round1(recentMinAvg - seasonMinAvg);
+  const minDeltaVsPrior = round1(recentMinAvg - priorMinAvg);
+  const effectiveMinDelta = round1(
+    Math.max(minDeltaVsSeason, minDeltaVsPrior * 0.72)
+  );
+
+  const seasonUsgAvg = round1(mean(g2027, (g) => g.usgEst));
+  const recentUsgAvg = round1(mean(recent, (g) => g.usgEst));
+  const usgDelta = round1(recentUsgAvg - seasonUsgAvg);
+
+  const recentStarterRate = mean(recent, (g) => (g.isStarter ? 1 : 0));
+  const priorStarterRate = mean(prior, (g) => (g.isStarter ? 1 : 0));
+  const promotedToStarter =
+    recentStarterRate >= 0.66 && priorStarterRate <= 0.34;
+
+  if (recentMinAvg < 17.5) return null;
+
+  const qualifies =
+    effectiveMinDelta >= 3.2 ||
+    usgDelta >= 2.8 ||
+    (promotedToStarter && effectiveMinDelta >= 1.5);
+
+  if (!qualifies) return null;
+
+  return {
+    sampleGames,
+    seasonMinAvg,
+    recentMinAvg,
+    minDelta: effectiveMinDelta,
+    seasonUsgAvg,
+    recentUsgAvg,
+    usgDelta,
+    promotedToStarter,
+  };
+}
+
+export interface WeeklyLockProjectionResult {
+  rawFormulaFpts: number; // Exact rule: Partidos en la Semana × Media FPTS/Partido
+  scheduledGames: number;
+  playableGamesEst: number;
+  missedInjuryGamesEst: number;
+  b2bRestRiskGamesEst: number;
+  lockAdjustedFpts: number; // Smart lock optimizer score accounting for 0-FPTS injury/B2B risk & recent form
+  healthMultiplier: number;
+  absenceTier: FantasyAbsenceTier;
+  absenceLabelEs: string;
+  riskWarningEs: string | null;
+}
+
 /**
  * Under Strict Weekly Lineup Lock (Monday lock, 0 FPTS for missed games, no mid-week subs),
- * calculates both the raw rule formula (Games × Season Avg FPTS) and the health-adjusted expected volume.
+ * differentiates:
+ * - Long-term absences (IR / Suspension / Multi-week Out -> 0.0 playable games)
+ * - Punctual Day-to-Day / Questionable / Doubtful / 1-game Out absences
+ * - Back-to-Back load-management / rest risk when b2bGames > 0
  */
 export function computeWeeklyLockProjection(params: {
   scheduledGames: number;
+  b2bGames?: number;
   stats: PlayerOfficialFantasyStats;
   injurySeverity?: FantasyInjurySeverity;
+  injuryAbsenceTier?: FantasyAbsenceTier;
   injuryDetailEs?: string;
-}): {
-  rawFormulaFpts: number; // Exact rule: Partidos en la Semana × Media FPTS/Partido
-  playableGamesEst: number;
-  lockAdjustedFpts: number; // Smart lock optimizer score accounting for 0-FPTS injury risk & recent form
-  healthMultiplier: number;
-  riskWarningEs: string | null;
-} {
-  const { scheduledGames, stats, injurySeverity = 'healthy', injuryDetailEs = '' } = params;
+  availabilityContext?: PlayerAvailabilityContext;
+  projectionMode?: FantasyProjectionMode;
+}): WeeklyLockProjectionResult {
+  const {
+    scheduledGames,
+    b2bGames = 0,
+    stats,
+    injurySeverity = 'healthy',
+    injuryAbsenceTier,
+    injuryDetailEs = '',
+    availabilityContext,
+    projectionMode = 'smart',
+  } = params;
+
   const rawFormulaFpts = round1(scheduledGames * stats.seasonAvgFpts);
-
-  let healthMultiplier = 1.0;
-  let playableGamesEst = scheduledGames;
-  let riskWarningEs: string | null = null;
-
-  if (
-    injurySeverity === 'out' ||
-    injurySeverity === 'suspended' ||
-    injurySeverity === 'ir'
-  ) {
-    const detail = (injuryDetailEs || '').toLowerCase();
-    // Keywords indicating a long-term absence or significant recovery time
-    const isLongTerm =
-      /cirug|rotura|cruzado|fractur|meses|indefinid|temporada|prolongad|aquiles|8-10|6-8|4-6/i.test(
-        detail
-      ) ||
-      // Also treat as long-term if specifically mentioned "semanas" (plural) unless it's just "esta semana"
-      (detail.includes('semana') && !detail.includes('esta semana') && !detail.includes('proxima semana'));
-
-    if (isLongTerm || scheduledGames <= 1 || injurySeverity === 'ir' || injurySeverity === 'suspended') {
-      playableGamesEst = 0;
-      healthMultiplier = 0.0;
-      riskWarningEs =
-        injurySeverity === 'suspended'
-          ? 'Sancionado: suma 0.0 FPTS sin relevo entre semana'
-          : injurySeverity === 'ir'
-          ? 'En lista IR: baja prolongada confirmada (0.0 FPTS)'
-          : 'Baja médica definitiva/larga duración: 0.0 FPTS proyectados';
-    } else {
-      // Short-term / Day-to-Day style OUT (e.g. "Baja hoy contra...")
-      // We estimate they miss the first game but might play the rest of the week
-      playableGamesEst = Math.max(0, scheduledGames - 1);
-      healthMultiplier = scheduledGames > 0 ? playableGamesEst / scheduledGames : 0;
-      riskWarningEs = `Baja confirmada hoy (estimación: se pierde 1 de ${scheduledGames} PJ; ${playableGamesEst} PJ probables restantes)`;
-    }
-  } else if (injurySeverity === 'doubtful') {
-    healthMultiplier = 0.35;
-    playableGamesEst = round1(scheduledGames * healthMultiplier);
-    riskWarningEs = 'Muy dudoso: alto peligro de perder partidos tras el bloqueo';
-  } else if (injurySeverity === 'questionable' || injurySeverity === 'dtd') {
-    healthMultiplier = 0.75;
-    playableGamesEst = round1(scheduledGames * healthMultiplier);
-    riskWarningEs = 'Cuestionable / Día a día: vigilar antes del cierre del lunes';
-  } else if (injurySeverity === 'probable') {
-    healthMultiplier = 0.95;
-    playableGamesEst = round1(scheduledGames * healthMultiplier);
+  if (scheduledGames <= 0) {
+    return {
+      rawFormulaFpts: 0,
+      scheduledGames: 0,
+      playableGamesEst: 0,
+      missedInjuryGamesEst: 0,
+      b2bRestRiskGamesEst: 0,
+      lockAdjustedFpts: 0,
+      healthMultiplier: 0,
+      absenceTier:
+        injurySeverity === 'ir' || injurySeverity === 'suspended'
+          ? 'long_term'
+          : injuryAbsenceTier || 'healthy',
+      absenceLabelEs: 'Sin partidos',
+      riskWarningEs: null,
+    };
   }
 
+  const detail = (injuryDetailEs || '').toLowerCase();
+  const isRestKeyword =
+    injuryAbsenceTier === 'b2b_rest' ||
+    /\b(?:descanso|dosificaci|gesti[oó]n de cargas|load management|injury management|rest)\b/i.test(
+      detail
+    );
+  const isLongTermKeyword =
+    injuryAbsenceTier === 'long_term' ||
+    /\b(?:cirug|rotura|cruzado|fractur|meses|indefinid|temporada|prolongad|aquiles|menisco|8-10|6-8|4-6|3-4|2-4)\b/i.test(
+      detail
+    ) ||
+    (detail.includes('semana') &&
+      !detail.includes('esta semana') &&
+      !detail.includes('proxima semana'));
+
+  const consecutiveMisses = availabilityContext?.recentConsecutiveTeamMisses ?? 0;
+  const hasB2BPattern = availabilityContext?.hasB2BRestPattern ?? false;
+  const b2bRestRate = availabilityContext?.b2bRestRate ?? 0;
+  const satOutB2Bs = availabilityContext?.satOutB2Bs ?? 0;
+  const eligibleB2Bs = availabilityContext?.eligibleB2Bs ?? 0;
+
+  let playableGamesEst = scheduledGames;
+  let missedInjuryGamesEst = 0;
+  let b2bRestRiskGamesEst = 0;
+  let absenceTier: FantasyAbsenceTier = 'healthy';
+  let absenceLabelEs = 'Disponible';
+  let riskWarningEs: string | null = null;
+
+  // 1. LONG-TERM ABSENCES (Out long-term, IR, Suspension, or Out + >= 5 consecutive missed team games)
+  if (
+    injurySeverity === 'ir' ||
+    injurySeverity === 'suspended' ||
+    (injurySeverity === 'out' &&
+      (isLongTermKeyword || consecutiveMisses >= 5))
+  ) {
+    playableGamesEst = 0;
+    missedInjuryGamesEst = scheduledGames;
+    absenceTier = 'long_term';
+    absenceLabelEs =
+      injurySeverity === 'ir'
+        ? 'Larga duración (IR · 0 PJ)'
+        : injurySeverity === 'suspended'
+        ? 'Sanción fija (0 PJ)'
+        : 'Larga duración (0 PJ)';
+    riskWarningEs =
+      injurySeverity === 'suspended'
+        ? 'Sancionado: suma 0.0 FPTS sin relevo entre semana'
+        : injurySeverity === 'ir'
+        ? 'Lista IR: baja de larga duración confirmada (0.0 FPTS)'
+        : `Baja de larga duración (${
+            consecutiveMisses >= 5
+              ? `${consecutiveMisses} partidos seguidos ausente`
+              : 'parte prolongado'
+          }): 0.0 FPTS`;
+  }
+  // 2. SHORT-TERM / PUNCTUAL 'OUT' (1-game absence or load-management rest day)
+  else if (injurySeverity === 'out') {
+    if (isRestKeyword) {
+      absenceTier = 'b2b_rest';
+      b2bRestRiskGamesEst = Math.min(
+        scheduledGames,
+        projectionMode === 'conservative' ? 1.5 : 1.0
+      );
+      playableGamesEst = round1(Math.max(0, scheduledGames - b2bRestRiskGamesEst));
+      absenceLabelEs = `Descanso puntual (${playableGamesEst}/${scheduledGames} PJ)`;
+      riskWarningEs = `Descanso / gestión de cargas: se proyectan ${playableGamesEst} de ${scheduledGames} PJ jugables`;
+    } else {
+      absenceTier = 'punctual';
+      const baseMiss =
+        scheduledGames <= 1
+          ? 1
+          : projectionMode === 'conservative'
+          ? Math.min(scheduledGames, 2.0)
+          : 1.2;
+      const extraB2B =
+        b2bGames > 0 && scheduledGames - baseMiss > 1
+          ? round1(b2bGames * (projectionMode === 'conservative' ? 0.45 : 0.3))
+          : 0;
+      missedInjuryGamesEst = round1(Math.min(scheduledGames, baseMiss));
+      b2bRestRiskGamesEst = round1(
+        Math.min(Math.max(0, scheduledGames - missedInjuryGamesEst), extraB2B)
+      );
+      playableGamesEst = round1(
+        Math.max(0, scheduledGames - missedInjuryGamesEst - b2bRestRiskGamesEst)
+      );
+      absenceLabelEs = `Baja puntual (${playableGamesEst}/${scheduledGames} PJ)`;
+      riskWarningEs = `Baja puntual de corto plazo: ~${playableGamesEst} de ${scheduledGames} PJ estimados${
+        b2bRestRiskGamesEst > 0 ? ' (incluye cautela B2B)' : ''
+      }`;
+    }
+  }
+  // 3. DOUBTFUL (Puntual high-risk)
+  else if (injurySeverity === 'doubtful') {
+    absenceTier = 'punctual';
+    const mult = projectionMode === 'conservative' ? 0.25 : 0.42;
+    const afterInj = scheduledGames * mult;
+    missedInjuryGamesEst = round1(scheduledGames - afterInj);
+    if (b2bGames > 0 && afterInj > 0.4) {
+      b2bRestRiskGamesEst = round1(Math.min(afterInj * 0.5, b2bGames * 0.3));
+    }
+    playableGamesEst = round1(Math.max(0, afterInj - b2bRestRiskGamesEst));
+    absenceLabelEs = `Muy dudoso (${playableGamesEst}/${scheduledGames} PJ)`;
+    riskWarningEs = `Muy dudoso: alto riesgo de perder ~${round1(
+      scheduledGames - playableGamesEst
+    )} PJ tras el bloqueo`;
+  }
+  // 4. QUESTIONABLE / DAY-TO-DAY (Puntual DTD + B2B interaction)
+  else if (injurySeverity === 'questionable' || injurySeverity === 'dtd') {
+    absenceTier = isRestKeyword && b2bGames > 0 ? 'b2b_rest' : 'punctual';
+    const baseMult =
+      injurySeverity === 'dtd'
+        ? projectionMode === 'conservative'
+          ? 0.68
+          : 0.82
+        : projectionMode === 'conservative'
+        ? 0.62
+        : 0.76;
+    const afterInj = scheduledGames * baseMult;
+    missedInjuryGamesEst = round1(scheduledGames - afterInj);
+
+    if (b2bGames > 0 && afterInj > 1) {
+      const b2bFactor =
+        hasB2BPattern || isRestKeyword
+          ? 0.55
+          : projectionMode === 'conservative'
+          ? 0.45
+          : 0.35;
+      b2bRestRiskGamesEst = round1(Math.min(afterInj - 0.5, b2bGames * b2bFactor));
+    }
+    playableGamesEst = round1(Math.max(0, afterInj - b2bRestRiskGamesEst));
+    absenceLabelEs =
+      b2bRestRiskGamesEst > 0
+        ? `DTD + B2B (${playableGamesEst}/${scheduledGames} PJ)`
+        : `Puntual DTD (${playableGamesEst}/${scheduledGames} PJ)`;
+    riskWarningEs =
+      b2bRestRiskGamesEst > 0
+        ? `Día a día en semana con ${b2bGames} B2B: riesgo combinado (~${playableGamesEst}/${scheduledGames} PJ)`
+        : `Baja puntual en evaluación (DTD/Q): ~${playableGamesEst} de ${scheduledGames} PJ proyectados`;
+  }
+  // 5. PROBABLE
+  else if (injurySeverity === 'probable') {
+    const afterInj = scheduledGames * (projectionMode === 'conservative' ? 0.9 : 0.95);
+    missedInjuryGamesEst = round1(scheduledGames - afterInj);
+    if (b2bGames > 0 && (hasB2BPattern || isRestKeyword)) {
+      b2bRestRiskGamesEst = round1(
+        Math.min(afterInj - 1, b2bGames * (projectionMode === 'conservative' ? 0.55 : 0.4))
+      );
+      absenceTier = 'b2b_rest';
+    } else {
+      absenceTier = 'punctual';
+    }
+    playableGamesEst = round1(Math.max(0, afterInj - b2bRestRiskGamesEst));
+    absenceLabelEs =
+      b2bRestRiskGamesEst > 0
+        ? `Probable · Riesgo B2B (${playableGamesEst}/${scheduledGames} PJ)`
+        : `Probable (${playableGamesEst}/${scheduledGames} PJ)`;
+    if (b2bRestRiskGamesEst > 0) {
+      riskWarningEs = `Probable pero con historial/riesgo de descanso en Back-to-Back`;
+    }
+  }
+  // 6. HEALTHY ON REPORT, CHECK EMPIRICAL BACK-TO-BACK LOAD MANAGEMENT
+  else if (b2bGames > 0 && (hasB2BPattern || isRestKeyword) && scheduledGames >= 2) {
+    absenceTier = 'b2b_rest';
+    const perB2BDisc = isRestKeyword
+      ? 0.6
+      : projectionMode === 'conservative'
+      ? Math.max(0.6, round2(b2bRestRate * 0.95))
+      : Math.max(0.45, Math.min(0.75, round2(b2bRestRate * 0.85)));
+    b2bRestRiskGamesEst = round1(Math.min(scheduledGames - 1, b2bGames * perB2BDisc));
+    playableGamesEst = round1(Math.max(1, scheduledGames - b2bRestRiskGamesEst));
+    absenceLabelEs =
+      eligibleB2Bs >= 2
+        ? `Riesgo B2B (${satOutB2Bs}/${eligibleB2Bs} descansos)`
+        : `Riesgo descanso B2B`;
+    riskWarningEs =
+      eligibleB2Bs >= 2
+        ? `Descansó en ${satOutB2Bs} de ${eligibleB2Bs} B2B este curso: ajuste a ${playableGamesEst}/${scheduledGames} PJ`
+        : `Semana con ${b2bGames} Back-to-Back y alerta de dosificación (${playableGamesEst}/${scheduledGames} PJ)`;
+  }
+
+  const healthMultiplier =
+    scheduledGames > 0 ? round2(playableGamesEst / scheduledGames) : 0;
   const lockAdjustedFpts = round1(playableGamesEst * stats.weightedFptsPerGame);
 
   return {
     rawFormulaFpts,
+    scheduledGames,
     playableGamesEst,
+    missedInjuryGamesEst,
+    b2bRestRiskGamesEst,
     lockAdjustedFpts,
     healthMultiplier,
+    absenceTier,
+    absenceLabelEs,
     riskWarningEs,
   };
 }

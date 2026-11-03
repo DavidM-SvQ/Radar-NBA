@@ -2,11 +2,11 @@
 import "dotenv/config";
 import express from "express";
 import helmet from "helmet";
-import { getBootstrapPayload, getBootstrapWireBuffers, getFantasyEspnSyncPayload, getGameDayPayload, getMilestonesPayload, getPlayerInspectorDossier, getSinglePlayerSummary, getTeamRoster, scoutingEngine, searchLeaguePlayers } from "./nbaDataService.ts";
+import { getBootstrapPayload, getBootstrapWireBuffers, getFantasyEspnSyncPayload, getGameDayPayload, getMilestonesPayload, getPlayerInspectorDossier, getSeasonAwardsPayload, getSinglePlayerSummary, getTeamRoster, scoutingEngine, searchLeaguePlayers } from "./nbaDataService.ts";
 import { readNbaSnapshotFromDisk } from "./nbaSnapshotStore.ts";
 import { getFantasyStorageBackendInfo, readManualFantasyState, writeManualFantasyState } from "./fantasyEspnService.ts";
 import { ADMIN_COOKIE_NAME, DEFAULT_ADMIN_SECURITY_VALUES, adminBruteForceLimiter, adminEndpointFloodLimiter, extractAdminTokenFromRequest, getAdminSecurityConfig, issueAdminSessionToken, nbaApiRateLimiter, nbaHeavyRefreshLimiter, requireAdminAuth, resetAdminBruteForceForRequest, resetAdminSecurityConfigToDefaults, resetAllRateLimitCounters, saveAdminSecurityConfig, verifyAdminPasscodeConstantTime, verifyAdminSessionToken } from "./securityMiddleware.ts";
-import { ADMIN_SECURITY_BOUNDS, adminLoginBodySchema, adminSecurityConfigBodySchema, bootstrapQuerySchema, emptyQuerySchema, gameEventParamsSchema, gamedayQuerySchema, getValidated, manualFantasyStateBodySchema, playerParamsSchema, playerSummaryQuerySchema, refreshOnlyQuerySchema, searchQuerySchema, teamParamsSchema, validateRequest } from "./validationSchemas.ts";
+import { ADMIN_SECURITY_BOUNDS, adminLoginBodySchema, adminSecurityConfigBodySchema, awardsQuerySchema, bootstrapQuerySchema, emptyQuerySchema, gameEventParamsSchema, gamedayQuerySchema, getValidated, manualFantasyStateBodySchema, playerParamsSchema, playerSummaryQuerySchema, refreshOnlyQuerySchema, searchQuerySchema, teamParamsSchema, validateRequest } from "./validationSchemas.ts";
 const isProduction = process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL);
 const isVercelDeployment = Boolean(process.env.VERCEL);
 function sendPreserializedJsonBuffers(req, res, buffers, cacheControl) {
@@ -194,6 +194,17 @@ app.get("/api/nba/milestones", validateRequest({ query: refreshOnlyQuerySchema }
   } catch (err) {
     console.error("Error in /api/nba/milestones:", err);
     res.status(500).json({ error: err?.message || "Error al calcular hitos." });
+  }
+});
+app.get("/api/nba/awards", validateRequest({ query: awardsQuerySchema }), async (req, res) => {
+  try {
+    const { query } = getValidated(req);
+    const payload = await getSeasonAwardsPayload(query.season, Boolean(query.refresh));
+    res.setHeader("Cache-Control", query.refresh ? "no-store" : "public, max-age=60, stale-while-revalidate=300");
+    res.json(payload);
+  } catch (err) {
+    console.error("Error in /api/nba/awards:", err);
+    res.status(500).json({ error: err?.message || "Error al calcular carreras a los premios NBA." });
   }
 });
 app.get("/api/nba/gameday", validateRequest({ query: gamedayQuerySchema }), async (req, res) => {

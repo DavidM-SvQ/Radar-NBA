@@ -14,8 +14,16 @@ import type {
   PlayerGameLog,
   PlayerSummary,
   StreakEntry,
+  TrendBreakoutAlert,
+  TrendBreakoutAxis,
+  WindowSize,
 } from '../types/nba';
-import { formatShortDate, mean, normalizeSearchText } from '../utils/analytics';
+import {
+  formatShortDate,
+  formatSigned,
+  mean,
+  normalizeSearchText,
+} from '../utils/analytics';
 import { ColumnHelpHeader, MetricInfoTooltip } from './MetricUiHelpers';
 import { EntityBadge, PlayerAvatar } from './NbaVisuals';
 import { PlayerStreakHistoryChart } from './PlayerStreakHistoryChart';
@@ -24,6 +32,9 @@ interface StreaksConsistencyViewProps {
   players: PlayerSummary[];
   streaks: StreakEntry[];
   consistencyRows: ConsistencyEntry[];
+  trendBreakouts: TrendBreakoutAlert[];
+  windowSize: WindowSize;
+  onChangeWindowSize: (w: WindowSize) => void;
   experienceMode: ExperienceMode;
   watchlistIds: Set<string>;
   onlyWatchlist: boolean;
@@ -40,10 +51,11 @@ type SubTab = 'streaks' | 'consistency' | 'history';
 type StreakEvalMode = 'custom' | 'auto';
 type StreakSpanMode = 'active' | 'best';
 type ThresholdOperator = 'gt' | 'gte' | 'lte' | 'lt';
-type CustomStreakSort = 'count' | 'streakAvg' | 'seasonAvg';
+type CustomStreakSort = 'count' | 'streakAvg' | 'windowAvg' | 'seasonAvg';
 type ConsistencySort =
   | 'consistencyScore'
   | 'ptsAvg'
+  | 'ptsWindowDelta'
   | 'ptsStdDev'
   | 'hitRate20Pts';
 
@@ -1008,6 +1020,72 @@ const QUICK_RATIO_CHIPS = [
   'gameScore',
 ];
 
+const BREAKOUT_STREAK_PRESETS: Array<{
+  id: string;
+  label: string;
+  metricId: string;
+  operator: ThresholdOperator;
+  threshold: number;
+  isPositive: boolean;
+}> = [
+  {
+    id: 'ext_3pm',
+    label: '▲ Triples (≥3 3PM)',
+    metricId: 'fg3m',
+    operator: 'gte',
+    threshold: 3,
+    isPositive: true,
+  },
+  {
+    id: 'ext_hot',
+    label: '▲ Puntería 3P (≥42%)',
+    metricId: 'fg3Pct',
+    operator: 'gte',
+    threshold: 42,
+    isPositive: true,
+  },
+  {
+    id: 'ext_cold',
+    label: '▼ Sequía 3P (≤25%)',
+    metricId: 'fg3Pct',
+    operator: 'lte',
+    threshold: 25,
+    isPositive: false,
+  },
+  {
+    id: 'role_min',
+    label: '▲ Minutos (≥34 MIN)',
+    metricId: 'minutes',
+    operator: 'gte',
+    threshold: 34,
+    isPositive: true,
+  },
+  {
+    id: 'role_usg',
+    label: '▲ Uso (≥28% USG)',
+    metricId: 'usgEst',
+    operator: 'gte',
+    threshold: 28,
+    isPositive: true,
+  },
+  {
+    id: 'eff_hot',
+    label: '▲ Eficiencia (TS% >62%)',
+    metricId: 'tsPct',
+    operator: 'gt',
+    threshold: 62,
+    isPositive: true,
+  },
+  {
+    id: 'eff_cold',
+    label: '▼ Bache Tiro (TS% ≤46%)',
+    metricId: 'tsPct',
+    operator: 'lte',
+    threshold: 46,
+    isPositive: false,
+  },
+];
+
 function formatMetricNumber(
   val: number,
   decimals: number,
@@ -1020,21 +1098,26 @@ function formatMetricNumber(
 
 function resolveAutoStreakHelpKey(st: StreakEntry): string {
   const lbl = `${st.metricLabel} ${st.thresholdLabel}`.toLowerCase();
+  if (lbl.includes('3p') || lbl.includes('triples')) return 'fg3Pct';
+  if (lbl.includes('usg') || lbl.includes('uso')) return 'usgPct';
+  if (lbl.includes('min')) return 'minBase';
   if (lbl.includes('ts')) return 'tsPct';
   if (lbl.includes('gmsc') || lbl.includes('game score')) return 'gmSc';
   if (lbl.includes('net rating')) return 'netRtg';
   if (lbl.includes('puntos') || lbl.includes('pts')) return 'ptsBase';
   if (lbl.includes('rebotes') || lbl.includes('reb')) return 'rebBase';
   if (lbl.includes('asistencias') || lbl.includes('ast')) return 'astBase';
-  if (lbl.includes('triples') || lbl.includes('3pm')) return 'fg3m';
   if (lbl.includes('victorias') || lbl.includes('derrotas')) return 'streakCurrent';
   return 'consecutiveStreak';
 }
 
 function humanThresholdLabel(st: StreakEntry, mode: ExperienceMode): string {
   if (mode === 'advanced') return st.thresholdLabel;
-  if (st.thresholdLabel.includes('TS')) {
+  if (st.thresholdLabel.includes('Menos de 46% TS')) {
     return 'Mala puntería seguida (<46% acierto)';
+  }
+  if (st.thresholdLabel.includes('64%+ TS')) {
+    return 'Puntería altísima seguida (64%+ TS)';
   }
   if (st.thresholdLabel.includes('GmSc')) {
     return 'Partidazos seguidos (valoración élite)';
@@ -1050,6 +1133,7 @@ interface CustomEvaluatedRow {
   gamesPlayed: number;
   count: number;
   streakAvg: number;
+  windowAvg: number;
   seasonAvg: number;
   recentSequence: number[];
   lastGameVal: number;
@@ -1062,6 +1146,9 @@ export function StreaksConsistencyView({
   players,
   streaks,
   consistencyRows,
+  trendBreakouts,
+  windowSize,
+  onChangeWindowSize,
   experienceMode,
   watchlistIds,
   onlyWatchlist,
@@ -1094,6 +1181,12 @@ export function StreaksConsistencyView({
   const [streakFilter, setStreakFilter] = useState<'all' | 'player' | 'team'>(
     'all'
   );
+  const [autoAxisFilter, setAutoAxisFilter] = useState<
+    'all' | TrendBreakoutAxis | 'counting'
+  >('all');
+  const [autoSignFilter, setAutoSignFilter] = useState<
+    'all' | 'positive' | 'negative'
+  >('all');
   const [query, setQuery] = useState('');
   const [consSort, setConsSort] = useState<ConsistencySort>('consistencyScore');
   const [consAsc, setConsAsc] = useState(false);
@@ -1220,6 +1313,17 @@ export function StreaksConsistencyView({
         qualifiedSeasonGames.length > 0 ? qualifiedSeasonGames : player.games
       ).map((g) => activeMetric.getValue(g));
 
+      const winSliceRaw = player.games.slice(
+        0,
+        Math.min(windowSize, player.games.length)
+      );
+      const qualifiedWinGames = activeMetric.qualifies
+        ? winSliceRaw.filter(activeMetric.qualifies)
+        : winSliceRaw;
+      const winVals = (
+        qualifiedWinGames.length > 0 ? qualifiedWinGames : winSliceRaw
+      ).map((g) => activeMetric.getValue(g));
+
       const latest = player.games[0];
       out.push({
         playerId: player.id,
@@ -1229,6 +1333,7 @@ export function StreaksConsistencyView({
         gamesPlayed: player.games.length,
         count,
         streakAvg: mean(streakVals),
+        windowAvg: mean(winVals),
         seasonAvg: mean(seasonVals),
         recentSequence: streakVals.slice(0, 6),
         lastGameVal: streakVals[0] ?? activeMetric.getValue(latest),
@@ -1260,9 +1365,20 @@ export function StreaksConsistencyView({
     useSecondaryCondition,
     streakSpanMode,
     minConsecutive,
+    windowSize,
     customSort,
     customAsc,
   ]);
+
+  const breakoutsByPlayerId = useMemo(() => {
+    const map = new Map<string, TrendBreakoutAlert>();
+    for (const b of trendBreakouts) {
+      if (!map.has(b.playerId)) {
+        map.set(b.playerId, b);
+      }
+    }
+    return map;
+  }, [trendBreakouts]);
 
   const CUSTOM_ROW_HEIGHT = 58;
   const VISIBLE_CONTAINER_HEIGHT = 600;
@@ -1304,6 +1420,15 @@ export function StreaksConsistencyView({
       const wKey = `${s.entityType}:${s.entityId}`;
       if (onlyWatchlist && !watchlistIds.has(wKey)) return false;
       if (streakFilter !== 'all' && s.entityType !== streakFilter) return false;
+      if (autoSignFilter === 'positive' && !s.isPositive) return false;
+      if (autoSignFilter === 'negative' && s.isPositive) return false;
+      if (autoAxisFilter !== 'all') {
+        if (autoAxisFilter === 'counting') {
+          if (s.breakoutAxis) return false;
+        } else if (s.breakoutAxis !== autoAxisFilter) {
+          return false;
+        }
+      }
       if (q) {
         const hay = normalizeSearchText(
           `${s.entityName} ${s.teamAbbr} ${s.thresholdLabel} ${s.metricLabel}`
@@ -1312,7 +1437,15 @@ export function StreaksConsistencyView({
       }
       return true;
     });
-  }, [streaks, watchlistIds, onlyWatchlist, streakFilter, query]);
+  }, [
+    streaks,
+    watchlistIds,
+    onlyWatchlist,
+    streakFilter,
+    autoSignFilter,
+    autoAxisFilter,
+    query,
+  ]);
 
   const filteredConsistency = useMemo(() => {
     const q = normalizeSearchText(query);
@@ -1321,17 +1454,34 @@ export function StreaksConsistencyView({
         const wKey = `player:${r.entityId}`;
         if (onlyWatchlist && !watchlistIds.has(wKey)) return false;
         if (q) {
+          const brk = breakoutsByPlayerId.get(r.entityId);
           const hay = normalizeSearchText(
-            `${r.entityName} ${r.teamAbbr} ${r.profileLabel}`
+            `${r.entityName} ${r.teamAbbr} ${r.profileLabel} ${brk?.badgeLabel || ''} ${brk?.axisLabel || ''}`
           );
           if (!hay.includes(q)) return false;
         }
         return true;
       })
-      .sort((a, b) =>
-        consAsc ? a[consSort] - b[consSort] : b[consSort] - a[consSort]
-      );
-  }, [consistencyRows, watchlistIds, onlyWatchlist, query, consSort, consAsc]);
+      .sort((a, b) => {
+        const valA =
+          consSort === 'ptsWindowDelta'
+            ? a.ptsWindowDelta ?? 0
+            : a[consSort];
+        const valB =
+          consSort === 'ptsWindowDelta'
+            ? b.ptsWindowDelta ?? 0
+            : b[consSort];
+        return consAsc ? valA - valB : valB - valA;
+      });
+  }, [
+    consistencyRows,
+    watchlistIds,
+    onlyWatchlist,
+    breakoutsByPlayerId,
+    query,
+    consSort,
+    consAsc,
+  ]);
 
   const topCustomRow = customEvaluatedRows[0];
   const topStreak = streaks[0];
@@ -1575,6 +1725,28 @@ export function StreaksConsistencyView({
           </div>
 
           {subTab !== 'history' && (
+            <div className="inline-flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg shrink-0">
+              <span className="px-1.5 text-[11px] text-slate-400 hidden sm:inline whitespace-nowrap">
+                Ventana:
+              </span>
+              {([3, 5, 10] as WindowSize[]).map((w) => (
+                <button
+                  key={w}
+                  type="button"
+                  onClick={() => onChangeWindowSize(w)}
+                  className={`px-2 py-1 text-xs font-mono rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                    windowSize === w
+                      ? 'bg-orange-500 text-slate-950 font-semibold'
+                      : 'text-slate-300 hover:text-white hover:bg-[#182338]'
+                  }`}
+                >
+                  Últ. {w} PJ
+                </button>
+              ))}
+            </div>
+          )}
+
+          {subTab !== 'history' && (
             <button
               type="button"
               onClick={() => setShowInlineHistoryChart((v) => !v)}
@@ -1616,31 +1788,6 @@ export function StreaksConsistencyView({
               </button>
             </div>
           )}
-
-          {subTab === 'streaks' && streakEvalMode === 'auto' && (
-            <div className="flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
-              {(
-                [
-                  { id: 'all', label: 'Todos' },
-                  { id: 'player', label: 'Jugadores' },
-                  { id: 'team', label: 'Equipos' },
-                ] as const
-              ).map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => setStreakFilter(opt.id)}
-                  className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                    streakFilter === opt.id
-                      ? 'bg-[#1E293B] text-white'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          )}
         </div>
 
         <div className="relative w-full xl:w-72 shrink-0">
@@ -1654,6 +1801,88 @@ export function StreaksConsistencyView({
           />
         </div>
       </div>
+
+      {/* Multi-Streak Axis & Sign Filters Bar */}
+      {subTab === 'streaks' && streakEvalMode === 'auto' && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
+            {(
+              [
+                { id: 'all', label: 'Todos los ejes' },
+                { id: 'exterior', label: 'Tiro Exterior' },
+                { id: 'minutes_usage', label: 'Minutos y Uso' },
+                { id: 'efficiency', label: 'Eficiencia' },
+                { id: 'counting', label: 'Puntos / Reb / Ast' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setAutoAxisFilter(opt.id)}
+                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  autoAxisFilter === opt.id
+                    ? 'bg-orange-500 text-slate-950 font-semibold'
+                    : 'text-slate-300 hover:text-white hover:bg-[#182338]'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg">
+              {(
+                [
+                  { id: 'all', label: 'Todas' },
+                  { id: 'positive', label: '▲ Positivas' },
+                  { id: 'negative', label: '▼ Negativas' },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setAutoSignFilter(opt.id)}
+                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                    autoSignFilter === opt.id
+                      ? opt.id === 'positive'
+                        ? 'bg-emerald-500 text-slate-950 font-semibold'
+                        : opt.id === 'negative'
+                        ? 'bg-rose-500 text-slate-950 font-semibold'
+                        : 'bg-orange-500 text-slate-950 font-semibold'
+                      : 'text-slate-300 hover:text-white hover:bg-[#182338]'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="inline-flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg">
+              {(
+                [
+                  { id: 'all', label: 'Jug. + Eq.' },
+                  { id: 'player', label: 'Jugadores' },
+                  { id: 'team', label: 'Equipos' },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setStreakFilter(opt.id)}
+                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                    streakFilter === opt.id
+                      ? 'bg-[#1E293B] text-white font-semibold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Custom Streak Evaluator Panel (Ratios + Quantity Slider + Consecutive Games Slider) */}
       {subTab === 'streaks' && streakEvalMode === 'custom' && (
@@ -1815,6 +2044,41 @@ export function StreaksConsistencyView({
               </div>
             </div>
           )}
+
+          {/* 1-Click Trend-Rupture Presets (Exterior, Minutes/Usage, Efficiency) */}
+          <div className="flex flex-wrap items-center gap-1.5 pb-3 border-b border-[#1E293B]">
+            <span className="text-xs font-medium text-slate-300 shrink-0 mr-1">
+              Rupturas en 1 clic:
+            </span>
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar sm:flex-wrap max-w-full">
+              {BREAKOUT_STREAK_PRESETS.map((preset) => {
+                const isActive =
+                  selectedMetricId === preset.metricId &&
+                  operator === preset.operator &&
+                  thresholdValue === preset.threshold;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedMetricId(preset.metricId);
+                      setOperator(preset.operator);
+                      setThresholdValue(preset.threshold);
+                    }}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 ${
+                      isActive
+                        ? preset.isPositive
+                          ? 'bg-emerald-500 text-slate-950 border-emerald-500 font-semibold'
+                          : 'bg-rose-500 text-slate-950 border-rose-500 font-semibold'
+                        : 'bg-[#0B1120] border-[#1E293B] text-slate-300 hover:text-white hover:border-slate-600'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2.5 sm:gap-3 pb-3 border-b border-[#1E293B]">
             <div className="flex items-center gap-2 max-w-full overflow-hidden">
@@ -2233,7 +2497,7 @@ export function StreaksConsistencyView({
                       </th>
                       <th className="py-3 px-3 font-medium text-right">
                         <ColumnHelpHeader
-                          label="Media en la racha"
+                          label="Media en racha"
                           helpKey="windowAvg"
                           sortable
                           activeSort={customSort === 'streakAvg'}
@@ -2243,7 +2507,17 @@ export function StreaksConsistencyView({
                       </th>
                       <th className="py-3 px-3 font-medium text-right">
                         <ColumnHelpHeader
-                          label="Media habitual"
+                          label={`Últ. ${windowSize} PJ`}
+                          helpKey="windowAvg"
+                          sortable
+                          activeSort={customSort === 'windowAvg'}
+                          sortAsc={customAsc}
+                          onSort={() => toggleCustomSort('windowAvg')}
+                        />
+                      </th>
+                      <th className="py-3 px-3 font-medium text-right">
+                        <ColumnHelpHeader
+                          label="Temporada"
                           helpKey="baselineAvg"
                           sortable
                           activeSort={customSort === 'seasonAvg'}
@@ -2262,12 +2536,16 @@ export function StreaksConsistencyView({
                   <tbody className="divide-y divide-[#1E293B] text-sm">
                     {customTopSpacerHeight > 0 && (
                       <tr style={{ height: `${customTopSpacerHeight}px` }}>
-                        <td colSpan={7} className="p-0 border-0" />
+                        <td colSpan={8} className="p-0 border-0" />
                       </tr>
                     )}
                     {customVisibleRows.map((row) => {
                       const wKey = `player:${row.playerId}`;
                       const watched = watchlistIds.has(wKey);
+                      const winDelta = row.windowAvg - row.seasonAvg;
+                      const winGood = activeMetric.lowerIsBetter
+                        ? winDelta <= 0
+                        : winDelta >= 0;
                       return (
                         <tr
                           key={row.playerId}
@@ -2354,6 +2632,26 @@ export function StreaksConsistencyView({
                               activeMetric.unit === '%' ? '%' : ''
                             )}
                           </td>
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                            <span className="text-slate-200 font-medium">
+                              {formatMetricNumber(
+                                row.windowAvg,
+                                activeMetric.decimals,
+                                activeMetric.unit === '%' ? '%' : ''
+                              )}
+                            </span>
+                            <span
+                              className={`ml-1.5 text-[11px] ${
+                                Math.abs(winDelta) < 0.05
+                                  ? 'text-slate-500'
+                                  : winGood
+                                  ? 'text-emerald-400'
+                                  : 'text-rose-400'
+                              }`}
+                            >
+                              ({formatSigned(winDelta, activeMetric.decimals)})
+                            </span>
+                          </td>
                           <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-400 whitespace-nowrap">
                             {formatMetricNumber(
                               row.seasonAvg,
@@ -2396,7 +2694,7 @@ export function StreaksConsistencyView({
                     })}
                     {customBottomSpacerHeight > 0 && (
                       <tr style={{ height: `${customBottomSpacerHeight}px` }}>
-                        <td colSpan={7} className="p-0 border-0" />
+                        <td colSpan={8} className="p-0 border-0" />
                       </tr>
                     )}
                   </tbody>
@@ -2519,13 +2817,19 @@ export function StreaksConsistencyView({
                     </th>
                     <th className="py-3 px-3 font-medium text-right">
                       <ColumnHelpHeader
-                        label="Media en la racha"
+                        label="Media en racha"
                         helpKey="windowAvg"
                       />
                     </th>
                     <th className="py-3 px-3 font-medium text-right">
                       <ColumnHelpHeader
-                        label="Media habitual"
+                        label={`Últ. ${windowSize} PJ vs Base`}
+                        helpKey="windowAvg"
+                      />
+                    </th>
+                    <th className="py-3 px-3 font-medium text-right">
+                      <ColumnHelpHeader
+                        label="Temporada"
                         helpKey="baselineAvg"
                       />
                     </th>
@@ -2542,6 +2846,8 @@ export function StreaksConsistencyView({
                     const wKey = `${st.entityType}:${st.entityId}`;
                     const watched = watchlistIds.has(wKey);
                     const rowHelpKey = resolveAutoStreakHelpKey(st);
+                    const unitSuf = st.unit === '%' ? '%' : '';
+                    const winDelta = st.windowDeltaVsSeason ?? 0;
                     return (
                       <tr
                         key={st.id}
@@ -2619,9 +2925,34 @@ export function StreaksConsistencyView({
                         </td>
                         <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-100 whitespace-nowrap">
                           {st.windowAvgDuringStreak.toFixed(1)}
+                          {unitSuf}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                          {typeof st.windowAvgRef === 'number' ? (
+                            <>
+                              <span className="text-slate-200 font-medium">
+                                {st.windowAvgRef.toFixed(1)}
+                                {unitSuf}
+                              </span>
+                              <span
+                                className={`ml-1.5 text-xs ${
+                                  Math.abs(winDelta) < 0.05
+                                    ? 'text-slate-500'
+                                    : winDelta > 0
+                                    ? 'text-emerald-400'
+                                    : 'text-rose-400'
+                                }`}
+                              >
+                                ({formatSigned(winDelta, 1)})
+                              </span>
+                            </>
+                          ) : (
+                            <span className="text-slate-500">—</span>
+                          )}
                         </td>
                         <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-400 whitespace-nowrap">
                           {st.seasonBaseline.toFixed(1)}
+                          {unitSuf}
                         </td>
                         <td className="py-2.5 pl-3 pr-4 text-right font-mono tabular-nums text-xs text-slate-400 whitespace-nowrap">
                           {formatShortDate(st.lastGameDate)}
@@ -2645,6 +2976,7 @@ export function StreaksConsistencyView({
                 {(
                   [
                     { id: 'consistencyScore', label: 'Regularidad' },
+                    { id: 'ptsWindowDelta', label: `Desv. Últ. ${windowSize} PJ` },
                     { id: 'ptsAvg', label: 'Puntos media' },
                     { id: 'hitRate20Pts', label: 'Noches cumple' },
                   ] as const
@@ -2672,6 +3004,8 @@ export function StreaksConsistencyView({
                 {filteredConsistency.map((row) => {
                   const wKey = `player:${row.entityId}`;
                   const watched = watchlistIds.has(wKey);
+                  const brk = breakoutsByPlayerId.get(row.entityId);
+                  const ptsWinDelta = row.ptsWindowDelta ?? 0;
                   return (
                     <div
                       key={row.entityId}
@@ -2733,24 +3067,48 @@ export function StreaksConsistencyView({
 
                       <div className="grid grid-cols-3 gap-2 bg-[#0B1120]/70 border border-[#1E293B]/80 rounded-lg px-3 py-2 text-xs">
                         <div>
-                          <div className="text-[10px] text-slate-400">Media PTS</div>
+                          <div className="text-[10px] text-slate-400">Temporada</div>
                           <div className="font-mono tabular-nums font-medium text-slate-100 mt-0.5">
-                            {row.ptsAvg.toFixed(1)}
+                            {row.ptsAvg.toFixed(1)} PTS
                           </div>
                         </div>
                         <div>
+                          <div className="text-[10px] text-slate-400">
+                            Últ. {windowSize} PJ
+                          </div>
+                          <div
+                            className={`font-mono tabular-nums font-semibold mt-0.5 ${
+                              ptsWinDelta > 0.4
+                                ? 'text-emerald-400'
+                                : ptsWinDelta < -0.4
+                                ? 'text-rose-400'
+                                : 'text-slate-200'
+                            }`}
+                          >
+                            {(row.ptsWindowAvg ?? row.ptsAvg).toFixed(1)} (
+                            {formatSigned(ptsWinDelta, 1)})
+                          </div>
+                        </div>
+                        <div className="text-right">
                           <div className="text-[10px] text-slate-400">Suelo–Techo</div>
                           <div className="font-mono tabular-nums text-slate-200 mt-0.5">
                             {row.ptsFloor.toFixed(0)}–{row.ptsCeiling.toFixed(0)} PTS
                           </div>
                         </div>
-                        <div className="text-right">
-                          <div className="text-[10px] text-slate-400">Cumple ≥85%</div>
-                          <div className="font-mono tabular-nums font-semibold text-emerald-400 mt-0.5">
-                            {row.hitRate20Pts}%
-                          </div>
-                        </div>
                       </div>
+
+                      {brk && (
+                        <div
+                          className={`text-[11px] font-medium ${
+                            brk.direction === 'positive'
+                              ? 'text-emerald-400'
+                              : 'text-rose-400'
+                          }`}
+                        >
+                          {brk.direction === 'positive' ? '▲ ' : '▼ '}
+                          {brk.badgeLabel} ({brk.axisLabel})
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -2766,7 +3124,7 @@ export function StreaksConsistencyView({
                   <th className="py-3 px-3 font-medium">Jugador</th>
                   <th className="py-3 px-3 font-medium">
                     <ColumnHelpHeader
-                      label="Tipo de fiabilidad"
+                      label="Fiabilidad y tendencia"
                       helpKey="consistencyScore"
                       align="left"
                     />
@@ -2783,12 +3141,22 @@ export function StreaksConsistencyView({
                   </th>
                   <th className="py-3 px-3 font-medium text-right">
                     <ColumnHelpHeader
-                      label="Puntos Media"
+                      label="Puntos Temporada"
                       helpKey="ptsBase"
                       sortable
                       activeSort={consSort === 'ptsAvg'}
                       sortAsc={consAsc}
                       onSort={() => toggleConsSort('ptsAvg')}
+                    />
+                  </th>
+                  <th className="py-3 px-3 font-medium text-right">
+                    <ColumnHelpHeader
+                      label={`Últ. ${windowSize} PJ vs Temp.`}
+                      helpKey="windowAvg"
+                      sortable
+                      activeSort={consSort === 'ptsWindowDelta'}
+                      sortAsc={consAsc}
+                      onSort={() => toggleConsSort('ptsWindowDelta')}
                     />
                   </th>
                   {experienceMode === 'advanced' && (
@@ -2833,6 +3201,8 @@ export function StreaksConsistencyView({
                 {filteredConsistency.map((row) => {
                   const wKey = `player:${row.entityId}`;
                   const watched = watchlistIds.has(wKey);
+                  const brk = breakoutsByPlayerId.get(row.entityId);
+                  const ptsWinDelta = row.ptsWindowDelta ?? 0;
                   return (
                     <tr
                       key={row.entityId}
@@ -2879,8 +3249,8 @@ export function StreaksConsistencyView({
                         </div>
                       </td>
                       <td className="py-2.5 px-3">
-                        <span
-                          className={`text-xs font-medium ${
+                        <div
+                          className={`text-xs font-medium whitespace-nowrap ${
                             row.consistencyScore >= 78
                               ? 'text-emerald-400'
                               : row.consistencyScore >= 60
@@ -2889,13 +3259,42 @@ export function StreaksConsistencyView({
                           }`}
                         >
                           {row.profileLabel}
-                        </span>
+                        </div>
+                        {brk && (
+                          <div
+                            className={`text-[11px] whitespace-nowrap mt-0.5 ${
+                              brk.direction === 'positive'
+                                ? 'text-emerald-400'
+                                : 'text-rose-400'
+                            }`}
+                          >
+                            {brk.direction === 'positive' ? '▲ ' : '▼ '}
+                            {brk.badgeLabel}
+                          </div>
+                        )}
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-orange-400 whitespace-nowrap">
                         {row.consistencyScore}/100
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-100 whitespace-nowrap">
                         {row.ptsAvg.toFixed(1)}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                        <span className="font-medium text-slate-100">
+                          {(row.ptsWindowAvg ?? row.ptsAvg).toFixed(1)}
+                        </span>
+                        <span
+                          className={`ml-1.5 text-xs ${
+                            Math.abs(ptsWinDelta) < 0.4
+                              ? 'text-slate-400'
+                              : ptsWinDelta > 0
+                              ? 'text-emerald-400'
+                              : 'text-rose-400'
+                          }`}
+                        >
+                          ({ptsWinDelta >= 0.4 ? '▲' : ptsWinDelta <= -0.4 ? '▼' : ''}{' '}
+                          {formatSigned(ptsWinDelta, 1)})
+                        </span>
                       </td>
                       {experienceMode === 'advanced' && (
                         <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-400 whitespace-nowrap">
@@ -2906,33 +3305,33 @@ export function StreaksConsistencyView({
                         {row.ptsFloor.toFixed(0)} – {row.ptsCeiling.toFixed(0)}{' '}
                         PTS
                       </td>
-                       <td className="py-2.5 pl-3 pr-4 text-right font-mono tabular-nums text-emerald-400 whitespace-nowrap">
-                         <div className="inline-flex items-center justify-end gap-2">
-                           <span>{row.hitRate20Pts}% de partidos</span>
-                           <button
-                             type="button"
-                             title="Ver evolución últimos 10 partidos en el gráfico"
-                             onClick={(e) => {
-                               e.stopPropagation();
-                               setHistoryPlayerId(row.entityId);
-                               setShowInlineHistoryChart(true);
-                             }}
-                             className="px-2 py-1 rounded bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/50 text-[11px] font-sans font-medium text-orange-300 hover:text-orange-200 transition-colors"
-                           >
-                             10 PJ
-                           </button>
-                         </div>
-                       </td>
-                     </tr>
-                   );
-                 })}
-               </tbody>
-             </table>
-             </div>
-           </>
-         )}
-       </div>
-       )}
+                      <td className="py-2.5 pl-3 pr-4 text-right font-mono tabular-nums text-emerald-400 whitespace-nowrap">
+                        <div className="inline-flex items-center justify-end gap-2">
+                          <span>{row.hitRate20Pts}% de partidos</span>
+                          <button
+                            type="button"
+                            title="Ver evolución últimos 10 partidos en el gráfico"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setHistoryPlayerId(row.entityId);
+                              setShowInlineHistoryChart(true);
+                            }}
+                            className="px-2 py-1 rounded bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/50 text-[11px] font-sans font-medium text-orange-300 hover:text-orange-200 transition-colors"
+                          >
+                            10 PJ
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            </div>
+          </>
+        )}
+      </div>
+      )}
      </div>
    );
  }

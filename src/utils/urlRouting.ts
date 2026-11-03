@@ -1,4 +1,4 @@
-import type { ActiveSection } from '../types/nba';
+import type { ActiveSection, AwardCategoryId } from '../types/nba';
 
 export type FantasyUrlTab =
   | 'lineup'
@@ -18,6 +18,7 @@ export interface AppRouteState {
   comparatorType: 'player' | 'team';
   comparatorId: string | null;
   fantasyTab: FantasyUrlTab;
+  awardCategory: AwardCategoryId;
 }
 
 export interface RadarHistoryMeta {
@@ -33,6 +34,7 @@ const VALID_SECTIONS = new Set<ActiveSection>([
   'streaks',
   'duel',
   'milestones',
+  'awards',
   'comparator',
   'teams',
   'players',
@@ -46,6 +48,17 @@ const VALID_FANTASY_TABS = new Set<FantasyUrlTab>([
   'trades',
   'injuries_rules',
   'rules',
+]);
+
+const VALID_AWARD_CATEGORIES = new Set<AwardCategoryId>([
+  'mvp',
+  'roy',
+  'mip',
+  'dpoy',
+  '6moy',
+  'clutch',
+  'hustle',
+  'all_nba',
 ]);
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -79,6 +92,11 @@ export function parseRouteFromSearch(
     ? rawFTab
     : 'lineup';
 
+  const rawAward = (params.get('award') || '').trim() as AwardCategoryId;
+  const awardCategory: AwardCategoryId = VALID_AWARD_CATEGORIES.has(rawAward)
+    ? rawAward
+    : 'mvp';
+
   // Smart section resolution supporting both /admin pathname and ?view=admin query
   let section: ActiveSection = 'home';
   if (rawView === 'admin') {
@@ -93,6 +111,8 @@ export function parseRouteFromSearch(
     section = 'duel';
   } else if (comparatorId) {
     section = 'comparator';
+  } else if (params.has('award')) {
+    section = 'awards';
   } else if (params.has('fTab')) {
     section = 'fantasy_espn';
   }
@@ -121,6 +141,7 @@ export function parseRouteFromSearch(
     comparatorType,
     comparatorId,
     fantasyTab,
+    awardCategory,
   };
 }
 
@@ -158,6 +179,10 @@ export function buildSearchFromRoute(
     }
     if (state.comparatorId) {
       params.set('cId', state.comparatorId);
+    }
+  } else if (state.section === 'awards') {
+    if (state.awardCategory && state.awardCategory !== 'mvp') {
+      params.set('award', state.awardCategory);
     }
   } else if (state.section === 'fantasy_espn') {
     if (state.fantasyTab && state.fantasyTab !== 'lineup') {

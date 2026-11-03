@@ -1,0 +1,129 @@
+name: Sync Daily NBA Snapshot
+
+on:
+  schedule:
+    # 10:00 UTC = 11:00 CET (invierno) / 12:00 CEST (verano) en España,
+    # cuando todos los partidos de la madrugada NBA ya son Final.
+    - cron: '0 10 * * *'
+  workflow_dispatch:
+    inputs:
+      force_full_2026:
+        description: 'Reconstruir también 2025-26 completa (--full)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-nba-snapshot
+  cancel-in-progress: false
+
+jobs:
+  sync-snapshot:
+    name: Consolidar jornada NBA en nba-snapshot.json.gz
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Configurar Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Capturar huella previa del snapshot
+        run: |
+          node -e '
+            const fs = require("fs");
+            const zlib = require("zlib");
+            const crypto = require("crypto");
+            const p = "data/nba-snapshot.json.gz";
+            let meta = { exists: false };
+            if (fs.existsSync(p)) {
+              const raw = JSON.parse(zlib.gunzipSync(fs.readFileSync(p)).toString("utf8"));
+              const clone = {
+                bios: raw.bios || [],
+                s2026: raw.s2026 || null,
+                s2027: raw.s2027 || null,
+              };
+              const contentHash = crypto.createHash("sha256").update(JSON.stringify(clone)).digest("hex");
+              const games27 = Math.round(((raw.s2027 && raw.s2027.teams) || []).reduce((a, t) => a + (t.games ? t.games.length : 0), 0) / 2);
+              const games26 = Math.round(((raw.s2026 && raw.s2026.teams) || []).reduce((a, t) => a + (t.games ? t.games.length : 0), 0) / 2);
+              meta = {
+                exists: true,
+                contentHash,
+                games27,
+                games26,
+                players27: ((raw.s2027 && raw.s2027.players) || []).length,
+                biosCount: (raw.bios || []).length,
+              };
+            }
+            fs.writeFileSync("/tmp/prev-nba-snap-meta.json", JSON.stringify(meta));
+            console.log("[RadarNBA CI] Estado previo:", meta);
+          '
+
+      - name: Sincronizar estadísticas NBA en data/nba-snapshot.json.gz
+        env:
+          CI: 'true'
+        run: |
+          if [ "${{ inputs.force_full_2026 }}" = "true" ]; then
+            npm run sync:nba -- --full
+          else
+            npm run sync:nba
+          fi
+
+      - name: Verificar cambios reales y publicar en main
+        run: |
+          DATA_CHANGED=$(node -e '
+            const fs = require("fs");
+            const zlib = require("zlib");
+            const crypto = require("crypto");
+            const prev = JSON.parse(fs.readFileSync("/tmp/prev-nba-snap-meta.json", "utf8"));
+            const raw = JSON.parse(zlib.gunzipSync(fs.readFileSync("data/nba-snapshot.json.gz")).toString("utf8"));
+            const clone = {
+              bios: raw.bios || [],
+              s2026: raw.s2026 || null,
+              s2027: raw.s2027 || null,
+            };
+            const nextHash = crypto.createHash("sha256").update(JSON.stringify(clone)).digest("hex");
+            const games27 = Math.round(((raw.s2027 && raw.s2027.teams) || []).reduce((a, t) => a + (t.games ? t.games.length : 0), 0) / 2);
+            if (!prev.exists || prev.contentHash !== nextHash) {
+              process.stdout.write(`yes:${games27}`);
+            } else {
+              process.stdout.write("no:0");
+            }
+          ')
+
+          STATUS="${DATA_CHANGED%%:*}"
+          GAMES27="${DATA_CHANGED#*:}"
+
+          if [ "$STATUS" != "yes" ]; then
+            echo "[RadarNBA CI] Sin partidos ni cambios nuevos en la NBA hoy. Se omite commit para no lanzar despliegue innecesario en Vercel."
+            git checkout -- data/nba-snapshot.json.gz || true
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/nba-snapshot.json.gz
+
+          if git diff --cached --quiet; then
+            echo "[RadarNBA CI] No hay cambios binarios para confirmar."
+            exit 0
+          fi
+
+          TODAY_UTC=$(date -u +"%Y-%m-%d")
+          git commit -m "chore(data): actualizar snapshot diario NBA (${TODAY_UTC} · ${GAMES27} PJ 26-27)"
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "[RadarNBA CI] Snapshot NBA actualizado y enviado a ${GITHUB_REF_NAME}. Vercel desplegará automáticamente."

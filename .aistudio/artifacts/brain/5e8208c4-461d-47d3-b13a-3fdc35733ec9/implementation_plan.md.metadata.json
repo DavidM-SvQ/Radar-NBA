@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan to add dedicated Rival Rosters manager for Free Agent control, create Tab 5 with full official rules breakdown and formula reference, and verify team scoring matching user examples.",
-  "updatedAt":  "2026-10-31T15:40:43.976485681Z",
-  "requestFeedback":  true,
-  "userFacing":  true
+  "summary": "Plan de implementación de Fase 1 para RadarNBA: automatización diaria gratuita del Snapshot NBA mediante GitHub Actions resiliente en la nube, cinta superior de Jornada en Juego sin consumo extra por refresco automático, nuevo apartado homogéneo de Premios de Temporada NBA (8 categorías con desviaciones, rachas y slider configurable de mínimo de partidos) y recordatorio íntegro de las Fases 2, 3 y 4 pendientes.",
+  "updatedAt": "2026-11-03T11:49:31.526267172Z",
+  "requestFeedback": true,
+  "userFacing": true
 }

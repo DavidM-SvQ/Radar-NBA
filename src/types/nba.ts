@@ -5,6 +5,7 @@ export type ActiveSection =
   | 'streaks'
   | 'duel'
   | 'milestones'
+  | 'awards'
   | 'comparator'
   | 'teams'
   | 'players'
@@ -171,6 +172,7 @@ export interface PlayerGameLog {
   scoreDisplay?: string;
   restDays: number | null;
   isBackToBack: boolean;
+  isStarter?: boolean;
   minutes: number;
   points: number;
   rebounds: number;
@@ -201,6 +203,7 @@ export interface PlayerGameLog {
 
 export interface PlayerAdvancedProfile {
   gp?: number;
+  gamesStarted?: number;
   offRtg: number;
   defRtg: number;
   netRtg: number;
@@ -235,6 +238,9 @@ export interface PlayerSummary {
   jersey?: string;
   height?: string;
   country?: string;
+  fromYear?: number;
+  draftYear?: number;
+  experienceYears?: number;
   headshotUrl?: string;
   gamesPlayed?: number;
   minutesAvg?: number;
@@ -285,11 +291,56 @@ export interface BootstrapPayload {
   players: PlayerSummary[];
 }
 
+export type TrendBreakoutAxis = 'exterior' | 'minutes_usage' | 'efficiency';
+
+export interface WindowComparisonStrip {
+  season: number;
+  l3: number;
+  l5: number;
+  l10: number;
+}
+
+export interface TrendBreakoutAlert {
+  id: string;
+  playerId: string;
+  playerName: string;
+  teamAbbr: string;
+  position: string;
+  axis: TrendBreakoutAxis;
+  axisLabel: string;
+  direction: 'positive' | 'negative';
+  severity: 'extreme' | 'high' | 'notable';
+  badgeLabel: string;
+  metricKey: string;
+  metricLabel: string;
+  unit: string;
+  decimals: number;
+  baselineAvg: number;
+  windowAvg: number;
+  absDelta: number;
+  pctDelta: number;
+  zScore: number;
+  breakoutScore: number;
+  sampleGames: number;
+  baselineGames: number;
+  windows: WindowComparisonStrip;
+  secondaryLabel: string;
+  headlineSimple: string;
+  detailSimple: string;
+  headlineAdvanced: string;
+  detailAdvanced: string;
+  sustainabilityLabel: string;
+  sustainabilityTone: 'solid' | 'warning' | 'negative';
+  activeStreakLabel: string | null;
+  activeStreakCount: number;
+}
+
 export type AnomalyCategory =
   | 'surge'
   | 'slump'
   | 'role_shift'
   | 'shooting_variance'
+  | 'exterior_shift'
   | 'efficiency_outlier'
   | 'advanced_shift'
   | 'team_shift';
@@ -305,6 +356,7 @@ export interface AnomalySignal {
   categoryLabel: string;
   metricKey: string;
   metricLabel: string;
+  unit?: string;
   baselineAvg: number;
   windowAvg: number;
   absDelta: number;
@@ -316,6 +368,10 @@ export interface AnomalySignal {
   sustainabilityTone: 'solid' | 'sustainable' | 'warning' | 'negative' | 'neutral';
   contextNote: string;
   takeaways: string[];
+  breakoutAxis?: TrendBreakoutAxis;
+  windows?: WindowComparisonStrip;
+  activeStreakLabel?: string | null;
+  activeStreakCount?: number;
 }
 
 export interface StreakEntry {
@@ -333,6 +389,10 @@ export interface StreakEntry {
   seasonBaseline: number;
   isPositive: boolean;
   lastGameDate: string;
+  breakoutAxis?: TrendBreakoutAxis;
+  windowAvgRef?: number;
+  windowDeltaVsSeason?: number;
+  unit?: string;
 }
 
 export interface ConsistencyEntry {
@@ -354,6 +414,14 @@ export interface ConsistencyEntry {
   consistencyScore: number;
   profileLabel: string;
   hitRate20Pts: number;
+  windowGames?: number;
+  ptsWindowAvg?: number;
+  ptsWindowDelta?: number;
+  praWindowAvg?: number;
+  praWindowDelta?: number;
+  tsSeasonAvg?: number;
+  tsWindowAvg?: number;
+  tsWindowDelta?: number;
 }
 
 export type RangePreset =
@@ -827,10 +895,19 @@ export type FantasyInjurySeverity =
   | 'ir'
   | 'suspended';
 
+export type FantasyAbsenceTier =
+  | 'healthy'
+  | 'b2b_rest'
+  | 'punctual'
+  | 'long_term';
+
+export type FantasyProjectionMode = 'smart' | 'conservative';
+
 export interface FantasyPlayerInjuryAlert {
   playerNameNorm: string;
   displayName: string;
   severity: FantasyInjurySeverity;
+  absenceTier?: FantasyAbsenceTier;
   statusLabelEs: string;
   detailEs: string;
   [key: string]: any;
@@ -897,4 +974,107 @@ export interface FantasyEspnSyncPayload {
   storageMode?: FantasyStorageMode;
   cloudConfigured?: boolean;
 }
+
+export type AwardCategoryId =
+  | 'mvp'
+  | 'roy'
+  | 'mip'
+  | 'dpoy'
+  | '6moy'
+  | 'clutch'
+  | 'hustle'
+  | 'all_nba';
+
+export type AwardIndividualCategoryId = Exclude<AwardCategoryId, 'all_nba'>;
+
+export type AwardSeasonScope = '2027' | '2026';
+
+export interface AwardCandidateMetricItem {
+  key: string;
+  label: string;
+  valueDisplay: string;
+  subDisplay?: string;
+  tone?: 'positive' | 'negative' | 'accent' | 'neutral';
+}
+
+export interface AwardScoreBreakdown {
+  production: number;
+  efficiencyImpact: number;
+  teamContext: number;
+  momentum: number;
+}
+
+export interface AwardCandidateEntry {
+  playerId: string;
+  playerName: string;
+  teamId: string;
+  teamAbbr: string;
+  teamName: string;
+  position: string;
+  teamWins: number;
+  teamLosses: number;
+  teamWinPct: number;
+  conference: string;
+  conferenceSeed: number;
+  gamesPlayed: number;
+  teamGamesPlayed: number;
+  gamesStarted: number;
+  benchGames: number;
+  projectedGames82: number;
+  awardScore: number;
+  scoreBreakdown: AwardScoreBreakdown;
+  minutesAvg: number;
+  ptsAvg: number;
+  rebAvg: number;
+  astAvg: number;
+  stlAvg: number;
+  blkAvg: number;
+  stocksAvg: number;
+  tsPct: number;
+  efgPct: number;
+  gmScAvg: number;
+  plusMinusAvg: number;
+  netRtg: number;
+  recentWindowGames: number;
+  recentPtsAvg: number;
+  recentPtsDelta: number;
+  recentGmScAvg: number;
+  recentGmScDelta: number;
+  momentumLabel: string;
+  momentumTone: 'positive' | 'negative' | 'neutral';
+  activeStreakLabel: string | null;
+  activeStreakCount: number;
+  yoyPtsDelta?: number;
+  yoyPraDelta?: number;
+  yoyTsDelta?: number;
+  prevPtsAvg?: number;
+  clutchGames?: number;
+  clutchWins?: number;
+  clutchLosses?: number;
+  clutchPtsAvg?: number;
+  clutchTsPct?: number;
+  clutchPlusMinusAvg?: number;
+  deflectionsAvg?: number;
+  contestedShotsAvg?: number;
+  looseBallsAvg?: number;
+  screenAssistsAvg?: number;
+  boxOutsAvg?: number;
+  orebAvg?: number;
+  metricsSimple: AwardCandidateMetricItem[];
+  metricsAdvanced: AwardCandidateMetricItem[];
+  summarySimple: string;
+  summaryAdvanced: string;
+}
+
+export interface SeasonAwardsPayload {
+  generatedAt: string;
+  dataSource: DataSourceKind;
+  seasonScope: AwardSeasonScope;
+  seasonLabel: string;
+  avgTeamGamesPlayed: number;
+  defaultMinProjectedGames: number;
+  categories: Record<AwardIndividualCategoryId, AwardCandidateEntry[]>;
+  allNbaPool: AwardCandidateEntry[];
+}
+
 
