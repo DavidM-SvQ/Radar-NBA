@@ -12,16 +12,19 @@ import type {
 import { formatSigned, normalizeSearchText } from '../utils/analytics';
 import {
   describeZScoreHuman,
+  evaluateVsLeague,
   isAnomalyPositive,
   plainAnomalyExplanation,
   plainMetricName,
   resolveSignalBenchmark,
   type LeagueBenchmarks,
 } from '../utils/humanize';
+import { STICKY_THEAD_CLASS, sortRows } from '../utils/tableSort';
 import {
-  ColumnHelpHeader,
+  BreakdownDetailCell,
   MetricInfoTooltip,
   NbaComparisonBar,
+  SortableTh,
 } from './MetricUiHelpers';
 import { EntityBadge, PlayerAvatar } from './NbaVisuals';
 
@@ -42,12 +45,25 @@ interface AnomalyRadarViewProps {
   onNavigateStreaks?: () => void;
 }
 
-type SortField = 'zScore' | 'pctDelta' | 'windowAvg' | 'baselineAvg';
-type BreakoutSortField =
-  | 'breakoutScore'
-  | 'absDelta'
+type SortField =
+  | 'watched'
+  | 'entityName'
+  | 'metricLabel'
+  | 'baselineAvg'
   | 'windowAvg'
-  | 'baselineAvg';
+  | 'pctDelta'
+  | 'zScore'
+  | 'vsNba'
+  | 'streakAndRead';
+type BreakoutSortField =
+  | 'watched'
+  | 'playerName'
+  | 'axisAlert'
+  | 'windowAvg'
+  | 'baselineAvg'
+  | 'absDelta'
+  | 'breakoutScore'
+  | 'streakRead';
 
 function CompactWindowStrip({
   windows,
@@ -162,25 +178,54 @@ function AnomalyBlockTable({
   const [sortAsc, setSortAsc] = useState(false);
 
   const sortedRows = useMemo(() => {
-    return [...rows].sort((a, b) => {
-      const valA =
-        sortField === 'zScore' || sortField === 'pctDelta'
-          ? Math.abs(a[sortField])
-          : a[sortField];
-      const valB =
-        sortField === 'zScore' || sortField === 'pctDelta'
-          ? Math.abs(b[sortField])
-          : b[sortField];
-      return sortAsc ? valA - valB : valB - valA;
-    });
-  }, [rows, sortField, sortAsc]);
+    return sortRows(
+      rows,
+      (sig) => {
+        switch (sortField) {
+          case 'watched':
+            return watchlistIds.has(`${sig.entityType}:${sig.entityId}`) ? 1 : 0;
+          case 'entityName':
+            return sig.entityName;
+          case 'metricLabel':
+            return experienceMode === 'simple'
+              ? plainMetricName(sig.metricKey, sig.metricLabel)
+              : sig.metricLabel;
+          case 'baselineAvg':
+            return sig.baselineAvg;
+          case 'windowAvg':
+            return sig.windowAvg;
+          case 'pctDelta':
+            return Math.abs(sig.pctDelta);
+          case 'zScore':
+            return Math.abs(sig.zScore);
+          case 'vsNba': {
+            const benchInfo = resolveSignalBenchmark(sig, benchmarks);
+            return evaluateVsLeague(benchInfo.value, benchInfo.benchmark).pct;
+          }
+          case 'streakAndRead':
+            return (
+              (sig.activeStreakCount || 0) * 100 +
+              (sig.sustainabilityTone === 'solid' ||
+              sig.sustainabilityTone === 'sustainable'
+                ? 2
+                : sig.sustainabilityTone === 'warning'
+                ? 1
+                : 0)
+            );
+          default:
+            return Math.abs(sig.zScore);
+        }
+      },
+      sortAsc
+    );
+  }, [rows, sortField, sortAsc, watchlistIds, experienceMode, benchmarks]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
       setSortAsc((prev) => !prev);
     } else {
       setSortField(field);
-      setSortAsc(false);
+      setSortAsc(field === 'entityName' || field === 'metricLabel');
     }
   };
 
@@ -418,77 +463,99 @@ function AnomalyBlockTable({
       </div>
 
       {/* Desktop Full Table (md+) */}
-      <div className="hidden md:block overflow-x-auto">
+      <div className="hidden md:block overflow-auto max-h-[68vh]">
         <table className="w-full text-left border-collapse">
-          <thead>
-            <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
-              <th className="py-3 pl-4 pr-2 w-10 font-medium">Seg.</th>
-              <th className="py-3 px-3 font-medium">{subjectColumnLabel}</th>
-              <th className="py-3 px-3 font-medium">
-                <ColumnHelpHeader
-                  label={
-                    experienceMode === 'simple'
-                      ? 'Qué está cambiando'
-                      : 'Señal y Métrica'
-                  }
-                  helpKey="zScore"
-                  align="left"
-                />
-              </th>
-              <th className="py-3 px-3 font-medium text-right">
-                <ColumnHelpHeader
-                  label={experienceMode === 'simple' ? 'Habitual' : 'Temporada'}
-                  helpKey="baselineAvg"
-                  sortable
-                  activeSort={sortField === 'baselineAvg'}
-                  sortAsc={sortAsc}
-                  onSort={() => handleSort('baselineAvg')}
-                />
-              </th>
-              <th className="py-3 px-3 font-medium text-right">
-                <ColumnHelpHeader
-                  label={`Últ. ${windowSize} PJ`}
-                  helpKey="windowAvg"
-                  sortable
-                  activeSort={sortField === 'windowAvg'}
-                  sortAsc={sortAsc}
-                  onSort={() => handleSort('windowAvg')}
-                />
-              </th>
-              <th className="py-3 px-3 font-medium text-right">
-                <ColumnHelpHeader
-                  label="Cambio %"
-                  helpKey="pctDelta"
-                  sortable
-                  activeSort={sortField === 'pctDelta'}
-                  sortAsc={sortAsc}
-                  onSort={() => handleSort('pctDelta')}
-                />
-              </th>
-              <th className="py-3 px-3 font-medium text-right">
-                <ColumnHelpHeader
-                  label={experienceMode === 'simple' ? 'Magnitud' : 'Desv. Z'}
-                  helpKey={
-                    experienceMode === 'simple' ? 'magnitudeSimple' : 'zScore'
-                  }
-                  sortable
-                  activeSort={sortField === 'zScore'}
-                  sortAsc={sortAsc}
-                  onSort={() => handleSort('zScore')}
-                />
-              </th>
-              <th className="py-3 px-3 font-medium min-w-[215px]">
-                <ColumnHelpHeader
-                  label="Estadística vs Media NBA"
-                  helpKey="vsLeagueBar"
-                  align="left"
-                />
-              </th>
-              <th className="py-3 pl-3 pr-4 font-medium min-w-[240px]">
-                {experienceMode === 'simple'
-                  ? 'Explicación y racha'
-                  : 'Lectura, ventanas y racha'}
-              </th>
+          <thead className={STICKY_THEAD_CLASS}>
+            <tr className="border-b border-[#1E293B] text-xs text-slate-400">
+              <SortableTh
+                label="Seg."
+                align="left"
+                compact
+                active={sortField === 'watched'}
+                asc={sortAsc}
+                onSort={() => handleSort('watched')}
+                className="py-3 pl-4 pr-2 w-10"
+              />
+              <SortableTh
+                label={subjectColumnLabel}
+                align="left"
+                active={sortField === 'entityName'}
+                asc={sortAsc}
+                onSort={() => handleSort('entityName')}
+                className="py-3 px-3"
+              />
+              <SortableTh
+                label={
+                  experienceMode === 'simple'
+                    ? 'Qué está cambiando'
+                    : 'Señal y Métrica'
+                }
+                helpKey="zScore"
+                align="left"
+                active={sortField === 'metricLabel'}
+                asc={sortAsc}
+                onSort={() => handleSort('metricLabel')}
+                className="py-3 px-3"
+              />
+              <SortableTh
+                label={experienceMode === 'simple' ? 'Habitual' : 'Temporada'}
+                helpKey="baselineAvg"
+                align="right"
+                active={sortField === 'baselineAvg'}
+                asc={sortAsc}
+                onSort={() => handleSort('baselineAvg')}
+                className="py-3 px-3"
+              />
+              <SortableTh
+                label={`Últ. ${windowSize} PJ`}
+                helpKey="windowAvg"
+                align="right"
+                active={sortField === 'windowAvg'}
+                asc={sortAsc}
+                onSort={() => handleSort('windowAvg')}
+                className="py-3 px-3"
+              />
+              <SortableTh
+                label="Cambio %"
+                helpKey="pctDelta"
+                align="right"
+                active={sortField === 'pctDelta'}
+                asc={sortAsc}
+                onSort={() => handleSort('pctDelta')}
+                className="py-3 px-3"
+              />
+              <SortableTh
+                label={experienceMode === 'simple' ? 'Magnitud' : 'Desv. Z'}
+                helpKey={
+                  experienceMode === 'simple' ? 'magnitudeSimple' : 'zScore'
+                }
+                align="right"
+                active={sortField === 'zScore'}
+                asc={sortAsc}
+                onSort={() => handleSort('zScore')}
+                className="py-3 px-3"
+              />
+              <SortableTh
+                label="Estadística vs Media NBA"
+                helpKey="vsLeagueBar"
+                align="left"
+                active={sortField === 'vsNba'}
+                asc={sortAsc}
+                onSort={() => handleSort('vsNba')}
+                className="py-3 px-3 min-w-[215px]"
+              />
+              <SortableTh
+                label={
+                  experienceMode === 'simple'
+                    ? 'Explicación y racha'
+                    : 'Lectura, ventanas y racha'
+                }
+                align="left"
+                active={sortField === 'streakAndRead'}
+                asc={sortAsc}
+                onSort={() => handleSort('streakAndRead')}
+                className="py-3 pl-3 pr-4 min-w-[240px]"
+              />
             </tr>
           </thead>
           <tbody className="divide-y divide-[#1E293B] text-sm">
@@ -633,40 +700,87 @@ function AnomalyBlockTable({
                     />
                   </td>
                   <td className="py-2.5 pl-3 pr-4 max-w-md">
-                    {experienceMode === 'simple' ? (
-                      <>
-                        <div className="text-xs font-medium text-slate-100">
-                          {plainExp.headline}
+                    <BreakdownDetailCell
+                      entityName={`${sig.entityName}${
+                        sig.entityType === 'player' ? ` (${sig.teamAbbr})` : ''
+                      }`}
+                      badgeLabel={`${isUp ? '▲' : '▼'} ${
+                        experienceMode === 'simple'
+                          ? plainMetricName(sig.metricKey, sig.metricLabel)
+                          : sig.metricLabel
+                      } (${formatSigned(sig.pctDelta, 1, '%')})`}
+                      badgeTone={isGood ? 'positive' : 'negative'}
+                      diagnosisLabel={
+                        experienceMode === 'advanced'
+                          ? sig.sustainabilityLabel
+                          : undefined
+                      }
+                      diagnosisTone={sig.sustainabilityTone}
+                      headline={plainExp.headline}
+                      detailText={
+                        experienceMode === 'simple'
+                          ? plainExp.detail
+                          : sig.contextNote || plainExp.detail
+                      }
+                      secondaryText={
+                        sig.takeaways && sig.takeaways.length > 0
+                          ? sig.takeaways.join(' · ')
+                          : undefined
+                      }
+                      windowsSummary={
+                        sig.windows
+                          ? `Temp ${sig.windows.season.toFixed(1)}${
+                              sig.unit === '%' ? '%' : ''
+                            } · 10P ${sig.windows.l10.toFixed(1)}${
+                              sig.unit === '%' ? '%' : ''
+                            } · 5P ${sig.windows.l5.toFixed(1)}${
+                              sig.unit === '%' ? '%' : ''
+                            } · 3P ${sig.windows.l3.toFixed(1)}${
+                              sig.unit === '%' ? '%' : ''
+                            }`
+                          : undefined
+                      }
+                      streakText={
+                        sig.activeStreakLabel && (sig.activeStreakCount || 0) > 0
+                          ? `Racha activa: ${sig.activeStreakCount} PJ · ${sig.activeStreakLabel}`
+                          : null
+                      }
+                    >
+                      {experienceMode === 'simple' ? (
+                        <>
+                          <div className="text-xs font-medium text-slate-100 truncate">
+                            {plainExp.headline}
+                          </div>
+                          <div className="text-xs text-slate-400 line-clamp-1 mt-0.5">
+                            {plainExp.detail}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div
+                            className={`text-xs font-medium truncate ${
+                              sig.sustainabilityTone === 'solid'
+                                ? 'text-emerald-400'
+                                : sig.sustainabilityTone === 'warning'
+                                ? 'text-amber-400'
+                                : 'text-rose-400'
+                            }`}
+                          >
+                            {sig.sustainabilityTone === 'warning' ? '◆ ' : ''}
+                            {sig.sustainabilityLabel}
+                          </div>
+                          <div className="text-xs text-slate-400 line-clamp-1 mt-0.5">
+                            {sig.contextNote}
+                          </div>
+                        </>
+                      )}
+                      {sig.activeStreakLabel && (sig.activeStreakCount || 0) > 0 && (
+                        <div className="text-[11px] font-mono tabular-nums text-orange-300 mt-0.5 truncate">
+                          Racha activa: {sig.activeStreakCount} PJ ·{' '}
+                          {sig.activeStreakLabel}
                         </div>
-                        <div className="text-xs text-slate-400 line-clamp-1 mt-0.5">
-                          {plainExp.detail}
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <div
-                          className={`text-xs font-medium ${
-                            sig.sustainabilityTone === 'solid'
-                              ? 'text-emerald-400'
-                              : sig.sustainabilityTone === 'warning'
-                              ? 'text-amber-400'
-                              : 'text-rose-400'
-                          }`}
-                        >
-                          {sig.sustainabilityTone === 'warning' ? '◆ ' : ''}
-                          {sig.sustainabilityLabel}
-                        </div>
-                        <div className="text-xs text-slate-400 line-clamp-1 mt-0.5">
-                          {sig.contextNote}
-                        </div>
-                      </>
-                    )}
-                    {sig.activeStreakLabel && (sig.activeStreakCount || 0) > 0 && (
-                      <div className="text-[11px] font-mono tabular-nums text-orange-300 mt-0.5 truncate">
-                        Racha activa: {sig.activeStreakCount} PJ ·{' '}
-                        {sig.activeStreakLabel}
-                      </div>
-                    )}
+                      )}
+                    </BreakdownDetailCell>
                   </td>
                 </tr>
               );
@@ -765,7 +879,7 @@ export function AnomalyRadarView({
       setBreakoutSortAsc((prev) => !prev);
     } else {
       setBreakoutSortField(field);
-      setBreakoutSortAsc(false);
+      setBreakoutSortAsc(field === 'playerName' || field === 'axisAlert');
     }
   };
 
@@ -808,17 +922,39 @@ export function AnomalyRadarView({
           ? basePool
           : basePool.filter((b) => b.axis === breakoutAxisFilter);
 
-      const sorted = [...axisFiltered].sort((a, b) => {
-        const valA =
-          breakoutSortField === 'absDelta'
-            ? Math.abs(a.absDelta)
-            : a[breakoutSortField];
-        const valB =
-          breakoutSortField === 'absDelta'
-            ? Math.abs(b.absDelta)
-            : b[breakoutSortField];
-        return breakoutSortAsc ? valA - valB : valB - valA;
-      });
+      const sorted = sortRows(
+        axisFiltered,
+        (b) => {
+          switch (breakoutSortField) {
+            case 'watched':
+              return watchlistIds.has(`player:${b.playerId}`) ? 1 : 0;
+            case 'playerName':
+              return b.playerName;
+            case 'axisAlert':
+              return `${b.axisLabel} ${b.badgeLabel}`;
+            case 'windowAvg':
+              return b.windowAvg;
+            case 'baselineAvg':
+              return b.baselineAvg;
+            case 'absDelta':
+              return Math.abs(b.absDelta);
+            case 'breakoutScore':
+              return b.breakoutScore;
+            case 'streakRead':
+              return (
+                (b.activeStreakCount || 0) * 100 +
+                (b.sustainabilityTone === 'solid'
+                  ? 2
+                  : b.sustainabilityTone === 'warning'
+                  ? 1
+                  : 0)
+              );
+            default:
+              return b.breakoutScore;
+          }
+        },
+        breakoutSortAsc
+      );
 
       return {
         axisCardsSummary: axisMap,
@@ -1457,55 +1593,79 @@ export function AnomalyRadarView({
               </div>
 
               {/* Desktop Table (md+) */}
-              <div className="hidden md:block overflow-x-auto">
+              <div className="hidden md:block overflow-auto max-h-[66vh]">
                 <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
-                      <th className="py-3 pl-4 pr-2 w-10 font-medium">Seg.</th>
-                      <th className="py-3 px-3 font-medium">Jugador</th>
-                      <th className="py-3 px-3 font-medium">
-                        <ColumnHelpHeader
-                          label="Eje y alerta de ruptura"
-                          helpKey="trendBreakouts"
-                          align="left"
-                        />
-                      </th>
-                      <th className="py-3 px-3 font-medium">
-                        <ColumnHelpHeader
-                          label="Progresión Temp · 10P · 5P · 3P"
-                          helpKey="multiWindowCompare"
-                          align="left"
-                        />
-                      </th>
-                      <th className="py-3 px-3 font-medium text-right">
-                        <ColumnHelpHeader
-                          label={`Salto (Últ. ${windowSize} PJ)`}
-                          helpKey="pctDelta"
-                          sortable
-                          activeSort={breakoutSortField === 'absDelta'}
-                          sortAsc={breakoutSortAsc}
-                          onSort={() => handleBreakoutSort('absDelta')}
-                        />
-                      </th>
-                      <th className="py-3 px-3 font-medium text-right">
-                        <ColumnHelpHeader
-                          label={
-                            experienceMode === 'simple'
-                              ? 'Intensidad'
-                              : 'Índice Ruptura'
-                          }
-                          helpKey="zScore"
-                          sortable
-                          activeSort={breakoutSortField === 'breakoutScore'}
-                          sortAsc={breakoutSortAsc}
-                          onSort={() => handleBreakoutSort('breakoutScore')}
-                        />
-                      </th>
-                      <th className="py-3 pl-3 pr-4 font-medium min-w-[250px]">
-                        {experienceMode === 'simple'
-                          ? 'Lectura clara y racha'
-                          : 'Desglose técnico y sostenibilidad'}
-                      </th>
+                  <thead className={STICKY_THEAD_CLASS}>
+                    <tr className="border-b border-[#1E293B] text-xs text-slate-400">
+                      <SortableTh
+                        label="Seg."
+                        align="left"
+                        compact
+                        active={breakoutSortField === 'watched'}
+                        asc={breakoutSortAsc}
+                        onSort={() => handleBreakoutSort('watched')}
+                        className="py-3 pl-4 pr-2 w-10"
+                      />
+                      <SortableTh
+                        label="Jugador"
+                        align="left"
+                        active={breakoutSortField === 'playerName'}
+                        asc={breakoutSortAsc}
+                        onSort={() => handleBreakoutSort('playerName')}
+                        className="py-3 px-3"
+                      />
+                      <SortableTh
+                        label="Eje y alerta de ruptura"
+                        helpKey="trendBreakouts"
+                        align="left"
+                        active={breakoutSortField === 'axisAlert'}
+                        asc={breakoutSortAsc}
+                        onSort={() => handleBreakoutSort('axisAlert')}
+                        className="py-3 px-3"
+                      />
+                      <SortableTh
+                        label="Progresión Temp · 10P · 5P · 3P"
+                        helpKey="multiWindowCompare"
+                        align="left"
+                        active={breakoutSortField === 'windowAvg'}
+                        asc={breakoutSortAsc}
+                        onSort={() => handleBreakoutSort('windowAvg')}
+                        className="py-3 px-3"
+                      />
+                      <SortableTh
+                        label={`Salto (Últ. ${windowSize} PJ)`}
+                        helpKey="pctDelta"
+                        align="right"
+                        active={breakoutSortField === 'absDelta'}
+                        asc={breakoutSortAsc}
+                        onSort={() => handleBreakoutSort('absDelta')}
+                        className="py-3 px-3"
+                      />
+                      <SortableTh
+                        label={
+                          experienceMode === 'simple'
+                            ? 'Intensidad'
+                            : 'Índice Ruptura'
+                        }
+                        helpKey="zScore"
+                        align="right"
+                        active={breakoutSortField === 'breakoutScore'}
+                        asc={breakoutSortAsc}
+                        onSort={() => handleBreakoutSort('breakoutScore')}
+                        className="py-3 px-3"
+                      />
+                      <SortableTh
+                        label={
+                          experienceMode === 'simple'
+                            ? 'Lectura clara y racha'
+                            : 'Desglose técnico y sostenibilidad'
+                        }
+                        align="left"
+                        active={breakoutSortField === 'streakRead'}
+                        asc={breakoutSortAsc}
+                        onSort={() => handleBreakoutSort('streakRead')}
+                        className="py-3 pl-3 pr-4 min-w-[250px]"
+                      />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#1E293B] text-sm">
@@ -1637,42 +1797,75 @@ export function AnomalyRadarView({
                           </td>
 
                           <td className="py-2.5 pl-3 pr-4 max-w-md">
-                            {experienceMode === 'simple' ? (
-                              <>
-                                <div className="text-xs font-medium text-slate-100">
-                                  {b.headlineSimple}
+                            <BreakdownDetailCell
+                              entityName={`${b.playerName} (${b.teamAbbr})`}
+                              badgeLabel={`${isPos ? '▲' : '▼'} ${b.badgeLabel} · ${b.metricLabel}`}
+                              badgeTone={isPos ? 'positive' : 'negative'}
+                              diagnosisLabel={b.sustainabilityLabel}
+                              diagnosisTone={b.sustainabilityTone}
+                              headline={
+                                experienceMode === 'simple'
+                                  ? b.headlineSimple
+                                  : b.headlineAdvanced
+                              }
+                              detailText={
+                                experienceMode === 'simple'
+                                  ? b.detailSimple
+                                  : b.detailAdvanced
+                              }
+                              secondaryText={b.secondaryLabel}
+                              windowsSummary={`Temp ${b.windows.season.toFixed(
+                                b.decimals
+                              )}${b.unit === '%' ? '%' : ''} · 10P ${b.windows.l10.toFixed(
+                                b.decimals
+                              )}${b.unit === '%' ? '%' : ''} · 5P ${b.windows.l5.toFixed(
+                                b.decimals
+                              )}${b.unit === '%' ? '%' : ''} · 3P ${b.windows.l3.toFixed(
+                                b.decimals
+                              )}${b.unit === '%' ? '%' : ''}`}
+                              streakText={
+                                b.activeStreakLabel && b.activeStreakCount > 0
+                                  ? `Racha activa: ${b.activeStreakCount} PJ · ${b.activeStreakLabel}`
+                                  : null
+                              }
+                            >
+                              {experienceMode === 'simple' ? (
+                                <>
+                                  <div className="text-xs font-medium text-slate-100 truncate">
+                                    {b.headlineSimple}
+                                  </div>
+                                  <div className="text-xs text-slate-400 line-clamp-1 mt-0.5">
+                                    {b.detailSimple}
+                                  </div>
+                                </>
+                              ) : (
+                                <>
+                                  <div
+                                    className={`text-xs font-medium truncate ${
+                                      b.sustainabilityTone === 'solid'
+                                        ? 'text-emerald-400'
+                                        : b.sustainabilityTone === 'warning'
+                                        ? 'text-amber-400'
+                                        : 'text-rose-400'
+                                    }`}
+                                  >
+                                    {b.sustainabilityTone === 'warning'
+                                      ? '◆ '
+                                      : ''}
+                                    {b.sustainabilityLabel}
+                                  </div>
+                                  <div className="text-xs font-mono tabular-nums text-slate-400 line-clamp-1 mt-0.5">
+                                    {b.secondaryLabel}
+                                  </div>
+                                </>
+                              )}
+                              {b.activeStreakLabel && b.activeStreakCount > 0 && (
+                                <div className="text-[11px] font-mono tabular-nums text-orange-300 mt-0.5 truncate">
+                                  Racha activa: {b.activeStreakCount} PJ ·{' '}
+                                  {b.activeStreakLabel}
                                 </div>
-                                <div className="text-xs text-slate-400 line-clamp-1 mt-0.5">
-                                  {b.detailSimple}
-                                </div>
-                              </>
-                            ) : (
-                              <>
-                                <div
-                                  className={`text-xs font-medium ${
-                                    b.sustainabilityTone === 'solid'
-                                      ? 'text-emerald-400'
-                                      : b.sustainabilityTone === 'warning'
-                                      ? 'text-amber-400'
-                                      : 'text-rose-400'
-                                  }`}
-                                >
-                                  {b.sustainabilityTone === 'warning'
-                                    ? '◆ '
-                                    : ''}
-                                  {b.sustainabilityLabel}
-                                </div>
-                                <div className="text-xs font-mono tabular-nums text-slate-400 line-clamp-1 mt-0.5">
-                                  {b.secondaryLabel}
-                                </div>
-                              </>
-                            )}
-                            {b.activeStreakLabel && b.activeStreakCount > 0 && (
-                              <div className="text-[11px] font-mono tabular-nums text-orange-300 mt-0.5 truncate">
-                                Racha activa: {b.activeStreakCount} PJ ·{' '}
-                                {b.activeStreakLabel}
-                              </div>
-                            )}
+                              )}
+                            </BreakdownDetailCell>
                           </td>
                         </tr>
                       );

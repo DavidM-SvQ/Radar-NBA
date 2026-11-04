@@ -314,7 +314,7 @@ async function buildSingleSeasonDataset(seasonCode, forceRefresh = false, option
         }
         const awayPts = cur.isHome ? cur.pointsAgainst : cur.pointsFor;
         const homePts = cur.isHome ? cur.pointsFor : cur.pointsAgainst;
-        teamGameContextMap.set(`${cur.eventId}:${tm.abbreviation}`, { scoreDisplay: `${awayPts}-${homePts}`, opponentName: cur.opponentName, opponentAbbr: cur.opponentAbbr, isHome: cur.isHome, result: cur.result, poss: cur.poss, gameMins: Math.max(48, cur.poss / Math.max(70, cur.pace) * 48), restDays: cur.restDays, isBackToBack: cur.isBackToBack });
+        teamGameContextMap.set(`${cur.eventId}:${tm.abbreviation}`, { scoreDisplay: `${awayPts}-${homePts}`, opponentName: cur.opponentName, opponentAbbr: cur.opponentAbbr, isHome: cur.isHome, result: cur.result, poss: cur.poss, tmPlays: cur.fga + 0.44 * cur.fta + cur.tov, gameMins: Math.max(48, cur.poss / Math.max(70, cur.pace) * 48), restDays: cur.restDays, isBackToBack: cur.isBackToBack });
       }
       if (tm.games.length > 0) {
         const w = tm.games.filter((g) => g.result === "W").length;
@@ -437,9 +437,10 @@ async function buildSingleSeasonDataset(seasonCode, forceRefresh = false, option
       const tsDenom = 2 * (fga + 0.44 * fta);
       const tsPct = tsDenom > 0 ? round1(pts / tsDenom * 100) : 0;
       const teamPoss = ctx?.poss || 99;
-      const gameMins = ctx?.gameMins || 48;
+      const tmPlays = ctx?.tmPlays && ctx.tmPlays > 0 ? ctx.tmPlays : teamPoss * 1.135;
+      const gameMins = Math.max(ctx?.gameMins || 48, minutes);
       const plPoss = fga + 0.44 * fta + tov;
-      const usgEst = minutes > 0 && teamPoss > 0 ? round1(Math.min(55, Math.max(0, plPoss / (teamPoss * (minutes / gameMins)) * 100))) : 0;
+      const usgEst = minutes > 0 && tmPlays > 0 ? round1(Math.min(55, Math.max(0, plPoss / (tmPlays * (minutes / gameMins)) * 100))) : 0;
       const gmSc = computeHollingerGameScore({ pts, fgm, fga, ftm, fta, oreb, dreb, stl, ast, blk, pf, tov });
       const gLog = { eventId: gid, date: String(row.GAME_DATE || "").slice(0, 10), seasonLabel: seasonCode, teamAbbr: tAbbr || pSummary.teamAbbr, teamId: tMeta?.id || String(row.TEAM_ID || pSummary.teamId || ""), opponentAbbr: oppAbbr, opponentName: oppName, isHome, result, scoreDisplay: ctx?.scoreDisplay || "", restDays: ctx?.restDays ?? null, isBackToBack: ctx?.isBackToBack ?? false, minutes, points: pts, rebounds: reb, oreb, dreb, assists: ast, steals: stl, blocks: blk, stocks: stl + blk, turnovers: tov, fouls: pf, plusMinus: pm, fgm, fga, fgPct, fg3m, fg3a, fg3Pct, ftm, fta, ftPct, pra: pts + reb + ast, tsPct, efgPct, usgEst, gameScore: gmSc };
       pSummary.games.push(gLog);

@@ -12,10 +12,15 @@ import {
   type LeagueBenchmarks,
 } from '../utils/humanize';
 import {
-  ColumnHelpHeader,
   MetricInfoTooltip,
   NbaComparisonBar,
+  SortableTh,
 } from './MetricUiHelpers';
+import {
+  STICKY_THEAD_CLASS,
+  compareSortValues,
+  parseStreakCodeValue,
+} from '../utils/tableSort';
 import { TeamLogo } from './NbaVisuals';
 
 interface TeamsExplorerViewProps {
@@ -33,6 +38,10 @@ interface TeamsExplorerViewProps {
 type TeamTableView = 'basic' | 'advanced' | 'zones_hustle';
 
 type SortKey =
+  | 'watched'
+  | 'name'
+  | 'domVsNba'
+  | 'streak'
   | 'winPct'
   | 'avgPointsFor'
   | 'avgPointsAgainst'
@@ -88,6 +97,10 @@ export function TeamsExplorerView({
     if (experienceMode === 'simple') {
       setViewMode('basic');
       if (
+        sortKey !== 'watched' &&
+        sortKey !== 'name' &&
+        sortKey !== 'domVsNba' &&
+        sortKey !== 'streak' &&
         sortKey !== 'winPct' &&
         sortKey !== 'avgPointsFor' &&
         sortKey !== 'avgPointsAgainst' &&
@@ -180,9 +193,25 @@ export function TeamsExplorerView({
         }
         return true;
       })
-      .sort((a, b) =>
-        sortAsc ? a[sortKey] - b[sortKey] : b[sortKey] - a[sortKey]
-      );
+      .sort((a, b) => {
+        if (sortKey === 'watched') {
+          const wa = watchlistIds.has(`team:${a.id}`);
+          const wb = watchlistIds.has(`team:${b.id}`);
+          return compareSortValues(wa, wb, sortAsc) || b.winPct - a.winPct;
+        }
+        if (sortKey === 'name') {
+          return compareSortValues(a.name, b.name, sortAsc);
+        }
+        if (sortKey === 'domVsNba') {
+          return sortAsc ? a.netRtg - b.netRtg : b.netRtg - a.netRtg;
+        }
+        if (sortKey === 'streak') {
+          const sa = parseStreakCodeValue(a.streakCode);
+          const sb = parseStreakCodeValue(b.streakCode);
+          return sortAsc ? sa - sb : sb - sa;
+        }
+        return sortAsc ? a[sortKey] - b[sortKey] : b[sortKey] - a[sortKey];
+      });
   }, [
     enrichedTeams,
     onlyWatchlist,
@@ -221,7 +250,8 @@ export function TeamsExplorerView({
     } else {
       setSortKey(key);
       setSortAsc(
-        key === 'avgPointsAgainst' ||
+        key === 'name' ||
+          key === 'avgPointsAgainst' ||
           key === 'defRtg' ||
           key === 'tovPct' ||
           key === 'oppPtsPaint'
@@ -233,18 +263,23 @@ export function TeamsExplorerView({
     label,
     k,
     helpKey,
+    className = 'py-3 px-2.5',
+    align = 'right',
   }: {
     label: string;
     k: SortKey;
     helpKey?: string;
+    className?: string;
+    align?: 'left' | 'right';
   }) => (
-    <ColumnHelpHeader
+    <SortableTh
       label={label}
       helpKey={helpKey ?? k}
-      sortable
-      activeSort={sortKey === k}
-      sortAsc={sortAsc}
+      active={sortKey === k}
+      asc={sortAsc}
       onSort={() => handleSort(k)}
+      align={align}
+      className={className}
     />
   );
 
@@ -717,148 +752,113 @@ export function TeamsExplorerView({
         </div>
 
         {/* Desktop Full Table (md+) */}
-        <div className="hidden md:block overflow-x-auto">
+        <div className="hidden md:block overflow-auto max-h-[72vh]">
           <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
-                <th className="py-3 pl-4 pr-2 w-10 font-medium">Seg.</th>
-                <th className="py-3 px-3 font-medium">Franquicia</th>
+            <thead className={STICKY_THEAD_CLASS}>
+              <tr className="text-xs text-slate-400">
+                <SortableTh
+                  label="Seg."
+                  active={sortKey === 'watched'}
+                  asc={sortAsc}
+                  onSort={() => handleSort('watched')}
+                  align="left"
+                  className="py-3 pl-4 pr-2 w-12"
+                  compact
+                />
+                <SortableTh
+                  label="Franquicia"
+                  active={sortKey === 'name'}
+                  asc={sortAsc}
+                  onSort={() => handleSort('name')}
+                  align="left"
+                  className="py-3 px-3"
+                />
 
                 {experienceMode === 'simple' ? (
                   <>
-                    <th className="py-3 px-2.5 font-medium text-right">
-                      <SH label="Victorias" k="winPct" />
-                    </th>
-                    <th className="py-3 px-2.5 font-medium text-right">
-                      <SH label="Ataque (Anota)" k="avgPointsFor" />
-                    </th>
-                    <th className="py-3 px-2.5 font-medium text-right">
-                      <SH label="Defensa (Recibe)" k="avgPointsAgainst" />
-                    </th>
-                    <th className="py-3 px-2.5 font-medium text-right">
-                      <SH
-                        label={`Margen Últ.${windowSize}`}
-                        k="windowDiff"
-                        helpKey="windowDiff"
-                      />
-                    </th>
-                    <th className="py-3 px-3 font-medium w-56">
-                      <ColumnHelpHeader
-                        label="Dominio vs Media NBA"
-                        helpKey="vsLeagueBar"
-                        align="left"
-                      />
-                    </th>
-                    <th className="py-3 pl-2.5 pr-4 font-medium text-right">
-                      <ColumnHelpHeader
-                        label="Racha actual"
-                        helpKey="streakCurrent"
-                      />
-                    </th>
+                    <SH label="Victorias" k="winPct" />
+                    <SH label="Ataque (Anota)" k="avgPointsFor" />
+                    <SH label="Defensa (Recibe)" k="avgPointsAgainst" />
+                    <SH
+                      label={`Margen Últ.${windowSize}`}
+                      k="windowDiff"
+                      helpKey="windowDiff"
+                    />
+                    <SH
+                      label="Dominio vs Media NBA"
+                      k="domVsNba"
+                      helpKey="vsLeagueBar"
+                      align="left"
+                      className="py-3 px-3 w-56"
+                    />
+                    <SH
+                      label="Racha actual"
+                      k="streak"
+                      helpKey="streakCurrent"
+                      className="py-3 pl-2.5 pr-4"
+                    />
                   </>
                 ) : (
                   <>
                     {viewMode === 'basic' && (
                       <>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="Balance (%V)" k="winPct" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="PTS Favor" k="avgPointsFor" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="PTS Contra" k="avgPointsAgainst" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="Dif. Base" k="differential" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH
-                            label={`Dif. Últ.${windowSize}`}
-                            k="windowDiff"
-                            helpKey="windowDiff"
-                          />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="OR / REB" k="orebAvg" helpKey="orebBase" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="3PM (3P%)" k="fg3mAvg" helpKey="fg3m" />
-                        </th>
-                        <th className="py-3 pl-2.5 pr-4 font-medium text-right">
-                          <ColumnHelpHeader
-                            label="Racha / Casa-Fuera"
-                            helpKey="streakCurrent"
-                          />
-                        </th>
+                        <SH label="Balance (%V)" k="winPct" />
+                        <SH label="PTS Favor" k="avgPointsFor" />
+                        <SH label="PTS Contra" k="avgPointsAgainst" />
+                        <SH label="Dif. Base" k="differential" />
+                        <SH
+                          label={`Dif. Últ.${windowSize}`}
+                          k="windowDiff"
+                          helpKey="windowDiff"
+                        />
+                        <SH label="OR / REB" k="orebAvg" helpKey="orebBase" />
+                        <SH label="3PM (3P%)" k="fg3mAvg" helpKey="fg3m" />
+                        <SH
+                          label="Racha / Casa-Fuera"
+                          k="streak"
+                          helpKey="streakCurrent"
+                          className="py-3 pl-2.5 pr-4"
+                        />
                       </>
                     )}
 
                     {viewMode === 'advanced' && (
                       <>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="OffRtg" k="offRtg" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="DefRtg" k="defRtg" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="NetRtg" k="netRtg" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH
-                            label={`Net Últ.${windowSize}`}
-                            k="winNetRtg"
-                            helpKey="winNetRtg"
-                          />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="Pace" k="pace" helpKey="paceSimple" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="eFG%" k="efgPct" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="TS%" k="tsPct" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="OREB%" k="orebPct" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="TOV%" k="tovPct" />
-                        </th>
-                        <th className="py-3 pl-2.5 pr-4 font-medium text-right">
-                          <SH label="PIE%" k="pie" />
-                        </th>
+                        <SH label="OffRtg" k="offRtg" />
+                        <SH label="DefRtg" k="defRtg" />
+                        <SH label="NetRtg" k="netRtg" />
+                        <SH
+                          label={`Net Últ.${windowSize}`}
+                          k="winNetRtg"
+                          helpKey="winNetRtg"
+                        />
+                        <SH label="Pace" k="pace" helpKey="paceSimple" />
+                        <SH label="eFG%" k="efgPct" />
+                        <SH label="TS%" k="tsPct" />
+                        <SH label="OREB%" k="orebPct" />
+                        <SH label="TOV%" k="tovPct" />
+                        <SH
+                          label="PIE%"
+                          k="pie"
+                          className="py-3 pl-2.5 pr-4"
+                        />
                       </>
                     )}
 
                     {viewMode === 'zones_hustle' && (
                       <>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="PTS Pintura" k="ptsPaint" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="Pint. Rival" k="oppPtsPaint" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="2ª Jugada" k="pts2ndChance" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="Contraataque" k="ptsFastBreak" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="Tras Pérdida" k="ptsOffTov" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="Punteados" k="contestedShots" />
-                        </th>
-                        <th className="py-3 px-2.5 font-medium text-right">
-                          <SH label="Desvíos" k="deflections" />
-                        </th>
-                        <th className="py-3 pl-2.5 pr-4 font-medium text-right">
-                          <SH label="Box-Outs" k="boxOuts" />
-                        </th>
+                        <SH label="PTS Pintura" k="ptsPaint" />
+                        <SH label="Pint. Rival" k="oppPtsPaint" />
+                        <SH label="2ª Jugada" k="pts2ndChance" />
+                        <SH label="Contraataque" k="ptsFastBreak" />
+                        <SH label="Tras Pérdida" k="ptsOffTov" />
+                        <SH label="Punteados" k="contestedShots" />
+                        <SH label="Desvíos" k="deflections" />
+                        <SH
+                          label="Box-Outs"
+                          k="boxOuts"
+                          className="py-3 pl-2.5 pr-4"
+                        />
                       </>
                     )}
                   </>

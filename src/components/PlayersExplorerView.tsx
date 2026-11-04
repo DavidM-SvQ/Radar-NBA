@@ -19,10 +19,11 @@ import {
   type LeagueBenchmarks,
 } from '../utils/humanize';
 import {
-  ColumnHelpHeader,
   MetricInfoTooltip,
   NbaComparisonBar,
+  SortableTh,
 } from './MetricUiHelpers';
+import { STICKY_THEAD_CLASS, compareSortValues } from '../utils/tableSort';
 import { PlayerAvatar } from './NbaVisuals';
 
 interface PlayersExplorerViewProps {
@@ -46,6 +47,9 @@ interface PlayersExplorerViewProps {
 type TableViewMode = 'basic' | 'advanced' | 'zones_hustle';
 
 type SortKey =
+  | 'watched'
+  | 'name'
+  | 'ptsVsNba'
   | 'minBase'
   | 'ptsBase'
   | 'ptsWin'
@@ -106,6 +110,9 @@ export function PlayersExplorerView({
     if (experienceMode === 'simple') {
       setViewMode('basic');
       if (
+        sortKey !== 'watched' &&
+        sortKey !== 'name' &&
+        sortKey !== 'ptsVsNba' &&
         sortKey !== 'minBase' &&
         sortKey !== 'ptsBase' &&
         sortKey !== 'ptsWin' &&
@@ -243,9 +250,20 @@ export function PlayersExplorerView({
         }
         return true;
       })
-      .sort((a, b) =>
-        sortAsc ? a[sortKey] - b[sortKey] : b[sortKey] - a[sortKey]
-      );
+      .sort((a, b) => {
+        if (sortKey === 'watched') {
+          const wa = watchlistIds.has(`player:${a.id}`);
+          const wb = watchlistIds.has(`player:${b.id}`);
+          return compareSortValues(wa, wb, sortAsc) || b.ptsBase - a.ptsBase;
+        }
+        if (sortKey === 'name') {
+          return compareSortValues(a.name, b.name, sortAsc);
+        }
+        if (sortKey === 'ptsVsNba') {
+          return sortAsc ? a.ptsBase - b.ptsBase : b.ptsBase - a.ptsBase;
+        }
+        return sortAsc ? a[sortKey] - b[sortKey] : b[sortKey] - a[sortKey];
+      });
   }, [rows, onlyWatchlist, watchlistIds, posFilter, query, sortKey, sortAsc]);
 
   const existingIds = useMemo(() => new Set(players.map((p) => p.id)), [players]);
@@ -283,7 +301,7 @@ export function PlayersExplorerView({
       setSortAsc((prev) => !prev);
     } else {
       setSortKey(key);
-      setSortAsc(key === 'defRtg');
+      setSortAsc(key === 'defRtg' || key === 'name');
     }
   };
 
@@ -291,18 +309,23 @@ export function PlayersExplorerView({
     label,
     k,
     helpKey,
+    className = 'py-3 px-2.5',
+    align = 'right',
   }: {
     label: string;
     k: SortKey;
     helpKey?: string;
+    className?: string;
+    align?: 'left' | 'right';
   }) => (
-    <ColumnHelpHeader
+    <SortableTh
       label={label}
       helpKey={helpKey ?? k}
-      sortable
-      activeSort={sortKey === k}
-      sortAsc={sortAsc}
+      active={sortKey === k}
+      asc={sortAsc}
       onSort={() => toggleSort(k)}
+      align={align}
+      className={className}
     />
   );
 
@@ -906,142 +929,99 @@ export function PlayersExplorerView({
             </div>
 
             {/* Desktop Full Table (md+) */}
-            <div className="hidden md:block overflow-x-auto">
+            <div className="hidden md:block overflow-auto max-h-[72vh]">
               <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
-                  <th className="py-3 pl-4 pr-2 w-10 font-medium">Seg.</th>
-                  <th className="py-3 px-3 font-medium">Jugador y Rol</th>
+              <thead className={STICKY_THEAD_CLASS}>
+                <tr className="text-xs text-slate-400">
+                  <SortableTh
+                    label="Seg."
+                    active={sortKey === 'watched'}
+                    asc={sortAsc}
+                    onSort={() => toggleSort('watched')}
+                    align="left"
+                    className="py-3 pl-4 pr-2 w-12"
+                    compact
+                  />
+                  <SortableTh
+                    label="Jugador y Rol"
+                    active={sortKey === 'name'}
+                    asc={sortAsc}
+                    onSort={() => toggleSort('name')}
+                    align="left"
+                    className="py-3 px-3"
+                  />
 
                   {experienceMode === 'simple' ? (
                     <>
-                      <th className="py-3 px-2.5 font-medium text-right">
-                        <SH label="Minutos" k="minBase" />
-                      </th>
-                      <th className="py-3 px-2.5 font-medium text-right">
-                        <SH label="Puntos" k="ptsBase" />
-                      </th>
-                      <th className="py-3 px-2.5 font-medium text-right">
-                        <SH label={`Últ. ${windowSize} PJ`} k="ptsWin" />
-                      </th>
-                      <th className="py-3 px-2.5 font-medium text-right">
-                        <SH label="Rebotes" k="rebBase" />
-                      </th>
-                      <th className="py-3 px-2.5 font-medium text-right">
-                        <SH label="Asistencias" k="astBase" />
-                      </th>
-                      <th className="py-3 px-2.5 font-medium text-right">
-                        <SH label="Acierto Real" k="tsPct" />
-                      </th>
-                      <th className="py-3 pl-3 pr-4 font-medium w-56">
-                        <ColumnHelpHeader
-                          label="Nivel anotador vs Media NBA"
-                          helpKey="vsLeagueBar"
-                          align="left"
-                        />
-                      </th>
+                      <SH label="Minutos" k="minBase" />
+                      <SH label="Puntos" k="ptsBase" />
+                      <SH label={`Últ. ${windowSize} PJ`} k="ptsWin" />
+                      <SH label="Rebotes" k="rebBase" />
+                      <SH label="Asistencias" k="astBase" />
+                      <SH label="Acierto Real" k="tsPct" />
+                      <SH
+                        label="Nivel anotador vs Media NBA"
+                        k="ptsVsNba"
+                        helpKey="vsLeagueBar"
+                        align="left"
+                        className="py-3 pl-3 pr-4 w-56"
+                      />
                     </>
                   ) : (
                     <>
                       {viewMode === 'basic' && (
                         <>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="MIN" k="minBase" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="PTS Base" k="ptsBase" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label={`Últ. ${windowSize}`} k="ptsWin" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="Delta %" k="pctDelta" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="REB" k="rebBase" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="OR" k="orebBase" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="AST" k="astBase" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="STK" k="stocksBase" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="TC%" k="fgPct" />
-                          </th>
-                          <th className="py-3 pl-2.5 pr-4 font-medium text-right">
-                            <SH label="+/-" k="plusMinusBase" />
-                          </th>
+                          <SH label="MIN" k="minBase" />
+                          <SH label="PTS Base" k="ptsBase" />
+                          <SH label={`Últ. ${windowSize}`} k="ptsWin" />
+                          <SH label="Delta %" k="pctDelta" />
+                          <SH label="REB" k="rebBase" />
+                          <SH label="OR" k="orebBase" />
+                          <SH label="AST" k="astBase" />
+                          <SH label="STK" k="stocksBase" />
+                          <SH label="TC%" k="fgPct" />
+                          <SH
+                            label="+/-"
+                            k="plusMinusBase"
+                            className="py-3 pl-2.5 pr-4"
+                          />
                         </>
                       )}
 
                       {viewMode === 'advanced' && (
                         <>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="MIN" k="minBase" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="USG% Base" k="usgPct" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label={`USG Últ.${windowSize}`} k="usgWin" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="TS%" k="tsPct" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="eFG%" k="efgPct" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="OffRtg" k="offRtg" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="DefRtg" k="defRtg" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="NetRtg" k="netRtg" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="PIE%" k="pie" />
-                          </th>
-                          <th className="py-3 pl-2.5 pr-4 font-medium text-right">
-                            <SH label="GmSc" k="gmSc" />
-                          </th>
+                          <SH label="MIN" k="minBase" />
+                          <SH label="USG% Base" k="usgPct" />
+                          <SH label={`USG Últ.${windowSize}`} k="usgWin" />
+                          <SH label="TS%" k="tsPct" />
+                          <SH label="eFG%" k="efgPct" />
+                          <SH label="OffRtg" k="offRtg" />
+                          <SH label="DefRtg" k="defRtg" />
+                          <SH label="NetRtg" k="netRtg" />
+                          <SH label="PIE%" k="pie" />
+                          <SH
+                            label="GmSc"
+                            k="gmSc"
+                            className="py-3 pl-2.5 pr-4"
+                          />
                         </>
                       )}
 
                       {viewMode === 'zones_hustle' && (
                         <>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="AST%" k="astPct" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="AST/PER" k="astTo" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="OREB%" k="orebPct" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="PTS Pintura" k="ptsPaint" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="2ª Jugada" k="pts2ndChance" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="Contraat." k="ptsFastBreak" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="Punteados" k="contestedShots" />
-                          </th>
-                          <th className="py-3 px-2.5 font-medium text-right">
-                            <SH label="Desvíos" k="deflections" />
-                          </th>
-                          <th className="py-3 pl-2.5 pr-4 font-medium text-right">
-                            <SH label="Screen AST" k="screenAssists" />
-                          </th>
+                          <SH label="AST%" k="astPct" />
+                          <SH label="AST/PER" k="astTo" />
+                          <SH label="OREB%" k="orebPct" />
+                          <SH label="PTS Pintura" k="ptsPaint" />
+                          <SH label="2ª Jugada" k="pts2ndChance" />
+                          <SH label="Contraat." k="ptsFastBreak" />
+                          <SH label="Punteados" k="contestedShots" />
+                          <SH label="Desvíos" k="deflections" />
+                          <SH
+                            label="Screen AST"
+                            k="screenAssists"
+                            className="py-3 pl-2.5 pr-4"
+                          />
                         </>
                       )}
                     </>

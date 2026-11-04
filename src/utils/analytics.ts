@@ -1526,13 +1526,13 @@ export function detectActiveStreaks(
         extract: (g) => g.minutes,
       },
       {
-        id: 'usg29',
+        id: 'usg30',
         metricLabel: 'Uso Ofensivo',
-        thresholdLabel: '29%+ USG uso de estrella',
+        thresholdLabel: '30%+ USG uso de estrella (≥25 MIN)',
         isPositive: true,
         breakoutAxis: 'minutes_usage',
         unit: '%',
-        test: (g) => g.minutes >= 18 && g.usgEst >= 29,
+        test: (g) => g.minutes >= 25 && g.usgEst >= 30,
         extract: (g) => g.usgEst,
       },
       {

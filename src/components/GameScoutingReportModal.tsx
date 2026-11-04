@@ -22,8 +22,74 @@ import type {
   PlayerSeasonHighEntry,
 } from '../types/nba';
 import { hexToRgba, resolveTeamMatchupColors } from '../utils/teamLogos';
-import { ColumnHelpHeader, MetricInfoTooltip } from './MetricUiHelpers';
+import {
+  STICKY_THEAD_CLASS,
+  sortRows,
+  useTableSort,
+  type SortPrimitive,
+} from '../utils/tableSort';
+import { MetricInfoTooltip, SortableTh } from './MetricUiHelpers';
 import { PlayerAvatar, TeamLogo } from './NbaVisuals';
+
+type TeamStatsSortCol = 'label' | 'away' | 'home' | 'diff' | 'pulse';
+
+function resolveBoxscorePlayerSortValue(
+  p: GameBoxScorePlayerLine,
+  colKey: string
+): SortPrimitive {
+  switch (colKey) {
+    case 'name':
+      return p.name;
+    case 'min':
+      return p.minutes;
+    case 'pts':
+      return p.points;
+    case 'fgm':
+      return p.fgm;
+    case 'fga':
+      return p.fga;
+    case 'fgPct':
+      return p.fgPct;
+    case 'fg3m':
+      return p.fg3m;
+    case 'fg3a':
+      return p.fg3a;
+    case 'fg3Pct':
+      return p.fg3Pct;
+    case 'ftm':
+      return p.ftm;
+    case 'fta':
+      return p.fta;
+    case 'ftPct':
+      return p.ftPct;
+    case 'oreb':
+      return p.oreb;
+    case 'dreb':
+      return p.dreb;
+    case 'reb':
+      return p.rebounds;
+    case 'ast':
+      return p.assists;
+    case 'stl':
+      return p.steals;
+    case 'blk':
+      return p.blocks;
+    case 'tov':
+      return p.turnovers;
+    case 'pf':
+      return p.fouls;
+    case 'plusMinus':
+      return p.plusMinus;
+    case 'gameScore':
+      return p.gameScore;
+    case 'tsPct':
+      return p.tsPct;
+    case 'usgEst':
+      return p.usgEst || 0;
+    default:
+      return p.points;
+  }
+}
 
 interface GameScoutingReportModalProps {
   eventId: string | null;
@@ -648,6 +714,62 @@ export function GameScoutingReportModal({
   const activeRequestIdRef = useRef<number>(0);
   const narrativeAbortRef = useRef<AbortController | null>(null);
 
+  const {
+    sortKey: quarterSortKey,
+    sortAsc: quarterSortAsc,
+    toggleSort: toggleQuarterSort,
+    setSortKey: setQuarterSortKey,
+  } = useTableSort<string>(null, false, ['team']);
+
+  const [teamStatsSorts, setTeamStatsSorts] = useState<
+    Record<string, { key: TeamStatsSortCol | null; asc: boolean }>
+  >({});
+
+  const toggleTeamSectionSort = (sectionId: string, col: TeamStatsSortCol) => {
+    setTeamStatsSorts((prev) => {
+      const curr = prev[sectionId];
+      if (curr?.key === col) {
+        return { ...prev, [sectionId]: { key: col, asc: !curr.asc } };
+      }
+      return {
+        ...prev,
+        [sectionId]: { key: col, asc: col === 'label' },
+      };
+    });
+  };
+
+  const {
+    sortKey: leaderSortKey,
+    sortAsc: leaderSortAsc,
+    toggleSort: toggleLeaderSort,
+    setSortKey: setLeaderSortKey,
+  } = useTableSort<'category' | 'away' | 'diff' | 'home'>(null, false, [
+    'category',
+  ]);
+
+  const [boxSorts, setBoxSorts] = useState<
+    Record<'away' | 'home', { key: string | null; asc: boolean }>
+  >({
+    away: { key: null, asc: false },
+    home: { key: null, asc: false },
+  });
+
+  const toggleBoxSort = (sideKey: 'away' | 'home', colKey: string) => {
+    setBoxSorts((prev) => {
+      const curr = prev[sideKey];
+      if (curr.key === colKey) {
+        return { ...prev, [sideKey]: { key: colKey, asc: !curr.asc } };
+      }
+      return {
+        ...prev,
+        [sideKey]: {
+          key: colKey,
+          asc: colKey === 'name' || colKey === 'tov' || colKey === 'pf',
+        },
+      };
+    });
+  };
+
   const matchupColors = useMemo(() => {
     if (!report) {
       return {
@@ -760,6 +882,13 @@ export function GameScoutingReportModal({
     setBoxTeamFilter('both');
     setAbsenceFilter('medical_setback');
     setLeaderFilter('all');
+    setQuarterSortKey(null);
+    setTeamStatsSorts({});
+    setLeaderSortKey(null);
+    setBoxSorts({
+      away: { key: null, asc: false },
+      home: { key: null, asc: false },
+    });
     setHoveredSeasonHigh(null);
     setCopied(false);
     void loadFullGameReport(eventId, false);
@@ -1001,7 +1130,7 @@ export function GameScoutingReportModal({
 
   const filteredLeaderRows = useMemo(() => {
     if (!report) return [];
-    return report.leaderComparisonRows
+    const base = report.leaderComparisonRows
       .map((row, index) => ({ row, ordinal: index + 1 }))
       .filter(({ row }) => {
         if (leaderFilter === 'away') return row.betterSide === 'away';
@@ -1010,7 +1139,26 @@ export function GameScoutingReportModal({
           return Boolean(row.awayIsElite || row.homeIsElite);
         return true;
       });
-  }, [report, leaderFilter]);
+    if (!leaderSortKey) return base;
+    return sortRows(
+      base,
+      ({ row }) => {
+        switch (leaderSortKey) {
+          case 'category':
+            return row.categoryLabel;
+          case 'away':
+            return row.awayValue;
+          case 'home':
+            return row.homeValue;
+          case 'diff':
+            return Math.abs(row.awayValue - row.homeValue);
+          default:
+            return row.categoryLabel;
+        }
+      },
+      leaderSortAsc
+    );
+  }, [report, leaderFilter, leaderSortKey, leaderSortAsc]);
 
   const gameHighlightEntities = useMemo(() => {
     if (!report) return [];
@@ -1048,6 +1196,8 @@ export function GameScoutingReportModal({
 
   const renderTeamBoxscoreTable = (side: GameReportTeamSide, roleLabel: string) => {
     const isAwaySide = report ? side.abbr === report.away.abbr : roleLabel === 'Visitante';
+    const sideKey: 'away' | 'home' = isAwaySide ? 'away' : 'home';
+    const sideSort = boxSorts[sideKey];
     const sideColor = isAwaySide
       ? matchupColors.awayColor
       : matchupColors.homeColor;
@@ -1055,6 +1205,13 @@ export function GameScoutingReportModal({
     const leaderCellBorder = hexToRgba(sideColor, 0.48);
 
     const allSidePlayers = [...side.starters, ...side.bench];
+    const sortedSidePlayers = sideSort.key
+      ? sortRows(
+          allSidePlayers,
+          (pl) => resolveBoxscorePlayerSortValue(pl, sideSort.key!),
+          sideSort.asc
+        )
+      : null;
 
     // Precompute team-leading maximum value in EVERY column (including TO and PF per user choice)
     const computeMaxForCol = (
@@ -1533,61 +1690,89 @@ export function GameScoutingReportModal({
         </div>
 
         <div
-          className="max-h-[520px] overflow-y-auto overflow-x-auto"
+          className="max-h-[520px] overflow-auto"
           onScroll={() => {
             if (hoveredSeasonHigh) setHoveredSeasonHigh(null);
           }}
         >
           <table className="w-full text-left border-collapse">
-            <thead className="sticky top-0 z-20 bg-[#0F172A] shadow-sm">
+            <thead className={STICKY_THEAD_CLASS}>
               <tr className="border-b border-[#1E293B] text-[11px] text-slate-400">
-                <th className="py-1.5 pl-3 pr-2 font-medium sticky left-0 bg-[#0F172A] z-30 shadow-[2px_0_5px_rgba(0,0,0,0.3)]">Jugador</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">MIN</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">PTOS</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">FGM</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">FGA</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">FG%</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">3PM</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">3PA</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">3P%</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">FTM</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">FTA</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">FT%</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">OREB</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">DREB</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">REB</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">AST</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">STL</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">BLK</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">TO</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">PF</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">+/-</th>
-                <th className="py-1.5 px-1.5 font-medium text-center align-middle">
-                  <ColumnHelpHeader label="GmSc" helpKey="gmSc" />
-                </th>
-                {boxscoreColsMode === 'all' && (
-                  <>
-                    <th className="py-1.5 px-1.5 font-medium text-center align-middle">TS%</th>
-                    <th className="py-1.5 px-1.5 font-medium text-center align-middle">USG%</th>
-                  </>
-                )}
+                <SortableTh
+                  label="Jugador"
+                  align="left"
+                  compact
+                  active={sideSort.key === 'name'}
+                  asc={sideSort.asc}
+                  onSort={() => toggleBoxSort(sideKey, 'name')}
+                  className="py-1.5 pl-3 pr-2 sticky left-0 bg-[#0F172A] z-30 shadow-[2px_0_5px_rgba(0,0,0,0.3)]"
+                />
+                {(
+                  [
+                    { key: 'min', label: 'MIN' },
+                    { key: 'pts', label: 'PTOS' },
+                    { key: 'fgm', label: 'FGM' },
+                    { key: 'fga', label: 'FGA' },
+                    { key: 'fgPct', label: 'FG%' },
+                    { key: 'fg3m', label: '3PM' },
+                    { key: 'fg3a', label: '3PA' },
+                    { key: 'fg3Pct', label: '3P%' },
+                    { key: 'ftm', label: 'FTM' },
+                    { key: 'fta', label: 'FTA' },
+                    { key: 'ftPct', label: 'FT%' },
+                    { key: 'oreb', label: 'OREB' },
+                    { key: 'dreb', label: 'DREB' },
+                    { key: 'reb', label: 'REB' },
+                    { key: 'ast', label: 'AST' },
+                    { key: 'stl', label: 'STL' },
+                    { key: 'blk', label: 'BLK' },
+                    { key: 'tov', label: 'TO' },
+                    { key: 'pf', label: 'PF' },
+                    { key: 'plusMinus', label: '+/-' },
+                    { key: 'gameScore', label: 'GmSc', helpKey: 'gmSc' },
+                    ...(boxscoreColsMode === 'all'
+                      ? [
+                          { key: 'tsPct', label: 'TS%' },
+                          { key: 'usgEst', label: 'USG%' },
+                        ]
+                      : []),
+                  ] as Array<{ key: string; label: string; helpKey?: string }>
+                ).map((col) => (
+                  <SortableTh
+                    key={col.key}
+                    label={col.label}
+                    helpKey={col.helpKey}
+                    align="center"
+                    compact
+                    active={sideSort.key === col.key}
+                    asc={sideSort.asc}
+                    onSort={() => toggleBoxSort(sideKey, col.key)}
+                    className="py-1.5 px-1.5 align-middle"
+                  />
+                ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-[#1E293B]/80">
-              {side.starters.map(renderPlayerRow)}
-
-              {side.bench.length > 0 && (
+              {sortedSidePlayers ? (
+                sortedSidePlayers.map(renderPlayerRow)
+              ) : (
                 <>
-                  <tr className="bg-[#0B1120]/70 border-y border-[#1E293B]">
-                    <td
-                      colSpan={colCount}
-                      className="py-1.5 px-3 text-[11px] font-semibold text-slate-400 sticky left-0 bg-[#0B1120]/90 z-10"
-                    >
-                      Segunda Unidad / Banquillo ({side.bench.length} jugadores ·{' '}
-                      {t.benchPoints} PTS)
-                    </td>
-                  </tr>
-                  {side.bench.map(renderPlayerRow)}
+                  {side.starters.map(renderPlayerRow)}
+
+                  {side.bench.length > 0 && (
+                    <>
+                      <tr className="bg-[#0B1120]/70 border-y border-[#1E293B]">
+                        <td
+                          colSpan={colCount}
+                          className="py-1.5 px-3 text-[11px] font-semibold text-slate-400 sticky left-0 bg-[#0B1120]/90 z-10"
+                        >
+                          Segunda Unidad / Banquillo ({side.bench.length} jugadores ·{' '}
+                          {t.benchPoints} PTS)
+                        </td>
+                      </tr>
+                      {side.bench.map(renderPlayerRow)}
+                    </>
+                  )}
                 </>
               )}
 
@@ -1678,10 +1863,39 @@ export function GameScoutingReportModal({
   };
 
   const renderTeamStatsSection = (
+    sectionId: string,
     title: string,
     rows: typeof report extends null ? never : GameOfficialReportData['teamComparisonRows']
   ) => {
     if (!report || rows.length === 0) return null;
+
+    const secSort = teamStatsSorts[sectionId] || { key: null, asc: false };
+    const sortedSecRows = secSort.key
+      ? sortRows(
+          rows,
+          (r) => {
+            switch (secSort.key) {
+              case 'label':
+                return r.label;
+              case 'away':
+                return r.awayNumeric;
+              case 'home':
+                return r.homeNumeric;
+              case 'diff':
+                return Math.abs(r.awayNumeric - r.homeNumeric);
+              case 'pulse':
+                return computeLeaderBarSplit(
+                  r.awayNumeric,
+                  r.homeNumeric,
+                  r.lowerIsBetter
+                ).awayPct;
+              default:
+                return r.label;
+            }
+          },
+          secSort.asc
+        )
+      : rows;
 
     if (statsViewStyle === 'bars_tv') {
       return (
@@ -1819,88 +2033,133 @@ export function GameScoutingReportModal({
             })}
           </div>
 
-          {/* Full-Width Fixed Table (sm+) with Zero Horizontal Scroll */}
-          <table className="hidden sm:table w-full table-fixed text-left border-collapse text-xs">
-            <colgroup>
-              <col
-                className={
-                  statsViewStyle === 'table_bars' ? 'w-[33%]' : 'w-[42%]'
-                }
-              />
-              <col
-                className={
-                  statsViewStyle === 'table_bars' ? 'w-[18%]' : 'w-[21%]'
-                }
-              />
-              <col
-                className={
-                  statsViewStyle === 'table_bars' ? 'w-[18%]' : 'w-[21%]'
-                }
-              />
-              <col
-                className={
-                  statsViewStyle === 'table_bars' ? 'w-[14%]' : 'w-[16%]'
-                }
-              />
-              {statsViewStyle === 'table_bars' && <col className="w-[17%]" />}
-            </colgroup>
-            <thead>
-              <tr className="border-b border-[#1E293B] text-[11px] text-slate-400 bg-[#0F172A]/70">
-                <th className="py-1.5 pl-3 pr-2 font-medium truncate">
-                  Categoría
-                </th>
-                <th className="py-1.5 px-2 font-semibold text-right text-slate-200 whitespace-nowrap">
-                  <span className="inline-flex items-center justify-end gap-1.5">
-                    <span
-                      aria-hidden="true"
-                      className="w-2 h-2 rounded-xs shrink-0 ring-1 ring-white/20"
-                      style={{ backgroundColor: matchupColors.awayColor }}
+          {/* Full-Width Fixed Table (sm+) with Sticky Sortable Headers */}
+          <div className="hidden sm:block overflow-auto max-h-[52vh]">
+            <table className="w-full table-fixed text-left border-collapse text-xs">
+              <colgroup>
+                <col
+                  className={
+                    statsViewStyle === 'table_bars' ? 'w-[33%]' : 'w-[42%]'
+                  }
+                />
+                <col
+                  className={
+                    statsViewStyle === 'table_bars' ? 'w-[18%]' : 'w-[21%]'
+                  }
+                />
+                <col
+                  className={
+                    statsViewStyle === 'table_bars' ? 'w-[18%]' : 'w-[21%]'
+                  }
+                />
+                <col
+                  className={
+                    statsViewStyle === 'table_bars' ? 'w-[14%]' : 'w-[16%]'
+                  }
+                />
+                {statsViewStyle === 'table_bars' && <col className="w-[17%]" />}
+              </colgroup>
+              <thead className={STICKY_THEAD_CLASS}>
+                <tr className="border-b border-[#1E293B] text-[11px] text-slate-400">
+                  <SortableTh
+                    label="Categoría"
+                    align="left"
+                    compact
+                    active={secSort.key === 'label'}
+                    asc={secSort.asc}
+                    onSort={() => toggleTeamSectionSort(sectionId, 'label')}
+                    className="py-1.5 pl-3 pr-2"
+                  />
+                  <SortableTh
+                    label={
+                      <span className="inline-flex items-center justify-end gap-1.5">
+                        <span
+                          aria-hidden="true"
+                          className="w-2 h-2 rounded-xs shrink-0 ring-1 ring-white/20"
+                          style={{ backgroundColor: matchupColors.awayColor }}
+                        />
+                        <TeamLogo
+                          abbr={report.away.abbr}
+                          teamId={report.away.teamId}
+                          size="xs"
+                        />
+                        <span>{report.away.abbr}</span>
+                        <span className="hidden lg:inline text-[10px] font-normal text-slate-400">
+                          (Visitante)
+                        </span>
+                      </span>
+                    }
+                    align="right"
+                    compact
+                    active={secSort.key === 'away'}
+                    asc={secSort.asc}
+                    onSort={() => toggleTeamSectionSort(sectionId, 'away')}
+                    className="py-1.5 px-2"
+                  />
+                  <SortableTh
+                    label={
+                      <span className="inline-flex items-center justify-end gap-1.5">
+                        <span
+                          aria-hidden="true"
+                          className="w-2 h-2 rounded-xs shrink-0 ring-1 ring-white/20"
+                          style={{ backgroundColor: matchupColors.homeColor }}
+                        />
+                        <TeamLogo
+                          abbr={report.home.abbr}
+                          teamId={report.home.teamId}
+                          size="xs"
+                        />
+                        <span>{report.home.abbr}</span>
+                        <span className="hidden lg:inline text-[10px] font-normal text-slate-400">
+                          (Local)
+                        </span>
+                      </span>
+                    }
+                    align="right"
+                    compact
+                    active={secSort.key === 'home'}
+                    asc={secSort.asc}
+                    onSort={() => toggleTeamSectionSort(sectionId, 'home')}
+                    className="py-1.5 px-2"
+                  />
+                  <SortableTh
+                    label="Ventaja (Δ)"
+                    align="right"
+                    compact
+                    active={secSort.key === 'diff'}
+                    asc={secSort.asc}
+                    onSort={() => toggleTeamSectionSort(sectionId, 'diff')}
+                    className="py-1.5 px-2"
+                  />
+                  {statsViewStyle === 'table_bars' && (
+                    <SortableTh
+                      label={
+                        <span className="inline-flex items-center justify-center gap-1.5">
+                          <span
+                            aria-hidden="true"
+                            className="w-2 h-2 rounded-xs shrink-0"
+                            style={{ backgroundColor: matchupColors.awayColor }}
+                          />
+                          <span>Pulso · 50%</span>
+                          <span
+                            aria-hidden="true"
+                            className="w-2 h-2 rounded-xs shrink-0"
+                            style={{ backgroundColor: matchupColors.homeColor }}
+                          />
+                        </span>
+                      }
+                      align="center"
+                      compact
+                      active={secSort.key === 'pulse'}
+                      asc={secSort.asc}
+                      onSort={() => toggleTeamSectionSort(sectionId, 'pulse')}
+                      className="py-1.5 pl-2 pr-3"
                     />
-                    <TeamLogo abbr={report.away.abbr} teamId={report.away.teamId} size="xs" />
-                    <span>{report.away.abbr}</span>
-                    <span className="hidden lg:inline text-[10px] font-normal text-slate-400">
-                      (Visitante)
-                    </span>
-                  </span>
-                </th>
-                <th className="py-1.5 px-2 font-semibold text-right text-slate-200 whitespace-nowrap">
-                  <span className="inline-flex items-center justify-end gap-1.5">
-                    <span
-                      aria-hidden="true"
-                      className="w-2 h-2 rounded-xs shrink-0 ring-1 ring-white/20"
-                      style={{ backgroundColor: matchupColors.homeColor }}
-                    />
-                    <TeamLogo abbr={report.home.abbr} teamId={report.home.teamId} size="xs" />
-                    <span>{report.home.abbr}</span>
-                    <span className="hidden lg:inline text-[10px] font-normal text-slate-400">
-                      (Local)
-                    </span>
-                  </span>
-                </th>
-                <th className="py-1.5 px-2 font-medium text-right whitespace-nowrap">
-                  Ventaja (Δ)
-                </th>
-                {statsViewStyle === 'table_bars' && (
-                  <th className="py-1.5 pl-2 pr-3 font-medium text-center whitespace-nowrap">
-                    <span className="inline-flex items-center justify-center gap-1.5">
-                      <span
-                        aria-hidden="true"
-                        className="w-2 h-2 rounded-xs shrink-0"
-                        style={{ backgroundColor: matchupColors.awayColor }}
-                      />
-                      <span>Pulso · 50%</span>
-                      <span
-                        aria-hidden="true"
-                        className="w-2 h-2 rounded-xs shrink-0"
-                        style={{ backgroundColor: matchupColors.homeColor }}
-                      />
-                    </span>
-                  </th>
-                )}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#1E293B]/80">
-              {rows.map((row) => {
+                  )}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#1E293B]/80">
+                {sortedSecRows.map((row) => {
                 const split = computeLeaderBarSplit(
                   row.awayNumeric,
                   row.homeNumeric,
@@ -1962,9 +2221,10 @@ export function GameScoutingReportModal({
                     )}
                   </tr>
                 );
-              })}
-            </tbody>
-          </table>
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
     );
@@ -2142,36 +2402,87 @@ export function GameScoutingReportModal({
                   </div>
                 </div>
 
-                <div className="overflow-x-auto">
+                <div className="overflow-auto max-h-[36vh]">
                   <table className="w-full text-left border-collapse font-mono tabular-nums text-xs sm:text-sm">
-                    <thead>
-                      <tr className="border-b border-[#1E293B] text-[11px] text-slate-400 bg-[#0B1120]/45">
-                        <th className="py-2 pl-4 pr-3 font-sans font-medium">
-                          Equipo (Récord)
-                        </th>
-                        {report.periods.map((p) => (
-                          <th
-                            key={p.period}
-                            className="py-2 px-2.5 text-center font-medium"
-                          >
-                            {p.label}
-                          </th>
-                        ))}
-                        <th className="py-2 px-3 text-right font-semibold text-slate-200">
-                          FINAL
-                        </th>
+                    <thead className={STICKY_THEAD_CLASS}>
+                      <tr className="border-b border-[#1E293B] text-[11px] text-slate-400">
+                        <SortableTh
+                          label="Equipo (Récord)"
+                          align="left"
+                          compact
+                          active={quarterSortKey === 'team'}
+                          asc={quarterSortAsc}
+                          onSort={() => toggleQuarterSort('team')}
+                          className="py-2 pl-4 pr-3 font-sans"
+                        />
+                        {report.periods.map((p) => {
+                          const pKey = `period_${p.period}`;
+                          return (
+                            <SortableTh
+                              key={p.period}
+                              label={p.label}
+                              align="center"
+                              compact
+                              active={quarterSortKey === pKey}
+                              asc={quarterSortAsc}
+                              onSort={() => toggleQuarterSort(pKey)}
+                              className="py-2 px-2.5"
+                            />
+                          );
+                        })}
+                        <SortableTh
+                          label="FINAL"
+                          align="right"
+                          compact
+                          active={quarterSortKey === 'final'}
+                          asc={quarterSortAsc}
+                          onSort={() => toggleQuarterSort('final')}
+                          className="py-2 px-3 font-semibold text-slate-200"
+                        />
                         {experienceMode === 'advanced' && (
-                          <th className="py-2 pl-2 pr-4 text-right font-medium hidden md:table-cell">
-                            OffRtg · eFG%
-                          </th>
+                          <SortableTh
+                            label="OffRtg · eFG%"
+                            align="right"
+                            compact
+                            active={quarterSortKey === 'adv'}
+                            asc={quarterSortAsc}
+                            onSort={() => toggleQuarterSort('adv')}
+                            className="py-2 pl-2 pr-4 hidden md:table-cell"
+                          />
                         )}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#1E293B]">
-                      {[
-                        { side: report.away, isAway: true },
-                        { side: report.home, isAway: false },
-                      ].map(({ side, isAway }) => (
+                      {(() => {
+                        const baseSides = [
+                          { side: report.away, isAway: true },
+                          { side: report.home, isAway: false },
+                        ];
+                        const quarterSides = quarterSortKey
+                          ? sortRows(
+                              baseSides,
+                              ({ side, isAway }) => {
+                                if (quarterSortKey === 'team') return side.name;
+                                if (quarterSortKey === 'final') return side.score;
+                                if (quarterSortKey === 'adv')
+                                  return side.totals.offRtg;
+                                if (quarterSortKey.startsWith('period_')) {
+                                  const pNum = Number(
+                                    quarterSortKey.replace('period_', '')
+                                  );
+                                  const found = report.periods.find(
+                                    (x) => x.period === pNum
+                                  );
+                                  if (!found) return 0;
+                                  return isAway ? found.awayScore : found.homeScore;
+                                }
+                                return side.score;
+                              },
+                              quarterSortAsc
+                            )
+                          : baseSides;
+                        return quarterSides;
+                      })().map(({ side, isAway }) => (
                         <tr key={side.abbr} className="hover:bg-[#182338]/60">
                           <td className="py-2.5 pl-4 pr-3 font-sans whitespace-nowrap">
                             <button
@@ -3204,9 +3515,9 @@ export function GameScoutingReportModal({
 
                   {/* 3 Grouped Sections (Concentrated spacing) */}
                   <div className="space-y-4">
-                    {renderTeamStatsSection('01. Anotación y Tiro', scoringShootingRows)}
-                    {renderTeamStatsSection('02. Eficiencia y Pizarra Táctica', efficiencyTacticsRows)}
-                    {renderTeamStatsSection('03. Rebote, Creación, Defensa y Disciplina', rebDefenseRows)}
+                    {renderTeamStatsSection('scoring', '01. Anotación y Tiro', scoringShootingRows)}
+                    {renderTeamStatsSection('efficiency', '02. Eficiencia y Pizarra Táctica', efficiencyTacticsRows)}
+                    {renderTeamStatsSection('rebDef', '03. Rebote, Creación, Defensa y Disciplina', rebDefenseRows)}
                   </div>
 
                   {/* Punto 5: CARA A CARA LÍDERES INDIVIDUALES (17 CATEGORÍAS ORDENADAS + DUELO VISUAL) */}
@@ -3598,80 +3909,94 @@ export function GameScoutingReportModal({
                       </div>
 
                       {/* Desktop & Tablet Full-Width Table (md+) */}
-                      <table className="hidden md:table w-full table-fixed text-left border-collapse text-xs">
-                        <colgroup>
-                          <col className="w-[22%]" />
-                          <col className="w-[32.5%]" />
-                          <col className="w-[13%]" />
-                          <col className="w-[32.5%]" />
-                        </colgroup>
-                        <thead>
-                          <tr className="border-b border-[#1E293B] text-[11px] text-slate-400 bg-[#0F172A]/80">
-                            <th className="py-1.5 pl-3 pr-2 font-medium truncate">
-                              Categoría
-                            </th>
-                            <th className="py-1.5 px-2.5 font-semibold text-slate-200">
-                              <div className="flex items-center justify-between gap-1.5">
-                                <span className="inline-flex items-center gap-1.5 min-w-0 truncate">
-                                  <TeamLogo
-                                    abbr={report.away.abbr}
-                                    teamId={report.away.teamId}
-                                    size="xs"
-                                  />
-                                  <span className="truncate">
-                                    Líder {report.away.abbr}
+                      <div className="hidden md:block overflow-auto max-h-[62vh]">
+                        <table className="w-full table-fixed text-left border-collapse text-xs">
+                          <colgroup>
+                            <col className="w-[22%]" />
+                            <col className="w-[32.5%]" />
+                            <col className="w-[13%]" />
+                            <col className="w-[32.5%]" />
+                          </colgroup>
+                          <thead className={STICKY_THEAD_CLASS}>
+                            <tr className="border-b border-[#1E293B] text-[11px] text-slate-400">
+                              <SortableTh
+                                label="Categoría"
+                                align="left"
+                                compact
+                                active={leaderSortKey === 'category'}
+                                asc={leaderSortAsc}
+                                onSort={() => toggleLeaderSort('category')}
+                                className="py-1.5 pl-3 pr-2"
+                              />
+                              <SortableTh
+                                label={
+                                  <span className="inline-flex items-center gap-1.5 min-w-0 truncate">
+                                    <TeamLogo
+                                      abbr={report.away.abbr}
+                                      teamId={report.away.teamId}
+                                      size="xs"
+                                    />
+                                    <span className="truncate">
+                                      Líder {report.away.abbr}
+                                    </span>
+                                    <span className="hidden xl:inline text-[10px] font-normal text-slate-400">
+                                      (Visitante)
+                                    </span>
                                   </span>
-                                  <span className="hidden xl:inline text-[10px] font-normal text-slate-400">
-                                    (Visitante)
+                                }
+                                align="left"
+                                compact
+                                active={leaderSortKey === 'away'}
+                                asc={leaderSortAsc}
+                                onSort={() => toggleLeaderSort('away')}
+                                className="py-1.5 px-2.5"
+                              />
+                              <SortableTh
+                                label="Ventaja (Δ)"
+                                helpKey="comparisonPulse"
+                                align="center"
+                                compact
+                                active={leaderSortKey === 'diff'}
+                                asc={leaderSortAsc}
+                                onSort={() => toggleLeaderSort('diff')}
+                                className="py-1.5 px-2"
+                              />
+                              <SortableTh
+                                label={
+                                  <span className="inline-flex items-center gap-1.5 min-w-0 truncate">
+                                    <TeamLogo
+                                      abbr={report.home.abbr}
+                                      teamId={report.home.teamId}
+                                      size="xs"
+                                    />
+                                    <span className="truncate">
+                                      Líder {report.home.abbr}
+                                    </span>
+                                    <span className="hidden xl:inline text-[10px] font-normal text-slate-400">
+                                      (Local)
+                                    </span>
                                   </span>
-                                </span>
-                                <span className="text-[10px] font-mono font-normal text-slate-400 shrink-0 hidden lg:inline">
-                                  Dato / media
-                                </span>
-                              </div>
-                            </th>
-                            <th className="py-1.5 px-2 font-medium text-center">
-                              <span className="inline-flex items-center justify-center gap-1 whitespace-nowrap">
-                                <span>Ventaja (Δ)</span>
-                                <MetricInfoTooltip
-                                  helpKey="comparisonPulse"
-                                  align="right"
-                                  iconClassName="w-3 h-3 shrink-0"
-                                />
-                              </span>
-                            </th>
-                            <th className="py-1.5 pl-2.5 pr-3 font-semibold text-slate-200">
-                              <div className="flex items-center justify-between gap-1.5">
-                                <span className="inline-flex items-center gap-1.5 min-w-0 truncate">
-                                  <TeamLogo
-                                    abbr={report.home.abbr}
-                                    teamId={report.home.teamId}
-                                    size="xs"
-                                  />
-                                  <span className="truncate">
-                                    Líder {report.home.abbr}
-                                  </span>
-                                  <span className="hidden xl:inline text-[10px] font-normal text-slate-400">
-                                    (Local)
-                                  </span>
-                                </span>
-                                <span className="text-[10px] font-mono font-normal text-slate-400 shrink-0 hidden lg:inline">
-                                  Dato / media
-                                </span>
-                              </div>
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[#1E293B]">
-                          {filteredLeaderRows.map(({ row, ordinal }, idx) => {
-                            const prevGroup =
-                              idx > 0
-                                ? filteredLeaderRows[idx - 1].row.groupLabel
-                                : null;
-                            const showGroupDivider =
-                              leaderFilter === 'all' &&
-                              Boolean(row.groupLabel) &&
-                              row.groupLabel !== prevGroup;
+                                }
+                                align="left"
+                                compact
+                                active={leaderSortKey === 'home'}
+                                asc={leaderSortAsc}
+                                onSort={() => toggleLeaderSort('home')}
+                                className="py-1.5 pl-2.5 pr-3"
+                              />
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-[#1E293B]">
+                            {filteredLeaderRows.map(({ row, ordinal }, idx) => {
+                              const prevGroup =
+                                idx > 0
+                                  ? filteredLeaderRows[idx - 1].row.groupLabel
+                                  : null;
+                              const showGroupDivider =
+                                leaderSortKey === null &&
+                                leaderFilter === 'all' &&
+                                Boolean(row.groupLabel) &&
+                                row.groupLabel !== prevGroup;
 
                             const awayWon = row.betterSide === 'away';
                             const homeWon = row.betterSide === 'home';
@@ -3939,6 +4264,7 @@ export function GameScoutingReportModal({
                           })}
                         </tbody>
                       </table>
+                      </div>
                     </div>
                   </section>
                 </div>

@@ -107,10 +107,7 @@ function loadSavedThresholds(): ThresholdSettings {
     if (!raw) return DEFAULT_THRESHOLDS;
     const parsed = JSON.parse(raw) as Partial<ThresholdSettings>;
     return {
-      windowSize:
-        parsed.windowSize === 3 || parsed.windowSize === 5 || parsed.windowSize === 10
-          ? parsed.windowSize
-          : DEFAULT_THRESHOLDS.windowSize,
+      windowSize: DEFAULT_THRESHOLDS.windowSize,
       minZScore:
         typeof parsed.minZScore === 'number'
           ? parsed.minZScore
@@ -190,9 +187,7 @@ export default function App() {
   const [settings, setSettings] = useState<ThresholdSettings>(loadSavedThresholds);
   const [watchlistIds, setWatchlistIds] = useState<Set<string>>(loadSavedWatchlist);
   const [onlyWatchlist, setOnlyWatchlist] = useState(false);
-  const [showThresholdBar, setShowThresholdBar] = useState<boolean>(
-    () => loadSavedExperienceMode() === 'advanced'
-  );
+  const [showThresholdBar, setShowThresholdBar] = useState<boolean>(false);
 
   const [teams, setTeams] = useState<TeamSummary[]>([]);
   const [players, setPlayers] = useState<PlayerSummary[]>([]);
@@ -418,12 +413,16 @@ export default function App() {
 
   const handleChangeExperienceMode = useCallback((mode: ExperienceMode) => {
     setExperienceMode(mode);
-    setShowThresholdBar(mode === 'advanced');
   }, []);
 
   const handleNavigateSection = useCallback(
     (section: ActiveSection) => {
       setMobileMenuOpen(false);
+      if (section === 'anomalies') {
+        setSettings((prev) =>
+          prev.windowSize === 5 ? prev : { ...prev, windowSize: 5 }
+        );
+      }
       commitRoute(
         (prev) => ({
           ...prev,
@@ -449,9 +448,23 @@ export default function App() {
   const handleOpenBreakoutAxis = useCallback(
     (axis: 'all' | TrendBreakoutAxis) => {
       setRequestedBreakoutAxis(axis);
-      handleNavigateSection('anomalies');
+      setMobileMenuOpen(false);
+      commitRoute(
+        (prev) => ({
+          ...prev,
+          section: 'anomalies',
+          inspectedType: null,
+          inspectedId: null,
+          gamedayReportId: null,
+        }),
+        'push',
+        null
+      );
+      if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
     },
-    [handleNavigateSection]
+    [commitRoute]
   );
 
   const importedDirectoryPlayersRef = useRef<Map<string, PlayerSummary>>(

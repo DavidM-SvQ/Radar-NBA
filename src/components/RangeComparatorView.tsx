@@ -29,7 +29,12 @@ import {
   type LeagueBenchmarks,
   type MetricBenchmark,
 } from '../utils/humanize';
-import { ColumnHelpHeader, MetricInfoTooltip } from './MetricUiHelpers';
+import { MetricInfoTooltip, SortableTh } from './MetricUiHelpers';
+import {
+  STICKY_THEAD_CLASS,
+  sortRows,
+  useTableSort,
+} from '../utils/tableSort';
 import { EntityBadge, PlayerAvatar, TeamLogo } from './NbaVisuals';
 
 interface RangeComparatorViewProps {
@@ -118,6 +123,13 @@ export function RangeComparatorView({
   const [metricLayer, setMetricLayer] = useState<'all' | 'basic' | 'advanced'>(
     experienceMode === 'simple' ? 'basic' : 'all'
   );
+  const {
+    sortKey: compSortKey,
+    sortAsc: compSortAsc,
+    toggleSort: toggleCompSort,
+  } = useTableSort<
+    'label' | 'rangeA' | 'rangeB' | 'absDiff' | 'pctDiff' | 'impact'
+  >(null, false, ['label']);
   const pickerRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -1059,7 +1071,7 @@ export function RangeComparatorView({
             </div>
 
             {/* Desktop Full Comparison Table (md+) */}
-            <div className="hidden md:block overflow-hidden">
+            <div className="hidden md:block overflow-auto max-h-[68vh]">
               <table className="w-full table-fixed text-left border-collapse">
                 <colgroup>
                   <col className="w-[32%]" />
@@ -1069,76 +1081,121 @@ export function RangeComparatorView({
                   <col className="w-[12%]" />
                   <col className="w-[16%]" />
                 </colgroup>
-                <thead>
-                  <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
-                    <th className="py-2 pl-4 pr-2 font-medium">
-                      <ColumnHelpHeader
-                        label="Apartado estadístico"
-                        align="left"
-                        customHelp={{
-                          title: 'Qué estamos comparando',
-                          simpleDesc:
-                            'Cada fila enfrenta el promedio del jugador o equipo en el Tramo A frente al Tramo B y muestra su nivel frente a la media NBA.',
-                          calculation:
-                            'Pasa el ratón por el icono (i) a la derecha de cada métrica para ver su significado y fórmula exacta.',
-                        }}
-                      />
-                    </th>
-                    <th className="py-2 px-2.5 font-medium text-right">
-                      <ColumnHelpHeader
-                        label={`Tramo A (${comparison.countA} PJ)`}
-                        customHelp={{
-                          title: 'Promedio en el Tramo A',
-                          simpleDesc:
-                            'Sus números medios durante el primer periodo seleccionado arriba (color naranja).',
-                          calculation:
-                            'Suma o agregación ponderada de las hojas de partido dentro del filtro del Tramo A dividida por sus PJ.',
-                        }}
-                      />
-                    </th>
-                    <th className="py-2 px-2.5 font-medium text-right">
-                      <ColumnHelpHeader
-                        label={`Tramo B (${comparison.countB} PJ)`}
-                        customHelp={{
-                          title: 'Promedio en el Tramo B',
-                          simpleDesc:
-                            'Sus números medios durante el periodo de referencia con el que comparas.',
-                          calculation:
-                            'Suma o agregación ponderada de las hojas de partido dentro del filtro del Tramo B dividida por sus PJ.',
-                        }}
-                      />
-                    </th>
-                    <th className="py-2 px-2.5 font-medium text-right">
-                      <ColumnHelpHeader
-                        label="Diferencia"
-                        helpKey="absDiff"
-                      />
-                    </th>
-                    <th className="py-2 px-2.5 font-medium text-right">
-                      <ColumnHelpHeader
-                        label={experienceMode === 'simple' ? 'Cambio %' : 'Variación %'}
-                        helpKey="pctDelta"
-                      />
-                    </th>
-                    <th className="py-2 pl-2.5 pr-4 font-medium">
-                      <ColumnHelpHeader
-                        label="Impacto"
-                        align="left"
-                        customHelp={{
-                          title: 'Tamaño visual del cambio',
-                          simpleDesc:
-                            'Cuanto más larga es la barra verde o roja, mayor es el salto entre el Tramo A y el Tramo B.',
-                          calculation:
-                            'Longitud proporcional a |Variación %| × 2.2 (acotada al 100%); verde si mejora y rojo si empeora.',
-                        }}
-                      />
-                    </th>
+                <thead className={STICKY_THEAD_CLASS}>
+                  <tr className="text-xs text-slate-400">
+                    <SortableTh
+                      label="Apartado estadístico"
+                      active={compSortKey === 'label'}
+                      asc={compSortAsc}
+                      onSort={() => toggleCompSort('label')}
+                      align="left"
+                      className="py-2.5 pl-4 pr-2"
+                      customHelp={{
+                        title: 'Qué estamos comparando',
+                        simpleDesc:
+                          'Cada fila enfrenta el promedio del jugador o equipo en el Tramo A frente al Tramo B y muestra su nivel frente a la media NBA.',
+                        calculation:
+                          'Pasa el ratón por el icono (i) a la derecha de cada métrica para ver su significado y fórmula exacta.',
+                      }}
+                    />
+                    <SortableTh
+                      label={`Tramo A (${comparison.countA} PJ)`}
+                      active={compSortKey === 'rangeA'}
+                      asc={compSortAsc}
+                      onSort={() => toggleCompSort('rangeA')}
+                      align="right"
+                      className="py-2.5 px-2.5"
+                      customHelp={{
+                        title: 'Promedio en el Tramo A',
+                        simpleDesc:
+                          'Sus números medios durante el primer periodo seleccionado arriba (color naranja).',
+                        calculation:
+                          'Suma o agregación ponderada de las hojas de partido dentro del filtro del Tramo A dividida por sus PJ.',
+                      }}
+                    />
+                    <SortableTh
+                      label={`Tramo B (${comparison.countB} PJ)`}
+                      active={compSortKey === 'rangeB'}
+                      asc={compSortAsc}
+                      onSort={() => toggleCompSort('rangeB')}
+                      align="right"
+                      className="py-2.5 px-2.5"
+                      customHelp={{
+                        title: 'Promedio en el Tramo B',
+                        simpleDesc:
+                          'Sus números medios durante el periodo de referencia con el que comparas.',
+                        calculation:
+                          'Suma o agregación ponderada de las hojas de partido dentro del filtro del Tramo B dividida por sus PJ.',
+                      }}
+                    />
+                    <SortableTh
+                      label="Diferencia"
+                      helpKey="absDiff"
+                      active={compSortKey === 'absDiff'}
+                      asc={compSortAsc}
+                      onSort={() => toggleCompSort('absDiff')}
+                      align="right"
+                      className="py-2.5 px-2.5"
+                    />
+                    <SortableTh
+                      label={experienceMode === 'simple' ? 'Cambio %' : 'Variación %'}
+                      helpKey="pctDelta"
+                      active={compSortKey === 'pctDiff'}
+                      asc={compSortAsc}
+                      onSort={() => toggleCompSort('pctDiff')}
+                      align="right"
+                      className="py-2.5 px-2.5"
+                    />
+                    <SortableTh
+                      label="Impacto"
+                      active={compSortKey === 'impact'}
+                      asc={compSortAsc}
+                      onSort={() => toggleCompSort('impact')}
+                      align="left"
+                      className="py-2.5 pl-2.5 pr-4"
+                      customHelp={{
+                        title: 'Tamaño visual del cambio',
+                        simpleDesc:
+                          'Cuanto más larga es la barra verde o roja, mayor es el salto entre el Tramo A y el Tramo B.',
+                        calculation:
+                          'Longitud proporcional a |Variación %| × 2.2 (acotada al 100%); verde si mejora y rojo si empeora.',
+                      }}
+                    />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#1E293B] text-xs lg:text-sm">
-                  {comparison.rows
-                    .filter((r) => metricLayer === 'all' || r.group === metricLayer)
-                    .map((r) => {
+                  {(() => {
+                    const baseRows = comparison.rows.filter(
+                      (r) => metricLayer === 'all' || r.group === metricLayer
+                    );
+                    const displayRows = !compSortKey
+                      ? baseRows
+                      : sortRows(
+                          baseRows,
+                          (r) => {
+                            const lbl =
+                              experienceMode === 'simple'
+                                ? SIMPLE_ROW_LABELS[r.key] || r.label
+                                : r.label;
+                            switch (compSortKey) {
+                              case 'label':
+                                return lbl;
+                              case 'rangeA':
+                                return r.rangeAValue;
+                              case 'rangeB':
+                                return r.rangeBValue;
+                              case 'absDiff':
+                                return r.absDiff;
+                              case 'pctDiff':
+                                return r.pctDiff;
+                              case 'impact':
+                                return Math.abs(r.pctDiff);
+                            }
+                          },
+                          compSortAsc
+                        );
+                    return displayRows;
+                  })().map((r) => {
                       const isGood = r.inverseGood ? r.absDiff <= 0 : r.absDiff >= 0;
                       const barWidth = Math.min(100, Math.abs(r.pctDiff) * 2.2);
                       const significant =

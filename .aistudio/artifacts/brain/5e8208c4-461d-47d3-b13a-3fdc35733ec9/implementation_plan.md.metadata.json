@@ -1,6 +1,6 @@
 {
-  "summary": "Plan de implementación de Fase 1 para RadarNBA: automatización diaria gratuita del Snapshot NBA mediante GitHub Actions resiliente en la nube, cinta superior de Jornada en Juego sin consumo extra por refresco automático, nuevo apartado homogéneo de Premios de Temporada NBA (8 categorías con desviaciones, rachas y slider configurable de mínimo de partidos) y recordatorio íntegro de las Fases 2, 3 y 4 pendientes.",
-  "updatedAt": "2026-11-03T11:49:31.526267172Z",
+  "summary": "Plan de implementación para sustituir el botón 10 PJ por un icono de gráfico sincronizado en las tablas de rachas y renovar por completo el Gráfico de Historial de Rachas: serie continua de 2 temporadas (actual y pasada) con línea divisoria vertical, filtro configurable de últimos X partidos (10 por defecto) con zoom deslizable, catálogo categorizado con las 49 métricas existentes (máximo 3 simultáneas), resaltado exclusivo de los puntos en racha activa más máximo/mínimo del tramo, umbral editable con línea horizontal de referencia y resumen inferior de medias (temporada actual y tramo) con sus desviaciones respecto a la racha.",
+  "updatedAt": "2026-11-04T07:04:00.924141565Z",
   "requestFeedback": true,
   "userFacing": true
 }

@@ -161,12 +161,32 @@ function serializeSeasonDatasetForSnapshot(ds) {
 }
 function hydrateSeasonDatasetFromSnapshot(serialized) {
   const teamsByAbbr = /* @__PURE__ */ new Map();
+  const tmUsageCtx = /* @__PURE__ */ new Map();
   for (const t of serialized.teams) {
-    teamsByAbbr.set(t.abbreviation, { ...t, advanced: t.advanced ? { ...t.advanced } : void 0, games: t.games.map((g) => ({ ...g })) });
+    const clonedTeamGames = t.games.map((g) => {
+      const tmPlays = (Number(g.fga) || 0) + 0.44 * (Number(g.fta) || 0) + (Number(g.tov) || 0);
+      const rawGameMins = g.poss && g.pace ? g.poss / Math.max(70, g.pace) * 48 : 48;
+      const gameMins = Math.max(48, rawGameMins);
+      if (tmPlays > 0 && g.eventId) {
+        tmUsageCtx.set(`${g.eventId}:${t.abbreviation}`, { tmPlays, gameMins });
+      }
+      return { ...g };
+    });
+    teamsByAbbr.set(t.abbreviation, { ...t, advanced: t.advanced ? { ...t.advanced } : void 0, games: clonedTeamGames });
   }
   const playersById = /* @__PURE__ */ new Map();
   for (const p of serialized.players) {
-    playersById.set(p.id, { ...p, advanced: p.advanced ? { ...p.advanced } : void 0, games: p.games.map((g) => ({ ...g })) });
+    const clonedPlayerGames = p.games.map((g) => {
+      const mins = Number(g.minutes) || 0;
+      const tAbbr = g.teamAbbr || p.teamAbbr;
+      const ctx = g.eventId && tAbbr ? tmUsageCtx.get(`${g.eventId}:${tAbbr}`) : null;
+      const plPlays = (Number(g.fga) || 0) + 0.44 * (Number(g.fta) || 0) + (Number(g.turnovers) || 0);
+      const tmPlays = ctx && ctx.tmPlays > 0 ? ctx.tmPlays : ((Number(ctx?.poss) || 99) * 1.135);
+      const gameMins = Math.max(ctx ? ctx.gameMins : 48, mins);
+      const usgEst = mins > 0 && tmPlays > 0 ? round1(Math.min(55, Math.max(0, plPlays / (tmPlays * (mins / gameMins)) * 100))) : 0;
+      return { ...g, usgEst };
+    });
+    playersById.set(p.id, { ...p, advanced: p.advanced ? { ...p.advanced } : void 0, games: clonedPlayerGames });
   }
   return { seasonCode: serialized.seasonCode, dataSource: serialized.dataSource, teamsByAbbr, playersById };
 }
@@ -479,7 +499,9 @@ async function applyCdnDeltaGamesTo2027(dataset, biosMap, options) {
     awayTeamSummary.games.push(awayLog);
     homeTeamSummary.games.push(homeLog);
     const scoreDisplay = `${aw.pts}-${hm.pts}`;
-    for (const sideInfo of [{ cdnSide: awayTeamCdn, teamAbbr: awayAbbr, oppAbbr: homeAbbr, isHome: false, result: awayLog.result }, { cdnSide: homeTeamCdn, teamAbbr: homeAbbr, oppAbbr: awayAbbr, isHome: true, result: homeLog.result }]) {
+    const awTmPlays = Math.max(1, aw.fga + 0.44 * aw.fta + aw.tov);
+    const hmTmPlays = Math.max(1, hm.fga + 0.44 * hm.fta + hm.tov);
+    for (const sideInfo of [{ cdnSide: awayTeamCdn, teamAbbr: awayAbbr, oppAbbr: homeAbbr, isHome: false, result: awayLog.result, tmPlays: awTmPlays }, { cdnSide: homeTeamCdn, teamAbbr: homeAbbr, oppAbbr: awayAbbr, isHome: true, result: homeLog.result, tmPlays: hmTmPlays }]) {
       const cdnPlayers = Array.isArray(sideInfo.cdnSide.players) ? sideInfo.cdnSide.players : [];
       const teamMeta = NBA_TEAMS_MAP[sideInfo.teamAbbr];
       for (const cp of cdnPlayers) {
@@ -535,7 +557,8 @@ async function applyCdnDeltaGamesTo2027(dataset, biosMap, options) {
         const tsDenom = 2 * (fga + 0.44 * fta);
         const tsPct = tsDenom > 0 ? round1(pts / tsDenom * 100) : 0;
         const plPoss = fga + 0.44 * fta + tov;
-        const usgEst = minutes > 0 && poss > 0 ? round1(Math.min(55, Math.max(0, plPoss / (poss * (minutes / gameMins)) * 100))) : 0;
+        const effGameMins = Math.max(gameMins, minutes);
+        const usgEst = minutes > 0 && sideInfo.tmPlays > 0 ? round1(Math.min(55, Math.max(0, plPoss / (sideInfo.tmPlays * (minutes / effGameMins)) * 100))) : 0;
         const gmSc = computeHollingerGameScore({ pts, fgm, fga, ftm, fta, oreb, dreb, stl, ast, blk, pf, tov });
         const isStarter = cp?.starter === "1" || cp?.starter === true || cp?.starter === 1;
         const pLog = { eventId: ref.gameId, date: ref.dateIso, seasonLabel: "2026-27", teamAbbr: sideInfo.teamAbbr, teamId: teamMeta?.id || pSummary.teamId, opponentAbbr: sideInfo.oppAbbr, opponentName: NBA_TEAMS_MAP[sideInfo.oppAbbr]?.name || sideInfo.oppAbbr, isHome: sideInfo.isHome, result: sideInfo.result, scoreDisplay, restDays: null, isBackToBack: false, isStarter, minutes, points: pts, rebounds: reb, oreb, dreb, assists: ast, steals: stl, blocks: blk, stocks: stl + blk, turnovers: tov, fouls: pf, plusMinus: pm, fgm, fga, fgPct, fg3m, fg3a, fg3Pct, ftm, fta, ftPct, pra: pts + reb + ast, tsPct, efgPct, usgEst, gameScore: gmSc };

@@ -30,7 +30,12 @@ import {
   qualifyUsageRole,
   type LeagueBenchmarks,
 } from '../utils/humanize';
-import { ColumnHelpHeader, MetricInfoTooltip } from './MetricUiHelpers';
+import { MetricInfoTooltip, SortableTh } from './MetricUiHelpers';
+import {
+  STICKY_THEAD_CLASS,
+  sortRows,
+  useTableSort,
+} from '../utils/tableSort';
 import { PlayerAvatar } from './NbaVisuals';
 
 interface HeadToHeadBattleViewProps {
@@ -1314,10 +1319,41 @@ export function HeadToHeadBattleView({
     return rows;
   }, [statsA, statsB]);
 
+  const {
+    sortKey: duelSortKey,
+    sortAsc: duelSortAsc,
+    toggleSort: toggleDuelSort,
+  } = useTableSort<'category' | 'valA' | 'shareA' | 'valB' | 'advantage'>(
+    null,
+    false,
+    ['category']
+  );
+
   const visibleCategories = useMemo(() => {
-    if (categoryTab === 'all') return allCategories;
-    return allCategories.filter((r) => r.group === categoryTab);
-  }, [allCategories, categoryTab]);
+    const filteredCats =
+      categoryTab === 'all'
+        ? allCategories
+        : allCategories.filter((r) => r.group === categoryTab);
+    if (!duelSortKey) return filteredCats;
+    return sortRows(
+      filteredCats,
+      (row) => {
+        switch (duelSortKey) {
+          case 'category':
+            return experienceMode === 'simple' ? row.simpleLabel : row.label;
+          case 'valA':
+            return row.valA;
+          case 'shareA':
+            return row.shareA;
+          case 'valB':
+            return row.valB;
+          case 'advantage':
+            return row.shareA - 50;
+        }
+      },
+      duelSortAsc
+    );
+  }, [allCategories, categoryTab, duelSortKey, duelSortAsc, experienceMode]);
 
   // Scoreboard Summary Counts across all active categories
   const scoreboard = useMemo(() => {
@@ -2711,7 +2747,7 @@ export function HeadToHeadBattleView({
               </div>
 
               {/* Desktop Symmetrical Tale-of-the-Tape Table (md+) */}
-              <div className="hidden md:block overflow-hidden">
+              <div className="hidden md:block overflow-auto max-h-[68vh]">
                 <table className="w-full table-fixed text-left border-collapse">
                   <colgroup>
                     <col className="w-[26%]" />
@@ -2720,38 +2756,52 @@ export function HeadToHeadBattleView({
                     <col className="w-[15%]" />
                     <col className="w-[22%]" />
                   </colgroup>
-                  <thead>
-                    <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
-                      <th className="py-2 pl-4 pr-2 font-medium truncate">
-                        Categoría NBA
-                      </th>
-                      <th
-                        className="py-2 px-2.5 font-medium text-right text-orange-300 truncate"
-                        title={playerA?.name || 'Jugador 1'}
-                      >
-                        {playerA?.name || 'Jugador 1'}
-                      </th>
-                      <th className="py-2 px-3 font-medium text-center">
-                        <div className="inline-flex items-center justify-center">
-                          <ColumnHelpHeader
-                            label="Pulso directo"
-                            helpKey="duelTugOfWar"
-                          />
-                        </div>
-                      </th>
-                      <th
-                        className="py-2 px-2.5 font-medium text-left text-sky-300 truncate"
-                        title={playerB?.name || 'Jugador 2'}
-                      >
-                        {playerB?.name || 'Jugador 2'}
-                      </th>
-                      <th className="py-2 pl-2 pr-4 font-medium text-right">
-                        <ColumnHelpHeader
-                          label="Punto de categoría"
-                          helpKey="duelCategoryScore"
-                          align="right"
-                        />
-                      </th>
+                  <thead className={STICKY_THEAD_CLASS}>
+                    <tr className="text-xs text-slate-400">
+                      <SortableTh
+                        label="Categoría NBA"
+                        active={duelSortKey === 'category'}
+                        asc={duelSortAsc}
+                        onSort={() => toggleDuelSort('category')}
+                        align="left"
+                        className="py-2.5 pl-4 pr-2"
+                      />
+                      <SortableTh
+                        label={playerA?.name || 'Jugador 1'}
+                        title={`${playerA?.name || 'Jugador 1'} · Pulsa para ordenar`}
+                        active={duelSortKey === 'valA'}
+                        asc={duelSortAsc}
+                        onSort={() => toggleDuelSort('valA')}
+                        align="right"
+                        className="py-2.5 px-2.5 !text-orange-300"
+                      />
+                      <SortableTh
+                        label="Pulso directo"
+                        helpKey="duelTugOfWar"
+                        active={duelSortKey === 'shareA'}
+                        asc={duelSortAsc}
+                        onSort={() => toggleDuelSort('shareA')}
+                        align="center"
+                        className="py-2.5 px-3"
+                      />
+                      <SortableTh
+                        label={playerB?.name || 'Jugador 2'}
+                        title={`${playerB?.name || 'Jugador 2'} · Pulsa para ordenar`}
+                        active={duelSortKey === 'valB'}
+                        asc={duelSortAsc}
+                        onSort={() => toggleDuelSort('valB')}
+                        align="left"
+                        className="py-2.5 px-2.5 !text-sky-300"
+                      />
+                      <SortableTh
+                        label="Punto de categoría"
+                        helpKey="duelCategoryScore"
+                        active={duelSortKey === 'advantage'}
+                        asc={duelSortAsc}
+                        onSort={() => toggleDuelSort('advantage')}
+                        align="right"
+                        className="py-2.5 pl-2 pr-4"
+                      />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#1E293B] text-xs lg:text-sm">

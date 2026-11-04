@@ -30,7 +30,12 @@ import {
   renderEditorialParagraphs,
   renderHighlightedInline,
 } from './GameScoutingReportModal';
-import { ColumnHelpHeader, MetricInfoTooltip } from './MetricUiHelpers';
+import { MetricInfoTooltip, SortableTh } from './MetricUiHelpers';
+import {
+  STICKY_THEAD_CLASS,
+  sortRows,
+  useTableSort,
+} from '../utils/tableSort';
 import { PlayerAvatar, TeamLogo } from './NbaVisuals';
 
 interface GameDayAnalyzerViewProps {
@@ -114,6 +119,15 @@ export function GameDayAnalyzerView({
   );
   const [streakFilter, setStreakFilter] = useState<'all' | 'broken' | 'extended'>(
     'all'
+  );
+  const {
+    sortKey: roleSortKey,
+    sortAsc: roleSortAsc,
+    toggleSort: toggleRoleSort,
+  } = useTableSort<'name' | 'minutesDelta' | 'usage' | 'gameScore'>(
+    'minutesDelta',
+    false,
+    ['name']
   );
 
   // Global Daily Chronicle (folded by default every morning) + Match Report Modal state
@@ -2220,36 +2234,72 @@ export function GameDayAnalyzerView({
                   </div>
 
                   {/* Desktop compact table */}
-                  <div className="hidden sm:block overflow-x-auto">
+                  <div className="hidden sm:block overflow-auto max-h-[56vh]">
                     <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
-                          <th className="py-2.5 pl-4 pr-3 font-medium">Jugador</th>
-                          <th className="py-2.5 px-3 font-medium text-right">
-                            <ColumnHelpHeader
-                              label="Minutos vs Media"
-                              helpKey="minBase"
-                            />
-                          </th>
-                          <th className="py-2.5 px-3 font-medium text-right">
-                            <ColumnHelpHeader
-                              label={
-                                experienceMode === 'advanced'
-                                  ? 'USG% Noche'
-                                  : 'Tiros (TCI)'
-                              }
-                              helpKey={
-                                experienceMode === 'advanced' ? 'usgPct' : 'fga'
-                              }
-                            />
-                          </th>
-                          <th className="py-2.5 pl-3 pr-4 font-medium text-right">
-                            Línea
-                          </th>
+                      <thead className={STICKY_THEAD_CLASS}>
+                        <tr className="text-xs text-slate-400">
+                          <SortableTh
+                            label="Jugador"
+                            active={roleSortKey === 'name'}
+                            asc={roleSortAsc}
+                            onSort={() => toggleRoleSort('name')}
+                            align="left"
+                            className="py-2.5 pl-4 pr-3"
+                          />
+                          <SortableTh
+                            label="Minutos vs Media"
+                            helpKey="minBase"
+                            active={roleSortKey === 'minutesDelta'}
+                            asc={roleSortAsc}
+                            onSort={() => toggleRoleSort('minutesDelta')}
+                            align="right"
+                            className="py-2.5 px-3"
+                          />
+                          <SortableTh
+                            label={
+                              experienceMode === 'advanced'
+                                ? 'USG% Noche'
+                                : 'Tiros (TCI)'
+                            }
+                            helpKey={
+                              experienceMode === 'advanced' ? 'usgPct' : 'fga'
+                            }
+                            active={roleSortKey === 'usage'}
+                            asc={roleSortAsc}
+                            onSort={() => toggleRoleSort('usage')}
+                            align="right"
+                            className="py-2.5 px-3"
+                          />
+                          <SortableTh
+                            label="Línea"
+                            active={roleSortKey === 'gameScore'}
+                            asc={roleSortAsc}
+                            onSort={() => toggleRoleSort('gameScore')}
+                            align="right"
+                            className="py-2.5 pl-3 pr-4"
+                          />
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#1E293B] text-sm">
-                        {data.roleShifts.map((r) => (
+                        {sortRows(
+                          data.roleShifts,
+                          (r) => {
+                            switch (roleSortKey) {
+                              case 'name':
+                                return r.playerName;
+                              case 'minutesDelta':
+                                return r.minutesDelta;
+                              case 'usage':
+                                return experienceMode === 'advanced'
+                                  ? r.usgEst
+                                  : r.fga;
+                              case 'gameScore':
+                              default:
+                                return r.gameScore;
+                            }
+                          },
+                          roleSortAsc
+                        ).map((r) => (
                           <tr
                             key={r.playerId}
                             onClick={() => onInspectEntity('player', r.playerId)}

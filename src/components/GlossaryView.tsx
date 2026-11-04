@@ -9,7 +9,12 @@ import {
 } from 'lucide-react';
 import type { ActiveSection } from '../types/nba';
 import { normalizeSearchText } from '../utils/analytics';
-import { MetricInfoTooltip } from './MetricUiHelpers';
+import { MetricInfoTooltip, SortableTh } from './MetricUiHelpers';
+import {
+  STICKY_THEAD_CLASS,
+  sortRows,
+  useTableSort,
+} from '../utils/tableSort';
 
 interface GlossaryViewProps {
   onNavigateSection: (section: ActiveSection) => void;
@@ -510,33 +515,70 @@ export function GlossaryView({ onNavigateSection }: GlossaryViewProps) {
 
   const q = normalizeSearchText(query);
 
+  const {
+    sortKey: secSortKey,
+    sortAsc: secSortAsc,
+    toggleSort: toggleSecSort,
+  } = useTableSort<'title' | 'purpose' | 'measuredStats' | 'whenToUse' | 'id'>(
+    null,
+    true,
+    ['title', 'purpose', 'measuredStats', 'whenToUse', 'id']
+  );
+
+  const {
+    sortKey: srcSortKey,
+    sortAsc: srcSortAsc,
+    toggleSort: toggleSrcSort,
+  } = useTableSort<
+    'channel' | 'endpointScope' | 'providedMetrics' | 'refreshRule'
+  >(null, true, ['channel', 'endpointScope', 'providedMetrics', 'refreshRule']);
+
+  const {
+    sortKey: metSortKey,
+    sortAsc: metSortAsc,
+    toggleSort: toggleMetSort,
+  } = useTableSort<'code' | 'name' | 'formula' | 'benchmark'>(null, true, [
+    'code',
+    'name',
+    'formula',
+    'benchmark',
+  ]);
+
   const filteredSections = useMemo(() => {
-    if (!q) return APP_SECTIONS_DOCS;
-    return APP_SECTIONS_DOCS.filter((s) =>
-      normalizeSearchText(
-        `${s.title} ${s.purpose} ${s.measuredStats} ${s.whenToUse}`
-      ).includes(q)
-    );
-  }, [q]);
+    const base = !q
+      ? APP_SECTIONS_DOCS
+      : APP_SECTIONS_DOCS.filter((s) =>
+          normalizeSearchText(
+            `${s.title} ${s.purpose} ${s.measuredStats} ${s.whenToUse}`
+          ).includes(q)
+        );
+    if (!secSortKey) return base;
+    return sortRows(base, (s) => s[secSortKey], secSortAsc);
+  }, [q, secSortKey, secSortAsc]);
 
   const filteredSources = useMemo(() => {
-    if (!q) return DATA_SOURCES_DOCS;
-    return DATA_SOURCES_DOCS.filter((d) =>
-      normalizeSearchText(
-        `${d.channel} ${d.endpointScope} ${d.providedMetrics} ${d.refreshRule}`
-      ).includes(q)
-    );
-  }, [q]);
+    const base = !q
+      ? DATA_SOURCES_DOCS
+      : DATA_SOURCES_DOCS.filter((d) =>
+          normalizeSearchText(
+            `${d.channel} ${d.endpointScope} ${d.providedMetrics} ${d.refreshRule}`
+          ).includes(q)
+        );
+    if (!srcSortKey) return base;
+    return sortRows(base, (d) => d[srcSortKey], srcSortAsc);
+  }, [q, srcSortKey, srcSortAsc]);
 
   const filteredMetrics = useMemo(() => {
-    return METRICS_DICTIONARY.filter((m) => {
+    const base = METRICS_DICTIONARY.filter((m) => {
       if (metricCategory !== 'Todas' && m.category !== metricCategory) return false;
       if (!q) return true;
       return normalizeSearchText(
         `${m.code} ${m.name} ${m.category} ${m.description} ${m.formula} ${m.benchmark}`
       ).includes(q);
     });
-  }, [q, metricCategory]);
+    if (!metSortKey) return base;
+    return sortRows(base, (m) => m[metSortKey], metSortAsc);
+  }, [q, metricCategory, metSortKey, metSortAsc]);
 
   const filteredRules = useMemo(() => {
     if (!q) return PRACTICAL_RULES;
@@ -668,15 +710,50 @@ export function GlossaryView({ onNavigateSection }: GlossaryViewProps) {
             </div>
 
             {/* Desktop App Sections Table (md+) */}
-            <div className="hidden md:block overflow-x-auto">
+            <div className="hidden md:block overflow-auto max-h-[60vh]">
               <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
-                    <th className="py-3 pl-4 pr-3 font-medium w-56">Apartado</th>
-                    <th className="py-3 px-3 font-medium">Finalidad principal</th>
-                    <th className="py-3 px-3 font-medium">Qué estadísticas mide</th>
-                    <th className="py-3 px-3 font-medium">Cuándo consultarlo</th>
-                    <th className="py-3 pl-3 pr-4 font-medium text-right">Acceso</th>
+                <thead className={STICKY_THEAD_CLASS}>
+                  <tr className="text-xs text-slate-400">
+                    <SortableTh
+                      label="Apartado"
+                      active={secSortKey === 'title'}
+                      asc={secSortAsc}
+                      onSort={() => toggleSecSort('title')}
+                      align="left"
+                      className="py-3 pl-4 pr-3 w-56"
+                    />
+                    <SortableTh
+                      label="Finalidad principal"
+                      active={secSortKey === 'purpose'}
+                      asc={secSortAsc}
+                      onSort={() => toggleSecSort('purpose')}
+                      align="left"
+                      className="py-3 px-3"
+                    />
+                    <SortableTh
+                      label="Qué estadísticas mide"
+                      active={secSortKey === 'measuredStats'}
+                      asc={secSortAsc}
+                      onSort={() => toggleSecSort('measuredStats')}
+                      align="left"
+                      className="py-3 px-3"
+                    />
+                    <SortableTh
+                      label="Cuándo consultarlo"
+                      active={secSortKey === 'whenToUse'}
+                      asc={secSortAsc}
+                      onSort={() => toggleSecSort('whenToUse')}
+                      align="left"
+                      className="py-3 px-3"
+                    />
+                    <SortableTh
+                      label="Acceso"
+                      active={secSortKey === 'id'}
+                      asc={secSortAsc}
+                      onSort={() => toggleSecSort('id')}
+                      align="right"
+                      className="py-3 pl-3 pr-4"
+                    />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#1E293B] text-xs">
@@ -743,14 +820,42 @@ export function GlossaryView({ onNavigateSection }: GlossaryViewProps) {
             </div>
 
             {/* Desktop Data Sources Table (md+) */}
-            <div className="hidden md:block overflow-x-auto">
+            <div className="hidden md:block overflow-auto max-h-[60vh]">
               <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
-                    <th className="py-3 pl-4 pr-3 font-medium">Canal de Datos Oficial</th>
-                    <th className="py-3 px-3 font-medium">Servicio Consultado</th>
-                    <th className="py-3 px-3 font-medium">Datos Extraídos y Derivados</th>
-                    <th className="py-3 pl-3 pr-4 font-medium">Frecuencia y Caché</th>
+                <thead className={STICKY_THEAD_CLASS}>
+                  <tr className="text-xs text-slate-400">
+                    <SortableTh
+                      label="Canal de Datos Oficial"
+                      active={srcSortKey === 'channel'}
+                      asc={srcSortAsc}
+                      onSort={() => toggleSrcSort('channel')}
+                      align="left"
+                      className="py-3 pl-4 pr-3"
+                    />
+                    <SortableTh
+                      label="Servicio Consultado"
+                      active={srcSortKey === 'endpointScope'}
+                      asc={srcSortAsc}
+                      onSort={() => toggleSrcSort('endpointScope')}
+                      align="left"
+                      className="py-3 px-3"
+                    />
+                    <SortableTh
+                      label="Datos Extraídos y Derivados"
+                      active={srcSortKey === 'providedMetrics'}
+                      asc={srcSortAsc}
+                      onSort={() => toggleSrcSort('providedMetrics')}
+                      align="left"
+                      className="py-3 px-3"
+                    />
+                    <SortableTh
+                      label="Frecuencia y Caché"
+                      active={srcSortKey === 'refreshRule'}
+                      asc={srcSortAsc}
+                      onSort={() => toggleSrcSort('refreshRule')}
+                      align="left"
+                      className="py-3 pl-3 pr-4"
+                    />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#1E293B] text-xs">
@@ -854,14 +959,42 @@ export function GlossaryView({ onNavigateSection }: GlossaryViewProps) {
               </div>
 
               {/* Desktop Metrics Dictionary Table (md+) */}
-              <div className="hidden md:block overflow-x-auto">
+              <div className="hidden md:block overflow-auto max-h-[68vh]">
                 <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
-                      <th className="py-3 pl-4 pr-3 font-medium">Sigla / Métrica</th>
-                      <th className="py-3 px-3 font-medium">Significado y Qué Mide</th>
-                      <th className="py-3 px-3 font-medium">Fórmula / Obtención</th>
-                      <th className="py-3 pl-3 pr-4 font-medium">Referencia NBA</th>
+                  <thead className={STICKY_THEAD_CLASS}>
+                    <tr className="text-xs text-slate-400">
+                      <SortableTh
+                        label="Sigla / Métrica"
+                        active={metSortKey === 'code'}
+                        asc={metSortAsc}
+                        onSort={() => toggleMetSort('code')}
+                        align="left"
+                        className="py-3 pl-4 pr-3"
+                      />
+                      <SortableTh
+                        label="Significado y Qué Mide"
+                        active={metSortKey === 'name'}
+                        asc={metSortAsc}
+                        onSort={() => toggleMetSort('name')}
+                        align="left"
+                        className="py-3 px-3"
+                      />
+                      <SortableTh
+                        label="Fórmula / Obtención"
+                        active={metSortKey === 'formula'}
+                        asc={metSortAsc}
+                        onSort={() => toggleMetSort('formula')}
+                        align="left"
+                        className="py-3 px-3"
+                      />
+                      <SortableTh
+                        label="Referencia NBA"
+                        active={metSortKey === 'benchmark'}
+                        asc={metSortAsc}
+                        onSort={() => toggleMetSort('benchmark')}
+                        align="left"
+                        className="py-3 pl-3 pr-4"
+                      />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#1E293B] text-xs">

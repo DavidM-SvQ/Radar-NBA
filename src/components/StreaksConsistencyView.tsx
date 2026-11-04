@@ -1,11 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
+  LineChart,
   RefreshCw,
   Search,
   SlidersHorizontal,
   Star,
-  TrendingUp,
   Users,
 } from 'lucide-react';
 import type {
@@ -24,7 +24,26 @@ import {
   mean,
   normalizeSearchText,
 } from '../utils/analytics';
-import { ColumnHelpHeader, MetricInfoTooltip } from './MetricUiHelpers';
+import {
+  evalThresholdOp,
+  formatMetricNumber,
+  getOperatorSymbol,
+  isRulePositive,
+  resolveAutoStreakPreload,
+  STREAK_METRIC_GROUPS,
+  STREAK_METRIC_OPTIONS,
+} from '../utils/streakMetricsCatalog';
+import type {
+  StreakChartPreloadMetricRule,
+  StreakChartPreloadRequest,
+  ThresholdOperator,
+} from '../utils/streakMetricsCatalog';
+import {
+  STICKY_THEAD_CLASS,
+  compareSortValues,
+  type SortPrimitive,
+} from '../utils/tableSort';
+import { MetricInfoTooltip, SortableTh } from './MetricUiHelpers';
 import { EntityBadge, PlayerAvatar } from './NbaVisuals';
 import { PlayerStreakHistoryChart } from './PlayerStreakHistoryChart';
 
@@ -52,971 +71,38 @@ interface StreaksConsistencyViewProps {
 type SubTab = 'streaks' | 'consistency' | 'history';
 type StreakEvalMode = 'custom' | 'auto';
 type StreakSpanMode = 'active' | 'best';
-type ThresholdOperator = 'gt' | 'gte' | 'lte' | 'lt';
 type CustomStreakSort =
+  | 'watched'
+  | 'playerName'
+  | 'recentSeries'
   | 'count'
   | 'streakAvg'
   | 'windowAvg'
   | 'currentSeasonAvg'
-  | 'prevSeasonAvg';
+  | 'prevSeasonAvg'
+  | 'lastGameVal';
 type AutoStreakSort =
+  | 'watched'
+  | 'entityName'
+  | 'thresholdLabel'
   | 'count'
   | 'windowAvgDuringStreak'
   | 'windowDeltaVsSeason'
   | 'currentSeasonAvg'
-  | 'prevSeasonAvg';
+  | 'prevSeasonAvg'
+  | 'lastGameDate';
 type ConsistencySort =
+  | 'watched'
+  | 'entityName'
+  | 'profileLabel'
   | 'consistencyScore'
   | 'ptsAvg'
   | 'ptsWindowDelta'
   | 'ptsStdDev'
+  | 'floorCeiling'
   | 'hitRate20Pts';
 
-type StreakMetricGroup =
-  | 'basic_counting'
-  | 'shooting_vol'
-  | 'combos_milestones'
-  | 'shooting_eff'
-  | 'ratios_per36';
 
-interface StreakMetricOption {
-  id: string;
-  group: StreakMetricGroup;
-  shortLabel: string;
-  label: string;
-  helpKey: string;
-  min: number;
-  max: number;
-  step: number;
-  defaultThreshold: number;
-  defaultOperator?: ThresholdOperator;
-  lowerIsBetter?: boolean;
-  unit: string;
-  decimals: number;
-  gameDecimals: number;
-  qualificationNote?: string;
-  qualifies?: (g: PlayerGameLog) => boolean;
-  getValue: (g: PlayerGameLog) => number;
-}
-
-const STREAK_METRIC_GROUPS: Array<{
-  id: StreakMetricGroup;
-  label: string;
-  shortType: string;
-}> = [
-  {
-    id: 'basic_counting',
-    label: '1. Estadísticas básicas por partido',
-    shortType: 'Acumulado',
-  },
-  {
-    id: 'shooting_vol',
-    label: '2. Volumen de tiro y conversión',
-    shortType: 'Volumen',
-  },
-  {
-    id: 'combos_milestones',
-    label: '3. Combinadas e hitos (PRA, DD2, TD3)',
-    shortType: 'Combinada',
-  },
-  {
-    id: 'shooting_eff',
-    label: '4. Porcentajes y eficiencia de tiro',
-    shortType: 'Eficiencia %',
-  },
-  {
-    id: 'ratios_per36',
-    label: '5. Ratios de creación, ritmo /36m y valoración',
-    shortType: 'Ratio',
-  },
-];
-
-function countDoubleDigitStats(g: PlayerGameLog): number {
-  let hits = 0;
-  if (g.points >= 10) hits += 1;
-  if (g.rebounds >= 10) hits += 1;
-  if (g.assists >= 10) hits += 1;
-  if (g.steals >= 10) hits += 1;
-  if (g.blocks >= 10) hits += 1;
-  return hits;
-}
-
-function evalThresholdOp(
-  val: number,
-  op: ThresholdOperator,
-  target: number
-): boolean {
-  if (op === 'gt') return val > target;
-  if (op === 'gte') return val >= target;
-  if (op === 'lte') return val <= target;
-  return val < target;
-}
-
-function getOperatorSymbol(op: ThresholdOperator): string {
-  if (op === 'gt') return '>';
-  if (op === 'gte') return '≥';
-  if (op === 'lte') return '≤';
-  return '<';
-}
-
-const STREAK_METRIC_OPTIONS: StreakMetricOption[] = [
-  // 1. Estadísticas básicas por partido (12)
-  {
-    id: 'points',
-    group: 'basic_counting',
-    shortLabel: 'PTS',
-    label: 'PTS · Puntos anotados',
-    helpKey: 'ptsBase',
-    min: 5,
-    max: 50,
-    step: 1,
-    defaultThreshold: 20,
-    defaultOperator: 'gte',
-    unit: ' PTS',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.points,
-  },
-  {
-    id: 'rebounds',
-    group: 'basic_counting',
-    shortLabel: 'REB',
-    label: 'REB · Rebotes totales',
-    helpKey: 'rebBase',
-    min: 2,
-    max: 20,
-    step: 1,
-    defaultThreshold: 8,
-    defaultOperator: 'gte',
-    unit: ' REB',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.rebounds,
-  },
-  {
-    id: 'dreb',
-    group: 'basic_counting',
-    shortLabel: 'DR',
-    label: 'DR · Rebotes defensivos',
-    helpKey: 'drebBase',
-    min: 2,
-    max: 16,
-    step: 1,
-    defaultThreshold: 6,
-    defaultOperator: 'gte',
-    unit: ' DR',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.dreb,
-  },
-  {
-    id: 'oreb',
-    group: 'basic_counting',
-    shortLabel: 'OR',
-    label: 'OR · Rebotes ofensivos',
-    helpKey: 'orebBase',
-    min: 1,
-    max: 9,
-    step: 1,
-    defaultThreshold: 3,
-    defaultOperator: 'gte',
-    unit: ' OR',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.oreb,
-  },
-  {
-    id: 'assists',
-    group: 'basic_counting',
-    shortLabel: 'AST',
-    label: 'AST · Asistencias',
-    helpKey: 'astBase',
-    min: 2,
-    max: 16,
-    step: 1,
-    defaultThreshold: 7,
-    defaultOperator: 'gte',
-    unit: ' AST',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.assists,
-  },
-  {
-    id: 'steals',
-    group: 'basic_counting',
-    shortLabel: 'ROB',
-    label: 'ROB · Robos de balón',
-    helpKey: 'steals',
-    min: 1,
-    max: 6,
-    step: 1,
-    defaultThreshold: 2,
-    defaultOperator: 'gte',
-    unit: ' ROB',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.steals,
-  },
-  {
-    id: 'blocks',
-    group: 'basic_counting',
-    shortLabel: 'TAP',
-    label: 'TAP · Tapones',
-    helpKey: 'blocks',
-    min: 1,
-    max: 6,
-    step: 1,
-    defaultThreshold: 2,
-    defaultOperator: 'gte',
-    unit: ' TAP',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.blocks,
-  },
-  {
-    id: 'stocks',
-    group: 'basic_counting',
-    shortLabel: 'STK',
-    label: 'STK · Robos + Tapones (Stocks)',
-    helpKey: 'stocksBase',
-    min: 1,
-    max: 8,
-    step: 1,
-    defaultThreshold: 3,
-    defaultOperator: 'gte',
-    unit: ' STK',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.stocks,
-  },
-  {
-    id: 'turnovers',
-    group: 'basic_counting',
-    shortLabel: 'PER',
-    label: 'PER · Pérdidas de balón',
-    helpKey: 'tov',
-    min: 0,
-    max: 9,
-    step: 1,
-    defaultThreshold: 2,
-    defaultOperator: 'lte',
-    lowerIsBetter: true,
-    unit: ' PER',
-    decimals: 1,
-    gameDecimals: 0,
-    qualificationNote:
-      'Exige ≥15 MIN (usa ≤ para seguridad o ≥ para exceso de pérdidas)',
-    qualifies: (g) => g.minutes >= 15,
-    getValue: (g) => g.turnovers,
-  },
-  {
-    id: 'fouls',
-    group: 'basic_counting',
-    shortLabel: 'FP',
-    label: 'FP · Faltas personales cometidas',
-    helpKey: 'personalFouls',
-    min: 0,
-    max: 6,
-    step: 1,
-    defaultThreshold: 2,
-    defaultOperator: 'lte',
-    lowerIsBetter: true,
-    unit: ' FP',
-    decimals: 1,
-    gameDecimals: 0,
-    qualificationNote:
-      'Exige ≥15 MIN (usa ≤ para disciplina o ≥ para problemas de faltas)',
-    qualifies: (g) => g.minutes >= 15,
-    getValue: (g) => g.fouls,
-  },
-  {
-    id: 'plusMinus',
-    group: 'basic_counting',
-    shortLabel: '+/-',
-    label: '+/- · Impacto Más / Menos en pista',
-    helpKey: 'plusMinusBase',
-    min: -15,
-    max: 25,
-    step: 1,
-    defaultThreshold: 5,
-    defaultOperator: 'gte',
-    unit: '',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.plusMinus,
-  },
-  {
-    id: 'minutes',
-    group: 'basic_counting',
-    shortLabel: 'MIN',
-    label: 'MIN · Minutos jugados',
-    helpKey: 'minBase',
-    min: 15,
-    max: 44,
-    step: 1,
-    defaultThreshold: 34,
-    defaultOperator: 'gte',
-    unit: ' MIN',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.minutes,
-  },
-
-  // 2. Volumen de tiro y conversión (9)
-  {
-    id: 'fg3m',
-    group: 'shooting_vol',
-    shortLabel: '3PM',
-    label: '3PM · Triples anotados',
-    helpKey: 'fg3m',
-    min: 1,
-    max: 10,
-    step: 1,
-    defaultThreshold: 3,
-    defaultOperator: 'gte',
-    unit: ' 3PM',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.fg3m,
-  },
-  {
-    id: 'fg3a',
-    group: 'shooting_vol',
-    shortLabel: '3PA',
-    label: '3PA · Triples intentados',
-    helpKey: 'fg3a',
-    min: 2,
-    max: 16,
-    step: 1,
-    defaultThreshold: 7,
-    defaultOperator: 'gte',
-    unit: ' 3PA',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.fg3a,
-  },
-  {
-    id: 'fgm',
-    group: 'shooting_vol',
-    shortLabel: 'TCM',
-    label: 'TCM · Tiros de campo anotados',
-    helpKey: 'fgmMade',
-    min: 3,
-    max: 18,
-    step: 1,
-    defaultThreshold: 8,
-    defaultOperator: 'gte',
-    unit: ' TCM',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.fgm,
-  },
-  {
-    id: 'fga',
-    group: 'shooting_vol',
-    shortLabel: 'TCI',
-    label: 'TCI · Tiros de campo intentados',
-    helpKey: 'fga',
-    min: 6,
-    max: 30,
-    step: 1,
-    defaultThreshold: 16,
-    defaultOperator: 'gte',
-    unit: ' TCI',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.fga,
-  },
-  {
-    id: 'fg2m',
-    group: 'shooting_vol',
-    shortLabel: 'T2M',
-    label: 'T2M · Tiros de 2 puntos anotados',
-    helpKey: 'fg2m',
-    min: 2,
-    max: 15,
-    step: 1,
-    defaultThreshold: 6,
-    defaultOperator: 'gte',
-    unit: ' T2M',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => Math.max(0, g.fgm - g.fg3m),
-  },
-  {
-    id: 'fg2a',
-    group: 'shooting_vol',
-    shortLabel: 'T2I',
-    label: 'T2I · Tiros de 2 puntos intentados',
-    helpKey: 'fg2a',
-    min: 4,
-    max: 24,
-    step: 1,
-    defaultThreshold: 10,
-    defaultOperator: 'gte',
-    unit: ' T2I',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => Math.max(0, g.fga - g.fg3a),
-  },
-  {
-    id: 'ftm',
-    group: 'shooting_vol',
-    shortLabel: 'TLM',
-    label: 'TLM · Tiros libres anotados',
-    helpKey: 'ftmMade',
-    min: 2,
-    max: 16,
-    step: 1,
-    defaultThreshold: 6,
-    defaultOperator: 'gte',
-    unit: ' TLM',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.ftm,
-  },
-  {
-    id: 'fta',
-    group: 'shooting_vol',
-    shortLabel: 'TLI',
-    label: 'TLI · Tiros libres intentados',
-    helpKey: 'fta',
-    min: 2,
-    max: 18,
-    step: 1,
-    defaultThreshold: 7,
-    defaultOperator: 'gte',
-    unit: ' TLI',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.fta,
-  },
-  {
-    id: 'tsa',
-    group: 'shooting_vol',
-    shortLabel: 'TSA',
-    label: 'TSA · Posesiones de tiro lanzadas (FGA + 0.44×FTA)',
-    helpKey: 'tsaVolume',
-    min: 8,
-    max: 34,
-    step: 1,
-    defaultThreshold: 18,
-    defaultOperator: 'gte',
-    unit: ' TSA',
-    decimals: 1,
-    gameDecimals: 1,
-    getValue: (g) => g.fga + 0.44 * g.fta,
-  },
-
-  // 3. Combinadas e hitos (6)
-  {
-    id: 'pra',
-    group: 'combos_milestones',
-    shortLabel: 'PRA',
-    label: 'PRA · Puntos + Rebotes + Asistencias',
-    helpKey: 'pra',
-    min: 15,
-    max: 65,
-    step: 1,
-    defaultThreshold: 32,
-    defaultOperator: 'gte',
-    unit: ' PRA',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.pra,
-  },
-  {
-    id: 'ptsReb',
-    group: 'combos_milestones',
-    shortLabel: 'PTS+REB',
-    label: 'PTS+REB · Puntos + Rebotes',
-    helpKey: 'prCombo',
-    min: 12,
-    max: 55,
-    step: 1,
-    defaultThreshold: 26,
-    defaultOperator: 'gte',
-    unit: ' P+R',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.points + g.rebounds,
-  },
-  {
-    id: 'ptsAst',
-    group: 'combos_milestones',
-    shortLabel: 'PTS+AST',
-    label: 'PTS+AST · Puntos + Asistencias',
-    helpKey: 'paCombo',
-    min: 12,
-    max: 55,
-    step: 1,
-    defaultThreshold: 26,
-    defaultOperator: 'gte',
-    unit: ' P+A',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.points + g.assists,
-  },
-  {
-    id: 'rebAst',
-    group: 'combos_milestones',
-    shortLabel: 'REB+AST',
-    label: 'REB+AST · Rebotes + Asistencias',
-    helpKey: 'raCombo',
-    min: 6,
-    max: 28,
-    step: 1,
-    defaultThreshold: 12,
-    defaultOperator: 'gte',
-    unit: ' R+A',
-    decimals: 1,
-    gameDecimals: 0,
-    getValue: (g) => g.rebounds + g.assists,
-  },
-  {
-    id: 'doubleDouble',
-    group: 'combos_milestones',
-    shortLabel: 'DD2',
-    label: 'DD2 · Doble-Doble logrado en el partido',
-    helpKey: 'doubleDoubles',
-    min: 1,
-    max: 1,
-    step: 1,
-    defaultThreshold: 1,
-    defaultOperator: 'gte',
-    unit: ' DD2',
-    decimals: 2,
-    gameDecimals: 0,
-    qualificationNote: '1 = logró Doble-Doble (≥10 en 2 categorías), 0 = no',
-    getValue: (g) => (countDoubleDigitStats(g) >= 2 ? 1 : 0),
-  },
-  {
-    id: 'tripleDouble',
-    group: 'combos_milestones',
-    shortLabel: 'TD3',
-    label: 'TD3 · Triple-Doble logrado en el partido',
-    helpKey: 'tripleDoubles',
-    min: 1,
-    max: 1,
-    step: 1,
-    defaultThreshold: 1,
-    defaultOperator: 'gte',
-    unit: ' TD3',
-    decimals: 2,
-    gameDecimals: 0,
-    qualificationNote: '1 = logró Triple-Doble (≥10 en 3 categorías), 0 = no',
-    getValue: (g) => (countDoubleDigitStats(g) >= 3 ? 1 : 0),
-  },
-
-  // 4. Porcentajes y eficiencia de tiro (9)
-  {
-    id: 'tsPct',
-    group: 'shooting_eff',
-    shortLabel: 'TS%',
-    label: 'TS% · Acierto Real (True Shooting %)',
-    helpKey: 'tsPct',
-    min: 40,
-    max: 80,
-    step: 1,
-    defaultThreshold: 60,
-    defaultOperator: 'gt',
-    unit: '%',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥5 tiros de campo o ≥4 libres en el partido',
-    qualifies: (g) => g.fga >= 5 || g.fta >= 4,
-    getValue: (g) => g.tsPct,
-  },
-  {
-    id: 'efgPct',
-    group: 'shooting_eff',
-    shortLabel: 'eFG%',
-    label: 'eFG% · Tiro de Campo Efectivo',
-    helpKey: 'efgPct',
-    min: 35,
-    max: 80,
-    step: 1,
-    defaultThreshold: 58,
-    defaultOperator: 'gt',
-    unit: '%',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥5 tiros de campo intentados en el partido',
-    qualifies: (g) => g.fga >= 5,
-    getValue: (g) => g.efgPct,
-  },
-  {
-    id: 'fgPct',
-    group: 'shooting_eff',
-    shortLabel: 'TC%',
-    label: 'TC% · % Tiros de Campo',
-    helpKey: 'fgPct',
-    min: 30,
-    max: 75,
-    step: 1,
-    defaultThreshold: 50,
-    defaultOperator: 'gte',
-    unit: '%',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥5 tiros de campo intentados en el partido',
-    qualifies: (g) => g.fga >= 5,
-    getValue: (g) => g.fgPct,
-  },
-  {
-    id: 'fg2Pct',
-    group: 'shooting_eff',
-    shortLabel: 'T2%',
-    label: 'T2% · % Acierto en Tiros de 2 puntos',
-    helpKey: 'fg2Pct',
-    min: 35,
-    max: 80,
-    step: 1,
-    defaultThreshold: 58,
-    defaultOperator: 'gte',
-    unit: '%',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥4 tiros de 2 intentados en el partido',
-    qualifies: (g) => g.fga - g.fg3a >= 4,
-    getValue: (g) => {
-      const fg2a = g.fga - g.fg3a;
-      return fg2a > 0 ? ((g.fgm - g.fg3m) / fg2a) * 100 : 0;
-    },
-  },
-  {
-    id: 'fg3Pct',
-    group: 'shooting_eff',
-    shortLabel: '3P%',
-    label: '3P% · % Acierto en Triples',
-    helpKey: 'fg3Pct',
-    min: 20,
-    max: 70,
-    step: 1,
-    defaultThreshold: 40,
-    defaultOperator: 'gte',
-    unit: '%',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥3 triples intentados en el partido',
-    qualifies: (g) => g.fg3a >= 3,
-    getValue: (g) => g.fg3Pct,
-  },
-  {
-    id: 'ftPct',
-    group: 'shooting_eff',
-    shortLabel: 'TL%',
-    label: 'TL% · % Tiros Libres',
-    helpKey: 'ftPct',
-    min: 50,
-    max: 100,
-    step: 1,
-    defaultThreshold: 85,
-    defaultOperator: 'gte',
-    unit: '%',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥2 tiros libres intentados en el partido',
-    qualifies: (g) => g.fta >= 2,
-    getValue: (g) => g.ftPct,
-  },
-  {
-    id: 'ptsPerShot',
-    group: 'shooting_eff',
-    shortLabel: 'PTS/TCI',
-    label: 'PTS/TCI · Puntos por Tiro de Campo Intentado',
-    helpKey: 'ptsPerShot',
-    min: 0.9,
-    max: 1.9,
-    step: 0.05,
-    defaultThreshold: 1.35,
-    defaultOperator: 'gte',
-    unit: '',
-    decimals: 2,
-    gameDecimals: 2,
-    qualificationNote: 'Exige ≥5 tiros de campo intentados en el partido',
-    qualifies: (g) => g.fga >= 5,
-    getValue: (g) => (g.fga > 0 ? g.points / g.fga : 0),
-  },
-  {
-    id: 'threeRate',
-    group: 'shooting_eff',
-    shortLabel: '3PAr',
-    label: '3PAr · % Volumen de Triples (3PA / FGA)',
-    helpKey: 'threeRatio',
-    min: 15,
-    max: 85,
-    step: 1,
-    defaultThreshold: 50,
-    defaultOperator: 'gte',
-    unit: '%',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥5 tiros de campo intentados en el partido',
-    qualifies: (g) => g.fga >= 5,
-    getValue: (g) => (g.fga > 0 ? (g.fg3a / g.fga) * 100 : 0),
-  },
-  {
-    id: 'ftRate',
-    group: 'shooting_eff',
-    shortLabel: 'FTr',
-    label: 'FTr · Ratio de Tiros Libres (FTA / FGA)',
-    helpKey: 'ftr',
-    min: 10,
-    max: 80,
-    step: 1,
-    defaultThreshold: 35,
-    defaultOperator: 'gte',
-    unit: '%',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥5 tiros de campo intentados en el partido',
-    qualifies: (g) => g.fga >= 5,
-    getValue: (g) => (g.fga > 0 ? (g.fta / g.fga) * 100 : 0),
-  },
-
-  // 5. Ratios de creación, ritmo por 36m y valoración (13)
-  {
-    id: 'astTo',
-    group: 'ratios_per36',
-    shortLabel: 'AST/PER',
-    label: 'AST/PER · Asistencias/Pérdidas (Ratio creación/seguridad)',
-    helpKey: 'astTo',
-    min: 0.5,
-    max: 10,
-    step: 0.5,
-    defaultThreshold: 3,
-    defaultOperator: 'gte',
-    unit: 'x',
-    decimals: 2,
-    gameDecimals: 1,
-    qualificationNote: 'Si tiene 0 pérdidas toma el total de asistencias',
-    qualifies: (g) => g.assists > 0 || g.turnovers > 0,
-    getValue: (g) => (g.turnovers === 0 ? g.assists : g.assists / g.turnovers),
-  },
-  {
-    id: 'tovPctEst',
-    group: 'ratios_per36',
-    shortLabel: 'TOV%',
-    label: 'TOV% · % Pérdidas sobre posesiones jugadas',
-    helpKey: 'tovRatioEst',
-    min: 3,
-    max: 30,
-    step: 1,
-    defaultThreshold: 10,
-    defaultOperator: 'lte',
-    lowerIsBetter: true,
-    unit: '%',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote:
-      'Exige ≥6 posesiones usadas (usa ≤ para seguridad o ≥ para exceso)',
-    qualifies: (g) => g.fga + 0.44 * g.fta + g.turnovers >= 6,
-    getValue: (g) => {
-      const denom = g.fga + 0.44 * g.fta + g.turnovers;
-      return denom > 0 ? (g.turnovers / denom) * 100 : 0;
-    },
-  },
-  {
-    id: 'astRatioEst',
-    group: 'ratios_per36',
-    shortLabel: 'AST Ratio',
-    label: 'AST Ratio · % Posesiones que acaban en asistencia',
-    helpKey: 'astRatio',
-    min: 8,
-    max: 50,
-    step: 1,
-    defaultThreshold: 25,
-    defaultOperator: 'gte',
-    unit: '%',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
-    qualifies: (g) => g.minutes >= 12,
-    getValue: (g) => {
-      const denom = g.fga + 0.44 * g.fta + g.assists + g.turnovers;
-      return denom > 0 ? (g.assists / denom) * 100 : 0;
-    },
-  },
-  {
-    id: 'gameScore',
-    group: 'ratios_per36',
-    shortLabel: 'GmSc',
-    label: 'GmSc · Valoración Game Score (Hollinger)',
-    helpKey: 'gmSc',
-    min: 5,
-    max: 42,
-    step: 1,
-    defaultThreshold: 20,
-    defaultOperator: 'gte',
-    unit: '',
-    decimals: 1,
-    gameDecimals: 1,
-    getValue: (g) => g.gameScore,
-  },
-  {
-    id: 'usgEst',
-    group: 'ratios_per36',
-    shortLabel: 'USG%',
-    label: 'USG% · Ratio de Uso Ofensivo',
-    helpKey: 'usgPct',
-    min: 12,
-    max: 44,
-    step: 1,
-    defaultThreshold: 28,
-    defaultOperator: 'gte',
-    unit: '%',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
-    qualifies: (g) => g.minutes >= 12,
-    getValue: (g) => g.usgEst,
-  },
-  {
-    id: 'ptsPerMin',
-    group: 'ratios_per36',
-    shortLabel: 'PTS/MIN',
-    label: 'PTS/MIN · Ratio Puntos por Minuto',
-    helpKey: 'ptsPerMin',
-    min: 0.35,
-    max: 1.4,
-    step: 0.05,
-    defaultThreshold: 0.75,
-    defaultOperator: 'gte',
-    unit: '',
-    decimals: 2,
-    gameDecimals: 2,
-    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
-    qualifies: (g) => g.minutes >= 12,
-    getValue: (g) => (g.minutes > 0 ? g.points / g.minutes : 0),
-  },
-  {
-    id: 'ptsPer36',
-    group: 'ratios_per36',
-    shortLabel: 'PTS/36',
-    label: 'PTS/36 · Puntos por 36 minutos',
-    helpKey: 'ptsPer36',
-    min: 12,
-    max: 44,
-    step: 1,
-    defaultThreshold: 26,
-    defaultOperator: 'gte',
-    unit: '',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
-    qualifies: (g) => g.minutes >= 12,
-    getValue: (g) => (g.minutes > 0 ? (g.points / g.minutes) * 36 : 0),
-  },
-  {
-    id: 'rebPer36',
-    group: 'ratios_per36',
-    shortLabel: 'REB/36',
-    label: 'REB/36 · Rebotes totales por 36 minutos',
-    helpKey: 'rebPer36',
-    min: 4,
-    max: 22,
-    step: 0.5,
-    defaultThreshold: 11,
-    defaultOperator: 'gte',
-    unit: '',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
-    qualifies: (g) => g.minutes >= 12,
-    getValue: (g) => (g.minutes > 0 ? (g.rebounds / g.minutes) * 36 : 0),
-  },
-  {
-    id: 'drebPer36',
-    group: 'ratios_per36',
-    shortLabel: 'DR/36',
-    label: 'DR/36 · Rebotes defensivos por 36 minutos',
-    helpKey: 'drebPer36',
-    min: 3,
-    max: 16,
-    step: 0.5,
-    defaultThreshold: 8.5,
-    defaultOperator: 'gte',
-    unit: '',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
-    qualifies: (g) => g.minutes >= 12,
-    getValue: (g) => (g.minutes > 0 ? (g.dreb / g.minutes) * 36 : 0),
-  },
-  {
-    id: 'orebPer36',
-    group: 'ratios_per36',
-    shortLabel: 'OR/36',
-    label: 'OR/36 · Rebotes ofensivos por 36 minutos',
-    helpKey: 'orebPer36',
-    min: 1,
-    max: 10,
-    step: 0.5,
-    defaultThreshold: 3.5,
-    defaultOperator: 'gte',
-    unit: '',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
-    qualifies: (g) => g.minutes >= 12,
-    getValue: (g) => (g.minutes > 0 ? (g.oreb / g.minutes) * 36 : 0),
-  },
-  {
-    id: 'astPer36',
-    group: 'ratios_per36',
-    shortLabel: 'AST/36',
-    label: 'AST/36 · Asistencias por 36 minutos',
-    helpKey: 'astPer36',
-    min: 3,
-    max: 16,
-    step: 0.5,
-    defaultThreshold: 8,
-    defaultOperator: 'gte',
-    unit: '',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
-    qualifies: (g) => g.minutes >= 12,
-    getValue: (g) => (g.minutes > 0 ? (g.assists / g.minutes) * 36 : 0),
-  },
-  {
-    id: 'stocksPer36',
-    group: 'ratios_per36',
-    shortLabel: 'STK/36',
-    label: 'STK/36 · Robos + Tapones por 36 minutos',
-    helpKey: 'stocksPer36',
-    min: 1,
-    max: 8,
-    step: 0.5,
-    defaultThreshold: 3,
-    defaultOperator: 'gte',
-    unit: '',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
-    qualifies: (g) => g.minutes >= 12,
-    getValue: (g) => (g.minutes > 0 ? (g.stocks / g.minutes) * 36 : 0),
-  },
-  {
-    id: 'praPer36',
-    group: 'ratios_per36',
-    shortLabel: 'PRA/36',
-    label: 'PRA/36 · Puntos + Rebotes + Asistencias por 36m',
-    helpKey: 'praPer36',
-    min: 20,
-    max: 65,
-    step: 1,
-    defaultThreshold: 38,
-    defaultOperator: 'gte',
-    unit: '',
-    decimals: 1,
-    gameDecimals: 1,
-    qualificationNote: 'Exige ≥12 minutos jugados en el partido',
-    qualifies: (g) => g.minutes >= 12,
-    getValue: (g) => (g.minutes > 0 ? (g.pra / g.minutes) * 36 : 0),
-  },
-];
 
 const QUICK_RATIO_CHIPS = [
   'points',
@@ -1099,15 +185,7 @@ const BREAKOUT_STREAK_PRESETS: Array<{
   },
 ];
 
-function formatMetricNumber(
-  val: number,
-  decimals: number,
-  unit: string,
-  includeUnit = true
-): string {
-  const numStr = val.toFixed(decimals);
-  return includeUnit ? `${numStr}${unit}` : numStr;
-}
+
 
 function resolveAutoStreakHelpKey(st: StreakEntry): string {
   const lbl = `${st.metricLabel} ${st.thresholdLabel}`.toLowerCase();
@@ -1231,11 +309,13 @@ export function StreaksConsistencyView({
   const [consAsc, setConsAsc] = useState(false);
   const [customScrollTop, setCustomScrollTop] = useState<number>(0);
   const [mobileCustomScrollTop, setMobileCustomScrollTop] = useState<number>(0);
-  const [mobileSlidersOpen, setMobileSlidersOpen] = useState<boolean>(true);
+  const [mobileSlidersOpen, setMobileSlidersOpen] = useState<boolean>(false);
   const [historyPlayerId, setHistoryPlayerId] = useState<string | null>(null);
   const [showInlineHistoryChart, setShowInlineHistoryChart] =
     useState<boolean>(false);
-
+  const [chartPreloadRequest, setChartPreloadRequest] =
+    useState<StreakChartPreloadRequest | null>(null);
+  const chartSectionRef = useRef<HTMLDivElement | null>(null);
 
   const activeMetric = useMemo(
     () =>
@@ -1250,6 +330,45 @@ export function StreaksConsistencyView({
       STREAK_METRIC_OPTIONS[0],
     [secondaryMetricId]
   );
+
+  const openPlayerChartWithRules = (
+    playerId: string,
+    metrics: StreakChartPreloadMetricRule[]
+  ) => {
+    setHistoryPlayerId(playerId);
+    setChartPreloadRequest({
+      nonce: Date.now() + Math.random(),
+      playerId,
+      metrics,
+    });
+    setShowInlineHistoryChart(true);
+    requestAnimationFrame(() => {
+      chartSectionRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+      });
+    });
+  };
+
+  const buildCustomRowPreloadRules = (): StreakChartPreloadMetricRule[] => {
+    const rules: StreakChartPreloadMetricRule[] = [
+      {
+        metricId: activeMetric.id,
+        operator,
+        threshold: thresholdValue,
+        isPositive: isRulePositive(activeMetric, operator),
+      },
+    ];
+    if (useSecondaryCondition && secondaryMetric.id !== activeMetric.id) {
+      rules.push({
+        metricId: secondaryMetric.id,
+        operator: secondaryOperator,
+        threshold: secondaryThresholdValue,
+        isPositive: isRulePositive(secondaryMetric, secondaryOperator),
+      });
+    }
+    return rules;
+  };
 
   const handleSelectMetric = (metricId: string) => {
     const found = STREAK_METRIC_OPTIONS.find((m) => m.id === metricId);
@@ -1408,13 +527,32 @@ export function StreaksConsistencyView({
     }
 
     out.sort((a, b) => {
-      const valA = a[customSort];
-      const valB = b[customSort];
-      if (valA === null && valB !== null) return 1;
-      if (valA !== null && valB === null) return -1;
-      if (valA !== null && valB !== null && valA !== valB) {
-        return customAsc ? valA - valB : valB - valA;
-      }
+      const resolveCustomVal = (r: (typeof out)[number]): SortPrimitive => {
+        switch (customSort) {
+          case 'watched':
+            return watchlistIds.has(`player:${r.playerId}`) ? 1 : 0;
+          case 'playerName':
+            return r.playerName;
+          case 'recentSeries':
+            return r.recentSequence[0] ?? r.streakAvg;
+          case 'lastGameVal':
+            return r.lastGameVal;
+          case 'count':
+          case 'streakAvg':
+          case 'windowAvg':
+          case 'currentSeasonAvg':
+          case 'prevSeasonAvg':
+            return r[customSort];
+          default:
+            return r.count;
+        }
+      };
+      const cmp = compareSortValues(
+        resolveCustomVal(a),
+        resolveCustomVal(b),
+        customAsc
+      );
+      if (cmp !== 0) return cmp;
       if (b.count !== a.count) return b.count - a.count;
       return b.streakAvg - a.streakAvg;
     });
@@ -1510,26 +648,38 @@ export function StreaksConsistencyView({
         return true;
       })
       .sort((a, b) => {
-        const resolveAutoVal = (st: StreakEntry): number | null => {
-          if (autoSort === 'windowDeltaVsSeason') {
-            return st.windowDeltaVsSeason ?? 0;
+        const resolveAutoVal = (st: StreakEntry): SortPrimitive => {
+          switch (autoSort) {
+            case 'watched':
+              return watchlistIds.has(`${st.entityType}:${st.entityId}`) ? 1 : 0;
+            case 'entityName':
+              return st.entityName;
+            case 'thresholdLabel':
+              return `${st.metricLabel} ${st.thresholdLabel}`;
+            case 'lastGameDate':
+              return st.lastGameDate || '';
+            case 'windowDeltaVsSeason':
+              return st.windowDeltaVsSeason ?? 0;
+            case 'currentSeasonAvg':
+              return st.currentSeasonAvg !== undefined
+                ? st.currentSeasonAvg
+                : st.seasonBaseline;
+            case 'prevSeasonAvg':
+              return st.prevSeasonAvg !== undefined ? st.prevSeasonAvg : null;
+            case 'count':
+            case 'windowAvgDuringStreak':
+              return st[autoSort];
+            default:
+              return st.count;
           }
-          if (autoSort === 'currentSeasonAvg') {
-            return st.currentSeasonAvg !== undefined ? st.currentSeasonAvg : st.seasonBaseline;
-          }
-          if (autoSort === 'prevSeasonAvg') {
-            return st.prevSeasonAvg !== undefined ? st.prevSeasonAvg : null;
-          }
-          return st[autoSort];
         };
 
-        const valA = resolveAutoVal(a);
-        const valB = resolveAutoVal(b);
-        if (valA === null && valB !== null) return 1;
-        if (valA !== null && valB === null) return -1;
-        if (valA !== null && valB !== null && valA !== valB) {
-          return autoAsc ? valA - valB : valB - valA;
-        }
+        const cmp = compareSortValues(
+          resolveAutoVal(a),
+          resolveAutoVal(b),
+          autoAsc
+        );
+        if (cmp !== 0) return cmp;
         if (b.count !== a.count) return b.count - a.count;
         return b.windowAvgDuringStreak - a.windowAvgDuringStreak;
       });
@@ -1561,15 +711,33 @@ export function StreaksConsistencyView({
         return true;
       })
       .sort((a, b) => {
-        const valA =
-          consSort === 'ptsWindowDelta'
-            ? a.ptsWindowDelta ?? 0
-            : a[consSort];
-        const valB =
-          consSort === 'ptsWindowDelta'
-            ? b.ptsWindowDelta ?? 0
-            : b[consSort];
-        return consAsc ? valA - valB : valB - valA;
+        const resolveConsVal = (r: ConsistencyEntry): SortPrimitive => {
+          switch (consSort) {
+            case 'watched':
+              return watchlistIds.has(`player:${r.entityId}`) ? 1 : 0;
+            case 'entityName':
+              return r.entityName;
+            case 'profileLabel':
+              return r.profileLabel;
+            case 'ptsWindowDelta':
+              return r.ptsWindowDelta ?? 0;
+            case 'floorCeiling':
+              return r.ptsCeiling;
+            case 'consistencyScore':
+            case 'ptsAvg':
+            case 'ptsStdDev':
+            case 'hitRate20Pts':
+              return r[consSort];
+            default:
+              return r.consistencyScore;
+          }
+        };
+        const cmp = compareSortValues(
+          resolveConsVal(a),
+          resolveConsVal(b),
+          consAsc
+        );
+        return cmp !== 0 ? cmp : b.consistencyScore - a.consistencyScore;
       });
   }, [
     consistencyRows,
@@ -1590,11 +758,12 @@ export function StreaksConsistencyView({
       : undefined;
 
   const toggleCustomSort = (field: CustomStreakSort) => {
+    setCustomScrollTop(0);
     if (customSort === field) {
       setCustomAsc((prev) => !prev);
     } else {
       setCustomSort(field);
-      setCustomAsc(false);
+      setCustomAsc(field === 'playerName');
     }
   };
 
@@ -1603,7 +772,7 @@ export function StreaksConsistencyView({
       setAutoAsc((prev) => !prev);
     } else {
       setAutoSort(field);
-      setAutoAsc(false);
+      setAutoAsc(field === 'entityName' || field === 'thresholdLabel');
     }
   };
 
@@ -1612,7 +781,11 @@ export function StreaksConsistencyView({
       setConsAsc((prev) => !prev);
     } else {
       setConsSort(field);
-      setConsAsc(field === 'ptsStdDev');
+      setConsAsc(
+        field === 'ptsStdDev' ||
+          field === 'entityName' ||
+          field === 'profileLabel'
+      );
     }
   };
 
@@ -1826,8 +999,8 @@ export function StreaksConsistencyView({
                   : 'text-slate-300 hover:text-white hover:bg-[#182338]'
               }`}
             >
-              <TrendingUp className="w-3.5 h-3.5" />
-              <span>Historial de rachas (10 PJ)</span>
+              <LineChart className="w-3.5 h-3.5" />
+              <span>Historial de rachas</span>
             </button>
           </div>
 
@@ -1863,8 +1036,12 @@ export function StreaksConsistencyView({
                   : 'bg-[#131C2E] border-[#1E293B] text-slate-300 hover:text-white'
               }`}
             >
-              <TrendingUp className="w-3.5 h-3.5 text-orange-400" />
-              <span>{showInlineHistoryChart ? 'Ocultar curva 10 PJ' : 'Mostrar curva 10 PJ'}</span>
+              <LineChart className="w-3.5 h-3.5 text-orange-400" />
+              <span>
+                {showInlineHistoryChart
+                  ? 'Ocultar gráfico de rachas'
+                  : 'Mostrar gráfico de rachas'}
+              </span>
             </button>
           )}
 
@@ -1891,7 +1068,7 @@ export function StreaksConsistencyView({
                 }`}
               >
                 <SlidersHorizontal className="w-3.5 h-3.5 text-orange-400" />
-                <span>Buscador a medida (38 ratios)</span>
+                <span>Buscador a medida ({STREAK_METRIC_OPTIONS.length} métricas)</span>
               </button>
             </div>
           )}
@@ -2395,22 +1572,32 @@ export function StreaksConsistencyView({
         </div>
       )}
 
-      {/* Historial de Rachas (10-Game Progression Line Chart) */}
+      {/* Historial de Rachas (2-Season Progression Line Chart) */}
       {(subTab === 'history' || showInlineHistoryChart) && (
-        <PlayerStreakHistoryChart
-          players={players}
-          selectedPlayerId={
-            historyPlayerId ||
-            (streakEvalMode === 'auto'
-              ? filteredStreaks.find((s) => s.entityType === 'player')?.entityId
-              : topCustomRow?.playerId) ||
-            topCustomRow?.playerId ||
-            players[0]?.id ||
-            null
-          }
-          onSelectPlayerId={(pid) => setHistoryPlayerId(pid)}
-          onInspectPlayer={(pid) => onInspectEntity('player', pid)}
-        />
+        <div ref={chartSectionRef}>
+          <PlayerStreakHistoryChart
+            players={players}
+            players2027={players2027}
+            players2026={players2026}
+            selectedPlayerId={
+              historyPlayerId ||
+              (streakEvalMode === 'auto'
+                ? filteredStreaks.find((s) => s.entityType === 'player')?.entityId
+                : topCustomRow?.playerId) ||
+              topCustomRow?.playerId ||
+              players[0]?.id ||
+              null
+            }
+            onSelectPlayerId={(pid) => setHistoryPlayerId(pid)}
+            onInspectPlayer={(pid) => onInspectEntity('player', pid)}
+            preloadRequest={chartPreloadRequest}
+            onCloseInline={
+              subTab !== 'history'
+                ? () => setShowInlineHistoryChart(false)
+                : undefined
+            }
+          />
+        </div>
       )}
 
       {/* Row 3: Homogeneous Data Grid */}
@@ -2531,8 +1718,25 @@ export function StreaksConsistencyView({
                             </div>
 
                             <div className="text-right font-mono tabular-nums shrink-0">
-                              <div className="text-sm font-bold text-orange-400">
-                                {row.count} PJ seguidos
+                              <div className="inline-flex items-center justify-end gap-1.5">
+                                <span className="text-sm font-bold text-orange-400">
+                                  {row.count} PJ seguidos
+                                </span>
+                                <button
+                                  type="button"
+                                  title="Ver gráfico de historial de rachas"
+                                  aria-label="Ver gráfico de historial de rachas"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openPlayerChartWithRules(
+                                      row.playerId,
+                                      buildCustomRowPreloadRules()
+                                    );
+                                  }}
+                                  className="p-1 rounded-md bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/60 text-orange-400 hover:text-orange-300 transition-colors"
+                                >
+                                  <LineChart className="w-3.5 h-3.5" />
+                                </button>
                               </div>
                               <div className="text-[11px] text-emerald-400">
                                 Media{' '}
@@ -2593,77 +1797,92 @@ export function StreaksConsistencyView({
 
                 {/* Desktop Virtualized Table (md+) */}
                 <div
-                  className="hidden md:block overflow-x-auto max-h-[600px] overflow-y-auto"
+                  className="hidden md:block overflow-auto max-h-[600px]"
                   onScroll={(e) => setCustomScrollTop(e.currentTarget.scrollTop)}
                 >
                   <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60 sticky top-0 z-10">
-                      <th className="py-3 pl-4 pr-2 w-10 font-medium">Seg.</th>
-                      <th className="py-3 px-3 font-medium">Jugador</th>
-                      <th className="py-3 px-3 font-medium">
-                        <ColumnHelpHeader
-                          label={`Serie reciente (${activeMetric.shortLabel} ${operatorSymbol} ${formattedThreshold})`}
-                          helpKey={activeMetric.helpKey}
-                          align="left"
-                        />
-                      </th>
-                      <th className="py-3 px-3 font-medium text-right">
-                        <ColumnHelpHeader
-                          label="Partidos seguidos"
-                          helpKey="consecutiveStreak"
-                          sortable
-                          activeSort={customSort === 'count'}
-                          sortAsc={customAsc}
-                          onSort={() => toggleCustomSort('count')}
-                        />
-                      </th>
-                      <th className="py-3 px-3 font-medium text-right">
-                        <ColumnHelpHeader
-                          label="Media en racha"
-                          helpKey="windowAvg"
-                          sortable
-                          activeSort={customSort === 'streakAvg'}
-                          sortAsc={customAsc}
-                          onSort={() => toggleCustomSort('streakAvg')}
-                        />
-                      </th>
-                      <th className="py-3 px-3 font-medium text-right">
-                        <ColumnHelpHeader
-                          label={`Últ. ${windowSize} PJ`}
-                          helpKey="windowAvg"
-                          sortable
-                          activeSort={customSort === 'windowAvg'}
-                          sortAsc={customAsc}
-                          onSort={() => toggleCustomSort('windowAvg')}
-                        />
-                      </th>
-                      <th className="py-3 px-3 font-medium text-right">
-                        <ColumnHelpHeader
-                          label="Temporada actual"
-                          customHelp={CURRENT_SEASON_COLUMN_HELP}
-                          sortable
-                          activeSort={customSort === 'currentSeasonAvg'}
-                          sortAsc={customAsc}
-                          onSort={() => toggleCustomSort('currentSeasonAvg')}
-                        />
-                      </th>
-                      <th className="py-3 px-3 font-medium text-right">
-                        <ColumnHelpHeader
-                          label="Temporada pasada"
-                          customHelp={PREV_SEASON_COLUMN_HELP}
-                          sortable
-                          activeSort={customSort === 'prevSeasonAvg'}
-                          sortAsc={customAsc}
-                          onSort={() => toggleCustomSort('prevSeasonAvg')}
-                        />
-                      </th>
-                      <th className="py-3 pl-3 pr-4 font-medium text-right">
-                        <ColumnHelpHeader
-                          label="Último partido"
-                          helpKey="lastGamePerf"
-                        />
-                      </th>
+                  <thead className={STICKY_THEAD_CLASS}>
+                    <tr className="border-b border-[#1E293B] text-xs text-slate-400">
+                      <SortableTh
+                        label="Seg."
+                        align="left"
+                        compact
+                        active={customSort === 'watched'}
+                        asc={customAsc}
+                        onSort={() => toggleCustomSort('watched')}
+                        className="py-3 pl-4 pr-2 w-10"
+                      />
+                      <SortableTh
+                        label="Jugador"
+                        align="left"
+                        active={customSort === 'playerName'}
+                        asc={customAsc}
+                        onSort={() => toggleCustomSort('playerName')}
+                        className="py-3 px-3"
+                      />
+                      <SortableTh
+                        label={`Serie reciente (${activeMetric.shortLabel} ${operatorSymbol} ${formattedThreshold})`}
+                        helpKey={activeMetric.helpKey}
+                        align="left"
+                        active={customSort === 'recentSeries'}
+                        asc={customAsc}
+                        onSort={() => toggleCustomSort('recentSeries')}
+                        className="py-3 px-3"
+                      />
+                      <SortableTh
+                        label="Partidos seguidos"
+                        helpKey="consecutiveStreak"
+                        align="right"
+                        active={customSort === 'count'}
+                        asc={customAsc}
+                        onSort={() => toggleCustomSort('count')}
+                        className="py-3 px-3"
+                      />
+                      <SortableTh
+                        label="Media en racha"
+                        helpKey="windowAvg"
+                        align="right"
+                        active={customSort === 'streakAvg'}
+                        asc={customAsc}
+                        onSort={() => toggleCustomSort('streakAvg')}
+                        className="py-3 px-3"
+                      />
+                      <SortableTh
+                        label={`Últ. ${windowSize} PJ`}
+                        helpKey="windowAvg"
+                        align="right"
+                        active={customSort === 'windowAvg'}
+                        asc={customAsc}
+                        onSort={() => toggleCustomSort('windowAvg')}
+                        className="py-3 px-3"
+                      />
+                      <SortableTh
+                        label="Temporada actual"
+                        customHelp={CURRENT_SEASON_COLUMN_HELP}
+                        align="right"
+                        active={customSort === 'currentSeasonAvg'}
+                        asc={customAsc}
+                        onSort={() => toggleCustomSort('currentSeasonAvg')}
+                        className="py-3 px-3"
+                      />
+                      <SortableTh
+                        label="Temporada pasada"
+                        customHelp={PREV_SEASON_COLUMN_HELP}
+                        align="right"
+                        active={customSort === 'prevSeasonAvg'}
+                        asc={customAsc}
+                        onSort={() => toggleCustomSort('prevSeasonAvg')}
+                        className="py-3 px-3"
+                      />
+                      <SortableTh
+                        label="Último partido"
+                        helpKey="lastGamePerf"
+                        align="right"
+                        active={customSort === 'lastGameVal'}
+                        asc={customAsc}
+                        onSort={() => toggleCustomSort('lastGameVal')}
+                        className="py-3 pl-3 pr-4"
+                      />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#1E293B] text-sm">
@@ -2825,15 +2044,18 @@ export function StreaksConsistencyView({
                               </div>
                               <button
                                 type="button"
-                                title="Ver evolución últimos 10 partidos en el gráfico"
+                                title="Ver gráfico de historial de rachas"
+                                aria-label="Ver gráfico de historial de rachas"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setHistoryPlayerId(row.playerId);
-                                  setShowInlineHistoryChart(true);
+                                  openPlayerChartWithRules(
+                                    row.playerId,
+                                    buildCustomRowPreloadRules()
+                                  );
                                 }}
-                                className="px-2 py-1 rounded bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/50 text-[11px] font-sans font-medium text-orange-300 hover:text-orange-200 transition-colors"
+                                className="p-1.5 rounded-md bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/60 text-orange-400 hover:text-orange-300 transition-colors"
                               >
-                                10 PJ
+                                <LineChart className="w-3.5 h-3.5" />
                               </button>
                             </div>
                           </td>
@@ -2857,7 +2079,7 @@ export function StreaksConsistencyView({
                 partidos seguidos con la combinación de filtros actual.
               </p>
               <p className="mt-1 text-xs text-slate-400">
-                Baja el corte de &ldquo;Partidos seguidos en racha&rdquo; en los filtros superiores o usa el &ldquo;Buscador a medida (38 ratios)&rdquo;.
+                Baja el corte de &ldquo;Partidos seguidos en racha&rdquo; en los filtros superiores o usa el &ldquo;Buscador a medida ({STREAK_METRIC_OPTIONS.length} métricas)&rdquo;.
               </p>
             </div>
           ) : (
@@ -2950,8 +2172,26 @@ export function StreaksConsistencyView({
                           </div>
 
                           <div className="text-right font-mono tabular-nums shrink-0">
-                            <div className="text-sm font-bold text-orange-400">
-                              {st.count} PJ seguidos
+                            <div className="inline-flex items-center justify-end gap-1.5">
+                              <span className="text-sm font-bold text-orange-400">
+                                {st.count} PJ seguidos
+                              </span>
+                              {st.entityType === 'player' && (
+                                <button
+                                  type="button"
+                                  title="Ver gráfico de historial de rachas"
+                                  aria-label="Ver gráfico de historial de rachas"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openPlayerChartWithRules(st.entityId, [
+                                      resolveAutoStreakPreload(st),
+                                    ]);
+                                  }}
+                                  className="p-1 rounded-md bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/60 text-orange-400 hover:text-orange-300 transition-colors"
+                                >
+                                  <LineChart className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </div>
                             <div className="text-[11px] text-slate-200">
                               Media {st.windowAvgDuringStreak.toFixed(1)}
@@ -2986,75 +2226,90 @@ export function StreaksConsistencyView({
               </div>
 
               {/* Desktop Auto-Streaks Table (md+) */}
-              <div className="hidden md:block overflow-x-auto">
+              <div className="hidden md:block overflow-auto max-h-[68vh]">
                 <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
-                    <th className="py-3 pl-4 pr-2 w-10 font-medium">Seg.</th>
-                    <th className="py-3 px-3 font-medium">Protagonista</th>
-                    <th className="py-3 px-3 font-medium">
-                      <ColumnHelpHeader
-                        label="Qué lleva haciendo seguido"
-                        helpKey="consecutiveStreak"
-                        align="left"
-                      />
-                    </th>
-                    <th className="py-3 px-3 font-medium text-right">
-                      <ColumnHelpHeader
-                        label="Partidos seguidos"
-                        helpKey="consecutiveStreak"
-                        sortable
-                        activeSort={autoSort === 'count'}
-                        sortAsc={autoAsc}
-                        onSort={() => toggleAutoSort('count')}
-                      />
-                    </th>
-                    <th className="py-3 px-3 font-medium text-right">
-                      <ColumnHelpHeader
-                        label="Media en racha"
-                        helpKey="windowAvg"
-                        sortable
-                        activeSort={autoSort === 'windowAvgDuringStreak'}
-                        sortAsc={autoAsc}
-                        onSort={() => toggleAutoSort('windowAvgDuringStreak')}
-                      />
-                    </th>
-                    <th className="py-3 px-3 font-medium text-right">
-                      <ColumnHelpHeader
-                        label={`Últ. ${windowSize} PJ vs Base`}
-                        helpKey="windowAvg"
-                        sortable
-                        activeSort={autoSort === 'windowDeltaVsSeason'}
-                        sortAsc={autoAsc}
-                        onSort={() => toggleAutoSort('windowDeltaVsSeason')}
-                      />
-                    </th>
-                    <th className="py-3 px-3 font-medium text-right">
-                      <ColumnHelpHeader
-                        label="Temporada actual"
-                        customHelp={CURRENT_SEASON_COLUMN_HELP}
-                        sortable
-                        activeSort={autoSort === 'currentSeasonAvg'}
-                        sortAsc={autoAsc}
-                        onSort={() => toggleAutoSort('currentSeasonAvg')}
-                      />
-                    </th>
-                    <th className="py-3 px-3 font-medium text-right">
-                      <ColumnHelpHeader
-                        label="Temporada pasada"
-                        customHelp={PREV_SEASON_COLUMN_HELP}
-                        sortable
-                        activeSort={autoSort === 'prevSeasonAvg'}
-                        sortAsc={autoAsc}
-                        onSort={() => toggleAutoSort('prevSeasonAvg')}
-                      />
-                    </th>
-                    <th className="py-3 pl-3 pr-4 font-medium text-right">
-                      <ColumnHelpHeader
-                        label="Último partido"
-                        helpKey="lastGamePerf"
-                      />
-                    </th>
+                <thead className={STICKY_THEAD_CLASS}>
+                  <tr className="border-b border-[#1E293B] text-xs text-slate-400">
+                    <SortableTh
+                      label="Seg."
+                      align="left"
+                      compact
+                      active={autoSort === 'watched'}
+                      asc={autoAsc}
+                      onSort={() => toggleAutoSort('watched')}
+                      className="py-3 pl-4 pr-2 w-10"
+                    />
+                    <SortableTh
+                      label="Protagonista"
+                      align="left"
+                      active={autoSort === 'entityName'}
+                      asc={autoAsc}
+                      onSort={() => toggleAutoSort('entityName')}
+                      className="py-3 px-3"
+                    />
+                    <SortableTh
+                      label="Qué lleva haciendo seguido"
+                      helpKey="consecutiveStreak"
+                      align="left"
+                      active={autoSort === 'thresholdLabel'}
+                      asc={autoAsc}
+                      onSort={() => toggleAutoSort('thresholdLabel')}
+                      className="py-3 px-3"
+                    />
+                    <SortableTh
+                      label="Partidos seguidos"
+                      helpKey="consecutiveStreak"
+                      align="right"
+                      active={autoSort === 'count'}
+                      asc={autoAsc}
+                      onSort={() => toggleAutoSort('count')}
+                      className="py-3 px-3"
+                    />
+                    <SortableTh
+                      label="Media en racha"
+                      helpKey="windowAvg"
+                      align="right"
+                      active={autoSort === 'windowAvgDuringStreak'}
+                      asc={autoAsc}
+                      onSort={() => toggleAutoSort('windowAvgDuringStreak')}
+                      className="py-3 px-3"
+                    />
+                    <SortableTh
+                      label={`Últ. ${windowSize} PJ vs Base`}
+                      helpKey="windowAvg"
+                      align="right"
+                      active={autoSort === 'windowDeltaVsSeason'}
+                      asc={autoAsc}
+                      onSort={() => toggleAutoSort('windowDeltaVsSeason')}
+                      className="py-3 px-3"
+                    />
+                    <SortableTh
+                      label="Temporada actual"
+                      customHelp={CURRENT_SEASON_COLUMN_HELP}
+                      align="right"
+                      active={autoSort === 'currentSeasonAvg'}
+                      asc={autoAsc}
+                      onSort={() => toggleAutoSort('currentSeasonAvg')}
+                      className="py-3 px-3"
+                    />
+                    <SortableTh
+                      label="Temporada pasada"
+                      customHelp={PREV_SEASON_COLUMN_HELP}
+                      align="right"
+                      active={autoSort === 'prevSeasonAvg'}
+                      asc={autoAsc}
+                      onSort={() => toggleAutoSort('prevSeasonAvg')}
+                      className="py-3 px-3"
+                    />
+                    <SortableTh
+                      label="Último partido"
+                      helpKey="lastGamePerf"
+                      align="right"
+                      active={autoSort === 'lastGameDate'}
+                      asc={autoAsc}
+                      onSort={() => toggleAutoSort('lastGameDate')}
+                      className="py-3 pl-3 pr-4"
+                    />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#1E293B] text-sm">
@@ -3198,15 +2453,17 @@ export function StreaksConsistencyView({
                             {st.entityType === 'player' && (
                               <button
                                 type="button"
-                                title="Ver evolución últimos 10 partidos en el gráfico"
+                                title="Ver gráfico de historial de rachas"
+                                aria-label="Ver gráfico de historial de rachas"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setHistoryPlayerId(st.entityId);
-                                  setShowInlineHistoryChart(true);
+                                  openPlayerChartWithRules(st.entityId, [
+                                    resolveAutoStreakPreload(st),
+                                  ]);
                                 }}
-                                className="px-2 py-1 rounded bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/50 text-[11px] font-sans font-medium text-orange-300 hover:text-orange-200 transition-colors"
+                                className="p-1.5 rounded-md bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/60 text-orange-400 hover:text-orange-300 transition-colors"
                               >
-                                10 PJ
+                                <LineChart className="w-3.5 h-3.5" />
                               </button>
                             )}
                           </div>
@@ -3302,8 +2559,32 @@ export function StreaksConsistencyView({
                         </div>
 
                         <div className="text-right shrink-0">
-                          <div className="font-mono tabular-nums text-sm font-bold text-orange-400">
-                            {row.consistencyScore}/100
+                          <div className="inline-flex items-center justify-end gap-1.5">
+                            <span className="font-mono tabular-nums text-sm font-bold text-orange-400">
+                              {row.consistencyScore}/100
+                            </span>
+                            <button
+                              type="button"
+                              title="Ver gráfico de historial de rachas"
+                              aria-label="Ver gráfico de historial de rachas"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openPlayerChartWithRules(row.entityId, [
+                                  {
+                                    metricId: 'points',
+                                    operator: 'gte',
+                                    threshold: Math.max(
+                                      5,
+                                      Math.round(row.ptsAvg * 0.85)
+                                    ),
+                                    isPositive: true,
+                                  },
+                                ]);
+                              }}
+                              className="p-1 rounded-md bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/60 text-orange-400 hover:text-orange-300 transition-colors"
+                            >
+                              <LineChart className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                           <div
                             className={`text-[11px] font-medium ${
@@ -3370,85 +2651,100 @@ export function StreaksConsistencyView({
             </div>
 
             {/* Desktop Consistency Table (md+) */}
-            <div className="hidden md:block overflow-x-auto">
+            <div className="hidden md:block overflow-auto max-h-[68vh]">
               <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
-                  <th className="py-3 pl-4 pr-2 w-10 font-medium">Seg.</th>
-                  <th className="py-3 px-3 font-medium">Jugador</th>
-                  <th className="py-3 px-3 font-medium">
-                    <ColumnHelpHeader
-                      label="Fiabilidad y tendencia"
-                      helpKey="consistencyScore"
-                      align="left"
-                    />
-                  </th>
-                  <th className="py-3 px-3 font-medium text-right">
-                    <ColumnHelpHeader
-                      label="Nota Regularidad"
-                      helpKey="consistencyScore"
-                      sortable
-                      activeSort={consSort === 'consistencyScore'}
-                      sortAsc={consAsc}
-                      onSort={() => toggleConsSort('consistencyScore')}
-                    />
-                  </th>
-                  <th className="py-3 px-3 font-medium text-right">
-                    <ColumnHelpHeader
-                      label="Puntos Temporada"
-                      helpKey="ptsBase"
-                      sortable
-                      activeSort={consSort === 'ptsAvg'}
-                      sortAsc={consAsc}
-                      onSort={() => toggleConsSort('ptsAvg')}
-                    />
-                  </th>
-                  <th className="py-3 px-3 font-medium text-right">
-                    <ColumnHelpHeader
-                      label={`Últ. ${windowSize} PJ vs Temp.`}
-                      helpKey="windowAvg"
-                      sortable
-                      activeSort={consSort === 'ptsWindowDelta'}
-                      sortAsc={consAsc}
-                      onSort={() => toggleConsSort('ptsWindowDelta')}
-                    />
-                  </th>
+              <thead className={STICKY_THEAD_CLASS}>
+                <tr className="border-b border-[#1E293B] text-xs text-slate-400">
+                  <SortableTh
+                    label="Seg."
+                    align="left"
+                    compact
+                    active={consSort === 'watched'}
+                    asc={consAsc}
+                    onSort={() => toggleConsSort('watched')}
+                    className="py-3 pl-4 pr-2 w-10"
+                  />
+                  <SortableTh
+                    label="Jugador"
+                    align="left"
+                    active={consSort === 'entityName'}
+                    asc={consAsc}
+                    onSort={() => toggleConsSort('entityName')}
+                    className="py-3 px-3"
+                  />
+                  <SortableTh
+                    label="Fiabilidad y tendencia"
+                    helpKey="consistencyScore"
+                    align="left"
+                    active={consSort === 'profileLabel'}
+                    asc={consAsc}
+                    onSort={() => toggleConsSort('profileLabel')}
+                    className="py-3 px-3"
+                  />
+                  <SortableTh
+                    label="Nota Regularidad"
+                    helpKey="consistencyScore"
+                    align="right"
+                    active={consSort === 'consistencyScore'}
+                    asc={consAsc}
+                    onSort={() => toggleConsSort('consistencyScore')}
+                    className="py-3 px-3"
+                  />
+                  <SortableTh
+                    label="Puntos Temporada"
+                    helpKey="ptsBase"
+                    align="right"
+                    active={consSort === 'ptsAvg'}
+                    asc={consAsc}
+                    onSort={() => toggleConsSort('ptsAvg')}
+                    className="py-3 px-3"
+                  />
+                  <SortableTh
+                    label={`Últ. ${windowSize} PJ vs Temp.`}
+                    helpKey="windowAvg"
+                    align="right"
+                    active={consSort === 'ptsWindowDelta'}
+                    asc={consAsc}
+                    onSort={() => toggleConsSort('ptsWindowDelta')}
+                    className="py-3 px-3"
+                  />
                   {experienceMode === 'advanced' && (
-                    <th className="py-3 px-3 font-medium text-right">
-                      <ColumnHelpHeader
-                        label="Desv. ±σ"
-                        helpKey="ptsStdDev"
-                        sortable
-                        activeSort={consSort === 'ptsStdDev'}
-                        sortAsc={consAsc}
-                        onSort={() => toggleConsSort('ptsStdDev')}
-                      />
-                    </th>
+                    <SortableTh
+                      label="Desv. ±σ"
+                      helpKey="ptsStdDev"
+                      align="right"
+                      active={consSort === 'ptsStdDev'}
+                      asc={consAsc}
+                      onSort={() => toggleConsSort('ptsStdDev')}
+                      className="py-3 px-3"
+                    />
                   )}
-                  <th className="py-3 px-3 font-medium text-right">
-                    <ColumnHelpHeader
-                      label={
-                        experienceMode === 'simple'
-                          ? 'Noche normal (Suelo – Techo)'
-                          : 'Suelo – Techo (1σ PTS)'
-                      }
-                      helpKey="floorCeiling"
-                    />
-                  </th>
-                  <th className="py-3 pl-3 pr-4 font-medium text-right">
-                    <ColumnHelpHeader
-                      label={
-                        experienceMode === 'simple'
-                          ? 'Noches que cumple'
-                          : 'Cumple ≥85% media'
-                      }
-                      helpKey="hitRate85"
-                      sortable
-                      activeSort={consSort === 'hitRate20Pts'}
-                      sortAsc={consAsc}
-                      onSort={() => toggleConsSort('hitRate20Pts')}
-                    />
-                  </th>
+                  <SortableTh
+                    label={
+                      experienceMode === 'simple'
+                        ? 'Noche normal (Suelo – Techo)'
+                        : 'Suelo – Techo (1σ PTS)'
+                    }
+                    helpKey="floorCeiling"
+                    align="right"
+                    active={consSort === 'floorCeiling'}
+                    asc={consAsc}
+                    onSort={() => toggleConsSort('floorCeiling')}
+                    className="py-3 px-3"
+                  />
+                  <SortableTh
+                    label={
+                      experienceMode === 'simple'
+                        ? 'Noches que cumple'
+                        : 'Cumple ≥85% media'
+                    }
+                    helpKey="hitRate85"
+                    align="right"
+                    active={consSort === 'hitRate20Pts'}
+                    asc={consAsc}
+                    onSort={() => toggleConsSort('hitRate20Pts')}
+                    className="py-3 pl-3 pr-4"
+                  />
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#1E293B] text-sm">
@@ -3564,15 +2860,25 @@ export function StreaksConsistencyView({
                           <span>{row.hitRate20Pts}% de partidos</span>
                           <button
                             type="button"
-                            title="Ver evolución últimos 10 partidos en el gráfico"
+                            title="Ver gráfico de historial de rachas"
+                            aria-label="Ver gráfico de historial de rachas"
                             onClick={(e) => {
                               e.stopPropagation();
-                              setHistoryPlayerId(row.entityId);
-                              setShowInlineHistoryChart(true);
+                              openPlayerChartWithRules(row.entityId, [
+                                {
+                                  metricId: 'points',
+                                  operator: 'gte',
+                                  threshold: Math.max(
+                                    5,
+                                    Math.round(row.ptsAvg * 0.85)
+                                  ),
+                                  isPositive: true,
+                                },
+                              ]);
                             }}
-                            className="px-2 py-1 rounded bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/50 text-[11px] font-sans font-medium text-orange-300 hover:text-orange-200 transition-colors"
+                            className="p-1.5 rounded-md bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/60 text-orange-400 hover:text-orange-300 transition-colors"
                           >
-                            10 PJ
+                            <LineChart className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       </td>

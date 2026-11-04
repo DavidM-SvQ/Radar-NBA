@@ -23,7 +23,25 @@ import type {
   SeasonAwardsPayload,
 } from '../types/nba';
 import { formatSigned, normalizeSearchText } from '../utils/analytics';
+import { STICKY_THEAD_CLASS, sortRows, useTableSort } from '../utils/tableSort';
+import { SortableTh } from './MetricUiHelpers';
 import { PlayerAvatar, TeamLogo } from './NbaVisuals';
+
+type AwardTableSortKey =
+  | 'rank'
+  | 'player'
+  | 'awardScore'
+  | 'metric_0'
+  | 'metric_1'
+  | 'metric_2'
+  | 'deviation'
+  | 'eligibility';
+
+function parseMetricDisplayValue(raw: string | undefined): number {
+  if (!raw) return 0;
+  const match = raw.replace(',', '.').match(/[+-]?\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : 0;
+}
 
 interface SeasonAwardsViewProps {
   data: SeasonAwardsPayload | null;
@@ -259,6 +277,58 @@ export function SeasonAwardsView({
   }, [data, matchesFilters, minProjectedGames]);
 
   const isCompletedSeasonView = seasonScope === '2026' || (data?.avgTeamGamesPlayed ?? 0) >= 80;
+
+  const {
+    sortKey: awardSortKey,
+    sortAsc: awardSortAsc,
+    toggleSort: toggleAwardSort,
+  } = useTableSort<AwardTableSortKey>('rank', true, ['rank', 'player']);
+
+  const sortedTableRows = useMemo(() => {
+    const indexed = individualRows.map((cand, idx) => ({
+      cand,
+      baseRank: idx + 1,
+    }));
+    if (!awardSortKey) return indexed;
+    return sortRows(
+      indexed,
+      ({ cand, baseRank }) => {
+        const metrics =
+          experienceMode === 'simple'
+            ? cand.metricsSimple
+            : cand.metricsAdvanced;
+        switch (awardSortKey) {
+          case 'rank':
+            return baseRank;
+          case 'player':
+            return cand.playerName;
+          case 'awardScore':
+            return cand.awardScore;
+          case 'metric_0':
+            return parseMetricDisplayValue(metrics[0]?.valueDisplay);
+          case 'metric_1':
+            return parseMetricDisplayValue(metrics[1]?.valueDisplay);
+          case 'metric_2':
+            return parseMetricDisplayValue(metrics[2]?.valueDisplay);
+          case 'deviation':
+            return cand.recentPtsDelta * 100 + cand.activeStreakCount;
+          case 'eligibility':
+            return isCompletedSeasonView
+              ? cand.gamesPlayed
+              : cand.projectedGames82 * 100 + cand.gamesPlayed;
+          default:
+            return baseRank;
+        }
+      },
+      awardSortAsc
+    );
+  }, [
+    individualRows,
+    awardSortKey,
+    awardSortAsc,
+    experienceMode,
+    isCompletedSeasonView,
+  ]);
 
   return (
     <div className="space-y-4 sm:space-y-5">
@@ -747,38 +817,69 @@ export function SeasonAwardsView({
                   </span>
                 </div>
 
-                <div className="overflow-x-auto">
+                <div className="overflow-auto max-h-[68vh]">
                   <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="border-b border-[#1E293B] text-[11px] font-medium text-slate-400 bg-[#0B1120]/55">
-                        <th className="py-2.5 pl-4 pr-2 w-10">#</th>
-                        <th className="py-2.5 px-3">Jugador y equipo</th>
-                        <th className="py-2.5 px-3 text-right whitespace-nowrap">
-                          Índice Radar
-                        </th>
+                    <thead className={STICKY_THEAD_CLASS}>
+                      <tr className="border-b border-[#1E293B] text-[11px] font-medium text-slate-400">
+                        <SortableTh
+                          label="#"
+                          align="left"
+                          active={awardSortKey === 'rank'}
+                          asc={awardSortAsc}
+                          onSort={() => toggleAwardSort('rank')}
+                          className="py-2.5 pl-4 pr-2 w-10"
+                        />
+                        <SortableTh
+                          label="Jugador y equipo"
+                          align="left"
+                          active={awardSortKey === 'player'}
+                          asc={awardSortAsc}
+                          onSort={() => toggleAwardSort('player')}
+                        />
+                        <SortableTh
+                          label="Índice Radar"
+                          align="right"
+                          active={awardSortKey === 'awardScore'}
+                          asc={awardSortAsc}
+                          onSort={() => toggleAwardSort('awardScore')}
+                        />
                         {(experienceMode === 'simple'
                           ? individualRows[0]?.metricsSimple
                           : individualRows[0]?.metricsAdvanced
                         )
                           ?.slice(0, 3)
-                          .map((col) => (
-                            <th
-                              key={col.key}
-                              className="py-2.5 px-3 text-right whitespace-nowrap"
-                            >
-                              {col.label}
-                            </th>
-                          ))}
-                        <th className="py-2.5 px-3 whitespace-nowrap">
-                          Desviación (Últ. 5) y Racha
-                        </th>
-                        <th className="py-2.5 pl-3 pr-4 text-right whitespace-nowrap">
-                          {isCompletedSeasonView ? 'PJ Jugados' : 'PJ · Proy. 82'}
-                        </th>
+                          .map((col, colIdx) => {
+                            const mKey = `metric_${colIdx}` as AwardTableSortKey;
+                            return (
+                              <SortableTh
+                                key={col.key}
+                                label={col.label}
+                                align="right"
+                                active={awardSortKey === mKey}
+                                asc={awardSortAsc}
+                                onSort={() => toggleAwardSort(mKey)}
+                              />
+                            );
+                          })}
+                        <SortableTh
+                          label="Desviación (Últ. 5) y Racha"
+                          align="left"
+                          active={awardSortKey === 'deviation'}
+                          asc={awardSortAsc}
+                          onSort={() => toggleAwardSort('deviation')}
+                        />
+                        <SortableTh
+                          label={isCompletedSeasonView ? 'PJ Jugados' : 'PJ · Proy. 82'}
+                          align="right"
+                          active={awardSortKey === 'eligibility'}
+                          asc={awardSortAsc}
+                          onSort={() => toggleAwardSort('eligibility')}
+                          className="py-2.5 pl-3 pr-4"
+                        />
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#1E293B] text-xs">
-                      {individualRows.map((cand, idx) => {
+                      {sortedTableRows.map(({ cand, baseRank }) => {
                         const isEligible = cand.projectedGames82 >= minProjectedGames;
                         const rowMetrics =
                           experienceMode === 'simple'
@@ -815,10 +916,10 @@ export function SeasonAwardsView({
                                 </button>
                                 <span
                                   className={
-                                    idx < 3 ? 'text-orange-400 font-semibold' : ''
+                                    baseRank <= 3 ? 'text-orange-400 font-semibold' : ''
                                   }
                                 >
-                                  {idx + 1}
+                                  {baseRank}
                                 </span>
                               </div>
                             </td>

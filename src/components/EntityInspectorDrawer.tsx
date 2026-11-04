@@ -57,11 +57,64 @@ import {
   type PlayerSamplePreset,
 } from '../utils/playerInspectorAnalytics';
 import {
-  ColumnHelpHeader,
+  STICKY_THEAD_CLASS,
+  sortRows,
+  useTableSort,
+  type SortPrimitive,
+} from '../utils/tableSort';
+import {
   MetricInfoTooltip,
   NbaComparisonBar,
+  SortableTh,
 } from './MetricUiHelpers';
 import { PlayerAvatar, TeamLogo } from './NbaVisuals';
+
+type TeamLogSortKey =
+  | 'date'
+  | 'matchup'
+  | 'pointsFor'
+  | 'differential'
+  | 'oreb'
+  | 'fg3m'
+  | 'offRtg'
+  | 'defRtg'
+  | 'netRtg'
+  | 'pace'
+  | 'efgPct';
+
+function resolvePlayerLogGameSortValue(
+  g: PlayerGameLog,
+  key: string
+): SortPrimitive {
+  switch (key) {
+    case 'date':
+      return g.date;
+    case 'opponent':
+      return `${g.opponentAbbr} ${g.result}`;
+    case 'fg_split':
+      return g.fgm * 100 + g.fga;
+    case 'fg2_split':
+      return (
+        Math.max(0, g.fgm - g.fg3m) * 100 + Math.max(0, g.fga - g.fg3a)
+      );
+    case 'fg3_split':
+      return g.fg3m * 100 + g.fg3a;
+    case 'ft_split':
+      return g.ftm * 100 + g.fta;
+    default: {
+      const mDef = PLAYER_METRICS_MAP[key];
+      if (mDef) return mDef.gameValue(g);
+      const colDef = PLAYER_LOG_COLUMNS_MAP[key];
+      if (colDef?.numericForTone) return colDef.numericForTone(g);
+      if (colDef) {
+        const rendered = colDef.renderCell(g);
+        const match = rendered.replace(',', '.').match(/[+-]?\d+(?:\.\d+)?/);
+        return match ? Number(match[0]) : rendered;
+      }
+      return g.date;
+    }
+  }
+}
 
 const STORAGE_EXTRA_KPIS_KEY = 'radarnba_inspector_extra_kpis_v1';
 const STORAGE_EXTRA_ADV_KPIS_KEY = 'radarnba_inspector_extra_adv_kpis_v1';
@@ -385,6 +438,18 @@ export function EntityInspectorDrawer({
   const [roster, setRoster] = useState<RosterPlayerItem[]>([]);
   const [loadingRoster, setLoadingRoster] = useState(false);
   const [loadingPlayerId, setLoadingPlayerId] = useState<string | null>(null);
+
+  const {
+    sortKey: pLogSortKey,
+    sortAsc: pLogSortAsc,
+    toggleSort: togglePLogSort,
+  } = useTableSort<string>('date', false, ['opponent', 'turnovers', 'fouls', 'tovRatioEst']);
+
+  const {
+    sortKey: tLogSortKey,
+    sortAsc: tLogSortAsc,
+    toggleSort: toggleTLogSort,
+  } = useTableSort<TeamLogSortKey>('date', false, ['matchup', 'defRtg']);
 
   useEffect(() => {
     try {
@@ -1311,9 +1376,60 @@ export function EntityInspectorDrawer({
     .map((k) => PLAYER_LOG_COLUMNS_MAP[k])
     .filter(Boolean);
 
+  const recentPlayerGameKeySet = new Set(
+    sampleGames.slice(0, windowSize).map((g) => `${g.eventId}-${g.date}`)
+  );
+
+  const sortedPlayerLogGames = pLogSortKey
+    ? sortRows(
+        sampleGames,
+        (g) => resolvePlayerLogGameSortValue(g, pLogSortKey),
+        pLogSortAsc
+      )
+    : sampleGames;
+
   const visiblePlayerLogGames = showAllLogRows
-    ? sampleGames
-    : sampleGames.slice(0, 35);
+    ? sortedPlayerLogGames
+    : sortedPlayerLogGames.slice(0, 35);
+
+  const baseTeamGames = team ? team.games.slice(0, 28) : [];
+  const recentTeamEventIdSet = new Set(
+    baseTeamGames.slice(0, windowSize).map((g) => g.eventId)
+  );
+  const sortedTeamLogGames = tLogSortKey
+    ? sortRows(
+        baseTeamGames,
+        (g) => {
+          switch (tLogSortKey) {
+            case 'date':
+              return g.date;
+            case 'matchup':
+              return `${g.opponentAbbr} ${g.result}`;
+            case 'pointsFor':
+              return g.pointsFor;
+            case 'differential':
+              return g.differential;
+            case 'oreb':
+              return g.oreb * 100 + g.reb;
+            case 'fg3m':
+              return g.fg3m * 100 + g.fg3a;
+            case 'offRtg':
+              return g.offRtg;
+            case 'defRtg':
+              return g.defRtg;
+            case 'netRtg':
+              return g.netRtg;
+            case 'pace':
+              return g.pace;
+            case 'efgPct':
+              return g.efgPct;
+            default:
+              return g.date;
+          }
+        },
+        tLogSortAsc
+      )
+    : baseTeamGames;
 
   const handleToggleLogColumn = (colKey: string) => {
     setSelectedLogCols((prev) => {
@@ -3062,35 +3178,49 @@ export function EntityInspectorDrawer({
                   </div>
                 )}
 
-                <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-x-auto">
+                <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-auto max-h-[56vh]">
                   {sampleGames.length === 0 ? (
                     <div className="p-6 text-center text-xs text-slate-400">
                       No hay partidos registrados para este filtro de muestra.
                     </div>
                   ) : (
                     <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="border-b border-[#1E293B] text-slate-400 bg-[#0B1120]/60">
-                          <th className="py-2.5 pl-3 pr-2 font-medium whitespace-nowrap">
-                            Fecha
-                          </th>
-                          <th className="py-2.5 px-2 font-medium whitespace-nowrap">
-                            Rival
-                          </th>
+                      <thead className={STICKY_THEAD_CLASS}>
+                        <tr className="border-b border-[#1E293B] text-slate-400">
+                          <SortableTh
+                            label="Fecha"
+                            align="left"
+                            compact
+                            active={pLogSortKey === 'date'}
+                            asc={pLogSortAsc}
+                            onSort={() => togglePLogSort('date')}
+                            className="py-2.5 pl-3 pr-2"
+                          />
+                          <SortableTh
+                            label="Rival"
+                            align="left"
+                            compact
+                            active={pLogSortKey === 'opponent'}
+                            asc={pLogSortAsc}
+                            onSort={() => togglePLogSort('opponent')}
+                            className="py-2.5 px-2"
+                          />
                           {activeLogColumnDefs.map((col, idx) => (
-                            <th
+                            <SortableTh
                               key={col.key}
-                              className={`py-2.5 font-medium text-right ${
+                              label={col.label}
+                              helpKey={col.helpKey}
+                              align="right"
+                              compact
+                              active={pLogSortKey === col.key}
+                              asc={pLogSortAsc}
+                              onSort={() => togglePLogSort(col.key)}
+                              className={`py-2.5 ${
                                 idx === activeLogColumnDefs.length - 1
                                   ? 'pl-2 pr-3'
                                   : 'px-2'
                               }`}
-                            >
-                              <ColumnHelpHeader
-                                label={col.label}
-                                helpKey={col.helpKey}
-                              />
-                            </th>
+                            />
                           ))}
                         </tr>
                       </thead>
@@ -3117,11 +3247,11 @@ export function EntityInspectorDrawer({
                           ))}
                         </tr>
 
-                        {visiblePlayerLogGames.map((g, idx) => (
+                        {visiblePlayerLogGames.map((g) => (
                           <tr
                             key={`${g.eventId}-${g.date}`}
                             className={
-                              idx < windowSize
+                              recentPlayerGameKeySet.has(`${g.eventId}-${g.date}`)
                                 ? 'bg-orange-500/[0.04] hover:bg-[#182338]/70'
                                 : 'hover:bg-[#182338]/70'
                             }
@@ -3543,78 +3673,133 @@ export function EntityInspectorDrawer({
                 </div>
 
                 {teamTab === 'games' ? (
-                  <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-x-auto">
+                  <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-auto max-h-[56vh]">
                     <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="border-b border-[#1E293B] text-slate-400 bg-[#0B1120]/60">
-                          <th className="py-2.5 pl-3 pr-2 font-medium">Fecha</th>
-                          <th className="py-2.5 px-2 font-medium">Partido</th>
+                      <thead className={STICKY_THEAD_CLASS}>
+                        <tr className="border-b border-[#1E293B] text-slate-400">
+                          <SortableTh
+                            label="Fecha"
+                            align="left"
+                            compact
+                            active={tLogSortKey === 'date'}
+                            asc={tLogSortAsc}
+                            onSort={() => toggleTLogSort('date')}
+                            className="py-2.5 pl-3 pr-2"
+                          />
+                          <SortableTh
+                            label="Partido"
+                            align="left"
+                            compact
+                            active={tLogSortKey === 'matchup'}
+                            asc={tLogSortAsc}
+                            onSort={() => toggleTLogSort('matchup')}
+                            className="py-2.5 px-2"
+                          />
                           {teamLogMode === 'basic' ? (
                             <>
-                              <th className="py-2.5 px-2 font-medium text-right">
-                                <ColumnHelpHeader
-                                  label="Marcador"
-                                  helpKey="avgPointsFor"
-                                />
-                              </th>
-                              <th className="py-2.5 px-2 font-medium text-right">
-                                <ColumnHelpHeader
-                                  label="Dif."
-                                  helpKey="differential"
-                                />
-                              </th>
-                              <th className="py-2.5 px-2 font-medium text-right">
-                                <ColumnHelpHeader
-                                  label="OR/REB"
-                                  helpKey="orebBase"
-                                />
-                              </th>
-                              <th className="py-2.5 pr-3 pl-2 font-medium text-right">
-                                <ColumnHelpHeader label="3PM" helpKey="fg3m" />
-                              </th>
+                              <SortableTh
+                                label="Marcador"
+                                helpKey="avgPointsFor"
+                                align="right"
+                                compact
+                                active={tLogSortKey === 'pointsFor'}
+                                asc={tLogSortAsc}
+                                onSort={() => toggleTLogSort('pointsFor')}
+                                className="py-2.5 px-2"
+                              />
+                              <SortableTh
+                                label="Dif."
+                                helpKey="differential"
+                                align="right"
+                                compact
+                                active={tLogSortKey === 'differential'}
+                                asc={tLogSortAsc}
+                                onSort={() => toggleTLogSort('differential')}
+                                className="py-2.5 px-2"
+                              />
+                              <SortableTh
+                                label="OR/REB"
+                                helpKey="orebBase"
+                                align="right"
+                                compact
+                                active={tLogSortKey === 'oreb'}
+                                asc={tLogSortAsc}
+                                onSort={() => toggleTLogSort('oreb')}
+                                className="py-2.5 px-2"
+                              />
+                              <SortableTh
+                                label="3PM"
+                                helpKey="fg3m"
+                                align="right"
+                                compact
+                                active={tLogSortKey === 'fg3m'}
+                                asc={tLogSortAsc}
+                                onSort={() => toggleTLogSort('fg3m')}
+                                className="py-2.5 pr-3 pl-2"
+                              />
                             </>
                           ) : (
                             <>
-                              <th className="py-2.5 px-2 font-medium text-right">
-                                <ColumnHelpHeader
-                                  label="OffRtg"
-                                  helpKey="offRtg"
-                                />
-                              </th>
-                              <th className="py-2.5 px-2 font-medium text-right">
-                                <ColumnHelpHeader
-                                  label="DefRtg"
-                                  helpKey="defRtg"
-                                />
-                              </th>
-                              <th className="py-2.5 px-2 font-medium text-right">
-                                <ColumnHelpHeader
-                                  label="NetRtg"
-                                  helpKey="netRtg"
-                                />
-                              </th>
-                              <th className="py-2.5 px-2 font-medium text-right">
-                                <ColumnHelpHeader
-                                  label="Pace"
-                                  helpKey="paceSimple"
-                                />
-                              </th>
-                              <th className="py-2.5 pr-3 pl-2 font-medium text-right">
-                                <ColumnHelpHeader
-                                  label="eFG%"
-                                  helpKey="efgPct"
-                                />
-                              </th>
+                              <SortableTh
+                                label="OffRtg"
+                                helpKey="offRtg"
+                                align="right"
+                                compact
+                                active={tLogSortKey === 'offRtg'}
+                                asc={tLogSortAsc}
+                                onSort={() => toggleTLogSort('offRtg')}
+                                className="py-2.5 px-2"
+                              />
+                              <SortableTh
+                                label="DefRtg"
+                                helpKey="defRtg"
+                                align="right"
+                                compact
+                                active={tLogSortKey === 'defRtg'}
+                                asc={tLogSortAsc}
+                                onSort={() => toggleTLogSort('defRtg')}
+                                className="py-2.5 px-2"
+                              />
+                              <SortableTh
+                                label="NetRtg"
+                                helpKey="netRtg"
+                                align="right"
+                                compact
+                                active={tLogSortKey === 'netRtg'}
+                                asc={tLogSortAsc}
+                                onSort={() => toggleTLogSort('netRtg')}
+                                className="py-2.5 px-2"
+                              />
+                              <SortableTh
+                                label="Pace"
+                                helpKey="paceSimple"
+                                align="right"
+                                compact
+                                active={tLogSortKey === 'pace'}
+                                asc={tLogSortAsc}
+                                onSort={() => toggleTLogSort('pace')}
+                                className="py-2.5 px-2"
+                              />
+                              <SortableTh
+                                label="eFG%"
+                                helpKey="efgPct"
+                                align="right"
+                                compact
+                                active={tLogSortKey === 'efgPct'}
+                                asc={tLogSortAsc}
+                                onSort={() => toggleTLogSort('efgPct')}
+                                className="py-2.5 pr-3 pl-2"
+                              />
                             </>
                           )}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#1E293B] font-mono tabular-nums">
-                        {team.games.slice(0, 28).map((g, idx) => (
+                        {sortedTeamLogGames.map((g) => (
                           <tr
                             key={g.eventId}
                             className={
-                              idx < windowSize
+                              recentTeamEventIdSet.has(g.eventId)
                                 ? 'bg-orange-500/[0.04]'
                                 : undefined
                             }

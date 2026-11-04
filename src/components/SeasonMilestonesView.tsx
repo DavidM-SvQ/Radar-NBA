@@ -8,7 +8,12 @@ import type {
   SingleGamePerformance,
 } from '../types/nba';
 import { formatShortDate, formatSigned, normalizeSearchText } from '../utils/analytics';
-import { ColumnHelpHeader, MetricInfoTooltip } from './MetricUiHelpers';
+import { MetricInfoTooltip, SortableTh } from './MetricUiHelpers';
+import {
+  STICKY_THEAD_CLASS,
+  sortRows,
+  useTableSort,
+} from '../utils/tableSort';
 import { EntityBadge, PlayerAvatar, TeamLogo } from './NbaVisuals';
 
 interface SeasonMilestonesViewProps {
@@ -53,6 +58,30 @@ export function SeasonMilestonesView({
     'all' | 'averages' | 'totals'
   >('all');
   const [query, setQuery] = useState('');
+
+  const {
+    sortKey: macroSortKey,
+    sortAsc: macroSortAsc,
+    toggleSort: toggleMacroSort,
+  } = useTableSort<'label' | 'cur' | 'prev' | 'diff' | 'pct'>(null, false, [
+    'label',
+  ]);
+
+  const {
+    sortKey: sgSortKey,
+    sortAsc: sgSortAsc,
+    toggleSort: toggleSgSort,
+  } = useTableSort<'metric' | 'cur' | 'prev' | 'comp'>(null, false, [
+    'metric',
+  ]);
+
+  const {
+    sortKey: leadSortKey,
+    sortAsc: leadSortAsc,
+    toggleSort: toggleLeadSort,
+  } = useTableSort<'metric' | 'cur' | 'prev' | 'diff'>(null, false, [
+    'metric',
+  ]);
 
   useEffect(() => {
     setGlobalLayer(experienceMode === 'simple' ? 'basic' : 'all');
@@ -825,7 +854,7 @@ export function SeasonMilestonesView({
           </div>
 
           {/* Desktop Global Macro Table (md+, fixed layout so everything fits horizontally) */}
-          <div className="hidden md:block">
+          <div className="hidden md:block overflow-auto max-h-[62vh]">
             <table className="w-full table-fixed text-left border-collapse">
               <colgroup>
                 <col className={bothColsVisible ? 'w-[44%]' : 'w-[70%]'} />
@@ -842,72 +871,112 @@ export function SeasonMilestonesView({
                   </>
                 )}
               </colgroup>
-              <thead>
-                <tr className="border-b border-[#1E293B] text-[11px] text-slate-400 bg-[#0F172A]/60">
-                  <th className="py-2 pl-3 pr-2 font-medium">
-                    <ColumnHelpHeader
-                      label="Indicador Global NBA"
-                      align="left"
+              <thead className={STICKY_THEAD_CLASS}>
+                <tr className="text-[11px] text-slate-400">
+                  <SortableTh
+                    label="Indicador Global NBA"
+                    active={macroSortKey === 'label'}
+                    asc={macroSortAsc}
+                    onSort={() => toggleMacroSort('label')}
+                    align="left"
+                    className="py-2.5 pl-3 pr-2"
+                    customHelp={{
+                      title: 'Promedios globales de toda la liga',
+                      simpleDesc:
+                        'Mide el estilo de juego medio sumando todos los partidos disputados por los 30 equipos de la NBA.',
+                      calculation:
+                        'Pasa el ratón sobre el icono (i) junto a cada métrica para ver su significado y fórmula exacta.',
+                    }}
+                  />
+                  {showCurSeasonCol && (
+                    <SortableTh
+                      label="Temp. 2026-27"
+                      active={macroSortKey === 'cur'}
+                      asc={macroSortAsc}
+                      onSort={() => toggleMacroSort('cur')}
+                      align="right"
+                      className="py-2.5 px-2.5"
                       customHelp={{
-                        title: 'Promedios globales de toda la liga',
+                        title: 'Promedio actual 2026-27',
                         simpleDesc:
-                          'Mide el estilo de juego medio sumando todos los partidos disputados por los 30 equipos de la NBA.',
+                          'Dato medio registrado en lo que llevamos de temporada actual.',
                         calculation:
-                          'Pasa el ratón sobre el icono (i) junto a cada métrica para ver su significado y fórmula exacta.',
+                          'Agregación oficial de todos los partidos de liga disputados en 2026-27.',
                       }}
                     />
-                  </th>
-                  {showCurSeasonCol && (
-                    <th className="py-2 px-2.5 font-medium text-right">
-                      <ColumnHelpHeader
-                        label="Temp. 2026-27"
-                        customHelp={{
-                          title: 'Promedio actual 2026-27',
-                          simpleDesc:
-                            'Dato medio registrado en lo que llevamos de temporada actual.',
-                          calculation:
-                            'Agregación oficial de todos los partidos de liga disputados en 2026-27.',
-                        }}
-                      />
-                    </th>
                   )}
                   {showPrevSeasonCol && (
-                    <th className="py-2 px-2.5 font-medium text-right">
-                      <ColumnHelpHeader
-                        label={refShortHeader}
-                        customHelp={{
-                          title: 'Temporada pasada de referencia',
-                          simpleDesc:
-                            'Valor registrado la temporada 2025-26 según el modo de comparación elegido arriba.',
-                          calculation:
-                            'Agregación oficial de los partidos de 2025-26 (curso completo o mismo tramo inicial).',
-                        }}
-                      />
-                    </th>
+                    <SortableTh
+                      label={refShortHeader}
+                      active={macroSortKey === 'prev'}
+                      asc={macroSortAsc}
+                      onSort={() => toggleMacroSort('prev')}
+                      align="right"
+                      className="py-2.5 px-2.5"
+                      customHelp={{
+                        title: 'Temporada pasada de referencia',
+                        simpleDesc:
+                          'Valor registrado la temporada 2025-26 según el modo de comparación elegido arriba.',
+                        calculation:
+                          'Agregación oficial de los partidos de 2025-26 (curso completo o mismo tramo inicial).',
+                      }}
+                    />
                   )}
                   {bothColsVisible && (
                     <>
-                      <th className="py-2 px-2 font-medium text-right">
-                        <ColumnHelpHeader
-                          label="Dif."
-                          customHelp={{
-                            title: 'Cambio respecto al año pasado',
-                            simpleDesc:
-                              'Cuántos puntos o puntos porcentuales ha subido o bajado la media de la liga este curso.',
-                            calculation:
-                              'Resta directa: Valor medio 2026-27 − Valor de referencia 2025-26.',
-                          }}
-                        />
-                      </th>
-                      <th className="py-2 pl-2 pr-3 font-medium text-right">
-                        <ColumnHelpHeader label="Var. %" helpKey="pctDelta" />
-                      </th>
+                      <SortableTh
+                        label="Dif."
+                        active={macroSortKey === 'diff'}
+                        asc={macroSortAsc}
+                        onSort={() => toggleMacroSort('diff')}
+                        align="right"
+                        className="py-2.5 px-2"
+                        customHelp={{
+                          title: 'Cambio respecto al año pasado',
+                          simpleDesc:
+                            'Cuántos puntos o puntos porcentuales ha subido o bajado la media de la liga este curso.',
+                          calculation:
+                            'Resta directa: Valor medio 2026-27 − Valor de referencia 2025-26.',
+                        }}
+                      />
+                      <SortableTh
+                        label="Var. %"
+                        helpKey="pctDelta"
+                        active={macroSortKey === 'pct'}
+                        asc={macroSortAsc}
+                        onSort={() => toggleMacroSort('pct')}
+                        align="right"
+                        className="py-2.5 pl-2 pr-3"
+                      />
                     </>
                   )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#1E293B] text-xs">
-                {visibleGlobalRows.map((r) => {
+                {(!macroSortKey
+                  ? visibleGlobalRows
+                  : sortRows(
+                      visibleGlobalRows,
+                      (r) => {
+                        const diff = r.cur - r.prev;
+                        const pct =
+                          r.prev !== 0 ? (diff / Math.abs(r.prev)) * 100 : 0;
+                        switch (macroSortKey) {
+                          case 'label':
+                            return r.label;
+                          case 'cur':
+                            return r.cur;
+                          case 'prev':
+                            return r.prev;
+                          case 'diff':
+                            return diff;
+                          case 'pct':
+                            return pct;
+                        }
+                      },
+                      macroSortAsc
+                    )
+                ).map((r) => {
                   const diff = r.cur - r.prev;
                   const pct = r.prev !== 0 ? (diff / Math.abs(r.prev)) * 100 : 0;
                   const isGood = r.lowerIsBetter ? diff <= 0 : diff >= 0;
@@ -1167,7 +1236,7 @@ export function SeasonMilestonesView({
               </div>
 
               {/* Desktop Single-Game Records Table (md+, fixed layout so everything fits horizontally) */}
-              <div className="hidden md:block">
+              <div className="hidden md:block overflow-auto max-h-[65vh]">
                 <table className="w-full table-fixed text-left border-collapse">
                   <colgroup>
                     <col className={bothColsVisible ? 'w-[28%]' : 'w-[42%]'} />
@@ -1179,73 +1248,118 @@ export function SeasonMilestonesView({
                     )}
                     {bothColsVisible && <col className="w-[14%]" />}
                   </colgroup>
-                  <thead>
-                    <tr className="border-b border-[#1E293B] text-[11px] text-slate-400 bg-[#0F172A]/60">
-                      <th className="py-2 pl-3 pr-2 font-medium">
-                        <ColumnHelpHeader
-                          label="Récord (1 Partido)"
+                  <thead className={STICKY_THEAD_CLASS}>
+                    <tr className="text-[11px] text-slate-400">
+                      <SortableTh
+                        label="Récord (1 Partido)"
+                        active={sgSortKey === 'metric'}
+                        asc={sgSortAsc}
+                        onSort={() => toggleSgSort('metric')}
+                        align="left"
+                        className="py-2.5 pl-3 pr-2"
+                        customHelp={{
+                          title: 'Mejor marca lograda en una sola noche',
+                          simpleDesc:
+                            'Muestra la actuación individual o colectiva más alta registrada en un único partido.',
+                          calculation:
+                            'Máximo absoluto máx(x) escaneando todas las hojas de partido oficiales de jugadores y equipos.',
+                        }}
+                      />
+                      {showCurSeasonCol && (
+                        <SortableTh
+                          label="Tope 2026-27"
+                          active={sgSortKey === 'cur'}
+                          asc={sgSortAsc}
+                          onSort={() => toggleSgSort('cur')}
                           align="left"
+                          className="py-2.5 px-2.5"
                           customHelp={{
-                            title: 'Mejor marca lograda en una sola noche',
+                            title: 'Récord actual 2026-27',
                             simpleDesc:
-                              'Muestra la actuación individual o colectiva más alta registrada en un único partido.',
+                              'Pulsa sobre el nombre del jugador o equipo para abrir su ficha completa.',
                             calculation:
-                              'Máximo absoluto máx(x) escaneando todas las hojas de partido oficiales de jugadores y equipos.',
+                              'Mayor registro logrado en una sola noche durante la temporada 2026-27.',
                           }}
                         />
-                      </th>
-                      {showCurSeasonCol && (
-                        <th className="py-2 px-2.5 font-medium">
-                          <ColumnHelpHeader
-                            label="Tope 2026-27"
-                            align="left"
-                            customHelp={{
-                              title: 'Récord actual 2026-27',
-                              simpleDesc:
-                                'Pulsa sobre el nombre del jugador o equipo para abrir su ficha completa.',
-                              calculation:
-                                'Mayor registro logrado en una sola noche durante la temporada 2026-27.',
-                            }}
-                          />
-                        </th>
                       )}
                       {showPrevSeasonCol && (
-                        <th className="py-2 px-2.5 font-medium">
-                          <ColumnHelpHeader
-                            label={`Tope ${refShortHeader}`}
-                            align="left"
-                            customHelp={{
-                              title: 'Récord de la temporada pasada',
-                              simpleDesc:
-                                'Mejor actuación en una sola noche durante el tramo comparado de 2025-26.',
-                              calculation:
-                                'Mayor registro logrado en un partido durante el periodo seleccionado de 2025-26.',
-                            }}
-                          />
-                        </th>
+                        <SortableTh
+                          label={`Tope ${refShortHeader}`}
+                          active={sgSortKey === 'prev'}
+                          asc={sgSortAsc}
+                          onSort={() => toggleSgSort('prev')}
+                          align="left"
+                          className="py-2.5 px-2.5"
+                          customHelp={{
+                            title: 'Récord de la temporada pasada',
+                            simpleDesc:
+                              'Mejor actuación en una sola noche durante el tramo comparado de 2025-26.',
+                            calculation:
+                              'Mayor registro logrado en un partido durante el periodo seleccionado de 2025-26.',
+                          }}
+                        />
                       )}
                       {bothColsVisible && (
-                        <th className="py-2 pl-2 pr-3 font-medium text-right">
-                          <ColumnHelpHeader
-                            label={
-                              compMode === 'full_season'
-                                ? '% Tope 25-26'
-                                : 'Comparativa'
-                            }
-                            customHelp={{
-                              title: 'Comparativa frente al tope anterior',
-                              simpleDesc:
-                                'Indica cómo de cerca está el récord de este año respecto al techo del curso pasado (si llega o supera el 100%, ya lo ha batido).',
-                              calculation:
-                                '(Tope 2026-27 / Tope 2025-26) × 100 y diferencia neta (Tope 26-27 − Tope 25-26).',
-                            }}
-                          />
-                        </th>
+                        <SortableTh
+                          label={
+                            compMode === 'full_season'
+                              ? '% Tope 25-26'
+                              : 'Comparativa'
+                          }
+                          active={sgSortKey === 'comp'}
+                          asc={sgSortAsc}
+                          onSort={() => toggleSgSort('comp')}
+                          align="right"
+                          className="py-2.5 pl-2 pr-3"
+                          customHelp={{
+                            title: 'Comparativa frente al tope anterior',
+                            simpleDesc:
+                              'Indica cómo de cerca está el récord de este año respecto al techo del curso pasado (si llega o supera el 100%, ya lo ha batido).',
+                            calculation:
+                              '(Tope 2026-27 / Tope 2025-26) × 100 y diferencia neta (Tope 26-27 − Tope 25-26).',
+                          }}
+                        />
                       )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#1E293B] text-xs">
-                    {filteredSingleGame.map((rec) => {
+                    {(!sgSortKey
+                      ? filteredSingleGame
+                      : sortRows(
+                          filteredSingleGame,
+                          (rec) => {
+                            const refPerf =
+                              compMode === 'same_opening'
+                                ? rec.prev2026Opening
+                                : rec.prev2026Full;
+                            const curVal = rec.current2027?.value ?? null;
+                            const prevVal = refPerf?.value ?? null;
+                            switch (sgSortKey) {
+                              case 'metric':
+                                return rec.metricLabel;
+                              case 'cur':
+                                return curVal;
+                              case 'prev':
+                                return prevVal;
+                              case 'comp': {
+                                if (curVal === null || prevVal === null)
+                                  return null;
+                                if (compMode === 'full_season') {
+                                  return rec.lowerIsBetter
+                                    ? curVal > 0
+                                      ? (prevVal / curVal) * 100
+                                      : 0
+                                    : prevVal > 0
+                                    ? (curVal / prevVal) * 100
+                                    : 0;
+                                }
+                                return curVal - prevVal;
+                              }
+                            }
+                          },
+                          sgSortAsc
+                        )
+                    ).map((rec) => {
                       const refPerf =
                         compMode === 'same_opening'
                           ? rec.prev2026Opening
@@ -1573,7 +1687,7 @@ export function SeasonMilestonesView({
               </div>
 
               {/* Desktop Season Leaders Table (md+, fixed layout so everything fits horizontally) */}
-              <div className="hidden md:block">
+              <div className="hidden md:block overflow-auto max-h-[68vh]">
                 <table className="w-full table-fixed text-left border-collapse">
                   <colgroup>
                     <col className={bothColsVisible ? 'w-[28%]' : 'w-[42%]'} />
@@ -1585,69 +1699,112 @@ export function SeasonMilestonesView({
                     )}
                     {bothColsVisible && <col className="w-[14%]" />}
                   </colgroup>
-                  <thead>
-                    <tr className="border-b border-[#1E293B] text-[11px] text-slate-400 bg-[#0F172A]/60">
-                      <th className="py-2 pl-3 pr-2 font-medium">
-                        <ColumnHelpHeader
-                          label="Categoría Estadística"
+                  <thead className={STICKY_THEAD_CLASS}>
+                    <tr className="text-[11px] text-slate-400">
+                      <SortableTh
+                        label="Categoría Estadística"
+                        active={leadSortKey === 'metric'}
+                        asc={leadSortAsc}
+                        onSort={() => toggleLeadSort('metric')}
+                        align="left"
+                        className="py-2.5 pl-3 pr-2"
+                        customHelp={{
+                          title: 'Apartado estadístico liderado',
+                          simpleDesc:
+                            'Quién encabeza toda la NBA en promedios por partido o totales acumulados.',
+                          calculation:
+                            'Ordenación descendente (o ascendente en DefRtg) entre los jugadores y equipos que cumplen el mínimo oficial de partidos.',
+                        }}
+                      />
+                      {showCurSeasonCol && (
+                        <SortableTh
+                          label="Líder 2026-27"
+                          active={leadSortKey === 'cur'}
+                          asc={leadSortAsc}
+                          onSort={() => toggleLeadSort('cur')}
                           align="left"
+                          className="py-2.5 px-2.5"
                           customHelp={{
-                            title: 'Apartado estadístico liderado',
+                            title: 'Número 1 actual en 2026-27',
                             simpleDesc:
-                              'Quién encabeza toda la NBA en promedios por partido o totales acumulados.',
+                              'Pulsa sobre el líder para inspeccionar todos sus partidos.',
                             calculation:
-                              'Ordenación descendente (o ascendente en DefRtg) entre los jugadores y equipos que cumplen el mínimo oficial de partidos.',
+                              'Mejor promedio o total acumulado registrado en la temporada 2026-27.',
                           }}
                         />
-                      </th>
-                      {showCurSeasonCol && (
-                        <th className="py-2 px-2.5 font-medium">
-                          <ColumnHelpHeader
-                            label="Líder 2026-27"
-                            align="left"
-                            customHelp={{
-                              title: 'Número 1 actual en 2026-27',
-                              simpleDesc:
-                                'Pulsa sobre el líder para inspeccionar todos sus partidos.',
-                              calculation:
-                                'Mejor promedio o total acumulado registrado en la temporada 2026-27.',
-                            }}
-                          />
-                        </th>
                       )}
                       {showPrevSeasonCol && (
-                        <th className="py-2 px-2.5 font-medium">
-                          <ColumnHelpHeader
-                            label={`Líder ${refShortHeader}`}
-                            align="left"
-                            customHelp={{
-                              title: 'Número 1 en 2025-26',
-                              simpleDesc:
-                                'Líder de la temporada anterior en este mismo apartado.',
-                              calculation:
-                                'Mejor promedio o total registrado en el corte seleccionado de 2025-26.',
-                            }}
-                          />
-                        </th>
+                        <SortableTh
+                          label={`Líder ${refShortHeader}`}
+                          active={leadSortKey === 'prev'}
+                          asc={leadSortAsc}
+                          onSort={() => toggleLeadSort('prev')}
+                          align="left"
+                          className="py-2.5 px-2.5"
+                          customHelp={{
+                            title: 'Número 1 en 2025-26',
+                            simpleDesc:
+                              'Líder de la temporada anterior en este mismo apartado.',
+                            calculation:
+                              'Mejor promedio o total registrado en el corte seleccionado de 2025-26.',
+                          }}
+                        />
                       )}
                       {bothColsVisible && (
-                        <th className="py-2 pl-2 pr-3 font-medium text-right">
-                          <ColumnHelpHeader
-                            label="Diferencial"
-                            customHelp={{
-                              title: 'Diferencia entre ambos líderes',
-                              simpleDesc:
-                                'Compara la marca del líder actual frente a la del líder del curso pasado.',
-                              calculation:
-                                'Resta directa: Marca del líder 2026-27 − Marca del líder 2025-26.',
-                            }}
-                          />
-                        </th>
+                        <SortableTh
+                          label="Diferencial"
+                          active={leadSortKey === 'diff'}
+                          asc={leadSortAsc}
+                          onSort={() => toggleLeadSort('diff')}
+                          align="right"
+                          className="py-2.5 pl-2 pr-3"
+                          customHelp={{
+                            title: 'Diferencia entre ambos líderes',
+                            simpleDesc:
+                              'Compara la marca del líder actual frente a la del líder del curso pasado.',
+                            calculation:
+                              'Resta directa: Marca del líder 2026-27 − Marca del líder 2025-26.',
+                          }}
+                        />
                       )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#1E293B] text-xs">
-                    {filteredSeasonLeaders.map((item) => {
+                    {(!leadSortKey
+                      ? filteredSeasonLeaders
+                      : sortRows(
+                          filteredSeasonLeaders,
+                          (item) => {
+                            const refHold =
+                              compMode === 'same_opening'
+                                ? item.prev2026Opening
+                                : item.prev2026Full;
+                            const curVal = item.current2027?.value ?? null;
+                            const prevVal = refHold?.value ?? null;
+                            switch (leadSortKey) {
+                              case 'metric':
+                                return item.metricLabel;
+                              case 'cur':
+                                return curVal;
+                              case 'prev':
+                                return prevVal;
+                              case 'diff':
+                                if (curVal === null || prevVal === null)
+                                  return null;
+                                if (
+                                  item.isCumulativeTotal &&
+                                  compMode === 'full_season'
+                                ) {
+                                  return prevVal > 0
+                                    ? (curVal / prevVal) * 100
+                                    : 0;
+                                }
+                                return curVal - prevVal;
+                            }
+                          },
+                          leadSortAsc
+                        )
+                    ).map((item) => {
                       const refHold =
                         compMode === 'same_opening'
                           ? item.prev2026Opening

@@ -23,6 +23,7 @@ import type {
 } from '../types/nba';
 import { formatSigned, mean, round1 } from '../utils/analytics';
 import {
+  evaluateVsLeague,
   describeZScoreHuman,
   isAnomalyPositive,
   plainAnomalyExplanation,
@@ -33,10 +34,16 @@ import {
   type ResolvedStatBenchmark,
 } from '../utils/humanize';
 import {
-  ColumnHelpHeader,
+  BreakdownDetailCell,
   MetricInfoTooltip,
   NbaComparisonBar,
+  SortableTh,
 } from './MetricUiHelpers';
+import {
+  STICKY_THEAD_CLASS,
+  sortRows,
+  useTableSort,
+} from '../utils/tableSort';
 import { EntityBadge, PlayerAvatar, TeamLogo } from './NbaVisuals';
 
 interface GuidedHomeViewProps {
@@ -85,6 +92,26 @@ export function GuidedHomeView({
   const [streakDirection, setStreakDirection] = useState<
     'all' | 'positive' | 'negative'
   >('all');
+
+  const {
+    sortKey: protSortKey,
+    sortAsc: protSortAsc,
+    toggleSort: toggleProtSort,
+  } = useTableSort<
+    'watched' | 'name' | 'zScore' | 'pctDelta' | 'vsNba' | 'headline'
+  >('zScore', false, ['name', 'headline']);
+
+  const {
+    sortKey: teamSortKey,
+    sortAsc: teamSortAsc,
+    toggleSort: toggleTeamSort,
+  } = useTableSort<'name' | 'recDiff' | 'vsNba'>(null, false, ['name']);
+
+  const {
+    sortKey: strSortKey,
+    sortAsc: strSortAsc,
+    toggleSort: toggleStrSort,
+  } = useTableSort<'name' | 'count' | 'vsNba'>('count', false, ['name']);
 
   // Watchlist-filtered base pools
   const scopedAnomalies = useMemo(() => {
@@ -195,7 +222,7 @@ export function GuidedHomeView({
 
     if (protagonistDirection === 'positive') {
       return {
-        protagonistRows: posDedup.slice(0, 8),
+        protagonistRows: posDedup.slice(0, 15),
         posEntityCount: posDedup.length,
         negEntityCount: negDedup.length,
       };
@@ -203,16 +230,16 @@ export function GuidedHomeView({
 
     if (protagonistDirection === 'negative') {
       return {
-        protagonistRows: negDedup.slice(0, 8),
+        protagonistRows: negDedup.slice(0, 15),
         posEntityCount: posDedup.length,
         negEntityCount: negDedup.length,
       };
     }
 
-    // Balanced 'all' showcase: guarantee both positive surges and negative slumps appear
+    // Balanced 'all' showcase: guarantee both positive surges and negative slumps appear across the top 15
     const picked = new Map<string, AnomalySignal>();
-    const targetNeg = Math.min(3, negDedup.length);
-    const targetPos = Math.min(4, posDedup.length);
+    const targetNeg = Math.min(7, negDedup.length);
+    const targetPos = Math.min(8, posDedup.length);
 
     for (const s of posDedup.slice(0, targetPos)) {
       picked.set(`${s.entityType}:${s.entityId}`, s);
@@ -225,9 +252,9 @@ export function GuidedHomeView({
       }
     }
 
-    // Fill remaining up to 8 by highest |zScore|
+    // Fill remaining up to 15 by highest |zScore|
     for (const s of byEntityType) {
-      if (picked.size >= 8) break;
+      if (picked.size >= 15) break;
       const eKey = `${s.entityType}:${s.entityId}`;
       if (!picked.has(eKey)) {
         picked.set(eKey, s);
@@ -1033,43 +1060,91 @@ export function GuidedHomeView({
                 })}
               </div>
 
-              {/* Desktop Table (md+) */}
+              {/* Desktop Table (md+) — full 15 rows without vertical scroll */}
               <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
-                      <th className="py-3 pl-4 pr-2 w-10 font-medium">Seg.</th>
-                      <th className="py-3 px-3 font-medium">
-                        Jugador / Equipo
-                      </th>
-                      <th className="py-3 px-3 font-medium">
-                        <ColumnHelpHeader
-                          label="Aspecto destacado"
-                          helpKey="zScore"
-                          align="left"
-                        />
-                      </th>
-                      <th className="py-3 px-3 font-medium text-right">
-                        <ColumnHelpHeader
-                          label={`Últ. ${windowSize} vs Habitual`}
-                          helpKey="windowAvg"
-                          align="right"
-                        />
-                      </th>
-                      <th className="py-3 px-3 font-medium min-w-[225px]">
-                        <ColumnHelpHeader
-                          label="Estadística destacada vs Media NBA"
-                          helpKey="vsLeagueBar"
-                          align="left"
-                        />
-                      </th>
-                      <th className="py-3 pl-3 pr-4 font-medium min-w-[250px]">
-                        Lectura rápida
-                      </th>
+                  <thead className={STICKY_THEAD_CLASS}>
+                    <tr className="text-xs text-slate-400">
+                      <SortableTh
+                        label="Seg."
+                        active={protSortKey === 'watched'}
+                        asc={protSortAsc}
+                        onSort={() => toggleProtSort('watched')}
+                        align="left"
+                        className="py-3 pl-4 pr-2 w-12"
+                        compact
+                      />
+                      <SortableTh
+                        label="Jugador / Equipo"
+                        active={protSortKey === 'name'}
+                        asc={protSortAsc}
+                        onSort={() => toggleProtSort('name')}
+                        align="left"
+                        className="py-3 px-3"
+                      />
+                      <SortableTh
+                        label="Aspecto destacado"
+                        helpKey="zScore"
+                        active={protSortKey === 'zScore'}
+                        asc={protSortAsc}
+                        onSort={() => toggleProtSort('zScore')}
+                        align="left"
+                        className="py-3 px-3"
+                      />
+                      <SortableTh
+                        label={`Últ. ${windowSize} vs Habitual`}
+                        helpKey="windowAvg"
+                        active={protSortKey === 'pctDelta'}
+                        asc={protSortAsc}
+                        onSort={() => toggleProtSort('pctDelta')}
+                        align="right"
+                        className="py-3 px-3"
+                      />
+                      <SortableTh
+                        label="Estadística destacada vs Media NBA"
+                        helpKey="vsLeagueBar"
+                        active={protSortKey === 'vsNba'}
+                        asc={protSortAsc}
+                        onSort={() => toggleProtSort('vsNba')}
+                        align="left"
+                        className="py-3 px-3 min-w-[225px]"
+                      />
+                      <SortableTh
+                        label="Lectura rápida"
+                        active={protSortKey === 'headline'}
+                        asc={protSortAsc}
+                        onSort={() => toggleProtSort('headline')}
+                        align="left"
+                        className="py-3 pl-3 pr-4 min-w-[250px]"
+                      />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#1E293B] text-sm">
-                    {protagonistRows.map((sig) => {
+                    {sortRows(
+                      protagonistRows,
+                      (sig) => {
+                        switch (protSortKey) {
+                          case 'watched':
+                            return watchlistIds.has(
+                              `${sig.entityType}:${sig.entityId}`
+                            );
+                          case 'name':
+                            return sig.entityName;
+                          case 'pctDelta':
+                            return Math.abs(sig.pctDelta);
+                          case 'vsNba': {
+                            const b = resolveSignalBenchmark(sig, benchmarks);
+                            return evaluateVsLeague(b.value, b.benchmark).pct;
+                          }
+                          case 'headline':
+                            return plainAnomalyExplanation(sig).headline;
+                          case 'zScore':
+                          default:
+                            return Math.abs(sig.zScore);
+                        }
+                      },
+                      protSortAsc
+                    ).map((sig) => {
                       const wKey = `${sig.entityType}:${sig.entityId}`;
                       const watched = watchlistIds.has(wKey);
                       const isGood = isAnomalyPositive(sig);
@@ -1176,14 +1251,67 @@ export function GuidedHomeView({
                             />
                           </td>
                           <td className="py-3 pl-3 pr-4 max-w-md">
-                            <div className="text-xs font-medium text-slate-100">
-                              {plainExp.headline}
-                            </div>
-                            <div className="text-xs text-slate-400 line-clamp-1 mt-0.5">
-                              {experienceMode === 'simple'
-                                ? plainExp.detail
-                                : sig.contextNote || plainExp.detail}
-                            </div>
+                            <BreakdownDetailCell
+                              entityName={`${sig.entityName}${
+                                sig.entityType === 'player'
+                                  ? ` (${sig.teamAbbr})`
+                                  : ''
+                              }`}
+                              badgeLabel={`${isUp ? '▲' : '▼'} ${
+                                experienceMode === 'simple'
+                                  ? plainMetricName(
+                                      sig.metricKey,
+                                      sig.metricLabel
+                                    )
+                                  : sig.metricLabel
+                              } (${formatSigned(sig.pctDelta, 0, '%')})`}
+                              badgeTone={isGood ? 'positive' : 'negative'}
+                              diagnosisLabel={
+                                experienceMode === 'advanced'
+                                  ? sig.sustainabilityLabel
+                                  : undefined
+                              }
+                              diagnosisTone={sig.sustainabilityTone}
+                              headline={plainExp.headline}
+                              detailText={
+                                experienceMode === 'simple'
+                                  ? plainExp.detail
+                                  : sig.contextNote || plainExp.detail
+                              }
+                              secondaryText={
+                                sig.takeaways && sig.takeaways.length > 0
+                                  ? sig.takeaways.join(' · ')
+                                  : undefined
+                              }
+                              windowsSummary={
+                                sig.windows
+                                  ? `Temp ${sig.windows.season.toFixed(1)}${
+                                      sig.unit === '%' ? '%' : ''
+                                    } · 10P ${sig.windows.l10.toFixed(1)}${
+                                      sig.unit === '%' ? '%' : ''
+                                    } · 5P ${sig.windows.l5.toFixed(1)}${
+                                      sig.unit === '%' ? '%' : ''
+                                    } · 3P ${sig.windows.l3.toFixed(1)}${
+                                      sig.unit === '%' ? '%' : ''
+                                    }`
+                                  : undefined
+                              }
+                              streakText={
+                                sig.activeStreakLabel &&
+                                (sig.activeStreakCount || 0) > 0
+                                  ? `Racha activa: ${sig.activeStreakCount} PJ · ${sig.activeStreakLabel}`
+                                  : null
+                              }
+                            >
+                              <div className="text-xs font-medium text-slate-100 truncate">
+                                {plainExp.headline}
+                              </div>
+                              <div className="text-xs text-slate-400 line-clamp-1 mt-0.5">
+                                {experienceMode === 'simple'
+                                  ? plainExp.detail
+                                  : sig.contextNote || plainExp.detail}
+                              </div>
+                            </BreakdownDetailCell>
                           </td>
                         </tr>
                       );
@@ -1327,30 +1455,59 @@ export function GuidedHomeView({
                 </div>
 
                 {/* Desktop/Tablet Table (sm+) */}
-                <div className="hidden sm:block overflow-x-auto">
+                <div className="hidden sm:block overflow-auto max-h-[56vh]">
                   <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
-                        <th className="py-2.5 pl-4 pr-3 font-medium">
-                          Franquicia y aspecto destacado
-                        </th>
-                        <th className="py-2.5 px-3 font-medium text-right">
-                          <ColumnHelpHeader
-                            label={`Últ. ${windowSize} PJ`}
-                            helpKey="differential"
-                          />
-                        </th>
-                        <th className="py-2.5 pl-3 pr-4 font-medium min-w-[210px]">
-                          <ColumnHelpHeader
-                            label="Aspecto destacado vs Media NBA"
-                            helpKey="vsLeagueBar"
-                            align="left"
-                          />
-                        </th>
+                    <thead className={STICKY_THEAD_CLASS}>
+                      <tr className="text-xs text-slate-400">
+                        <SortableTh
+                          label="Franquicia y aspecto destacado"
+                          active={teamSortKey === 'name'}
+                          asc={teamSortAsc}
+                          onSort={() => toggleTeamSort('name')}
+                          align="left"
+                          className="py-2.5 pl-4 pr-3"
+                        />
+                        <SortableTh
+                          label={`Últ. ${windowSize} PJ`}
+                          helpKey="differential"
+                          active={teamSortKey === 'recDiff'}
+                          asc={teamSortAsc}
+                          onSort={() => toggleTeamSort('recDiff')}
+                          align="right"
+                          className="py-2.5 px-3"
+                        />
+                        <SortableTh
+                          label="Aspecto destacado vs Media NBA"
+                          helpKey="vsLeagueBar"
+                          active={teamSortKey === 'vsNba'}
+                          asc={teamSortAsc}
+                          onSort={() => toggleTeamSort('vsNba')}
+                          align="left"
+                          className="py-2.5 pl-3 pr-4 min-w-[210px]"
+                        />
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#1E293B] text-sm">
-                      {featuredTeams.map(
+                      {(!teamSortKey
+                        ? featuredTeams
+                        : sortRows(
+                            featuredTeams,
+                            (item) => {
+                              switch (teamSortKey) {
+                                case 'name':
+                                  return item.team.name;
+                                case 'recDiff':
+                                  return item.recDiff;
+                                case 'vsNba':
+                                  return evaluateVsLeague(
+                                    item.benchInfo.value,
+                                    item.benchInfo.benchmark
+                                  ).pct;
+                              }
+                            },
+                            teamSortAsc
+                          )
+                      ).map(
                         ({
                           team,
                           recWins,
@@ -1563,30 +1720,56 @@ export function GuidedHomeView({
                 </div>
 
                 {/* Desktop/Tablet Table (sm+) */}
-                <div className="hidden sm:block overflow-x-auto">
+                <div className="hidden sm:block overflow-auto max-h-[56vh]">
                   <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="border-b border-[#1E293B] text-xs text-slate-400 bg-[#0F172A]/60">
-                        <th className="py-2.5 pl-4 pr-3 font-medium">
-                          Protagonista y racha
-                        </th>
-                        <th className="py-2.5 px-2 font-medium text-right">
-                          <ColumnHelpHeader
-                            label="Racha"
-                            helpKey="consecutiveStreak"
-                          />
-                        </th>
-                        <th className="py-2.5 pl-3 pr-4 font-medium min-w-[205px]">
-                          <ColumnHelpHeader
-                            label="Media en racha vs Media NBA"
-                            helpKey="vsLeagueBar"
-                            align="left"
-                          />
-                        </th>
+                    <thead className={STICKY_THEAD_CLASS}>
+                      <tr className="text-xs text-slate-400">
+                        <SortableTh
+                          label="Protagonista y racha"
+                          active={strSortKey === 'name'}
+                          asc={strSortAsc}
+                          onSort={() => toggleStrSort('name')}
+                          align="left"
+                          className="py-2.5 pl-4 pr-3"
+                        />
+                        <SortableTh
+                          label="Racha"
+                          helpKey="consecutiveStreak"
+                          active={strSortKey === 'count'}
+                          asc={strSortAsc}
+                          onSort={() => toggleStrSort('count')}
+                          align="right"
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="Media en racha vs Media NBA"
+                          helpKey="vsLeagueBar"
+                          active={strSortKey === 'vsNba'}
+                          asc={strSortAsc}
+                          onSort={() => toggleStrSort('vsNba')}
+                          align="left"
+                          className="py-2.5 pl-3 pr-4 min-w-[205px]"
+                        />
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#1E293B] text-sm">
-                      {featuredStreaks.map((st) => {
+                      {sortRows(
+                        featuredStreaks,
+                        (st) => {
+                          switch (strSortKey) {
+                            case 'name':
+                              return st.entityName;
+                            case 'vsNba': {
+                              const b = resolveStreakBenchmark(st, benchmarks);
+                              return evaluateVsLeague(b.value, b.benchmark).pct;
+                            }
+                            case 'count':
+                            default:
+                              return st.count;
+                          }
+                        },
+                        strSortAsc
+                      ).map((st) => {
                         const stBench = resolveStreakBenchmark(st, benchmarks);
                         return (
                           <tr

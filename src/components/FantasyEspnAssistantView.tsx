@@ -49,6 +49,8 @@ import {
   parseCopiedEspnTextToPlayers,
 } from '../utils/fantasyScoring';
 import { PlayerAvatar, TeamLogo } from './NbaVisuals';
+import { SortableTh } from './MetricUiHelpers';
+import { STICKY_THEAD_CLASS, sortRows, useTableSort } from '../utils/tableSort';
 import { buildAdminAuthHeaders } from '../utils/adminAuthClient';
 import {
   addDaysIso,
@@ -56,6 +58,122 @@ import {
   formatDayShortEs,
   getEasternTodayIso,
 } from '../utils/staticSchedule';
+
+const OFFICIAL_SCORING_CATEGORIES_ROWS: Array<{
+  action: string;
+  code: string;
+  fptsVal: number;
+  fptsDisplay: string;
+  tone: 'positive' | 'negative';
+  description: string;
+}> = [
+  {
+    action: 'Tiro de campo anotado',
+    code: 'FGM',
+    fptsVal: 2.0,
+    fptsDisplay: '+2.0',
+    tone: 'positive',
+    description: 'Suma +2.0 por toda canasta en juego (de 2 o de 3 puntos).',
+  },
+  {
+    action: 'Tiro de campo fallado',
+    code: 'FGMI',
+    fptsVal: -1.0,
+    fptsDisplay: '-1.0',
+    tone: 'negative',
+    description: 'Calculado como FGA − FGM. Un tiro de 2 fallado resta −1.0 neto.',
+  },
+  {
+    action: 'Tiro libre anotado',
+    code: 'FTM',
+    fptsVal: 1.0,
+    fptsDisplay: '+1.0',
+    tone: 'positive',
+    description: 'Suma +1.0 por cada tiro libre convertido.',
+  },
+  {
+    action: 'Tiro libre fallado',
+    code: 'FTMI',
+    fptsVal: -1.0,
+    fptsDisplay: '-1.0',
+    tone: 'negative',
+    description: 'Calculado como FTA − FTM. Penaliza la ineficiencia desde la línea.',
+  },
+  {
+    action: 'Triple anotado (Bonus)',
+    code: '3PM',
+    fptsVal: 1.0,
+    fptsDisplay: '+1.0',
+    tone: 'positive',
+    description:
+      'Acumulativo al FGM: cada triple encestado vale +2.0 (FGM) + 1.0 (3PM) = +3.0 FPTS.',
+  },
+  {
+    action: 'Triple fallado (Compensación)',
+    code: '3PMI',
+    fptsVal: 0.5,
+    fptsDisplay: '+0.5',
+    tone: 'positive',
+    description:
+      'Calculado como 3PA − 3PM: suaviza el fallo exterior (−1.0 FGMI + 0.5 3PMI = −0.5 FPTS neto).',
+  },
+  {
+    action: 'Rebote ofensivo',
+    code: 'OREB',
+    fptsVal: 1.5,
+    fptsDisplay: '+1.5',
+    tone: 'positive',
+    description: 'Premia las segundas oportunidades generadas en aro rival.',
+  },
+  {
+    action: 'Rebote defensivo',
+    code: 'DREB',
+    fptsVal: 0.75,
+    fptsDisplay: '+0.75',
+    tone: 'positive',
+    description: 'Suma +0.75 FPTS por cada rebote defensivo cerrado.',
+  },
+  {
+    action: 'Asistencia',
+    code: 'AST',
+    fptsVal: 1.5,
+    fptsDisplay: '+1.5',
+    tone: 'positive',
+    description: 'Suma +1.5 FPTS por pase directo de canasta.',
+  },
+  {
+    action: 'Robo de balón',
+    code: 'STL',
+    fptsVal: 2.5,
+    fptsDisplay: '+2.5',
+    tone: 'positive',
+    description: 'Alto impacto defensivo por recuperación limpia.',
+  },
+  {
+    action: 'Tapón',
+    code: 'BLK',
+    fptsVal: 2.5,
+    fptsDisplay: '+2.5',
+    tone: 'positive',
+    description: 'Alto impacto de protección de aro (+2.5 FPTS por tapón).',
+  },
+  {
+    action: 'Pérdida de balón',
+    code: 'TO',
+    fptsVal: -2.0,
+    fptsDisplay: '-2.0',
+    tone: 'negative',
+    description: 'Resta −2.0 FPTS por cada balón perdido.',
+  },
+  {
+    action: 'Expulsión del partido',
+    code: 'EJ',
+    fptsVal: -5.0,
+    fptsDisplay: '-5.0',
+    tone: 'negative',
+    description: 'Penalización disciplinaria por descalificación o doble técnica.',
+  },
+];
 
 export type FantasyTab = 'lineup' | 'waivers' | 'trades' | 'injuries_rules' | 'rules';
 
@@ -222,35 +340,6 @@ function loadInitialFantasyLeagueState(): FantasyManualLeagueState {
     rivalRosters: {},
     rivalTeamNames: {},
   };
-}
-
-function ColumnSortHeader({
-  label,
-  active,
-  asc,
-  onClick,
-  align = 'left',
-}: {
-  label: string;
-  active: boolean;
-  asc: boolean;
-  onClick: () => void;
-  align?: 'left' | 'right' | 'center';
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`group inline-flex items-center gap-1 font-semibold hover:text-orange-400 transition-colors select-none ${
-        align === 'right' ? 'ml-auto justify-end' : align === 'center' ? 'mx-auto justify-center' : ''
-      } ${active ? 'text-orange-400 font-bold' : 'text-slate-400'}`}
-    >
-      <span>{label}</span>
-      <span className="text-[10px] font-mono text-orange-400">
-        {active ? (asc ? '▲' : '▼') : '↕'}
-      </span>
-    </button>
-  );
 }
 
 function renderScheduleBadges(teamSched: { gamesCount: number; b2bCount: number; games: FantasyTeamGameSlot[] }) {
@@ -446,6 +535,7 @@ export function FantasyEspnAssistantView({
 
   // Table Column Interactive Sorting State
   type RosterSortKey =
+    | 'slot'
     | 'name'
     | 'severity'
     | 'gamesCount'
@@ -453,7 +543,8 @@ export function FantasyEspnAssistantView({
     | 'seasonAvgFpts'
     | 'last5AvgFpts'
     | 'rawFormulaFpts'
-    | 'lockAdjustedFpts';
+    | 'lockAdjustedFpts'
+    | 'action';
   const [rosterSortKey, setRosterSortKey] = useState<RosterSortKey>('lockAdjustedFpts');
   const [rosterSortAsc, setRosterSortAsc] = useState<boolean>(false);
 
@@ -462,7 +553,7 @@ export function FantasyEspnAssistantView({
       setRosterSortAsc(!rosterSortAsc);
     } else {
       setRosterSortKey(key);
-      setRosterSortAsc(key === 'name' || key === 'severity');
+      setRosterSortAsc(key === 'name' || key === 'severity' || key === 'slot');
     }
   };
 
@@ -474,7 +565,8 @@ export function FantasyEspnAssistantView({
     | 'seasonAvgFpts'
     | 'last5AvgFpts'
     | 'lockAdjustedFpts'
-    | 'netWeekGain';
+    | 'netWeekGain'
+    | 'action';
   const [waiverTableSortKey, setWaiverTableSortKey] = useState<WaiverSortKey>('lockAdjustedFpts');
   const [waiverTableSortAsc, setWaiverTableSortAsc] = useState<boolean>(false);
 
@@ -489,6 +581,25 @@ export function FantasyEspnAssistantView({
 
   // Player Game Logs Breakdown Modal State
   const [inspectedPlayerForLogsId, setInspectedPlayerForLogsId] = useState<string | null>(null);
+  const {
+    sortKey: modalLogSortKey,
+    sortAsc: modalLogSortAsc,
+    toggleSort: toggleModalLogSort,
+  } = useTableSort<
+    | 'date'
+    | 'opp'
+    | 'min'
+    | 'pts'
+    | 'fgm'
+    | 'fg3m'
+    | 'ftm'
+    | 'reb'
+    | 'ast'
+    | 'stl'
+    | 'blk'
+    | 'tov'
+    | 'fpts'
+  >('date', false, ['opp', 'tov']);
 
   // Trade Analyzer State
   const [tradeSendIds, setTradeSendIds] = useState<string[]>([]);
@@ -497,10 +608,44 @@ export function FantasyEspnAssistantView({
   const [tradeSearchQuery, setTradeSearchQuery] = useState<string>('');
   const [includeWaiverStreamSlotInTrade, setIncludeWaiverStreamSlotInTrade] =
     useState<boolean>(true);
+  const {
+    sortKey: tradeTableSortKey,
+    sortAsc: tradeTableSortAsc,
+    toggleSort: toggleTradeTableSort,
+  } = useTableSort<'label' | 'send' | 'receive' | 'diff'>(null, false, ['label']);
 
-  // Scoring Audit Player Selector (Tab 4)
+  // Scoring Audit Player Selector (Tab 4) & Rules Table Sort (Tab 5)
   const [auditPlayerId, setAuditPlayerId] = useState<string>('');
   const [auditSearch, setAuditSearch] = useState<string>('');
+  const {
+    sortKey: auditSortKey,
+    sortAsc: auditSortAsc,
+    toggleSort: toggleAuditSort,
+  } = useTableSort<
+    | 'date'
+    | 'fgm'
+    | 'fgmi'
+    | 'fg3m'
+    | 'fg3mi'
+    | 'ftm'
+    | 'ftmi'
+    | 'oreb'
+    | 'dreb'
+    | 'ast'
+    | 'stocks'
+    | 'tov'
+    | 'totalFpts'
+  >('date', false, ['fgmi', 'ftmi', 'tov']);
+
+  const {
+    sortKey: rulesSortKey,
+    sortAsc: rulesSortAsc,
+    toggleSort: toggleRulesSort,
+  } = useTableSort<'action' | 'code' | 'fpts' | 'description'>(null, false, [
+    'action',
+    'code',
+    'description',
+  ]);
 
   const reconcileIncomingServerState = useCallback(
     (serverState: FantasyManualLeagueState | null | undefined, allowInitialLocalUpload: boolean) => {
@@ -837,9 +982,17 @@ export function FantasyEspnAssistantView({
   const sortRosterItems = useCallback(
     <T extends (typeof myRosterEnriched)[number]>(items: T[]) => {
       const copy = [...items];
+      const orderMap = new Map(
+        leagueState.roster.map((c, idx) => [c.playerId, idx])
+      );
       copy.sort((a, b) => {
         let cmp = 0;
         switch (rosterSortKey) {
+          case 'slot':
+            cmp =
+              (orderMap.get(a.player.id) ?? 99) -
+              (orderMap.get(b.player.id) ?? 99);
+            break;
           case 'name':
             cmp = a.player.name.localeCompare(b.player.name);
             break;
@@ -861,6 +1014,20 @@ export function FantasyEspnAssistantView({
           case 'rawFormulaFpts':
             cmp = a.weekly.rawFormulaFpts - b.weekly.rawFormulaFpts;
             break;
+          case 'action': {
+            const urgA =
+              optimalStarterIds.has(a.player.id) !== (a.slot === 'starter')
+                ? 1
+                : 0;
+            const urgB =
+              optimalStarterIds.has(b.player.id) !== (b.slot === 'starter')
+                ? 1
+                : 0;
+            cmp =
+              urgA - urgB ||
+              a.weekly.lockAdjustedFpts - b.weekly.lockAdjustedFpts;
+            break;
+          }
           case 'lockAdjustedFpts':
           default:
             cmp = a.weekly.lockAdjustedFpts - b.weekly.lockAdjustedFpts;
@@ -870,7 +1037,7 @@ export function FantasyEspnAssistantView({
       });
       return copy;
     },
-    [rosterSortKey, rosterSortAsc]
+    [rosterSortKey, rosterSortAsc, leagueState.roster, optimalStarterIds]
   );
 
   const myStarters = useMemo(
@@ -1309,6 +1476,12 @@ export function FantasyEspnAssistantView({
           break;
         case 'netWeekGain':
           cmp = a.netWeekGain - b.netWeekGain;
+          break;
+        case 'action':
+          cmp =
+            (a.roleBreakout?.streamingPriorityScore ?? 0) +
+            a.netWeekGain -
+            ((b.roleBreakout?.streamingPriorityScore ?? 0) + b.netWeekGain);
           break;
         case 'lockAdjustedFpts':
         default:
@@ -2468,83 +2641,82 @@ export function FantasyEspnAssistantView({
               )}
 
               {/* Roster Table (Starters + Bench Split) */}
-              <div className="overflow-x-auto">
+              <div className="overflow-auto max-h-[70vh]">
                 <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-[#1E293B] text-[11px] text-slate-400 bg-[#0B1120]/60">
-                      <th className="py-2.5 pl-4 pr-2 font-medium">Puesto</th>
-                      <th className="py-2.5 px-3 font-medium">
-                        <ColumnSortHeader
-                          label="Jugador"
-                          active={rosterSortKey === 'name'}
-                          asc={rosterSortAsc}
-                          onClick={() => handleRosterSort('name')}
-                        />
-                      </th>
-                      <th className="py-2.5 px-3 font-medium">
-                        <ColumnSortHeader
-                          label="Salud / Parte"
-                          active={rosterSortKey === 'severity'}
-                          asc={rosterSortAsc}
-                          onClick={() => handleRosterSort('severity')}
-                        />
-                      </th>
-                      <th className="py-2.5 px-3 font-medium">
-                        <ColumnSortHeader
-                          label={`Calendario (${activeWeek?.label || 'Semana'})`}
-                          active={rosterSortKey === 'gamesCount'}
-                          asc={rosterSortAsc}
-                          onClick={() => handleRosterSort('gamesCount')}
-                        />
-                      </th>
-                      <th className="py-2.5 px-3 font-medium text-right">
-                        <ColumnSortHeader
-                          label="Total FPTS"
-                          active={rosterSortKey === 'seasonTotalFpts'}
-                          asc={rosterSortAsc}
-                          onClick={() => handleRosterSort('seasonTotalFpts')}
-                          align="right"
-                        />
-                      </th>
-                      <th className="py-2.5 px-3 font-medium text-right">
-                        <ColumnSortHeader
-                          label="Media FPTS"
-                          active={rosterSortKey === 'seasonAvgFpts'}
-                          asc={rosterSortAsc}
-                          onClick={() => handleRosterSort('seasonAvgFpts')}
-                          align="right"
-                        />
-                      </th>
-                      <th className="py-2.5 px-3 font-medium text-right">
-                        <ColumnSortHeader
-                          label="Últ. 5 PJ"
-                          active={rosterSortKey === 'last5AvgFpts'}
-                          asc={rosterSortAsc}
-                          onClick={() => handleRosterSort('last5AvgFpts')}
-                          align="right"
-                        />
-                      </th>
-                      <th className="py-2.5 px-3 font-medium text-right">
-                        <ColumnSortHeader
-                          label="PJ × Media"
-                          active={rosterSortKey === 'rawFormulaFpts'}
-                          asc={rosterSortAsc}
-                          onClick={() => handleRosterSort('rawFormulaFpts')}
-                          align="right"
-                        />
-                      </th>
-                      <th className="py-2.5 px-3 font-medium text-right">
-                        <ColumnSortHeader
-                          label="Proy. Cierre"
-                          active={rosterSortKey === 'lockAdjustedFpts'}
-                          asc={rosterSortAsc}
-                          onClick={() => handleRosterSort('lockAdjustedFpts')}
-                          align="right"
-                        />
-                      </th>
-                      <th className="py-2.5 pl-2 pr-4 font-medium text-right">
-                        Acción
-                      </th>
+                  <thead className={STICKY_THEAD_CLASS}>
+                    <tr className="border-b border-[#1E293B] text-[11px] text-slate-400">
+                      <SortableTh
+                        label="Puesto"
+                        align="left"
+                        active={rosterSortKey === 'slot'}
+                        asc={rosterSortAsc}
+                        onSort={() => handleRosterSort('slot')}
+                        className="py-2.5 pl-4 pr-2"
+                      />
+                      <SortableTh
+                        label="Jugador"
+                        align="left"
+                        active={rosterSortKey === 'name'}
+                        asc={rosterSortAsc}
+                        onSort={() => handleRosterSort('name')}
+                      />
+                      <SortableTh
+                        label="Salud / Parte"
+                        align="left"
+                        active={rosterSortKey === 'severity'}
+                        asc={rosterSortAsc}
+                        onSort={() => handleRosterSort('severity')}
+                      />
+                      <SortableTh
+                        label={`Calendario (${activeWeek?.label || 'Semana'})`}
+                        align="left"
+                        active={rosterSortKey === 'gamesCount'}
+                        asc={rosterSortAsc}
+                        onSort={() => handleRosterSort('gamesCount')}
+                      />
+                      <SortableTh
+                        label="Total FPTS"
+                        align="right"
+                        active={rosterSortKey === 'seasonTotalFpts'}
+                        asc={rosterSortAsc}
+                        onSort={() => handleRosterSort('seasonTotalFpts')}
+                      />
+                      <SortableTh
+                        label="Media FPTS"
+                        align="right"
+                        active={rosterSortKey === 'seasonAvgFpts'}
+                        asc={rosterSortAsc}
+                        onSort={() => handleRosterSort('seasonAvgFpts')}
+                      />
+                      <SortableTh
+                        label="Últ. 5 PJ"
+                        align="right"
+                        active={rosterSortKey === 'last5AvgFpts'}
+                        asc={rosterSortAsc}
+                        onSort={() => handleRosterSort('last5AvgFpts')}
+                      />
+                      <SortableTh
+                        label="PJ × Media"
+                        align="right"
+                        active={rosterSortKey === 'rawFormulaFpts'}
+                        asc={rosterSortAsc}
+                        onSort={() => handleRosterSort('rawFormulaFpts')}
+                      />
+                      <SortableTh
+                        label="Proy. Cierre"
+                        align="right"
+                        active={rosterSortKey === 'lockAdjustedFpts'}
+                        asc={rosterSortAsc}
+                        onSort={() => handleRosterSort('lockAdjustedFpts')}
+                      />
+                      <SortableTh
+                        label="Acción"
+                        align="right"
+                        active={rosterSortKey === 'action'}
+                        asc={rosterSortAsc}
+                        onSort={() => handleRosterSort('action')}
+                        className="py-2.5 pl-2 pr-4"
+                      />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#1E293B]/80 text-xs">
@@ -3138,82 +3310,75 @@ export function FantasyEspnAssistantView({
               </div>
             </div>
 
-            <div className="overflow-x-auto">
+            <div className="overflow-auto max-h-[70vh]">
               <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-[#1E293B] text-[11px] text-slate-400 bg-[#0B1120]/60">
-                    <th className="py-2.5 pl-4 pr-3 font-medium">
-                      <ColumnSortHeader
-                        label="Agente Libre Disponible"
-                        active={waiverTableSortKey === 'name'}
-                        asc={waiverTableSortAsc}
-                        onClick={() => handleWaiverTableSort('name')}
-                      />
-                    </th>
-                    <th className="py-2.5 px-3 font-medium">
-                      <ColumnSortHeader
-                        label="Salud"
-                        active={waiverTableSortKey === 'severity'}
-                        asc={waiverTableSortAsc}
-                        onClick={() => handleWaiverTableSort('severity')}
-                      />
-                    </th>
-                    <th className="py-2.5 px-3 font-medium">
-                      <ColumnSortHeader
-                        label={`Partidos (${activeWeek?.label || 'Semana'})`}
-                        active={waiverTableSortKey === 'gamesCount'}
-                        asc={waiverTableSortAsc}
-                        onClick={() => handleWaiverTableSort('gamesCount')}
-                      />
-                    </th>
-                    <th className="py-2.5 px-3 font-medium text-right">
-                      <ColumnSortHeader
-                        label="Total FPTS"
-                        active={waiverTableSortKey === 'seasonTotalFpts'}
-                        asc={waiverTableSortAsc}
-                        onClick={() => handleWaiverTableSort('seasonTotalFpts')}
-                        align="right"
-                      />
-                    </th>
-                    <th className="py-2.5 px-3 font-medium text-right">
-                      <ColumnSortHeader
-                        label="Media FPTS"
-                        active={waiverTableSortKey === 'seasonAvgFpts'}
-                        asc={waiverTableSortAsc}
-                        onClick={() => handleWaiverTableSort('seasonAvgFpts')}
-                        align="right"
-                      />
-                    </th>
-                    <th className="py-2.5 px-3 font-medium text-right">
-                      <ColumnSortHeader
-                        label="Últ. 5 PJ"
-                        active={waiverTableSortKey === 'last5AvgFpts'}
-                        asc={waiverTableSortAsc}
-                        onClick={() => handleWaiverTableSort('last5AvgFpts')}
-                        align="right"
-                      />
-                    </th>
-                    <th className="py-2.5 px-3 font-medium text-right">
-                      <ColumnSortHeader
-                        label="Proy. Semana"
-                        active={waiverTableSortKey === 'lockAdjustedFpts'}
-                        asc={waiverTableSortAsc}
-                        onClick={() => handleWaiverTableSort('lockAdjustedFpts')}
-                        align="right"
-                      />
-                    </th>
-                    <th className="py-2.5 px-3 font-medium text-right">
-                      <ColumnSortHeader
-                        label="Ganancia vs Corte"
-                        active={waiverTableSortKey === 'netWeekGain'}
-                        asc={waiverTableSortAsc}
-                        onClick={() => handleWaiverTableSort('netWeekGain')}
-                        align="right"
-                      />
-                    </th>
-                    <th className="py-2.5 pl-2 pr-4 font-medium text-right">
-                      Acciones de Mercado
-                    </th>
+                <thead className={STICKY_THEAD_CLASS}>
+                  <tr className="border-b border-[#1E293B] text-[11px] text-slate-400">
+                    <SortableTh
+                      label="Agente Libre Disponible"
+                      align="left"
+                      active={waiverTableSortKey === 'name'}
+                      asc={waiverTableSortAsc}
+                      onSort={() => handleWaiverTableSort('name')}
+                      className="py-2.5 pl-4 pr-3"
+                    />
+                    <SortableTh
+                      label="Salud"
+                      align="left"
+                      active={waiverTableSortKey === 'severity'}
+                      asc={waiverTableSortAsc}
+                      onSort={() => handleWaiverTableSort('severity')}
+                    />
+                    <SortableTh
+                      label={`Partidos (${activeWeek?.label || 'Semana'})`}
+                      align="left"
+                      active={waiverTableSortKey === 'gamesCount'}
+                      asc={waiverTableSortAsc}
+                      onSort={() => handleWaiverTableSort('gamesCount')}
+                    />
+                    <SortableTh
+                      label="Total FPTS"
+                      align="right"
+                      active={waiverTableSortKey === 'seasonTotalFpts'}
+                      asc={waiverTableSortAsc}
+                      onSort={() => handleWaiverTableSort('seasonTotalFpts')}
+                    />
+                    <SortableTh
+                      label="Media FPTS"
+                      align="right"
+                      active={waiverTableSortKey === 'seasonAvgFpts'}
+                      asc={waiverTableSortAsc}
+                      onSort={() => handleWaiverTableSort('seasonAvgFpts')}
+                    />
+                    <SortableTh
+                      label="Últ. 5 PJ"
+                      align="right"
+                      active={waiverTableSortKey === 'last5AvgFpts'}
+                      asc={waiverTableSortAsc}
+                      onSort={() => handleWaiverTableSort('last5AvgFpts')}
+                    />
+                    <SortableTh
+                      label="Proy. Semana"
+                      align="right"
+                      active={waiverTableSortKey === 'lockAdjustedFpts'}
+                      asc={waiverTableSortAsc}
+                      onSort={() => handleWaiverTableSort('lockAdjustedFpts')}
+                    />
+                    <SortableTh
+                      label="Ganancia vs Corte"
+                      align="right"
+                      active={waiverTableSortKey === 'netWeekGain'}
+                      asc={waiverTableSortAsc}
+                      onSort={() => handleWaiverTableSort('netWeekGain')}
+                    />
+                    <SortableTh
+                      label="Acciones de Mercado"
+                      align="right"
+                      active={waiverTableSortKey === 'action'}
+                      asc={waiverTableSortAsc}
+                      onSort={() => handleWaiverTableSort('action')}
+                      className="py-2.5 pl-2 pr-4"
+                    />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#1E293B]/80 text-xs">
@@ -3621,55 +3786,98 @@ export function FantasyEspnAssistantView({
                   )}
               </div>
 
-              <div className="overflow-x-auto">
+              <div className="overflow-auto max-h-[52vh]">
                 <table className="w-full text-left border-collapse text-xs">
-                  <thead>
+                  <thead className={STICKY_THEAD_CLASS}>
                     <tr className="border-b border-[#1E293B] text-[11px] text-slate-400">
-                      <th className="py-2 px-4 font-medium">
-                        Bloque del Reglamento Oficial
-                      </th>
-                      <th className="py-2 px-3 font-medium text-right">
-                        Entregas / PJ
-                      </th>
-                      <th className="py-2 px-3 font-medium text-right">
-                        Recibes / PJ
-                      </th>
-                      <th className="py-2 px-4 font-medium text-right">
-                        Diferencia
-                      </th>
+                      <SortableTh
+                        label="Bloque del Reglamento Oficial"
+                        align="left"
+                        active={tradeTableSortKey === 'label'}
+                        asc={tradeTableSortAsc}
+                        onSort={() => toggleTradeTableSort('label')}
+                        className="py-2 px-4"
+                      />
+                      <SortableTh
+                        label="Entregas / PJ"
+                        align="right"
+                        active={tradeTableSortKey === 'send'}
+                        asc={tradeTableSortAsc}
+                        onSort={() => toggleTradeTableSort('send')}
+                        className="py-2 px-3"
+                      />
+                      <SortableTh
+                        label="Recibes / PJ"
+                        align="right"
+                        active={tradeTableSortKey === 'receive'}
+                        asc={tradeTableSortAsc}
+                        onSort={() => toggleTradeTableSort('receive')}
+                        className="py-2 px-3"
+                      />
+                      <SortableTh
+                        label="Diferencia"
+                        align="right"
+                        active={tradeTableSortKey === 'diff'}
+                        asc={tradeTableSortAsc}
+                        onSort={() => toggleTradeTableSort('diff')}
+                        className="py-2 px-4"
+                      />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#1E293B]/60 font-mono tabular-nums">
-                    {[
-                      {
-                        label: 'Aciertos de tiro (+2 FGM · +1 3PM · +1 FTM)',
-                        a: tradeEvaluation.sendSum.makePts,
-                        b: tradeEvaluation.receiveSum.makePts,
-                      },
-                      {
-                        label: 'Castigo por fallos (-1 FGMI · +0.5 3PMI · -1 FTMI)',
-                        a: tradeEvaluation.sendSum.missPenaltyPts,
-                        b: tradeEvaluation.receiveSum.missPenaltyPts,
-                      },
-                      {
-                        label: 'Rebotes (+1.5 OREB · +0.75 DREB)',
-                        a: tradeEvaluation.sendSum.rebPts,
-                        b: tradeEvaluation.receiveSum.rebPts,
-                      },
-                      {
-                        label: 'Creación y Defensa (+1.5 AST · +2.5 STL · +2.5 BLK)',
-                        a: tradeEvaluation.sendSum.playDefPts,
-                        b: tradeEvaluation.receiveSum.playDefPts,
-                      },
-                      {
-                        label: 'Penalizaciones (-2.0 TO · -5.0 EJ)',
-                        a: tradeEvaluation.sendSum.negPts,
-                        b: tradeEvaluation.receiveSum.negPts,
-                      },
-                    ].map((row) => {
+                    {(() => {
+                      const rawTradeRows = [
+                        {
+                          label: 'Aciertos de tiro (+2 FGM · +1 3PM · +1 FTM)',
+                          a: tradeEvaluation.sendSum.makePts,
+                          b: tradeEvaluation.receiveSum.makePts,
+                        },
+                        {
+                          label: 'Castigo por fallos (-1 FGMI · +0.5 3PMI · -1 FTMI)',
+                          a: tradeEvaluation.sendSum.missPenaltyPts,
+                          b: tradeEvaluation.receiveSum.missPenaltyPts,
+                        },
+                        {
+                          label: 'Rebotes (+1.5 OREB · +0.75 DREB)',
+                          a: tradeEvaluation.sendSum.rebPts,
+                          b: tradeEvaluation.receiveSum.rebPts,
+                        },
+                        {
+                          label: 'Creación y Defensa (+1.5 AST · +2.5 STL · +2.5 BLK)',
+                          a: tradeEvaluation.sendSum.playDefPts,
+                          b: tradeEvaluation.receiveSum.playDefPts,
+                        },
+                        {
+                          label: 'Penalizaciones (-2.0 TO · -5.0 EJ)',
+                          a: tradeEvaluation.sendSum.negPts,
+                          b: tradeEvaluation.receiveSum.negPts,
+                        },
+                      ];
+                      const tradeRows = tradeTableSortKey
+                        ? sortRows(
+                            rawTradeRows,
+                            (r) => {
+                              switch (tradeTableSortKey) {
+                                case 'label':
+                                  return r.label;
+                                case 'send':
+                                  return r.a;
+                                case 'receive':
+                                  return r.b;
+                                case 'diff':
+                                  return r.b - r.a;
+                                default:
+                                  return r.label;
+                              }
+                            },
+                            tradeTableSortAsc
+                          )
+                        : rawTradeRows;
+                      return tradeRows;
+                    })().map((row) => {
                       const diff = row.b - row.a;
                       return (
-                        <tr key={row.label}>
+                        <tr key={row.label} className="hover:bg-[#182338]/60 transition-colors">
                           <td className="py-2 px-4 font-sans text-slate-300">
                             {row.label}
                           </td>
@@ -3925,59 +4133,180 @@ export function FantasyEspnAssistantView({
                   </div>
                 </div>
 
-                <div className="overflow-x-auto">
+                <div className="overflow-auto max-h-[62vh]">
                   <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="border-b border-[#1E293B] text-[11px] text-slate-400 bg-[#0B1120]/60">
-                        <th className="py-2.5 pl-4 pr-2 font-medium">Fecha / Rival</th>
-                        <th className="py-2.5 px-2 font-medium text-right">
-                          FGM (+2)
-                        </th>
-                        <th className="py-2.5 px-2 font-medium text-right">
-                          FGMI (-1)
-                        </th>
-                        <th className="py-2.5 px-2 font-medium text-right">
-                          3PM (+1)
-                        </th>
-                        <th className="py-2.5 px-2 font-medium text-right">
-                          3PMI (+0.5)
-                        </th>
-                        <th className="py-2.5 px-2 font-medium text-right">
-                          FTM (+1)
-                        </th>
-                        <th className="py-2.5 px-2 font-medium text-right">
-                          FTMI (-1)
-                        </th>
-                        <th className="py-2.5 px-2 font-medium text-right">
-                          OREB (+1.5)
-                        </th>
-                        <th className="py-2.5 px-2 font-medium text-right">
-                          DREB (+0.75)
-                        </th>
-                        <th className="py-2.5 px-2 font-medium text-right">
-                          AST (+1.5)
-                        </th>
-                        <th className="py-2.5 px-2 font-medium text-right">
-                          STL/BLK (+2.5)
-                        </th>
-                        <th className="py-2.5 px-2 font-medium text-right">
-                          TO (-2)
-                        </th>
-                        <th className="py-2.5 pl-2 pr-4 font-medium text-right">
-                          Total FPTS
-                        </th>
+                    <thead className={STICKY_THEAD_CLASS}>
+                      <tr className="border-b border-[#1E293B] text-[11px] text-slate-400">
+                        <SortableTh
+                          label="Fecha / Rival"
+                          align="left"
+                          compact
+                          active={auditSortKey === 'date'}
+                          asc={auditSortAsc}
+                          onSort={() => toggleAuditSort('date')}
+                          className="py-2.5 pl-4 pr-2"
+                        />
+                        <SortableTh
+                          label="FGM (+2)"
+                          align="right"
+                          compact
+                          active={auditSortKey === 'fgm'}
+                          asc={auditSortAsc}
+                          onSort={() => toggleAuditSort('fgm')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="FGMI (-1)"
+                          align="right"
+                          compact
+                          active={auditSortKey === 'fgmi'}
+                          asc={auditSortAsc}
+                          onSort={() => toggleAuditSort('fgmi')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="3PM (+1)"
+                          align="right"
+                          compact
+                          active={auditSortKey === 'fg3m'}
+                          asc={auditSortAsc}
+                          onSort={() => toggleAuditSort('fg3m')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="3PMI (+0.5)"
+                          align="right"
+                          compact
+                          active={auditSortKey === 'fg3mi'}
+                          asc={auditSortAsc}
+                          onSort={() => toggleAuditSort('fg3mi')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="FTM (+1)"
+                          align="right"
+                          compact
+                          active={auditSortKey === 'ftm'}
+                          asc={auditSortAsc}
+                          onSort={() => toggleAuditSort('ftm')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="FTMI (-1)"
+                          align="right"
+                          compact
+                          active={auditSortKey === 'ftmi'}
+                          asc={auditSortAsc}
+                          onSort={() => toggleAuditSort('ftmi')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="OREB (+1.5)"
+                          align="right"
+                          compact
+                          active={auditSortKey === 'oreb'}
+                          asc={auditSortAsc}
+                          onSort={() => toggleAuditSort('oreb')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="DREB (+0.75)"
+                          align="right"
+                          compact
+                          active={auditSortKey === 'dreb'}
+                          asc={auditSortAsc}
+                          onSort={() => toggleAuditSort('dreb')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="AST (+1.5)"
+                          align="right"
+                          compact
+                          active={auditSortKey === 'ast'}
+                          asc={auditSortAsc}
+                          onSort={() => toggleAuditSort('ast')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="STL/BLK (+2.5)"
+                          align="right"
+                          compact
+                          active={auditSortKey === 'stocks'}
+                          asc={auditSortAsc}
+                          onSort={() => toggleAuditSort('stocks')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="TO (-2)"
+                          align="right"
+                          compact
+                          active={auditSortKey === 'tov'}
+                          asc={auditSortAsc}
+                          onSort={() => toggleAuditSort('tov')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="Total FPTS"
+                          align="right"
+                          compact
+                          active={auditSortKey === 'totalFpts'}
+                          asc={auditSortAsc}
+                          onSort={() => toggleAuditSort('totalFpts')}
+                          className="py-2.5 pl-2 pr-4"
+                        />
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#1E293B]/70 font-mono tabular-nums">
-                      {auditedPlayerItem.player.games
-                        .filter((g) =>
-                          auditedPlayerItem.stats.currentSeasonGamesPlayed > 0
-                            ? g.seasonLabel === '2026-27'
-                            : true
-                        )
-                        .slice(0, 15)
-                        .map((g) => {
-                          const b = computeOfficialGameFptsBreakdown(g, 0);
+                      {(() => {
+                        const baseAuditRows = auditedPlayerItem.player.games
+                          .filter((g) =>
+                            auditedPlayerItem.stats.currentSeasonGamesPlayed > 0
+                              ? g.seasonLabel === '2026-27'
+                              : true
+                          )
+                          .slice(0, 15)
+                          .map((g) => ({
+                            g,
+                            b: computeOfficialGameFptsBreakdown(g, 0),
+                          }));
+                        if (!auditSortKey) return baseAuditRows;
+                        return sortRows(
+                          baseAuditRows,
+                          ({ g, b }) => {
+                            switch (auditSortKey) {
+                              case 'date':
+                                return g.date;
+                              case 'fgm':
+                                return b.fgm;
+                              case 'fgmi':
+                                return b.fgmi;
+                              case 'fg3m':
+                                return b.fg3m;
+                              case 'fg3mi':
+                                return b.fg3mi;
+                              case 'ftm':
+                                return b.ftm;
+                              case 'ftmi':
+                                return b.ftmi;
+                              case 'oreb':
+                                return b.oreb;
+                              case 'dreb':
+                                return b.dreb;
+                              case 'ast':
+                                return b.ast;
+                              case 'stocks':
+                                return b.stl + b.blk;
+                              case 'tov':
+                                return b.tov;
+                              case 'totalFpts':
+                                return b.totalFpts;
+                              default:
+                                return g.date;
+                            }
+                          },
+                          auditSortAsc
+                        );
+                      })().map(({ g, b }) => {
                           return (
                             <tr
                               key={`${g.eventId}-${g.date}`}
@@ -4136,95 +4465,88 @@ export function FantasyEspnAssistantView({
             <h3 className="font-semibold text-slate-100 text-sm">
               03. Tabla Oficial del Sistema de Puntuación (13 Categorías FPTS)
             </h3>
-            <div className="overflow-x-auto border border-[#1E293B] rounded-lg bg-[#0B1120]">
+            <div className="overflow-auto max-h-[60vh] border border-[#1E293B] rounded-lg bg-[#0B1120]">
               <table className="w-full text-left border-collapse text-xs font-mono tabular-nums">
-                <thead>
-                  <tr className="border-b border-[#1E293B] bg-[#0F172A] text-slate-400">
-                    <th className="py-2.5 px-3.5 font-sans font-medium">Acción Estadística</th>
-                    <th className="py-2.5 px-3 font-sans font-medium">Código</th>
-                    <th className="py-2.5 px-3 text-right font-sans font-medium">Valor FPTS</th>
-                    <th className="py-2.5 px-3.5 font-sans font-medium">Aplicación Exacta en el Cálculo</th>
+                <thead className={STICKY_THEAD_CLASS}>
+                  <tr className="border-b border-[#1E293B] text-slate-400">
+                    <SortableTh
+                      label="Acción Estadística"
+                      align="left"
+                      active={rulesSortKey === 'action'}
+                      asc={rulesSortAsc}
+                      onSort={() => toggleRulesSort('action')}
+                      className="py-2.5 px-3.5 font-sans"
+                    />
+                    <SortableTh
+                      label="Código"
+                      align="left"
+                      active={rulesSortKey === 'code'}
+                      asc={rulesSortAsc}
+                      onSort={() => toggleRulesSort('code')}
+                      className="py-2.5 px-3 font-sans"
+                    />
+                    <SortableTh
+                      label="Valor FPTS"
+                      align="right"
+                      active={rulesSortKey === 'fpts'}
+                      asc={rulesSortAsc}
+                      onSort={() => toggleRulesSort('fpts')}
+                      className="py-2.5 px-3 font-sans"
+                    />
+                    <SortableTh
+                      label="Aplicación Exacta en el Cálculo"
+                      align="left"
+                      active={rulesSortKey === 'description'}
+                      asc={rulesSortAsc}
+                      onSort={() => toggleRulesSort('description')}
+                      className="py-2.5 px-3.5 font-sans"
+                    />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#1E293B]/80">
-                  <tr>
-                    <td className="py-2 px-3.5 font-sans font-semibold text-slate-200">Tiro de campo anotado</td>
-                    <td className="py-2 px-3 text-orange-400">FGM</td>
-                    <td className="py-2 px-3 text-right text-emerald-400 font-bold">+2.0</td>
-                    <td className="py-2 px-3.5 text-slate-400 font-sans">Suma +2.0 por toda canasta en juego (de 2 o de 3 puntos).</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 px-3.5 font-sans font-semibold text-slate-200">Tiro de campo fallado</td>
-                    <td className="py-2 px-3 text-orange-400">FGMI</td>
-                    <td className="py-2 px-3 text-right text-rose-400 font-bold">-1.0</td>
-                    <td className="py-2 px-3.5 text-slate-400 font-sans">Calculado como FGA − FGM. Un tiro de 2 fallado resta −1.0 neto.</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 px-3.5 font-sans font-semibold text-slate-200">Tiro libre anotado</td>
-                    <td className="py-2 px-3 text-orange-400">FTM</td>
-                    <td className="py-2 px-3 text-right text-emerald-400 font-bold">+1.0</td>
-                    <td className="py-2 px-3.5 text-slate-400 font-sans">Suma +1.0 por cada tiro libre convertido.</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 px-3.5 font-sans font-semibold text-slate-200">Tiro libre fallado</td>
-                    <td className="py-2 px-3 text-orange-400">FTMI</td>
-                    <td className="py-2 px-3 text-right text-rose-400 font-bold">-1.0</td>
-                    <td className="py-2 px-3.5 text-slate-400 font-sans">Calculado como FTA − FTM. Penaliza la ineficiencia desde la línea.</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 px-3.5 font-sans font-semibold text-slate-200">Triple anotado (Bonus)</td>
-                    <td className="py-2 px-3 text-orange-400">3PM</td>
-                    <td className="py-2 px-3 text-right text-emerald-400 font-bold">+1.0</td>
-                    <td className="py-2 px-3.5 text-slate-400 font-sans">Acumulativo al FGM: cada triple encestado vale +2.0 (FGM) + 1.0 (3PM) = +3.0 FPTS.</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 px-3.5 font-sans font-semibold text-slate-200">Triple fallado (Compensación)</td>
-                    <td className="py-2 px-3 text-orange-400">3PMI</td>
-                    <td className="py-2 px-3 text-right text-emerald-400 font-bold">+0.5</td>
-                    <td className="py-2 px-3.5 text-slate-400 font-sans">Calculado como 3PA − 3PM: suaviza el fallo exterior (−1.0 FGMI + 0.5 3PMI = −0.5 FPTS neto).</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 px-3.5 font-sans font-semibold text-slate-200">Rebote ofensivo</td>
-                    <td className="py-2 px-3 text-orange-400">OREB</td>
-                    <td className="py-2 px-3 text-right text-emerald-400 font-bold">+1.5</td>
-                    <td className="py-2 px-3.5 text-slate-400 font-sans">Premia las segundas oportunidades generadas en aro rival.</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 px-3.5 font-sans font-semibold text-slate-200">Rebote defensivo</td>
-                    <td className="py-2 px-3 text-orange-400">DREB</td>
-                    <td className="py-2 px-3 text-right text-emerald-400 font-bold">+0.75</td>
-                    <td className="py-2 px-3.5 text-slate-400 font-sans">Suma +0.75 FPTS por cada rebote defensivo cerrado.</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 px-3.5 font-sans font-semibold text-slate-200">Asistencia</td>
-                    <td className="py-2 px-3 text-orange-400">AST</td>
-                    <td className="py-2 px-3 text-right text-emerald-400 font-bold">+1.5</td>
-                    <td className="py-2 px-3.5 text-slate-400 font-sans">Suma +1.5 FPTS por pase directo de canasta.</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 px-3.5 font-sans font-semibold text-slate-200">Robo de balón</td>
-                    <td className="py-2 px-3 text-orange-400">STL</td>
-                    <td className="py-2 px-3 text-right text-emerald-400 font-bold">+2.5</td>
-                    <td className="py-2 px-3.5 text-slate-400 font-sans">Alto impacto defensivo por recuperación limpia.</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 px-3.5 font-sans font-semibold text-slate-200">Tapón</td>
-                    <td className="py-2 px-3 text-orange-400">BLK</td>
-                    <td className="py-2 px-3 text-right text-emerald-400 font-bold">+2.5</td>
-                    <td className="py-2 px-3.5 text-slate-400 font-sans">Alto impacto de protección de aro (+2.5 FPTS por tapón).</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 px-3.5 font-sans font-semibold text-slate-200">Pérdida de balón</td>
-                    <td className="py-2 px-3 text-orange-400">TO</td>
-                    <td className="py-2 px-3 text-right text-rose-400 font-bold">-2.0</td>
-                    <td className="py-2 px-3.5 text-slate-400 font-sans">Resta −2.0 FPTS por cada balón perdido.</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2 px-3.5 font-sans font-semibold text-slate-200">Expulsión del partido</td>
-                    <td className="py-2 px-3 text-orange-400">EJ</td>
-                    <td className="py-2 px-3 text-right text-rose-400 font-bold">-5.0</td>
-                    <td className="py-2 px-3.5 text-slate-400 font-sans">Penalización disciplinaria por descalificación o doble técnica.</td>
-                  </tr>
+                  {(rulesSortKey
+                    ? sortRows(
+                        OFFICIAL_SCORING_CATEGORIES_ROWS,
+                        (r) => {
+                          switch (rulesSortKey) {
+                            case 'action':
+                              return r.action;
+                            case 'code':
+                              return r.code;
+                            case 'fpts':
+                              return r.fptsVal;
+                            case 'description':
+                              return r.description;
+                            default:
+                              return r.action;
+                          }
+                        },
+                        rulesSortAsc
+                      )
+                    : OFFICIAL_SCORING_CATEGORIES_ROWS
+                  ).map((r) => (
+                    <tr
+                      key={r.code}
+                      className="hover:bg-[#182338]/60 transition-colors"
+                    >
+                      <td className="py-2 px-3.5 font-sans font-semibold text-slate-200">
+                        {r.action}
+                      </td>
+                      <td className="py-2 px-3 text-orange-400">{r.code}</td>
+                      <td
+                        className={`py-2 px-3 text-right font-bold ${
+                          r.tone === 'positive'
+                            ? 'text-emerald-400'
+                            : 'text-rose-400'
+                        }`}
+                      >
+                        {r.fptsDisplay}
+                      </td>
+                      <td className="py-2 px-3.5 text-slate-400 font-sans">
+                        {r.description}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -5122,33 +5444,178 @@ export function FantasyEspnAssistantView({
               </div>
 
               {/* Game Log Table */}
-              <div className="overflow-y-auto flex-1 pr-1 space-y-2">
+              <div className="overflow-auto flex-1 pr-1 space-y-2">
                 {g2027.length === 0 ? (
                   <div className="py-12 text-center text-xs text-slate-400">
                     No hay partidos oficiales registrados para {item.player.name} en la temporada 2026-27.
                   </div>
                 ) : (
                   <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="border-b border-[#1E293B] text-[11px] text-slate-400 bg-[#0B1120]/80 sticky top-0 z-10">
-                        <th className="py-2.5 pl-3 pr-2 font-medium">Fecha</th>
-                        <th className="py-2.5 px-2 font-medium">Rival</th>
-                        <th className="py-2.5 px-2 font-medium">Min</th>
-                        <th className="py-2.5 px-2 font-medium">PTS</th>
-                        <th className="py-2.5 px-2 font-medium">TC (FGM/A)</th>
-                        <th className="py-2.5 px-2 font-medium">3P (3PM/A)</th>
-                        <th className="py-2.5 px-2 font-medium">TL (FTM/A)</th>
-                        <th className="py-2.5 px-2 font-medium">REB (O/D)</th>
-                        <th className="py-2.5 px-2 font-medium">AST</th>
-                        <th className="py-2.5 px-2 font-medium">ROB</th>
-                        <th className="py-2.5 px-2 font-medium">TAP</th>
-                        <th className="py-2.5 px-2 font-medium">PER</th>
-                        <th className="py-2.5 pr-3 font-medium text-right">FPTS Obtenidos</th>
+                    <thead className={STICKY_THEAD_CLASS}>
+                      <tr className="border-b border-[#1E293B] text-[11px] text-slate-400">
+                        <SortableTh
+                          label="Fecha"
+                          align="left"
+                          compact
+                          active={modalLogSortKey === 'date'}
+                          asc={modalLogSortAsc}
+                          onSort={() => toggleModalLogSort('date')}
+                          className="py-2.5 pl-3 pr-2"
+                        />
+                        <SortableTh
+                          label="Rival"
+                          align="left"
+                          compact
+                          active={modalLogSortKey === 'opp'}
+                          asc={modalLogSortAsc}
+                          onSort={() => toggleModalLogSort('opp')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="Min"
+                          align="left"
+                          compact
+                          active={modalLogSortKey === 'min'}
+                          asc={modalLogSortAsc}
+                          onSort={() => toggleModalLogSort('min')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="PTS"
+                          align="left"
+                          compact
+                          active={modalLogSortKey === 'pts'}
+                          asc={modalLogSortAsc}
+                          onSort={() => toggleModalLogSort('pts')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="TC (FGM/A)"
+                          align="left"
+                          compact
+                          active={modalLogSortKey === 'fgm'}
+                          asc={modalLogSortAsc}
+                          onSort={() => toggleModalLogSort('fgm')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="3P (3PM/A)"
+                          align="left"
+                          compact
+                          active={modalLogSortKey === 'fg3m'}
+                          asc={modalLogSortAsc}
+                          onSort={() => toggleModalLogSort('fg3m')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="TL (FTM/A)"
+                          align="left"
+                          compact
+                          active={modalLogSortKey === 'ftm'}
+                          asc={modalLogSortAsc}
+                          onSort={() => toggleModalLogSort('ftm')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="REB (O/D)"
+                          align="left"
+                          compact
+                          active={modalLogSortKey === 'reb'}
+                          asc={modalLogSortAsc}
+                          onSort={() => toggleModalLogSort('reb')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="AST"
+                          align="left"
+                          compact
+                          active={modalLogSortKey === 'ast'}
+                          asc={modalLogSortAsc}
+                          onSort={() => toggleModalLogSort('ast')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="ROB"
+                          align="left"
+                          compact
+                          active={modalLogSortKey === 'stl'}
+                          asc={modalLogSortAsc}
+                          onSort={() => toggleModalLogSort('stl')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="TAP"
+                          align="left"
+                          compact
+                          active={modalLogSortKey === 'blk'}
+                          asc={modalLogSortAsc}
+                          onSort={() => toggleModalLogSort('blk')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="PER"
+                          align="left"
+                          compact
+                          active={modalLogSortKey === 'tov'}
+                          asc={modalLogSortAsc}
+                          onSort={() => toggleModalLogSort('tov')}
+                          className="py-2.5 px-2"
+                        />
+                        <SortableTh
+                          label="FPTS Obtenidos"
+                          align="right"
+                          compact
+                          active={modalLogSortKey === 'fpts'}
+                          asc={modalLogSortAsc}
+                          onSort={() => toggleModalLogSort('fpts')}
+                          className="py-2.5 pl-2 pr-3"
+                        />
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#1E293B]/70 font-mono text-[11px]">
-                      {g2027.map((g) => {
-                        const breakdown = computeOfficialGameFptsBreakdown(g, 0);
+                      {(() => {
+                        const baseModalRows = g2027.map((g) => ({
+                          g,
+                          breakdown: computeOfficialGameFptsBreakdown(g, 0),
+                        }));
+                        if (!modalLogSortKey) return baseModalRows;
+                        return sortRows(
+                          baseModalRows,
+                          ({ g, breakdown }) => {
+                            switch (modalLogSortKey) {
+                              case 'date':
+                                return g.date;
+                              case 'opp':
+                                return g.opponentAbbr;
+                              case 'min':
+                                return g.minutes;
+                              case 'pts':
+                                return g.points;
+                              case 'fgm':
+                                return g.fgm * 100 + g.fga;
+                              case 'fg3m':
+                                return g.fg3m * 100 + g.fg3a;
+                              case 'ftm':
+                                return g.ftm * 100 + g.fta;
+                              case 'reb':
+                                return g.rebounds * 100 + g.oreb;
+                              case 'ast':
+                                return g.assists;
+                              case 'stl':
+                                return g.steals;
+                              case 'blk':
+                                return g.blocks;
+                              case 'tov':
+                                return g.turnovers;
+                              case 'fpts':
+                                return breakdown.totalFpts;
+                              default:
+                                return g.date;
+                            }
+                          },
+                          modalLogSortAsc
+                        );
+                      })().map(({ g, breakdown }) => {
                         return (
                           <tr key={`${g.eventId}-${g.date}`} className="hover:bg-[#182338] transition-colors">
                             <td className="py-2.5 pl-3 pr-2 whitespace-nowrap text-slate-300 font-sans font-medium">
