@@ -203,3 +203,17 @@ export function buildStaticFantasyWeeks(
 ): FantasyWeekWindow[] {
   return buildWeeklyWindowsFromSchedule(STATIC_SCHEDULE_2027, referenceTodayIso);
 }
+
+export function countRemainingGamesForTeam(
+  teamAbbr: string,
+  fromDateIso: string
+): number {
+  if (!teamAbbr) return 0;
+  const cleanTeam = teamAbbr.trim().toUpperCase();
+  const cleanFrom = fromDateIso.slice(0, 10);
+  return STATIC_SCHEDULE_2027.filter(
+    (g) =>
+      g.dateIso >= cleanFrom &&
+      (g.awayAbbr === cleanTeam || g.homeAbbr === cleanTeam)
+  ).length;
+}

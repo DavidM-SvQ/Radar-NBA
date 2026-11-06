@@ -9,12 +9,13 @@ export type ActiveSection =
   | 'comparator'
   | 'teams'
   | 'players'
+  | 'scatter'
   | 'fantasy_espn'
   | 'glossary';
 
 export type ExperienceMode = 'simple' | 'advanced';
 
-export type SeasonMode = 'continuous' | '2027' | '2026';
+export type SeasonMode = 'continuous' | '2027' | '2026' | '2025' | '2024';
 
 export type DataSourceKind =
   | 'official_nba'

@@ -3,9 +3,14 @@ import type {
   AdminSecurityConfigValues,
 } from '../types/nba';
 
-const ADMIN_TOKEN_STORAGE_KEY = 'radarnba_admin_token_v1';
+const LEGACY_TOKEN_V2_STORAGE_KEY = 'radarnba_admin_token_v2';
+const LEGACY_TOKEN_V1_STORAGE_KEY = 'radarnba_admin_token_v1';
 const LEGACY_UNLOCKED_STORAGE_KEY = 'radarnba_private_unlocked';
 const ADMIN_SECURITY_BACKUP_KEY = 'radarnba_admin_security_config_v1';
+const ADMIN_CSRF_HEADER_NAME = 'X-RadarNBA-CSRF';
+const ADMIN_CSRF_HEADER_VALUE = '1';
+
+export type RateLimitBackendKind = 'upstash-redis' | 'memory';
 
 export const CLIENT_DEFAULT_SECURITY_VALUES: AdminSecurityConfigValues = {
   nbaApiLimit: 120,
@@ -38,58 +43,72 @@ export interface AdminLoginResult {
   ok: boolean;
   error?: string;
   lockedOut?: boolean;
+  notConfigured?: boolean;
   retryAfterSeconds?: number;
   expiresAt?: number;
+}
+
+export interface CircuitMetricsClient {
+  provider: string;
+  state: 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+  consecutiveFailures: number;
+  failureThreshold: number;
+  totalFailures: number;
+  totalSuccesses: number;
+  totalShortCircuits: number;
+  trippedCount: number;
+  lastFailureTime: string | null;
+  lastFailureReason: string | null;
+  lastSuccessTime: string | null;
+  cooldownMs: number;
+  openRemainingMs: number;
 }
 
 export interface AdminSecurityConfigResponse {
   ok: boolean;
   config?: AdminSecurityConfig;
   defaults?: AdminSecurityConfigValues;
+  rateLimitBackend?: RateLimitBackendKind;
+  circuits?: Record<string, CircuitMetricsClient>;
   error?: string;
   unauthorized?: boolean;
 }
 
-export function getStoredAdminToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    sessionStorage.removeItem(LEGACY_UNLOCKED_STORAGE_KEY);
-    const raw = sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY);
-    return raw && raw.trim() ? raw.trim() : null;
-  } catch {
-    return null;
+/**
+ * Purges any legacy session tokens previously stored in Web Storage.
+ * Active admin sessions live exclusively in an HttpOnly; Secure; SameSite=Strict cookie
+ * inaccessible to JavaScript (XSS-proof).
+ */
+export function purgeLegacyAdminBrowserStorage(): void {
+  if (typeof window === 'undefined') return;
+  const legacyKeys = [
+    LEGACY_TOKEN_V2_STORAGE_KEY,
+    LEGACY_TOKEN_V1_STORAGE_KEY,
+    LEGACY_UNLOCKED_STORAGE_KEY,
+  ];
+  for (const key of legacyKeys) {
+    try {
+      sessionStorage.removeItem(key);
+    } catch {
+      // Ignore storage errors
+    }
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Ignore storage errors
+    }
   }
 }
 
-export function storeAdminToken(token: string): void {
-  if (typeof window === 'undefined') return;
-  try {
-    sessionStorage.removeItem(LEGACY_UNLOCKED_STORAGE_KEY);
-    sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
-  } catch {
-    // Ignore storage quota errors
-  }
-}
-
-export function clearStoredAdminToken(): void {
-  if (typeof window === 'undefined') return;
-  try {
-    sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
-    sessionStorage.removeItem(LEGACY_UNLOCKED_STORAGE_KEY);
-  } catch {
-    // Ignore storage errors
-  }
-}
+purgeLegacyAdminBrowserStorage();
 
 export function buildAdminAuthHeaders(
   extraHeaders?: Record<string, string>
 ): Record<string, string> {
-  const headers: Record<string, string> = { ...(extraHeaders || {}) };
-  const token = getStoredAdminToken();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-  return headers;
+  return {
+    [ADMIN_CSRF_HEADER_NAME]: ADMIN_CSRF_HEADER_VALUE,
+    ...(extraHeaders || {}),
+  };
 }
 
 function readLocalSecurityBackup(): AdminSecurityConfig | null {
@@ -140,21 +159,32 @@ function writeLocalSecurityBackup(cfg: AdminSecurityConfig): void {
 export async function loginAdminWithPasscode(
   passcode: string
 ): Promise<AdminLoginResult> {
+  purgeLegacyAdminBrowserStorage();
   try {
     const res = await fetch('/api/admin/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ passcode }),
     });
 
     const data = (await res.json().catch(() => ({}))) as {
       ok?: boolean;
-      token?: string;
       expiresAt?: number;
       error?: string;
       code?: string;
       retryAfterSeconds?: number;
     };
+
+    if (res.status === 503 || data.code === 'ADMIN_ENV_NOT_CONFIGURED') {
+      return {
+        ok: false,
+        notConfigured: true,
+        error:
+          data.error ||
+          'Acceso administrativo deshabilitado por seguridad: faltan las variables de entorno obligatorias en el servidor.',
+      };
+    }
 
     if (res.status === 429) {
       return {
@@ -170,14 +200,13 @@ export async function loginAdminWithPasscode(
       };
     }
 
-    if (!res.ok || !data.ok || !data.token) {
+    if (!res.ok || !data.ok) {
       return {
         ok: false,
         error: data.error || 'Clave incorrecta. Inténtalo de nuevo.',
       };
     }
 
-    storeAdminToken(data.token);
     return {
       ok: true,
       expiresAt: data.expiresAt,
@@ -191,38 +220,31 @@ export async function loginAdminWithPasscode(
 }
 
 export async function verifyStoredAdminSession(): Promise<boolean> {
-  const token = getStoredAdminToken();
-  if (!token) return false;
-
+  purgeLegacyAdminBrowserStorage();
   try {
     const res = await fetch('/api/admin/session', {
       method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
       headers: buildAdminAuthHeaders(),
     });
     if (!res.ok) {
-      if (res.status === 401 || res.status === 403) {
-        clearStoredAdminToken();
-      }
       return false;
     }
     const data = (await res.json()) as { authenticated?: boolean };
-    if (!data.authenticated) {
-      clearStoredAdminToken();
-      return false;
-    }
-    return true;
+    return Boolean(data.authenticated);
   } catch {
     return false;
   }
 }
 
 export async function logoutAdminSession(): Promise<void> {
-  const headers = buildAdminAuthHeaders();
-  clearStoredAdminToken();
+  purgeLegacyAdminBrowserStorage();
   try {
     await fetch('/api/admin/logout', {
       method: 'POST',
-      headers,
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders(),
     });
   } catch {
     // Ignore network errors on logout
@@ -233,17 +255,21 @@ export async function fetchAdminSecurityConfig(): Promise<AdminSecurityConfigRes
   try {
     const res = await fetch('/api/admin/security-config', {
       method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
       headers: buildAdminAuthHeaders(),
     });
 
-    if (res.status === 401 || res.status === 403) {
-      return { ok: false, unauthorized: true, error: 'Sesión expirada.' };
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true, error: 'Sesión expirada o no disponible.' };
     }
 
     const data = (await res.json().catch(() => ({}))) as {
       ok?: boolean;
       config?: AdminSecurityConfig;
       defaults?: AdminSecurityConfigValues;
+      rateLimitBackend?: RateLimitBackendKind;
+      circuits?: Record<string, CircuitMetricsClient>;
       error?: string;
     };
 
@@ -254,7 +280,7 @@ export async function fetchAdminSecurityConfig(): Promise<AdminSecurityConfigRes
       };
     }
 
-    // Reconcile if serverless cold-start booted at updatedAt=0 while browser backup holds saved settings
+    // Reconcile if non-Redis cold-start booted at updatedAt=0 while browser backup holds saved settings
     const localBackup = readLocalSecurityBackup();
     if (
       data.config.updatedAt === 0 &&
@@ -273,6 +299,8 @@ export async function fetchAdminSecurityConfig(): Promise<AdminSecurityConfigRes
       ok: true,
       config: data.config,
       defaults: data.defaults || CLIENT_DEFAULT_SECURITY_VALUES,
+      rateLimitBackend: data.rateLimitBackend || 'memory',
+      circuits: data.circuits,
     };
   } catch {
     return {
@@ -282,24 +310,39 @@ export async function fetchAdminSecurityConfig(): Promise<AdminSecurityConfigRes
   }
 }
 
+export async function resetAdminCircuitBreakers(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/admin/circuit-breaker/reset', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders(),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function updateAdminSecurityConfig(
   values: AdminSecurityConfigValues
 ): Promise<AdminSecurityConfigResponse> {
   try {
     const res = await fetch('/api/admin/security-config', {
       method: 'PUT',
+      credentials: 'same-origin',
       headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(values),
     });
 
-    if (res.status === 401 || res.status === 403) {
-      return { ok: false, unauthorized: true, error: 'Sesión expirada.' };
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true, error: 'Sesión expirada o no disponible.' };
     }
 
     const data = (await res.json().catch(() => ({}))) as {
       ok?: boolean;
       config?: AdminSecurityConfig;
       defaults?: AdminSecurityConfigValues;
+      rateLimitBackend?: RateLimitBackendKind;
       error?: string;
     };
 
@@ -315,6 +358,7 @@ export async function updateAdminSecurityConfig(
       ok: true,
       config: data.config,
       defaults: data.defaults || CLIENT_DEFAULT_SECURITY_VALUES,
+      rateLimitBackend: data.rateLimitBackend || 'memory',
     };
   } catch {
     return {
@@ -328,17 +372,19 @@ export async function resetAdminSecurityConfigDefaults(): Promise<AdminSecurityC
   try {
     const res = await fetch('/api/admin/security-config/reset-defaults', {
       method: 'POST',
+      credentials: 'same-origin',
       headers: buildAdminAuthHeaders(),
     });
 
-    if (res.status === 401 || res.status === 403) {
-      return { ok: false, unauthorized: true, error: 'Sesión expirada.' };
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true, error: 'Sesión expirada o no disponible.' };
     }
 
     const data = (await res.json().catch(() => ({}))) as {
       ok?: boolean;
       config?: AdminSecurityConfig;
       defaults?: AdminSecurityConfigValues;
+      rateLimitBackend?: RateLimitBackendKind;
       error?: string;
     };
 
@@ -354,6 +400,7 @@ export async function resetAdminSecurityConfigDefaults(): Promise<AdminSecurityC
       ok: true,
       config: data.config,
       defaults: data.defaults || CLIENT_DEFAULT_SECURITY_VALUES,
+      rateLimitBackend: data.rateLimitBackend || 'memory',
     };
   } catch {
     return {
@@ -371,11 +418,12 @@ export async function resetAdminRateLimitCounters(): Promise<{
   try {
     const res = await fetch('/api/admin/security-config/reset-counters', {
       method: 'POST',
+      credentials: 'same-origin',
       headers: buildAdminAuthHeaders(),
     });
 
-    if (res.status === 401 || res.status === 403) {
-      return { ok: false, unauthorized: true, error: 'Sesión expirada.' };
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true, error: 'Sesión expirada o no disponible.' };
     }
 
     if (!res.ok) {
@@ -392,5 +440,78 @@ export async function resetAdminRateLimitCounters(): Promise<{
       ok: false,
       error: 'Error de conexión al limpiar contadores IP.',
     };
+  }
+}
+
+export interface TelemetrySummaryClient {
+  uptimeSeconds: number;
+  totalRequests: number;
+  requestsLastMinute: number;
+  statusDistribution: {
+    s2xx: number;
+    s3xx: number;
+    s4xx: number;
+    s5xx: number;
+  };
+  latency: {
+    avgMs: number;
+    p50Ms: number;
+    p90Ms: number;
+    p95Ms: number;
+  };
+  errorRatePct: number;
+  activeAlerts: Array<{
+    id: string;
+    triggeredAt: string;
+    type: string;
+    severity: 'medium' | 'high' | 'critical';
+    title: string;
+    description: string;
+    metrics: Record<string, any>;
+  }>;
+  recentLogs: Array<{
+    id: string;
+    timestamp: string;
+    level: string;
+    event: string;
+    method?: string;
+    path?: string;
+    statusCode?: number;
+    durationMs?: number;
+    ipHash?: string;
+    meta?: Record<string, any>;
+  }>;
+}
+
+export async function fetchAdminTelemetry(): Promise<{
+  ok: boolean;
+  telemetry?: TelemetrySummaryClient;
+  error?: string;
+  unauthorized?: boolean;
+}> {
+  try {
+    const res = await fetch('/api/admin/telemetry', {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: buildAdminAuthHeaders(),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      telemetry?: TelemetrySummaryClient;
+      error?: string;
+    };
+    if (!res.ok || !data.telemetry) {
+      return {
+        ok: false,
+        error: data.error || 'No se pudieron consultar los datos de telemetría.',
+      };
+    }
+    return { ok: true, telemetry: data.telemetry };
+  } catch {
+    return { ok: false, error: 'Error de red al consultar la telemetría.' };
   }
 }

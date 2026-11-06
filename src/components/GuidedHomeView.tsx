@@ -45,6 +45,8 @@ import {
   useTableSort,
 } from '../utils/tableSort';
 import { EntityBadge, PlayerAvatar, TeamLogo } from './NbaVisuals';
+import { ExportImageButton } from './ExportImageButton';
+import { buildTableSnapshotBlob } from '../utils/exportImageCard';
 
 interface GuidedHomeViewProps {
   players: PlayerSummary[];
@@ -917,6 +919,77 @@ export function GuidedHomeView({
                 );
               })}
             </div>
+
+            <ExportImageButton
+              disabled={protagonistRows.length === 0}
+              onBuildImage={async () => {
+                const dateSlug = new Date().toISOString().slice(0, 10);
+                const filename = `radarnba-protagonistas-${dateSlug}.png`;
+                return buildTableSnapshotBlob({
+                  filename,
+                  categoryTag: 'RESUMEN DEL DÍA · PROTAGONISTAS NBA',
+                  title: `Top ${protagonistRows.length} Protagonistas del Día (Últ. ${windowSize} PJ)`,
+                  subtitle: 'Anomalías estadísticas positivas y negativas más destacadas de la jornada',
+                  entityColumnLabel: 'JUGADOR / EQUIPO',
+                  entityColumnWeight: 2.25,
+                  kpis: [
+                    {
+                      label: 'CASOS DESTACADOS',
+                      value: `${protagonistRows.length}`,
+                      sublabel: `De ${scopedAnomalies.length} señales totales`,
+                      tone: 'accent',
+                    },
+                    {
+                      label: 'EN RACHA (+) / BACHE (-)',
+                      value: `${
+                        protagonistRows.filter((s) => isAnomalyPositive(s)).length
+                      } ↑ · ${
+                        protagonistRows.filter((s) => !isAnomalyPositive(s)).length
+                      } ↓`,
+                      tone: 'positive',
+                    },
+                  ],
+                  columns: [
+                    { key: 'metric', label: 'ESTADÍSTICA', align: 'left', widthWeight: 1.5 },
+                    { key: 'base', label: 'HABITUAL', align: 'right', widthWeight: 0.95 },
+                    { key: 'win', label: `ÚLT. ${windowSize} PJ`, align: 'right', widthWeight: 1.0 },
+                    { key: 'delta', label: 'DIFERENCIA', align: 'right', widthWeight: 1.1 },
+                    { key: 'z', label: 'IMPACTO', align: 'right', widthWeight: 1.0 },
+                  ],
+                  rows: protagonistRows.map((sig, idx) => {
+                    const pos = isAnomalyPositive(sig);
+                    return {
+                      rank: idx + 1,
+                      teamAbbr: sig.teamAbbr,
+                      entityName: sig.entityName,
+                      entitySubtext: sig.subtitle,
+                      cells: {
+                        metric: {
+                          text: plainMetricName(sig.metricKey, sig.metricLabel),
+                          tone: pos ? 'positive' : 'negative',
+                        },
+                        base: { text: `${sig.baselineAvg.toFixed(1)}${sig.unit}` },
+                        win: {
+                          text: `${sig.windowAvg.toFixed(1)}${sig.unit}`,
+                          tone: pos ? 'positive' : 'negative',
+                        },
+                        delta: {
+                          text: `${formatSigned(sig.pctDelta, 0)}%`,
+                          subtext: `${formatSigned(sig.absDelta, 1)}${sig.unit}`,
+                          tone: pos ? 'positive' : 'negative',
+                        },
+                        z: {
+                          text: `${formatSigned(sig.zScore, 2)}σ`,
+                          subtext: describeZScoreHuman(sig.zScore, pos).label,
+                          tone: 'accent',
+                        },
+                      },
+                    };
+                  }),
+                  footerNote: `Selección de los ${protagonistRows.length} casos más destacables sin recorte`,
+                });
+              }}
+            />
 
             <button
               type="button"

@@ -37,6 +37,8 @@ import {
   useTableSort,
 } from '../utils/tableSort';
 import { PlayerAvatar } from './NbaVisuals';
+import { ExportImageButton } from './ExportImageButton';
+import { buildComparisonSnapshotBlob } from '../utils/exportImageCard';
 
 interface HeadToHeadBattleViewProps {
   players: PlayerSummary[];
@@ -1690,6 +1692,105 @@ export function HeadToHeadBattleView({
               <Shuffle className="w-3.5 h-3.5 text-sky-400" />
               <span>Duelo aleatorio</span>
             </button>
+
+            <ExportImageButton
+              label="Exportar Duelo PNG"
+              disabled={!playerA || !playerB}
+              title="Descargar tarjeta comparativa de este Duelo 1v1 en imagen PNG"
+              onBuildImage={() =>
+                buildComparisonSnapshotBlob({
+                  filename: `radarnba-duelo-${shortA}-vs-${shortB}`,
+                  categoryTag: 'Duelo Directo 1v1 · Cara a Cara',
+                  title: `${playerA?.name || shortA} vs ${playerB?.name || shortB}`,
+                  subtitle: `Muestra: ${scopeLabel} · Valoración Radar: ${ovrA} vs ${ovrB} · Categorías: ${scoreboard.winsA}-${scoreboard.winsB}`,
+                  verdictLabel: 'Marcador Global del Duelo:',
+                  verdictPrimary:
+                    scoreboard.winsA > scoreboard.winsB
+                      ? `Domina ${shortA} (${scoreboard.winsA}-${scoreboard.winsB})`
+                      : scoreboard.winsB > scoreboard.winsA
+                      ? `Domina ${shortB} (${scoreboard.winsB}-${scoreboard.winsA})`
+                      : `Empate técnico (${scoreboard.winsA}-${scoreboard.winsB})`,
+                  verdictPrimaryTone:
+                    scoreboard.winsA > scoreboard.winsB
+                      ? 'accent'
+                      : scoreboard.winsB > scoreboard.winsA
+                      ? 'sky'
+                      : 'neutral',
+                  verdictSecondary: `Valoración Radar 6 ejes: ${ovrA} (${tierA.label}) vs ${ovrB} (${tierB.label})`,
+                  verdictSecondaryTone: 'muted',
+                  sideA: {
+                    headerLabel: `Esquina Naranja · ${playerA?.teamAbbr || 'NBA'}`,
+                    accentTone: 'orange',
+                    headlineTitle: playerA?.name || shortA,
+                    headlineValue: `OVR ${ovrA}`,
+                    headlineSubtext: `${playerA?.position || '—'} · ${statsA.gamesCount} PJ · ${roleA.label}`,
+                    items: [
+                      {
+                        name: `${statsA.pts.toFixed(1)} PTS · ${statsA.reb.toFixed(1)} REB · ${statsA.ast.toFixed(1)} AST`,
+                        teamAbbr: playerA?.teamAbbr,
+                        detail: `TS% ${statsA.tsPct.toFixed(1)}% · USG% ${statsA.usgPct.toFixed(1)}% · GmSc ${statsA.gmSc.toFixed(1)}`,
+                        badgeText: scoreboard.bestForA
+                          ? `Baza: ${scoreboard.bestForA.shortUnit}`
+                          : undefined,
+                        badgeTone: 'accent',
+                      },
+                    ],
+                  },
+                  sideB: {
+                    headerLabel: `Esquina Azul · ${playerB?.teamAbbr || 'NBA'}`,
+                    accentTone: 'sky',
+                    headlineTitle: playerB?.name || shortB,
+                    headlineValue: `OVR ${ovrB}`,
+                    headlineSubtext: `${playerB?.position || '—'} · ${statsB.gamesCount} PJ · ${roleB.label}`,
+                    items: [
+                      {
+                        name: `${statsB.pts.toFixed(1)} PTS · ${statsB.reb.toFixed(1)} REB · ${statsB.ast.toFixed(1)} AST`,
+                        teamAbbr: playerB?.teamAbbr,
+                        detail: `TS% ${statsB.tsPct.toFixed(1)}% · USG% ${statsB.usgPct.toFixed(1)}% · GmSc ${statsB.gmSc.toFixed(1)}`,
+                        badgeText: scoreboard.bestForB
+                          ? `Baza: ${scoreboard.bestForB.shortUnit}`
+                          : undefined,
+                        badgeTone: 'sky',
+                      },
+                    ],
+                  },
+                  breakdownTitle: 'Categoría enfrentada',
+                  colALabel: shortA,
+                  colBLabel: shortB,
+                  colDeltaLabel: 'Ventaja',
+                  rows: visibleCategories.slice(0, 12).map((r) => ({
+                    label:
+                      experienceMode === 'simple' ? r.simpleLabel : r.label,
+                    valAText: formatMetricVal(
+                      r.valA,
+                      r.decimals,
+                      r.suffix,
+                      r.signed
+                    ),
+                    valBText: formatMetricVal(
+                      r.valB,
+                      r.decimals,
+                      r.suffix,
+                      r.signed
+                    ),
+                    deltaText:
+                      r.winner === 'tie'
+                        ? 'Empate'
+                        : `+${r.advantageAbs.toFixed(r.decimals)} ${
+                            r.winner === 'A' ? shortA : shortB
+                          }`,
+                    deltaTone:
+                      r.winner === 'A'
+                        ? 'accent'
+                        : r.winner === 'B'
+                        ? 'sky'
+                        : 'muted',
+                    winner: r.winner,
+                    shareA: r.shareA,
+                  })),
+                })
+              }
+            />
 
             {!allPlayersLoaded && totalLeaguePlayersAvailable > players.length && (
               <div className="inline-flex items-center gap-1.5 shrink-0">

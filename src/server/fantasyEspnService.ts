@@ -6,52 +6,13 @@ import { fileURLToPath } from "url";
 import { OFFICIAL_LEAGUE_RULES, normalizePlayerLookupKey } from "../utils/fantasyScoring.ts";
 import { STATIC_SCHEDULE_2027, buildWeeklyWindowsFromSchedule, getEasternTodayIso } from "../utils/staticSchedule.ts";
 import { translateMedicalDetailEs } from "./scoutingEngine.ts";
+import { executeUpstashCommand, getRedisRestConfig } from "./upstashRedis.ts";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = [path.resolve(process.cwd(), "data"), path.resolve(__dirname, "../data"), path.resolve(__dirname, "../../data")].find((p) => fs.existsSync(p)) || path.resolve(process.cwd(), "data");
 const MANUAL_STATE_FILE = path.join(DATA_DIR, "fantasy-manual-league.json");
 const SERVERLESS_TMP_STATE_FILE = "/tmp/radarnba-fantasy-manual-league.json";
 const FANTASY_REDIS_KEY = "radarnba:fantasy:manual_league_v1";
-
-function getRedisRestConfig() {
-  const explicitPairs = [
-    [process.env.UPSTASH_REDIS_REST_URL, process.env.UPSTASH_REDIS_REST_TOKEN],
-    [process.env.KV_REST_API_URL, process.env.KV_REST_API_TOKEN],
-    [process.env.REDIS_REST_URL, process.env.REDIS_REST_TOKEN],
-    [process.env.FANTASY_REDIS_REST_URL, process.env.FANTASY_REDIS_REST_TOKEN],
-  ];
-  for (const [rawUrl, rawToken] of explicitPairs) {
-    if (
-      typeof rawUrl === "string" &&
-      rawUrl.trim().startsWith("https://") &&
-      typeof rawToken === "string" &&
-      rawToken.trim()
-    ) {
-      return {
-        url: rawUrl.trim().replace(/\/+$/, ""),
-        token: rawToken.trim(),
-      };
-    }
-  }
-  for (const [key, val] of Object.entries(process.env)) {
-    if (typeof val !== "string" || !val.trim().startsWith("https://")) continue;
-    if (key.endsWith("_REDIS_REST_URL")) {
-      const prefix = key.slice(0, -"_REDIS_REST_URL".length);
-      const tok = process.env[`${prefix}_REDIS_REST_TOKEN`];
-      if (typeof tok === "string" && tok.trim()) {
-        return { url: val.trim().replace(/\/+$/, ""), token: tok.trim() };
-      }
-    }
-    if (key.endsWith("_KV_REST_API_URL")) {
-      const prefix = key.slice(0, -"_KV_REST_API_URL".length);
-      const tok = process.env[`${prefix}_KV_REST_API_TOKEN`];
-      if (typeof tok === "string" && tok.trim()) {
-        return { url: val.trim().replace(/\/+$/, ""), token: tok.trim() };
-      }
-    }
-  }
-  return null;
-}
 
 function getFantasyStorageBackendInfo() {
   const redisCfg = getRedisRestConfig();
@@ -62,34 +23,6 @@ function getFantasyStorageBackendInfo() {
     return { storageMode: "tmp-ephemeral", cloudConfigured: false };
   }
   return { storageMode: "local-disk", cloudConfigured: false };
-}
-
-async function executeUpstashCommand(redisCfg, commandArgs) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 6000);
-  try {
-    const res = await fetch(redisCfg.url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${redisCfg.token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(commandArgs),
-      cache: "no-store",
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      const errText = await res.text().catch(() => "");
-      throw new Error(`Upstash HTTP ${res.status}: ${errText.slice(0, 160)}`);
-    }
-    const payload = await res.json();
-    if (payload && payload.error) {
-      throw new Error(`Upstash Redis error: ${String(payload.error)}`);
-    }
-    return payload ? payload.result : null;
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 function sanitizeManualFantasyState(raw) {

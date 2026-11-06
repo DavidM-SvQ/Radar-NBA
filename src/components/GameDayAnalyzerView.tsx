@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   BookOpen,
@@ -26,10 +26,15 @@ import type {
 } from '../types/nba';
 import { formatSigned } from '../utils/analytics';
 import {
-  GameScoutingReportModal,
   renderEditorialParagraphs,
   renderHighlightedInline,
-} from './GameScoutingReportModal';
+} from './editorialTextRenderers';
+
+const GameScoutingReportModal = lazy(() =>
+  import('./GameScoutingReportModal').then((m) => ({
+    default: m.GameScoutingReportModal,
+  }))
+);
 import { MetricInfoTooltip, SortableTh } from './MetricUiHelpers';
 import {
   STICKY_THEAD_CLASS,
@@ -2486,13 +2491,26 @@ export function GameDayAnalyzerView({
         </div>
       )}
 
-      {/* FULL PASO B + NBA.COM GAME BOOK SCOUTING REPORT MODAL */}
-      <GameScoutingReportModal
-        eventId={activeReportEventId}
-        experienceMode={experienceMode}
-        onClose={() => handleSetReportEventId(null)}
-        onInspectEntity={onInspectEntity}
-      />
+      {/* FULL PASO B + NBA.COM GAME BOOK SCOUTING REPORT MODAL (lazy-loaded on demand) */}
+      {activeReportEventId && (
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl px-5 py-4 flex items-center gap-2.5 text-xs font-medium text-slate-200 shadow-2xl">
+                <RefreshCw className="w-4 h-4 text-orange-400 animate-spin shrink-0" />
+                <span>Cargando acta e informe del partido...</span>
+              </div>
+            </div>
+          }
+        >
+          <GameScoutingReportModal
+            eventId={activeReportEventId}
+            experienceMode={experienceMode}
+            onClose={() => handleSetReportEventId(null)}
+            onInspectEntity={onInspectEntity}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

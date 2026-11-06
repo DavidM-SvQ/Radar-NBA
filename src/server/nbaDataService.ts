@@ -1,5 +1,6 @@
 // @ts-nocheck
-const __name = (fn, _n) => fn;
+const __name = (fn, _name) => fn;
+import crypto from "crypto";
 import { buildExtendedPlayerBenchmarks, seasonCycleDay } from "../utils/playerInspectorAnalytics.ts";
 import { NBA_TEAMS_MAP } from "../utils/teamLogos.ts";
 import { createScoutingEngine } from "./scoutingEngine.ts";
@@ -8,6 +9,7 @@ import zlib from "zlib";
 import { packBootstrapWirePayload } from "../utils/bootstrapWireCodec.ts";
 import { applyCdnDeltaGamesTo2027, hydrateSeasonDatasetFromSnapshot, readNbaSnapshotFromDisk, serializeSeasonDatasetForSnapshot, writeNbaSnapshotToDisk } from "./nbaSnapshotStore.ts";
 import { buildSeasonAwardsPayload, enrichBiosWithEspnRosters } from "./seasonAwardsService.ts";
+import { executeWithCircuitBreaker, identifyProviderFromUrl } from "./circuitBreaker.ts";
 function isSnapshotOnlyRuntime() {
   return Boolean(process.env.VERCEL) || process.env.NBA_SNAPSHOT_ONLY === "1";
 }
@@ -73,21 +75,33 @@ async function cachedFetchJson(url, ttlMs = 5 * 60 * 1e3, headers = {}, timeoutM
   if (inflight && !forceRefresh) {
     return inflight;
   }
-  const p = (async () => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch(url, { headers, signal: controller.signal });
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status} fetching ${url}`);
+  const provider = identifyProviderFromUrl(url);
+  const p = executeWithCircuitBreaker(
+    provider,
+    async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(url, { headers, signal: controller.signal });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status} fetching ${url}`);
+        }
+        const data = await res.json();
+        jsonCache.set(url, { expiresAt: Date.now() + ttlMs, value: data });
+        return data;
+      } finally {
+        clearTimeout(timer);
       }
-      const data = await res.json();
-      jsonCache.set(url, { expiresAt: Date.now() + ttlMs, value: data });
-      return data;
-    } finally {
-      clearTimeout(timer);
+    },
+    (err) => {
+      const staleHit = jsonCache.get(url);
+      if (staleHit) {
+        console.warn(`[CircuitBreaker Fallback] Sirviendo caché stale para ${url} debido a: ${err.message}`);
+        return staleHit.value;
+      }
+      throw err;
     }
-  })();
+  );
   jsonInflight.set(url, p);
   try {
     return await p;
@@ -208,6 +222,11 @@ async function buildSingleSeasonDataset(seasonCode, forceRefresh = false, option
       seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: hydrated26 });
       return hydrated26;
     }
+    if (seasonCode === "2023-24" && !forceLive && snap?.s2024) {
+      const hydrated24 = hydrateSeasonDatasetFromSnapshot(snap.s2024);
+      seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: hydrated24 });
+      return hydrated24;
+    }
     const biosMap = await getPlayerBiosMap(forceRefresh, { forceLiveStats: forceLive });
     if (isSnapshotOnlyRuntime() && !forceLive) {
       const createEmptyTeamsMap = __name(() => new Map(Object.values(NBA_TEAMS_MAP).map((tm) => [tm.abbr, { id: tm.id, name: tm.name, shortName: tm.abbr === "POR" ? "Trail Blazers" : tm.name.split(" ").slice(-1)[0] || tm.name, abbreviation: tm.abbr, conference: EAST_TEAM_ABBRS.has(tm.abbr) ? "Este" : "Oeste", wins: 0, losses: 0, winPct: 0, playoffSeed: 0, gamesBehind: "-", streakCode: "-", homeRecord: "0-0", roadRecord: "0-0", lastTenRecord: "0-0", avgPointsFor: 0, avgPointsAgainst: 0, differential: 0, games: [] }])), "createEmptyTeamsMap");
@@ -215,6 +234,16 @@ async function buildSingleSeasonDataset(seasonCode, forceRefresh = false, option
         const fallback26 = snap?.s2026 ? hydrateSeasonDatasetFromSnapshot(snap.s2026) : { seasonCode: "2025-26", dataSource: "espn_fallback", teamsByAbbr: createEmptyTeamsMap(), playersById: /* @__PURE__ */ new Map() };
         seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: fallback26 });
         return fallback26;
+      }
+      if (seasonCode === "2024-25") {
+        const fallback25 = snap?.s2025 ? hydrateSeasonDatasetFromSnapshot(snap.s2025) : { seasonCode: "2024-25", dataSource: "espn_fallback", teamsByAbbr: createEmptyTeamsMap(), playersById: /* @__PURE__ */ new Map() };
+        seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: fallback25 });
+        return fallback25;
+      }
+      if (seasonCode === "2023-24") {
+        const fallback24 = snap?.s2024 ? hydrateSeasonDatasetFromSnapshot(snap.s2024) : { seasonCode: "2023-24", dataSource: "espn_fallback", teamsByAbbr: createEmptyTeamsMap(), playersById: /* @__PURE__ */ new Map() };
+        seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: fallback24 });
+        return fallback24;
       }
       const hydrated27 = snap?.s2027 ? hydrateSeasonDatasetFromSnapshot(snap.s2027) : { seasonCode: "2026-27", dataSource: "nba_official_hybrid", teamsByAbbr: createEmptyTeamsMap(), playersById: /* @__PURE__ */ new Map() };
       await applyCdnDeltaGamesTo2027(hydrated27, biosMap, { maxGamesToFetch: options?.cdnMaxGames ?? 32, timeoutBudgetMs: options?.cdnTimeoutMs ?? 3800, forceRefresh });
@@ -472,6 +501,16 @@ async function buildSingleSeasonDataset(seasonCode, forceRefresh = false, option
       }
     }
     if (rawTeamLogs.length === 0 || rawPlayerLogs.length === 0) {
+      if (seasonCode === "2024-25" && snap?.s2025) {
+        const fallback25 = hydrateSeasonDatasetFromSnapshot(snap.s2025);
+        seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: fallback25 });
+        return fallback25;
+      }
+      if (seasonCode === "2023-24" && snap?.s2024) {
+        const fallback24 = hydrateSeasonDatasetFromSnapshot(snap.s2024);
+        seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: fallback24 });
+        return fallback24;
+      }
       if (seasonCode === "2025-26" && snap?.s2026) {
         const fallback26 = hydrateSeasonDatasetFromSnapshot(snap.s2026);
         seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: fallback26 });
@@ -549,6 +588,38 @@ async function fetchLiveScoreboardGames(dateIso, forceRefresh = false) {
     return [];
   }
 }
+async function getScoreboardDeltaPayload(clientSinceHash?: string, forceRefresh = false) {
+  const games = await fetchLiveScoreboardGames(void 0, forceRefresh);
+  const scoreFingerprint = games
+    .map((g) => `${g.id}:${g.statusText}:${g.isLive ? 1 : 0}:${g.isCompleted ? 1 : 0}:${g.awayScore}:${g.homeScore}`)
+    .join("|");
+  const serverHash = crypto.createHash("md5").update(scoreFingerprint || "empty").digest("hex").slice(0, 16);
+  const liveCount = games.filter((g) => g.isLive).length;
+
+  if (clientSinceHash && clientSinceHash === serverHash) {
+    return {
+      unmodified: true,
+      hash: serverHash,
+      liveCount,
+      timestamp: new Date().toISOString(),
+      gamesCount: games.length,
+    };
+  }
+
+  let changedGames: any[] | undefined = undefined;
+  if (clientSinceHash && clientSinceHash !== serverHash) {
+    changedGames = games.filter((g) => g.isLive || g.isCompleted);
+  }
+
+  return {
+    unmodified: false,
+    hash: serverHash,
+    liveCount,
+    timestamp: new Date().toISOString(),
+    games,
+    changedGames,
+  };
+}
 async function getBootstrapPayload(seasonMode = "continuous", forceRefresh = false) {
   if (seasonMode === "2027") {
     const [s2027, biosMap2, scoreboard2] = await Promise.all([buildSingleSeasonDataset("2026-27", forceRefresh), getPlayerBiosMap(false), fetchLiveScoreboardGames(void 0, forceRefresh)]);
@@ -562,6 +633,18 @@ async function getBootstrapPayload(seasonMode = "continuous", forceRefresh = fal
     const players = [...s2026.playersById.values()].sort((a, b) => meanNums(b.games.map((g) => g.points)) - meanNums(a.games.map((g) => g.points)));
     return { seasonMode, dataSource: s2026.dataSource, totalLeaguePlayersAvailable: Math.max(biosMap2.size, players.length), allPlayersLoaded: true, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), teams, players, scoreboard: scoreboard2 };
   }
+  if (seasonMode === "2025") {
+    const [s2025, biosMap2, scoreboard2] = await Promise.all([buildSingleSeasonDataset("2024-25", false), getPlayerBiosMap(false), fetchLiveScoreboardGames(void 0, false)]);
+    const teams = [...s2025.teamsByAbbr.values()].sort((a, b) => b.winPct - a.winPct || b.wins - a.wins || b.differential - a.differential);
+    const players = [...s2025.playersById.values()].sort((a, b) => meanNums(b.games.map((g) => g.points)) - meanNums(a.games.map((g) => g.points)));
+    return { seasonMode, dataSource: s2025.dataSource, totalLeaguePlayersAvailable: Math.max(biosMap2.size, players.length), allPlayersLoaded: true, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), teams, players, scoreboard: scoreboard2 };
+  }
+  if (seasonMode === "2024") {
+    const [s2024, biosMap2, scoreboard2] = await Promise.all([buildSingleSeasonDataset("2023-24", false), getPlayerBiosMap(false), fetchLiveScoreboardGames(void 0, false)]);
+    const teams = [...s2024.teamsByAbbr.values()].sort((a, b) => b.winPct - a.winPct || b.wins - a.wins || b.differential - a.differential);
+    const players = [...s2024.playersById.values()].sort((a, b) => meanNums(b.games.map((g) => g.points)) - meanNums(a.games.map((g) => g.points)));
+    return { seasonMode, dataSource: s2024.dataSource, totalLeaguePlayersAvailable: Math.max(biosMap2.size, players.length), allPlayersLoaded: true, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), teams, players, scoreboard: scoreboard2 };
+  }
   const [full, biosMap, scoreboard] = await Promise.all([getFullLeagueMemory(forceRefresh), getPlayerBiosMap(false), fetchLiveScoreboardGames(void 0, forceRefresh)]);
   return { seasonMode, dataSource: full.s2027.dataSource, totalLeaguePlayersAvailable: Math.max(biosMap.size, full.allPlayers.length), allPlayersLoaded: true, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), teams: full.teams, players: full.allPlayers, scoreboard };
 }
@@ -574,6 +657,12 @@ async function getBootstrapWireBuffers(seasonMode = "continuous", forceRefresh =
     if (seasonMode === "2026") {
       bootstrapWireBuffersCache.delete("2026");
     }
+    if (seasonMode === "2025") {
+      bootstrapWireBuffersCache.delete("2025");
+    }
+    if (seasonMode === "2024") {
+      bootstrapWireBuffersCache.delete("2024");
+    }
   } else {
     const hit = bootstrapWireBuffersCache.get(seasonMode);
     if (hit && hit.expiresAt > Date.now()) {
@@ -584,7 +673,7 @@ async function getBootstrapWireBuffers(seasonMode = "continuous", forceRefresh =
       return inflight;
     }
   }
-  const ttlMs = seasonMode === "2026" ? 10 * 60 * 1e3 : 90 * 1e3;
+  const ttlMs = (seasonMode === "2026" || seasonMode === "2025" || seasonMode === "2024") ? 10 * 60 * 1e3 : 90 * 1e3;
   const promise = (async () => {
     const rawPayload = await getBootstrapPayload(seasonMode, forceRefresh);
     const wirePayload = packBootstrapWirePayload(rawPayload);
@@ -635,6 +724,14 @@ async function getSinglePlayerSummary(playerId, seasonMode = "continuous") {
     if (p) return p;
   } else if (seasonMode === "2026") {
     const p = full.s2026.playersById.get(playerId);
+    if (p) return p;
+  } else if (seasonMode === "2025") {
+    const s2025 = await buildSingleSeasonDataset("2024-25", false);
+    const p = s2025.playersById.get(playerId);
+    if (p) return p;
+  } else if (seasonMode === "2024") {
+    const s2024 = await buildSingleSeasonDataset("2023-24", false);
+    const p = s2024.playersById.get(playerId);
     if (p) return p;
   } else {
     const p = full.allPlayers.find((x) => x.id === playerId);
@@ -924,7 +1021,45 @@ async function getGameDayPayload(requestedDate, forceRefresh = false) {
     const g = p.games[nightIdx];
     const nightTeamAbbr = g.teamAbbr || p.teamAbbr;
     const priorGames = p.games.filter((_, idx) => idx !== nightIdx).slice(0, 25);
-    const baselinePool = priorGames.length >= 3 ? priorGames : p.games;
+    let baselinePool = [...priorGames];
+
+    // Prior Supplementation: If active season sample is small (< 15 games),
+    // supplement baseline with previous season games to avoid small-sample volatility.
+    // For rookies/debutants with NO prior NBA history (like Kon Knueppel), fill missing slots
+    // with standard NBA rotation expectations so an explosive debut registers as an outlier!
+    if (baselinePool.length < 15) {
+      const pPrev = full.s2026?.playersById?.get(p.id) || full.s2025?.playersById?.get(p.id);
+      if (pPrev && Array.isArray(pPrev.games) && pPrev.games.length > 0) {
+        const needed = 15 - baselinePool.length;
+        baselinePool = [...baselinePool, ...pPrev.games.slice(0, needed)];
+      } else {
+        const needed = 15 - baselinePool.length;
+        const posUp = (p.position || "").toUpperCase();
+        const isGuard = posUp.includes("G");
+        const isCenter = posUp.includes("C");
+        const defaultPts = isGuard ? 10.5 : isCenter ? 9.2 : 10.0;
+        const defaultReb = isCenter ? 6.5 : isGuard ? 2.8 : 4.2;
+        const defaultAst = isGuard ? 3.8 : 1.8;
+        const default3pm = isGuard ? 1.4 : isCenter ? 0.3 : 1.0;
+
+        for (let k = 0; k < needed; k++) {
+          baselinePool.push({
+            points: defaultPts,
+            rebounds: defaultReb,
+            assists: defaultAst,
+            fg3m: default3pm,
+            minutes: 18.0,
+            gameScore: 7.5,
+            tsPct: 54.0,
+            usgEst: 18.5,
+            fga: 8.5,
+            fgm: 4.0,
+            stocks: 1.2,
+          });
+        }
+      }
+    }
+    if (baselinePool.length === 0) baselinePool = p.games;
     const ptsAvg = round1(meanNums(baselinePool.map((x) => x.points)));
     const ptsSd = Math.max(2.6, stdDevNums(baselinePool.map((x) => x.points)));
     const gmScAvg = round1(meanNums(baselinePool.map((x) => x.gameScore)));
@@ -940,15 +1075,87 @@ async function getGameDayPayload(requestedDate, forceRefresh = false) {
     bucket.push(line);
     nightLinesByEventSide.set(sideKey, bucket);
     if (baselinePool.length >= 3) {
-      const z = round1((g.points - ptsAvg) / ptsSd);
-      if (ptsDelta >= 9 && g.points >= 20 && z >= 1.35) {
-        const minDiff = round1(g.minutes - minAvg);
-        const tsDiff = round1(g.tsPct - tsAvg);
-        const driverTag = tsDiff >= 10 && minDiff < 4 ? "Explosi\xF3n de punter\xEDa" : minDiff >= 5 ? "Expansi\xF3n de minutos y volumen" : "Dominio ofensivo total";
-        explosions.push({ playerId: p.id, playerName: p.name, teamAbbr: nightTeamAbbr, position: p.position, opponentAbbr: g.opponentAbbr, isHome: g.isHome, result: g.result, scoreDisplay: g.scoreDisplay, kind: "explosion", minutes: g.minutes, minutesAvg: minAvg, points: g.points, ptsAvg, ptsDelta, rebounds: g.rebounds, assists: g.assists, stocks: g.stocks, turnovers: g.turnovers, fgm: g.fgm, fga: g.fga, fg3m: g.fg3m, fg3a: g.fg3a, tsPct: g.tsPct, tsAvg, usgEst: g.usgEst, usgAvg, gameScore: g.gameScore, gmScAvg, singleNightZ: z, driverTag, driverDetailSimple: `Anot\xF3 +${ptsDelta.toFixed(1)} PTS sobre su media habitual (${ptsAvg.toFixed(1)}) con ${g.fgm}/${g.fga} en tiros.`, driverDetailAdvanced: `Z +${z.toFixed(1)}\u03C3 \xB7 TS% ${g.tsPct.toFixed(1)}% (base ${tsAvg.toFixed(1)}%) \xB7 USG ${g.usgEst.toFixed(1)}% \xB7 GmSc ${g.gameScore.toFixed(1)}.` });
+      const zPts = round1((g.points - ptsAvg) / ptsSd);
+      const rebAvg = round1(meanNums(baselinePool.map((x) => x.rebounds)));
+      const rebSd = Math.max(1.8, stdDevNums(baselinePool.map((x) => x.rebounds)));
+      const zReb = round1((g.rebounds - rebAvg) / rebSd);
+      const astAvg = round1(meanNums(baselinePool.map((x) => x.assists)));
+      const astSd = Math.max(1.8, stdDevNums(baselinePool.map((x) => x.assists)));
+      const zAst = round1((g.assists - astAvg) / astSd);
+      const fg3mAvg = round1(meanNums(baselinePool.map((x) => x.fg3m)));
+      const fg3mSd = Math.max(1.0, stdDevNums(baselinePool.map((x) => x.fg3m)));
+      const z3PM = round1((g.fg3m - fg3mAvg) / fg3mSd);
+      const gmScSd = Math.max(2.5, stdDevNums(baselinePool.map((x) => x.gameScore)));
+      const zGmSc = round1((g.gameScore - gmScAvg) / gmScSd);
+
+      const maxZ = Math.max(zPts, zGmSc, zReb, zAst, z3PM);
+      const minDiff = round1(g.minutes - minAvg);
+      const tsDiff = round1(g.tsPct - tsAvg);
+
+      const isPtsExplosion = zPts >= 1.35 && ptsDelta >= 6.5;
+      const isGmScExplosion = zGmSc >= 1.4 && (g.gameScore - gmScAvg) >= 6.0;
+      const isRebExplosion = zReb >= 1.8 && (g.rebounds - rebAvg) >= 5.5 && g.rebounds >= 10;
+      const isAstExplosion = zAst >= 1.8 && (g.assists - astAvg) >= 4.5 && g.assists >= 8;
+      const is3pExplosion = z3PM >= 1.8 && (g.fg3m - fg3mAvg) >= 3.0 && g.fg3m >= 4;
+
+      if (isPtsExplosion || isGmScExplosion || isRebExplosion || isAstExplosion || is3pExplosion) {
+        let driverTag = "Despliegue estadístico sobresaliente";
+        let driverDetailSimple = `Anotó ${g.points} PTS (${ptsDelta >= 0 ? "+" : ""}${ptsDelta.toFixed(1)} vs media de ${ptsAvg.toFixed(1)}) con ${g.fgm}/${g.fga} TC.`;
+        if (priorGames.length === 0) {
+          driverTag = "Reaparición / Debut de temporada";
+          driverDetailSimple = `Debutó en la temporada sumando ${g.points} PTS (${ptsDelta >= 0 ? "+" : ""}${ptsDelta.toFixed(1)} vs su media anterior de ${ptsAvg.toFixed(1)}) en ${g.minutes.toFixed(0)} MIN.`;
+        } else if (is3pExplosion && g.fg3m >= 4) {
+          driverTag = "Explosión desde el triple";
+          driverDetailSimple = `Anotó ${g.fg3m} triples (${g.fg3m}/${g.fg3a}) sumando ${g.points} PTS (${ptsDelta >= 0 ? "+" : ""}${ptsDelta.toFixed(1)} vs media).`;
+        } else if (isRebExplosion) {
+          driverTag = "Dominio en el rebote";
+          driverDetailSimple = `Capturó ${g.rebounds} REB (+${(g.rebounds - rebAvg).toFixed(1)} vs media) y anotó ${g.points} PTS.`;
+        } else if (isAstExplosion) {
+          driverTag = "Recital en la dirección";
+          driverDetailSimple = `Repartió ${g.assists} AST (+${(g.assists - astAvg).toFixed(1)} vs media) con ${g.points} PTS.`;
+        } else if (tsDiff >= 10 && minDiff < 4) {
+          driverTag = "Explosión de puntería";
+        } else if (minDiff >= 5) {
+          driverTag = "Expansión de minutos y rol";
+        }
+
+        explosions.push({
+          playerId: p.id,
+          playerName: p.name,
+          teamAbbr: nightTeamAbbr,
+          position: p.position,
+          opponentAbbr: g.opponentAbbr,
+          isHome: g.isHome,
+          result: g.result,
+          scoreDisplay: g.scoreDisplay,
+          kind: "explosion",
+          minutes: g.minutes,
+          minutesAvg: minAvg,
+          points: g.points,
+          ptsAvg,
+          ptsDelta,
+          rebounds: g.rebounds,
+          assists: g.assists,
+          stocks: g.stocks,
+          turnovers: g.turnovers,
+          fgm: g.fgm,
+          fga: g.fga,
+          fg3m: g.fg3m,
+          fg3a: g.fg3a,
+          tsPct: g.tsPct,
+          tsAvg,
+          usgEst: g.usgEst,
+          usgAvg,
+          gameScore: g.gameScore,
+          gmScAvg,
+          singleNightZ: maxZ,
+          driverTag,
+          driverDetailSimple,
+          driverDetailAdvanced: `Z +${maxZ.toFixed(1)}σ · TS% ${g.tsPct.toFixed(1)}% (base ${tsAvg.toFixed(1)}%) · USG ${g.usgEst.toFixed(1)}% · GmSc ${g.gameScore.toFixed(1)}.`
+        });
       }
       if (minAvg >= 25 && ptsAvg >= 15 && ptsDelta <= -8 && g.minutes >= 16) {
-        slumps.push({ playerId: p.id, playerName: p.name, teamAbbr: nightTeamAbbr, position: p.position, opponentAbbr: g.opponentAbbr, isHome: g.isHome, result: g.result, scoreDisplay: g.scoreDisplay, kind: "slump", minutes: g.minutes, minutesAvg: minAvg, points: g.points, ptsAvg, ptsDelta, rebounds: g.rebounds, assists: g.assists, stocks: g.stocks, turnovers: g.turnovers, fgm: g.fgm, fga: g.fga, fg3m: g.fg3m, fg3a: g.fg3a, tsPct: g.tsPct, tsAvg, usgEst: g.usgEst, usgAvg, gameScore: g.gameScore, gmScAvg, singleNightZ: z, driverTag: g.tsPct < 42 ? "Atasco en el tiro" : "Frenado por la defensa", driverDetailSimple: `Se qued\xF3 en ${g.points} PTS (${ptsDelta.toFixed(1)} respecto a su media de ${ptsAvg.toFixed(1)}) con ${g.fgm}/${g.fga} en tiros.`, driverDetailAdvanced: `Z ${z.toFixed(1)}\u03C3 \xB7 TS% ${g.tsPct.toFixed(1)}% vs ${tsAvg.toFixed(1)}% habitual \xB7 USG ${g.usgEst.toFixed(1)}%.` });
+        slumps.push({ playerId: p.id, playerName: p.name, teamAbbr: nightTeamAbbr, position: p.position, opponentAbbr: g.opponentAbbr, isHome: g.isHome, result: g.result, scoreDisplay: g.scoreDisplay, kind: "slump", minutes: g.minutes, minutesAvg: minAvg, points: g.points, ptsAvg, ptsDelta, rebounds: g.rebounds, assists: g.assists, stocks: g.stocks, turnovers: g.turnovers, fgm: g.fgm, fga: g.fga, fg3m: g.fg3m, fg3a: g.fg3a, tsPct: g.tsPct, tsAvg, usgEst: g.usgEst, usgAvg, gameScore: g.gameScore, gmScAvg, singleNightZ: zPts, driverTag: g.tsPct < 42 ? "Atasco en el tiro" : "Frenado por la defensa", driverDetailSimple: `Se quedó en ${g.points} PTS (${ptsDelta.toFixed(1)} respecto a su media de ${ptsAvg.toFixed(1)}) con ${g.fgm}/${g.fga} en tiros.`, driverDetailAdvanced: `Z ${zPts.toFixed(1)}σ · TS% ${g.tsPct.toFixed(1)}% vs ${tsAvg.toFixed(1)}% habitual · USG ${g.usgEst.toFixed(1)}%.` });
       }
       const minDelta = round1(g.minutes - minAvg);
       const usgDelta = round1(g.usgEst - usgAvg);
@@ -1381,7 +1588,7 @@ async function syncNbaSnapshotToDisk(options) {
     }
   }
   const lastSyncedSource = statsLiveSucceeded ? "nba_stats_live" : "cdn_delta_only";
-  const snapshot = { version: 1, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), lastSyncedSource, bios: [...biosMap.values()], s2026: serializeSeasonDatasetForSnapshot(s2026), s2027: serializeSeasonDatasetForSnapshot(s2027) };
+  const snapshot = { version: 1, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), lastSyncedSource, bios: [...biosMap.values()], s2025: existingSnap?.s2025, s2024: existingSnap?.s2024, s2026: serializeSeasonDatasetForSnapshot(s2026), s2027: serializeSeasonDatasetForSnapshot(s2027) };
   const teamGames2026 = Math.round(snapshot.s2026.teams.reduce((acc, t) => acc + t.games.length, 0) / 2);
   const teamGames2027 = Math.round(snapshot.s2027.teams.reduce((acc, t) => acc + t.games.length, 0) / 2);
   if (teamGames2027 < prevGames2027) {
@@ -1391,6 +1598,7 @@ async function syncNbaSnapshotToDisk(options) {
   return { ...written, lastSyncedSource, biosCount: snapshot.bios.length, players2026: snapshot.s2026.players.length, players2027: snapshot.s2027.players.length, teamGames2026, teamGames2027 };
 }
 export {
+  buildSingleSeasonDataset,
   cachedFetchJson,
   fetchLiveScoreboardGames,
   getBootstrapPayload,
@@ -1403,6 +1611,7 @@ export {
   getPlayerBiosMap,
   getPlayerInspectorDossier,
   getSeasonAwardsPayload,
+  getScoreboardDeltaPayload,
   getSinglePlayerSummary,
   getTeamRoster,
   scoutingEngine,

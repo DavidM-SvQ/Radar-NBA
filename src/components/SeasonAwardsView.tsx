@@ -26,6 +26,8 @@ import { formatSigned, normalizeSearchText } from '../utils/analytics';
 import { STICKY_THEAD_CLASS, sortRows, useTableSort } from '../utils/tableSort';
 import { SortableTh } from './MetricUiHelpers';
 import { PlayerAvatar, TeamLogo } from './NbaVisuals';
+import { ExportImageButton } from './ExportImageButton';
+import { buildTableSnapshotBlob } from '../utils/exportImageCard';
 
 type AwardTableSortKey =
   | 'rank'
@@ -581,12 +583,177 @@ export function SeasonAwardsView({
                   : activeMeta.advancedDesc}
               </p>
             </div>
-            <div className="flex items-center gap-2 text-xs text-slate-400 font-mono tabular-nums shrink-0">
-              <span>Temporada {data.seasonLabel}</span>
-              <span aria-hidden="true">·</span>
-              <span>Media equipos: {data.avgTeamGamesPlayed} PJ</span>
-              <span aria-hidden="true">·</span>
-              <span className="text-orange-300">Corte: ≥{minProjectedGames} PJ</span>
+            <div className="flex flex-wrap items-center gap-3 shrink-0">
+              <div className="flex items-center gap-2 text-xs text-slate-400 font-mono tabular-nums">
+                <span>Temporada {data.seasonLabel}</span>
+                <span aria-hidden="true">·</span>
+                <span>Media equipos: {data.avgTeamGamesPlayed} PJ</span>
+                <span aria-hidden="true">·</span>
+                <span className="text-orange-300">Corte: ≥{minProjectedGames} PJ</span>
+              </div>
+
+              <ExportImageButton
+                disabled={
+                  activeCategory === 'all_nba'
+                    ? allNbaComputed.firstTeam.length === 0
+                    : sortedTableRows.length === 0
+                }
+                onBuildImage={async () => {
+                  const dateSlug = new Date().toISOString().slice(0, 10);
+                  const filename = `radarnba-premios-${activeCategory}-${data.seasonLabel}-${dateSlug}.png`;
+
+                  if (activeCategory === 'all_nba') {
+                    const combined = [
+                      ...allNbaComputed.firstTeam.map((c) => ({ c, tier: '1.er Quinteto' })),
+                      ...allNbaComputed.secondTeam.map((c) => ({ c, tier: '2.º Quinteto' })),
+                      ...allNbaComputed.thirdTeam.map((c) => ({ c, tier: '3.er Quinteto' })),
+                    ];
+                    return buildTableSnapshotBlob({
+                      filename,
+                      categoryTag: `CARRERA PREMIOS NBA · ${data.seasonLabel}`,
+                      title: `${activeMeta.fullTitle} (${data.seasonLabel})`,
+                      subtitle: `15 seleccionados sin restricción de posición · Corte elegibilidad ≥ ${minProjectedGames} PJ`,
+                      entityColumnLabel: 'JUGADOR',
+                      entityColumnWeight: 2.25,
+                      columns: [
+                        { key: 'tier', label: 'QUINTETO', align: 'left', widthWeight: 1.25 },
+                        { key: 'score', label: 'ÍNDICE', align: 'right', widthWeight: 0.9 },
+                        { key: 'm0', label: 'PRODUCCIÓN', align: 'right', widthWeight: 1.15 },
+                        { key: 'm1', label: 'IMPACTO', align: 'right', widthWeight: 1.15 },
+                        { key: 'proj', label: 'PROY. 82 PJ', align: 'right', widthWeight: 1.0 },
+                      ],
+                      rows: combined.map(({ c, tier }, idx) => {
+                        const m =
+                          experienceMode === 'simple'
+                            ? c.metricsSimple
+                            : c.metricsAdvanced;
+                        return {
+                          rank: idx + 1,
+                          teamAbbr: c.teamAbbr,
+                          entityName: c.playerName,
+                          entitySubtext: `${c.position} · Balance ${c.teamWins}-${c.teamLosses}`,
+                          cells: {
+                            tier: {
+                              text: tier,
+                              tone:
+                                tier === '1.er Quinteto'
+                                  ? 'accent'
+                                  : tier === '2.º Quinteto'
+                                  ? 'sky'
+                                  : 'neutral',
+                            },
+                            score: { text: c.awardScore.toFixed(1), tone: 'accent' },
+                            m0: {
+                              text: m[0]?.valueDisplay || '—',
+                              subtext: m[0]?.label,
+                            },
+                            m1: {
+                              text: m[1]?.valueDisplay || '—',
+                              subtext: m[1]?.label,
+                            },
+                            proj: {
+                              text: isCompletedSeasonView
+                                ? `${c.gamesPlayed} PJ`
+                                : `${c.projectedGames82} PJ`,
+                              subtext: `${c.gamesPlayed} PJ jug.`,
+                              tone: 'positive',
+                            },
+                          },
+                        };
+                      }),
+                      footerNote: `Quintetos All-NBA calculados sobre temporada ${data.seasonLabel} (corte ≥ ${minProjectedGames} PJ)`,
+                    });
+                  }
+
+                  const topRows = sortedTableRows.slice(0, 15);
+                  const sampleCand = topRows[0]?.cand;
+                  const sampleMetrics = sampleCand
+                    ? experienceMode === 'simple'
+                      ? sampleCand.metricsSimple
+                      : sampleCand.metricsAdvanced
+                    : [];
+
+                  return buildTableSnapshotBlob({
+                    filename,
+                    categoryTag: `CARRERA PREMIOS NBA · ${data.seasonLabel}`,
+                    title: `${activeMeta.fullTitle} (${data.seasonLabel})`,
+                    subtitle: `Corte elegibilidad ≥ ${minProjectedGames} PJ · Media liga ${data.avgTeamGamesPlayed} PJ`,
+                    entityColumnLabel: 'CANDIDATO',
+                    entityColumnWeight: 2.25,
+                    kpis: [
+                      {
+                        label: 'LÍDER ACTUAL',
+                        value: topRows[0]?.cand.playerName || '—',
+                        sublabel: topRows[0]
+                          ? `${topRows[0].cand.awardScore.toFixed(1)} pts · ${
+                              topRows[0].cand.teamAbbr
+                            }`
+                          : undefined,
+                        tone: 'accent',
+                      },
+                      {
+                        label: 'CANDIDATOS EN TABLA',
+                        value: `${sortedTableRows.length}`,
+                        sublabel: `Corte ≥ ${minProjectedGames} PJ`,
+                      },
+                    ],
+                    columns: [
+                      { key: 'score', label: 'ÍNDICE', align: 'right', widthWeight: 0.9 },
+                      {
+                        key: 'm0',
+                        label: (sampleMetrics[0]?.label || 'MÉTRICA 1').toUpperCase(),
+                        align: 'right',
+                        widthWeight: 1.05,
+                      },
+                      {
+                        key: 'm1',
+                        label: (sampleMetrics[1]?.label || 'MÉTRICA 2').toUpperCase(),
+                        align: 'right',
+                        widthWeight: 1.05,
+                      },
+                      {
+                        key: 'm2',
+                        label: (sampleMetrics[2]?.label || 'MÉTRICA 3').toUpperCase(),
+                        align: 'right',
+                        widthWeight: 1.05,
+                      },
+                      { key: 'proj', label: 'ELEGIBILIDAD', align: 'right', widthWeight: 1.05 },
+                    ],
+                    rows: topRows.map(({ cand, baseRank }) => {
+                      const m =
+                        experienceMode === 'simple'
+                          ? cand.metricsSimple
+                          : cand.metricsAdvanced;
+                      return {
+                        rank: baseRank,
+                        teamAbbr: cand.teamAbbr,
+                        entityName: cand.playerName,
+                        entitySubtext: `${cand.position} · ${cand.teamWins}-${cand.teamLosses}`,
+                        cells: {
+                          score: { text: cand.awardScore.toFixed(1), tone: 'accent' },
+                          m0: { text: m[0]?.valueDisplay || '—' },
+                          m1: { text: m[1]?.valueDisplay || '—' },
+                          m2: { text: m[2]?.valueDisplay || '—' },
+                          proj: {
+                            text: isCompletedSeasonView
+                              ? `${cand.gamesPlayed} PJ`
+                              : `${cand.projectedGames82} / 82 PJ`,
+                            subtext:
+                              cand.recentPtsDelta !== 0
+                                ? `${formatSigned(cand.recentPtsDelta, 1)} PTS rec.`
+                                : `${cand.gamesPlayed} PJ jug.`,
+                            tone:
+                              cand.projectedGames82 >= minProjectedGames
+                                ? 'positive'
+                                : 'warning',
+                          },
+                        },
+                      };
+                    }),
+                    footerNote: `Top ${topRows.length} candidatos en ${activeMeta.shortLabel} · Temporada ${data.seasonLabel}`,
+                  });
+                }}
+              />
             </div>
           </section>
 

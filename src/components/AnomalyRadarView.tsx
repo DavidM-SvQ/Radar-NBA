@@ -27,6 +27,8 @@ import {
   SortableTh,
 } from './MetricUiHelpers';
 import { EntityBadge, PlayerAvatar } from './NbaVisuals';
+import { ExportImageButton } from './ExportImageButton';
+import { buildTableSnapshotBlob } from '../utils/exportImageCard';
 
 interface AnomalyRadarViewProps {
   signals: AnomalySignal[];
@@ -1354,6 +1356,72 @@ export function AnomalyRadarView({
                 <span>Evaluar rachas →</span>
               </button>
             )}
+
+            <ExportImageButton
+              disabled={filteredBreakouts.length === 0}
+              onBuildImage={async () => {
+                const dateSlug = new Date().toISOString().slice(0, 10);
+                const topRows = filteredBreakouts.slice(0, 18);
+                const filename = `radarnba-rupturas-tendencia-${dateSlug}.png`;
+                return buildTableSnapshotBlob({
+                  filename,
+                  categoryTag: 'RADAR DE ANOMALÍAS · RUPTURA DE TENDENCIA',
+                  title: `Alertas de Ruptura de Tendencia (Últ. ${windowSize} PJ vs Base)`,
+                  subtitle: `${filteredBreakouts.length} alertas activas en Uso/Minutos, Eficiencia TS% y Impacto Defensivo`,
+                  entityColumnLabel: 'JUGADOR',
+                  entityColumnWeight: 2.2,
+                  kpis: [
+                    {
+                      label: 'RUPTURAS ACTIVAS',
+                      value: `${filteredBreakouts.length}`,
+                      sublabel: `Ventana Últ. ${windowSize} PJ`,
+                      tone: 'accent',
+                    },
+                    {
+                      label: 'SUBIDAS / BAJADAS',
+                      value: `${
+                        filteredBreakouts.filter((b) => b.direction === 'positive').length
+                      } ↑ · ${
+                        filteredBreakouts.filter((b) => b.direction !== 'positive').length
+                      } ↓`,
+                      tone: 'positive',
+                    },
+                  ],
+                  columns: [
+                    { key: 'axis', label: 'EJE / SEÑAL', align: 'left', widthWeight: 1.55 },
+                    { key: 'base', label: 'MEDIA BASE', align: 'right', widthWeight: 0.95 },
+                    { key: 'win', label: `ÚLT. ${windowSize} PJ`, align: 'right', widthWeight: 1.0 },
+                    { key: 'delta', label: 'CAMBIO', align: 'right', widthWeight: 1.1 },
+                    { key: 'z', label: 'Z-SCORE', align: 'right', widthWeight: 0.9 },
+                  ],
+                  rows: topRows.map((b, idx) => ({
+                    rank: idx + 1,
+                    teamAbbr: b.teamAbbr,
+                    entityName: b.playerName,
+                    entitySubtext: `${b.position} · ${b.sustainabilityLabel}`,
+                    cells: {
+                      axis: {
+                        text: b.badgeLabel,
+                        subtext: b.metricLabel,
+                        tone: b.direction === 'positive' ? 'positive' : 'negative',
+                      },
+                      base: { text: `${b.baselineAvg.toFixed(b.decimals)}${b.unit}` },
+                      win: {
+                        text: `${b.windowAvg.toFixed(b.decimals)}${b.unit}`,
+                        tone: b.direction === 'positive' ? 'positive' : 'negative',
+                      },
+                      delta: {
+                        text: `${formatSigned(b.absDelta, b.decimals)}${b.unit}`,
+                        subtext: `${formatSigned(b.pctDelta, 0)}%`,
+                        tone: b.direction === 'positive' ? 'positive' : 'negative',
+                      },
+                      z: { text: `${formatSigned(b.zScore, 2)}σ`, tone: 'accent' },
+                    },
+                  })),
+                  footerNote: `Mostrando top ${topRows.length} de ${filteredBreakouts.length} rupturas de tendencia`,
+                });
+              }}
+            />
           </div>
         </div>
 
@@ -1893,24 +1961,77 @@ export function AnomalyRadarView({
             </span>
           </div>
 
-          <div className="flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
-            {playerCategories.map((cat) => {
-              const active = playerCategoryFilter === cat.id;
-              return (
-                <button
-                  key={cat.id}
-                  type="button"
-                  onClick={() => setPlayerCategoryFilter(cat.id)}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                    active
-                      ? 'bg-orange-500 text-slate-950 font-semibold'
-                      : 'text-slate-300 hover:text-white hover:bg-[#182338]'
-                  }`}
-                >
-                  {cat.label}
-                </button>
-              );
-            })}
+          <div className="flex flex-wrap items-center gap-2 max-w-full">
+            <div className="flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
+              {playerCategories.map((cat) => {
+                const active = playerCategoryFilter === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => setPlayerCategoryFilter(cat.id)}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                      active
+                        ? 'bg-orange-500 text-slate-950 font-semibold'
+                        : 'text-slate-300 hover:text-white hover:bg-[#182338]'
+                    }`}
+                  >
+                    {cat.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <ExportImageButton
+              disabled={playerSignals.length === 0}
+              onBuildImage={async () => {
+                const dateSlug = new Date().toISOString().slice(0, 10);
+                const topRows = playerSignals.slice(0, 18);
+                const filename = `radarnba-anomalias-jugadores-${dateSlug}.png`;
+                return buildTableSnapshotBlob({
+                  filename,
+                  categoryTag: 'RADAR DE ANOMALÍAS · JUGADORES',
+                  title: `Desviaciones Estadísticas en Jugadores (Últ. ${windowSize} PJ)`,
+                  subtitle: `${playerSignals.length} anomalías detectadas frente a media base`,
+                  entityColumnLabel: 'JUGADOR',
+                  entityColumnWeight: 2.2,
+                  columns: [
+                    { key: 'metric', label: 'MÉTRICA', align: 'left', widthWeight: 1.5 },
+                    { key: 'base', label: 'HABITUAL', align: 'right', widthWeight: 0.95 },
+                    { key: 'win', label: `ÚLT. ${windowSize} PJ`, align: 'right', widthWeight: 1.0 },
+                    { key: 'delta', label: 'VARIACIÓN', align: 'right', widthWeight: 1.1 },
+                    { key: 'z', label: 'Z-SCORE', align: 'right', widthWeight: 0.95 },
+                  ],
+                  rows: topRows.map((sig, idx) => {
+                    const pos = isAnomalyPositive(sig);
+                    return {
+                      rank: idx + 1,
+                      teamAbbr: sig.teamAbbr,
+                      entityName: sig.entityName,
+                      entitySubtext: sig.subtitle,
+                      cells: {
+                        metric: {
+                          text: plainMetricName(sig.metricKey, sig.metricLabel),
+                          tone: pos ? 'positive' : 'negative',
+                        },
+                        base: { text: `${sig.baselineAvg.toFixed(1)}${sig.unit}` },
+                        win: {
+                          text: `${sig.windowAvg.toFixed(1)}${sig.unit}`,
+                          tone: pos ? 'positive' : 'negative',
+                        },
+                        delta: {
+                          text: `${formatSigned(sig.pctDelta, 1)}%`,
+                          subtext: `${formatSigned(sig.absDelta, 1)}${sig.unit}`,
+                          tone: pos ? 'positive' : 'negative',
+                        },
+                        z: { text: `${formatSigned(sig.zScore, 2)}σ`, tone: 'accent' },
+                      },
+                    };
+                  }),
+                  footerNote: `Mostrando top ${topRows.length} de ${playerSignals.length} desviaciones estadísticas`,
+                });
+              }}
+            />
           </div>
         </div>
 

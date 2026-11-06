@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Activity,
+  AlertTriangle,
   Check,
   ChevronDown,
   Lock,
+  Radio,
   RefreshCw,
   RotateCcw,
   Save,
+  Server,
   ShieldCheck,
   SlidersHorizontal,
+  Terminal,
+  Zap,
 } from 'lucide-react';
 import type {
   AdminSecurityConfig,
@@ -17,9 +23,14 @@ import {
   CLIENT_DEFAULT_SECURITY_VALUES,
   CLIENT_SECURITY_BOUNDS,
   fetchAdminSecurityConfig,
+  fetchAdminTelemetry,
+  resetAdminCircuitBreakers,
   resetAdminRateLimitCounters,
   resetAdminSecurityConfigDefaults,
   updateAdminSecurityConfig,
+  type CircuitMetricsClient,
+  type RateLimitBackendKind,
+  type TelemetrySummaryClient,
 } from '../utils/adminAuthClient';
 
 interface AdminSecurityConfigPanelProps {
@@ -90,11 +101,30 @@ export function AdminSecurityConfigPanel({
   const [draft, setDraft] = useState<DraftValues>(() =>
     valuesToDraft(CLIENT_DEFAULT_SECURITY_VALUES)
   );
+  const [rateLimitBackend, setRateLimitBackend] =
+    useState<RateLimitBackendKind>('memory');
+  const [circuits, setCircuits] = useState<Record<
+    string,
+    CircuitMetricsClient
+  > | null>(null);
+  const [resettingCircuits, setResettingCircuits] = useState(false);
+  const [telemetry, setTelemetry] = useState<TelemetrySummaryClient | null>(null);
 
   const [feedback, setFeedback] = useState<{
     kind: 'success' | 'error';
     text: string;
   } | null>(null);
+
+  const loadTelemetry = useCallback(async () => {
+    const res = await fetchAdminTelemetry();
+    if (res.unauthorized) {
+      onLockSession();
+      return;
+    }
+    if (res.ok && res.telemetry) {
+      setTelemetry(res.telemetry);
+    }
+  }, [onLockSession]);
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -107,15 +137,22 @@ export function AdminSecurityConfigPanel({
     if (res.ok && res.config) {
       setSavedConfig(res.config);
       if (res.defaults) setDefaults(res.defaults);
+      if (res.rateLimitBackend) setRateLimitBackend(res.rateLimitBackend);
+      if (res.circuits) setCircuits(res.circuits);
       setDraft(valuesToDraft(extractValues(res.config)));
     } else if (res.error) {
       setFeedback({ kind: 'error', text: res.error });
     }
-  }, [onLockSession]);
+    void loadTelemetry();
+  }, [onLockSession, loadTelemetry]);
 
   useEffect(() => {
     void loadConfig();
-  }, [loadConfig]);
+    const timer = setInterval(() => {
+      void loadTelemetry();
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [loadConfig, loadTelemetry]);
 
   const fieldValidation = useMemo(() => {
     const errors: Partial<Record<keyof AdminSecurityConfigValues, string>> = {};
@@ -181,6 +218,7 @@ export function AdminSecurityConfigPanel({
     }
     if (res.ok && res.config) {
       setSavedConfig(res.config);
+      if (res.rateLimitBackend) setRateLimitBackend(res.rateLimitBackend);
       setDraft(valuesToDraft(extractValues(res.config)));
       setFeedback({
         kind: 'success',
@@ -207,6 +245,7 @@ export function AdminSecurityConfigPanel({
     if (res.ok && res.config) {
       setSavedConfig(res.config);
       if (res.defaults) setDefaults(res.defaults);
+      if (res.rateLimitBackend) setRateLimitBackend(res.rateLimitBackend);
       setDraft(valuesToDraft(extractValues(res.config)));
       setFeedback({
         kind: 'success',
@@ -239,6 +278,26 @@ export function AdminSecurityConfigPanel({
       setFeedback({
         kind: 'error',
         text: res.error || 'No se pudieron limpiar los contadores IP.',
+      });
+    }
+  };
+
+  const handleResetCircuits = async () => {
+    if (resettingCircuits) return;
+    setResettingCircuits(true);
+    setFeedback(null);
+    const ok = await resetAdminCircuitBreakers();
+    setResettingCircuits(false);
+    if (ok) {
+      await loadConfig();
+      setFeedback({
+        kind: 'success',
+        text: 'Circuit breakers de proveedores externos reseteados a CLOSED (tráfico normal restablecido).',
+      });
+    } else {
+      setFeedback({
+        kind: 'error',
+        text: 'No se pudieron reiniciar los circuit breakers.',
       });
     }
   };
@@ -461,6 +520,277 @@ export function AdminSecurityConfigPanel({
                     })}
                   </div>
                 </div>
+
+                {/* 04. Circuit Breakers & External Providers Multilevel Fallback */}
+                <div className="p-4 sm:p-5 space-y-3 bg-[#0B1120]/30">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Activity className="w-4 h-4 text-emerald-400" />
+                        <h3 className="text-xs sm:text-sm font-semibold text-slate-200">
+                          04. Circuit Breakers y Fallback Multinivel de Proveedores
+                        </h3>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Aislamiento de fallos y degradación suave ante caídas de stats.nba.com, CDN y ESPN (estados CLOSED / OPEN / HALF-OPEN).
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={resettingCircuits}
+                      onClick={() => void handleResetCircuits()}
+                      className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium bg-[#131C2E] hover:bg-[#182338] disabled:opacity-50 text-slate-300 hover:text-white border border-[#1E293B] rounded-lg transition-colors whitespace-nowrap shrink-0"
+                    >
+                      <RotateCcw
+                        className={`w-3.5 h-3.5 text-slate-400 ${
+                          resettingCircuits ? 'animate-spin' : ''
+                        }`}
+                      />
+                      <span>Restablecer circuitos</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                    {[
+                      {
+                        key: 'nba_stats',
+                        name: 'NBA Stats API',
+                        domain: 'stats.nba.com',
+                        desc: 'Partidos, estadísticas avanzadas y rankings oficiales',
+                      },
+                      {
+                        key: 'nba_cdn',
+                        name: 'NBA CDN Live',
+                        domain: 'cdn.nba.com',
+                        desc: 'Boxscores en tiempo real y deltas de calendario',
+                      },
+                      {
+                        key: 'espn_api',
+                        name: 'ESPN API Fallback',
+                        domain: 'site.api.espn.com',
+                        desc: 'Marcadores en vivo, rotaciones y lesiones de plantilla',
+                      },
+                    ].map((prov) => {
+                      const metric = circuits ? circuits[prov.key] : null;
+                      const state = metric?.state || 'CLOSED';
+                      const isClosed = state === 'CLOSED';
+                      const isHalfOpen = state === 'HALF_OPEN';
+                      return (
+                        <div
+                          key={prov.key}
+                          className="bg-[#0B1120] border border-[#1E293B] rounded-lg p-3 space-y-2"
+                        >
+                          <div className="flex items-center justify-between gap-1.5">
+                            <span className="text-xs font-semibold text-slate-200 truncate">
+                              {prov.name}
+                            </span>
+                            <span
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold uppercase tracking-wider ${
+                                isClosed
+                                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                                  : isHalfOpen
+                                  ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+                                  : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                              }`}
+                            >
+                              {state}
+                            </span>
+                          </div>
+
+                          <div className="space-y-1 text-[11px] font-mono text-slate-400">
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Dominio:</span>
+                              <span className="text-slate-300 truncate max-w-[140px]">{prov.domain}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Peticiones OK / Fallos:</span>
+                              <span className="text-slate-300">
+                                {metric ? `${metric.totalSuccesses} / ${metric.totalFailures}` : '0 / 0'}
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">Fast-fails evitados:</span>
+                              <span className="text-orange-400 font-semibold">
+                                {metric ? metric.totalShortCircuits : 0}
+                              </span>
+                            </div>
+                            {metric?.openRemainingMs ? (
+                              <div className="flex justify-between text-rose-400 font-semibold">
+                                <span>Cooldown activo:</span>
+                                <span>{Math.round(metric.openRemainingMs / 1000)}s</span>
+                              </div>
+                            ) : null}
+                          </div>
+
+                          <p className="text-[10px] text-slate-500 leading-tight">
+                            {prov.desc}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 05. Structured Telemetry & Anonymized Operations Log */}
+                <div className="p-4 sm:p-5 space-y-4 bg-[#0B1120]/60">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Radio className="w-4 h-4 text-cyan-400" />
+                      <div>
+                        <h3 className="text-xs sm:text-sm font-semibold text-slate-200">
+                          05. Telemetría de Rendimiento y Registro Sanitizado (Punto 9)
+                        </h3>
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          Monitorización de latencias (p50/p90/p95), distribución HTTP, tasa de errores y encriptación de IPs/secretos sin PII.
+                        </p>
+                      </div>
+                    </div>
+
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                      <Zap className="w-3 h-3 animate-pulse" />
+                      <span>Sondeo cada 10s</span>
+                    </span>
+                  </div>
+
+                  {telemetry ? (
+                    <div className="space-y-4">
+                      {/* Active Alerts List */}
+                      {telemetry.activeAlerts.length > 0 ? (
+                        <div className="space-y-2">
+                          {telemetry.activeAlerts.map((alert) => (
+                            <div
+                              key={alert.id}
+                              className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-lg flex items-start gap-2.5"
+                            >
+                              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                              <div className="space-y-0.5 min-w-0">
+                                <h4 className="text-xs font-bold text-rose-300">
+                                  {alert.title}
+                                </h4>
+                                <p className="text-[11px] text-rose-200/80">
+                                  {alert.description}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      {/* KPI Cards Grid */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div className="bg-[#0B1120] border border-[#1E293B] rounded-lg p-3 space-y-1">
+                          <span className="text-[10px] font-mono text-slate-500 uppercase">
+                            Latencia p50 / p95
+                          </span>
+                          <div className="text-sm sm:text-base font-bold font-mono text-slate-100">
+                            {telemetry.latency.p50Ms}ms{' '}
+                            <span className="text-xs text-orange-400 font-normal">
+                              / {telemetry.latency.p95Ms}ms
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-500">Avg {telemetry.latency.avgMs}ms</p>
+                        </div>
+
+                        <div className="bg-[#0B1120] border border-[#1E293B] rounded-lg p-3 space-y-1">
+                          <span className="text-[10px] font-mono text-slate-500 uppercase">
+                            Tasa Errores HTTP
+                          </span>
+                          <div
+                            className={`text-sm sm:text-base font-bold font-mono ${
+                              telemetry.errorRatePct > 5 ? 'text-rose-400' : 'text-emerald-400'
+                            }`}
+                          >
+                            {telemetry.errorRatePct}%
+                          </div>
+                          <p className="text-[10px] text-slate-500">
+                            {telemetry.statusDistribution.s4xx + telemetry.statusDistribution.s5xx} fallos acumulados
+                          </p>
+                        </div>
+
+                        <div className="bg-[#0B1120] border border-[#1E293B] rounded-lg p-3 space-y-1">
+                          <span className="text-[10px] font-mono text-slate-500 uppercase">
+                            Carga Peticiones
+                          </span>
+                          <div className="text-sm sm:text-base font-bold font-mono text-cyan-400">
+                            {telemetry.requestsLastMinute}{' '}
+                            <span className="text-xs text-slate-400 font-normal">req/min</span>
+                          </div>
+                          <p className="text-[10px] text-slate-500">Total {telemetry.totalRequests} reqs</p>
+                        </div>
+
+                        <div className="bg-[#0B1120] border border-[#1E293B] rounded-lg p-3 space-y-1">
+                          <span className="text-[10px] font-mono text-slate-500 uppercase">
+                            Distribución Respuestas
+                          </span>
+                          <div className="text-xs font-mono text-slate-300 space-x-1.5 pt-0.5">
+                            <span className="text-emerald-400">2xx:{telemetry.statusDistribution.s2xx}</span>
+                            <span className="text-amber-400">3xx:{telemetry.statusDistribution.s3xx}</span>
+                            <span className="text-rose-400">5xx:{telemetry.statusDistribution.s5xx}</span>
+                          </div>
+                          <p className="text-[10px] text-slate-500">Uptime: {Math.floor(telemetry.uptimeSeconds / 60)}m</p>
+                        </div>
+                      </div>
+
+                      {/* Recent Logs Table Preview */}
+                      {telemetry.recentLogs.length > 0 ? (
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-1.5 text-xs font-mono text-slate-400">
+                            <Terminal className="w-3.5 h-3.5 text-slate-500" />
+                            <span>Últimos registros HTTP en buffer (IPs anonimizadas, sin tokens)</span>
+                          </div>
+
+                          <div className="bg-[#0B1120] border border-[#1E293B] rounded-lg overflow-x-auto max-h-44 font-mono text-[11px]">
+                            <table className="w-full text-left border-collapse">
+                              <thead>
+                                <tr className="border-b border-[#1E293B] text-slate-500 text-[10px] uppercase">
+                                  <th className="p-2">Hora</th>
+                                  <th className="p-2">Método</th>
+                                  <th className="p-2">Ruta</th>
+                                  <th className="p-2">Status</th>
+                                  <th className="p-2">Duración</th>
+                                  <th className="p-2">IP Hash</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#1E293B]/50">
+                                {telemetry.recentLogs.slice(0, 8).map((log) => (
+                                  <tr key={log.id} className="hover:bg-[#131C2E]/50 text-slate-300">
+                                    <td className="p-2 text-slate-500 whitespace-nowrap">
+                                      {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : ''}
+                                    </td>
+                                    <td className="p-2 font-bold text-slate-200">{log.method || 'GET'}</td>
+                                    <td className="p-2 text-cyan-300 truncate max-w-[200px]">{log.path || '/'}</td>
+                                    <td className="p-2">
+                                      <span
+                                        className={`px-1 rounded text-[10px] ${
+                                          (log.statusCode || 200) >= 500
+                                            ? 'bg-rose-500/20 text-rose-400'
+                                            : (log.statusCode || 200) >= 400
+                                            ? 'bg-amber-500/20 text-amber-400'
+                                            : (log.statusCode || 200) >= 300
+                                            ? 'bg-sky-500/20 text-sky-400'
+                                            : 'bg-emerald-500/20 text-emerald-400'
+                                        }`}
+                                      >
+                                        {log.statusCode || 200}
+                                      </span>
+                                    </td>
+                                    <td className="p-2 text-slate-400">{log.durationMs || 0}ms</td>
+                                    <td className="p-2 text-slate-500 text-[10px]">{log.ipHash || 'ip_anon'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="p-4 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs font-mono text-slate-500 animate-pulse">
+                      Cargando telemetría del servidor...
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Footer Action Strip */}
@@ -487,7 +817,11 @@ export function AdminSecurityConfigPanel({
                     <span className="text-slate-400 font-mono tabular-nums">
                       {formatUpdatedTimestamp(savedConfig.updatedAt)}
                       <span className="mx-1.5 text-slate-600">·</span>
-                      Cabeceras Helmet + Validación Zod activas
+                      Cookie HttpOnly Strict + CSRF
+                      <span className="mx-1.5 text-slate-600">·</span>
+                      {rateLimitBackend === 'upstash-redis'
+                        ? 'Rate Limit distribuido (Upstash Redis)'
+                        : 'Rate Limit en memoria local'}
                     </span>
                   )}
                 </div>

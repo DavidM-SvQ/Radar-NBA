@@ -6,6 +6,7 @@ import zlib from "zlib";
 import { fileURLToPath } from "url";
 import { STATIC_SCHEDULE_2027, addDaysIso, getEasternTodayIso } from "../utils/staticSchedule.ts";
 import { NBA_TEAMS_MAP } from "../utils/teamLogos.ts";
+import { executeWithCircuitBreaker, identifyProviderFromUrl } from "./circuitBreaker.ts";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const NBA_CDN_HEADERS = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36", Referer: "https://www.nba.com/", Origin: "https://www.nba.com", Accept: "application/json" };
@@ -115,6 +116,12 @@ function isValidSnapshotPayload(candidate) {
   if (!snap.s2027 || !Array.isArray(snap.s2027.teams) || snap.s2027.teams.length < 30 || !Array.isArray(snap.s2027.players)) {
     return false;
   }
+  if (snap.s2025 && (!Array.isArray(snap.s2025.teams) || snap.s2025.teams.length < 30 || !Array.isArray(snap.s2025.players))) {
+    return false;
+  }
+  if (snap.s2024 && (!Array.isArray(snap.s2024.teams) || snap.s2024.teams.length < 30 || !Array.isArray(snap.s2024.players))) {
+    return false;
+  }
   return true;
 }
 function readNbaSnapshotFromDisk() {
@@ -191,17 +198,20 @@ function hydrateSeasonDatasetFromSnapshot(serialized) {
   return { seasonCode: serialized.seasonCode, dataSource: serialized.dataSource, teamsByAbbr, playersById };
 }
 async function fetchCdnJsonWithTimeout(url, timeoutMs) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, { headers: NBA_CDN_HEADERS, signal: controller.signal });
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status} from ${url}`);
+  const provider = identifyProviderFromUrl(url);
+  return executeWithCircuitBreaker(provider, async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { headers: NBA_CDN_HEADERS, signal: controller.signal });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status} from ${url}`);
+      }
+      return await res.json();
+    } finally {
+      clearTimeout(timer);
     }
-    return await res.json();
-  } finally {
-    clearTimeout(timer);
-  }
+  });
 }
 const ESPN_ABBR_TO_NBA = { GS: "GSW", NY: "NYK", NO: "NOP", SA: "SAS", UTAH: "UTA", WSH: "WAS" };
 function normalizeEspnTricode(raw) {

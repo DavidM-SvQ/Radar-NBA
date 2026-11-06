@@ -814,18 +814,59 @@ function createScoutingEngine(deps) {
         console.warn(`NBA CDN boxscore fallback for ${eventId}:`, err);
       }
     }
-    const fallbackArena = NBA_TEAM_ARENAS[homeAbbr] || { arenaName: `Pabell\xF3n de ${homeTeamObj.shortName}`, arenaCity: homeTeamObj.name };
-    const arenaName = String(cdnGame?.arena?.arenaName || "").trim() || fallbackArena.arenaName;
-    const arenaCity = String(cdnGame?.arena?.arenaCity || "").trim() || fallbackArena.arenaCity;
-    const rawAttendance = Number(cdnGame?.attendance) || 0;
+
+    const cdnAwayPeriods = Array.isArray(cdnGame?.awayTeam?.periods) ? cdnGame.awayTeam.periods : [];
+    const cdnHomePeriods = Array.isArray(cdnGame?.homeTeam?.periods) ? cdnGame.homeTeam.periods : [];
+
+    let espnEventData = null;
+    if (cdnAwayPeriods.length === 0 || cdnHomePeriods.length === 0 || !cdnGame?.attendance || !cdnGame?.officials?.length) {
+      try {
+        const yyyymmdd = gameDate.replace(/-/g, "");
+        const sbData = await deps.cachedFetchJson(
+          `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${yyyymmdd}`,
+          15 * 60 * 1000,
+          {},
+          6500,
+          forceRefresh
+        );
+        const events = Array.isArray(sbData?.events) ? sbData.events : [];
+        for (const ev of events) {
+          const comp = ev?.competitions?.[0];
+          const competitors = Array.isArray(comp?.competitors) ? comp.competitors : [];
+          const awayComp = competitors.find((c) => normalizeEspnTeamAbbr(c?.team?.abbreviation || "") === awayAbbr);
+          const homeComp = competitors.find((c) => normalizeEspnTeamAbbr(c?.team?.abbreviation || "") === homeAbbr);
+          if (awayComp && homeComp) {
+            espnEventData = {
+              evId: String(ev?.id || ""),
+              awayLinescores: Array.isArray(awayComp.linescores) ? awayComp.linescores : [],
+              homeLinescores: Array.isArray(homeComp.linescores) ? homeComp.linescores : [],
+              attendance: Number(comp?.attendance) || 0,
+              officials: Array.isArray(comp?.officials)
+                ? comp.officials.map((o) => String(o?.fullName || o?.displayName || o?.name || "").trim()).filter(Boolean)
+                : [],
+              venueName: String(comp?.venue?.fullName || "").trim(),
+              venueCity: String(comp?.venue?.address?.city || "").trim(),
+            };
+            break;
+          }
+        }
+      } catch (err) {
+        console.warn(`ESPN Scoreboard fallback for ${gameDate} ${awayAbbr}@${homeAbbr}:`, err);
+      }
+    }
+
+    const fallbackArena = NBA_TEAM_ARENAS[homeAbbr] || { arenaName: `Pabellón de ${homeTeamObj.shortName}`, arenaCity: homeTeamObj.name };
+    const arenaName = String(cdnGame?.arena?.arenaName || "").trim() || String(espnEventData?.venueName || "").trim() || fallbackArena.arenaName;
+    const arenaCity = String(cdnGame?.arena?.arenaCity || "").trim() || String(espnEventData?.venueCity || "").trim() || fallbackArena.arenaCity;
+    const rawAttendance = Number(cdnGame?.attendance) || Number(espnEventData?.attendance) || 0;
     const attendance = rawAttendance > 0 ? rawAttendance : null;
     const attendanceFormatted = attendance !== null ? `${formatThousandsEs(attendance)} espectadores` : "Aforo oficial NBA";
     const rawDuration = Number(cdnGame?.duration) || 0;
-    const durationMinutes = rawDuration > 0 ? rawDuration : null;
-    const officials = Array.isArray(cdnGame?.officials) ? cdnGame.officials.map((o) => String(o?.name || "").trim()).filter(Boolean) : [];
+    const durationMinutes = rawDuration > 0 ? rawDuration : 135;
+    const cdnOfficials = Array.isArray(cdnGame?.officials) ? cdnGame.officials.map((o) => String(o?.name || "").trim()).filter(Boolean) : [];
+    const officials = cdnOfficials.length > 0 ? cdnOfficials : (espnEventData?.officials || []);
+
     const periods = [];
-    const cdnAwayPeriods = Array.isArray(cdnGame?.awayTeam?.periods) ? cdnGame.awayTeam.periods : [];
-    const cdnHomePeriods = Array.isArray(cdnGame?.homeTeam?.periods) ? cdnGame.homeTeam.periods : [];
     if (cdnAwayPeriods.length > 0 && cdnHomePeriods.length > 0) {
       const maxLen = Math.max(cdnAwayPeriods.length, cdnHomePeriods.length);
       for (let i = 0; i < maxLen; i++) {
@@ -834,7 +875,17 @@ function createScoutingEngine(deps) {
         const pNum = Number(ap?.period || hp?.period || i + 1);
         const isOt = pNum > 4 || String(ap?.periodType || "").toUpperCase() === "OVERTIME";
         const otIdx = pNum - 4;
-        periods.push({ period: pNum, label: isOt ? maxLen > 5 ? `PR${otIdx}` : "PR" : `${pNum}Q`, isOvertime: isOt, awayScore: Number(ap?.score) || 0, homeScore: Number(hp?.score) || 0 });
+        periods.push({ period: pNum, label: isOt ? (maxLen > 5 ? `PR${otIdx}` : "PR") : `${pNum}Q`, isOvertime: isOt, awayScore: Number(ap?.score) || 0, homeScore: Number(hp?.score) || 0 });
+      }
+    } else if (espnEventData && espnEventData.awayLinescores.length > 0 && espnEventData.homeLinescores.length > 0) {
+      const maxLen = Math.max(espnEventData.awayLinescores.length, espnEventData.homeLinescores.length);
+      for (let i = 0; i < maxLen; i++) {
+        const ap = espnEventData.awayLinescores[i];
+        const hp = espnEventData.homeLinescores[i];
+        const pNum = i + 1;
+        const isOt = pNum > 4;
+        const otIdx = pNum - 4;
+        periods.push({ period: pNum, label: isOt ? (maxLen > 5 ? `PR${otIdx}` : "PR") : `${pNum}Q`, isOvertime: isOt, awayScore: Number(ap?.value) || 0, homeScore: Number(hp?.value) || 0 });
       }
     }
     const isOvertime = periods.some((p) => p.isOvertime);

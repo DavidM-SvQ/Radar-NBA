@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useDeferredValue, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
   LineChart,
@@ -45,7 +45,14 @@ import {
 } from '../utils/tableSort';
 import { MetricInfoTooltip, SortableTh } from './MetricUiHelpers';
 import { EntityBadge, PlayerAvatar } from './NbaVisuals';
-import { PlayerStreakHistoryChart } from './PlayerStreakHistoryChart';
+import { ExportImageButton } from './ExportImageButton';
+import { buildTableSnapshotBlob } from '../utils/exportImageCard';
+
+const PlayerStreakHistoryChart = lazy(() =>
+  import('./PlayerStreakHistoryChart').then((m) => ({
+    default: m.PlayerStreakHistoryChart,
+  }))
+);
 
 interface StreaksConsistencyViewProps {
   players: PlayerSummary[];
@@ -305,6 +312,7 @@ export function StreaksConsistencyView({
     'all' | 'positive' | 'negative'
   >('all');
   const [query, setQuery] = useState('');
+  const deferredQuery = useDeferredValue(query);
   const [consSort, setConsSort] = useState<ConsistencySort>('consistencyScore');
   const [consAsc, setConsAsc] = useState(false);
   const [customScrollTop, setCustomScrollTop] = useState<number>(0);
@@ -432,7 +440,8 @@ export function StreaksConsistencyView({
 
   // Real-time evaluation of consecutive games with active vs best historical span and parlay support
   const customEvaluatedRows = useMemo<CustomEvaluatedRow[]>(() => {
-    const q = normalizeSearchText(query);
+    if (streakEvalMode !== 'custom') return [];
+    const q = normalizeSearchText(deferredQuery);
     const out: CustomEvaluatedRow[] = [];
 
     for (const player of players) {
@@ -559,12 +568,13 @@ export function StreaksConsistencyView({
 
     return out;
   }, [
+    streakEvalMode,
     players,
     players2027ById,
     players2026ById,
     onlyWatchlist,
     watchlistIds,
-    query,
+    deferredQuery,
     activeMetric,
     secondaryMetric,
     operator,
@@ -624,7 +634,7 @@ export function StreaksConsistencyView({
   );
 
   const filteredStreaks = useMemo(() => {
-    const q = normalizeSearchText(query);
+    const q = normalizeSearchText(deferredQuery);
     return streaks
       .filter((s) => {
         const wKey = `${s.entityType}:${s.entityId}`;
@@ -690,13 +700,14 @@ export function StreaksConsistencyView({
     streakFilter,
     autoSignFilter,
     autoAxisFilter,
-    query,
+    deferredQuery,
     autoSort,
     autoAsc,
   ]);
 
   const filteredConsistency = useMemo(() => {
-    const q = normalizeSearchText(query);
+    if (subTab !== 'consistency') return [];
+    const q = normalizeSearchText(deferredQuery);
     return consistencyRows
       .filter((r) => {
         const wKey = `player:${r.entityId}`;
@@ -740,11 +751,12 @@ export function StreaksConsistencyView({
         return cmp !== 0 ? cmp : b.consistencyScore - a.consistencyScore;
       });
   }, [
+    subTab,
     consistencyRows,
     watchlistIds,
     onlyWatchlist,
     breakoutsByPlayerId,
-    query,
+    deferredQuery,
     consSort,
     consAsc,
   ]);
@@ -752,6 +764,277 @@ export function StreaksConsistencyView({
   const topCustomRow = customEvaluatedRows[0];
   const topStreak = streaks[0];
   const mostConsistent = consistencyRows[0];
+
+  const handleBuildStreakSnapshot = async () => {
+    const dateSlug = new Date().toISOString().slice(0, 10);
+    if (subTab === 'consistency') {
+      const topRows = filteredConsistency.slice(0, 20);
+      const filename = `radarnba-consistencia-${dateSlug}.png`;
+      return buildTableSnapshotBlob({
+        filename,
+        categoryTag: 'RACHAS Y CONSISTENCIA · REGULARIDAD',
+        title: 'Ranking de Consistencia y Suelo Anotador NBA',
+        subtitle: `${filteredConsistency.length} jugadores evaluados · Ventana Últ. ${windowSize} PJ`,
+        entityColumnLabel: 'JUGADOR',
+        entityColumnWeight: 2.3,
+        kpis: [
+          {
+            label: 'JUGADORES FILTRADOS',
+            value: `${filteredConsistency.length}`,
+            sublabel: query.trim() ? `Filtro: "${query.trim()}"` : 'Rotación activa',
+          },
+          {
+            label: 'MÁS REGULAR',
+            value: mostConsistent ? mostConsistent.entityName : '—',
+            sublabel: mostConsistent
+              ? `${mostConsistent.consistencyScore}/100 · ${mostConsistent.teamAbbr}`
+              : undefined,
+            tone: 'positive',
+          },
+          {
+            label: 'VENTANA RECIENTE',
+            value: `Últ. ${windowSize} PJ`,
+            sublabel: 'Comparativa frente a media',
+            tone: 'accent',
+          },
+        ],
+        columns: [
+          { key: 'score', label: 'FIABILIDAD', align: 'right', widthWeight: 1.05 },
+          { key: 'profile', label: 'PERFIL', align: 'left', widthWeight: 1.45 },
+          { key: 'ptsAvg', label: 'MEDIA PTS', align: 'right', widthWeight: 0.95 },
+          { key: 'ptsWin', label: `ÚLT. ${windowSize} PJ`, align: 'right', widthWeight: 1.05 },
+          { key: 'range', label: 'SUELO – TECHO', align: 'right', widthWeight: 1.2 },
+          { key: 'hit20', label: '20+ PTS', align: 'right', widthWeight: 0.9 },
+        ],
+        rows: topRows.map((r, idx) => ({
+          rank: idx + 1,
+          teamAbbr: r.teamAbbr,
+          entityName: r.entityName,
+          entitySubtext: `${r.position} · ${r.gamesPlayed} PJ · ${r.minutesAvg.toFixed(1)} MIN`,
+          cells: {
+            score: {
+              text: `${r.consistencyScore}/100`,
+              tone:
+                r.consistencyScore >= 75
+                  ? 'positive'
+                  : r.consistencyScore >= 55
+                  ? 'accent'
+                  : 'warning',
+            },
+            profile: { text: r.profileLabel, subtext: `±${r.ptsStdDev.toFixed(1)} PTS` },
+            ptsAvg: { text: r.ptsAvg.toFixed(1) },
+            ptsWin: {
+              text: (r.ptsWindowAvg ?? r.ptsAvg).toFixed(1),
+              subtext:
+                r.ptsWindowDelta !== undefined
+                  ? `${formatSigned(r.ptsWindowDelta, 1)} vs temp`
+                  : undefined,
+              tone:
+                (r.ptsWindowDelta ?? 0) >= 1.5
+                  ? 'positive'
+                  : (r.ptsWindowDelta ?? 0) <= -1.5
+                  ? 'negative'
+                  : 'neutral',
+            },
+            range: { text: `${r.ptsFloor} – ${r.ptsCeiling}` },
+            hit20: { text: `${Math.round(r.hitRate20Pts)}%` },
+          },
+        })),
+        footerNote: `Mostrando top ${topRows.length} de ${filteredConsistency.length} jugadores ordenados según tabla activa`,
+      });
+    }
+
+    if (streakEvalMode === 'custom') {
+      const topRows = customEvaluatedRows.slice(0, 20);
+      const opSym = getOperatorSymbol(operator);
+      const condLabel = `${activeMetric.shortLabel} ${opSym} ${formatMetricNumber(
+        thresholdValue,
+        activeMetric.decimals,
+        activeMetric.unit
+      )}`;
+      const secondaryLabel = useSecondaryCondition
+        ? ` + ${secondaryMetric.shortLabel} ${getOperatorSymbol(
+            secondaryOperator
+          )} ${formatMetricNumber(
+            secondaryThresholdValue,
+            secondaryMetric.decimals,
+            secondaryMetric.unit
+          )}`
+        : '';
+      const filename = `radarnba-rachas-${activeMetric.id}-${dateSlug}.png`;
+      return buildTableSnapshotBlob({
+        filename,
+        categoryTag: 'BUSCADOR DE RACHAS A MEDIDA',
+        title: `Rachas Activas: ${condLabel}${secondaryLabel}`,
+        subtitle: `Mínimo ${minConsecutive} PJ seguidos · ${
+          streakSpanMode === 'best'
+            ? 'Mejor racha del tramo'
+            : 'Racha activa vigente'
+        }`,
+        entityColumnLabel: 'JUGADOR',
+        entityColumnWeight: 2.25,
+        kpis: [
+          {
+            label: 'RACHAS ACTIVAS',
+            value: `${customEvaluatedRows.length}`,
+            sublabel: `≥ ${minConsecutive} PJ consecutivos`,
+            tone: 'accent',
+          },
+          {
+            label: 'LÍDER ACTUAL',
+            value: topCustomRow ? topCustomRow.playerName : '—',
+            sublabel: topCustomRow
+              ? `${topCustomRow.count} PJ seguidos (${topCustomRow.teamAbbr})`
+              : undefined,
+            tone: 'positive',
+          },
+          {
+            label: 'CONDICIÓN EVALUADA',
+            value: condLabel,
+            sublabel: secondaryLabel ? secondaryLabel.slice(3) : activeMetric.group,
+          },
+        ],
+        columns: [
+          { key: 'count', label: 'RACHA', align: 'right', widthWeight: 0.9 },
+          { key: 'streakAvg', label: 'MEDIA RACHA', align: 'right', widthWeight: 1.1 },
+          { key: 'winAvg', label: `ÚLT. ${windowSize} PJ`, align: 'right', widthWeight: 1.05 },
+          { key: 'currAvg', label: 'TEMP. 26-27', align: 'right', widthWeight: 1.05 },
+          { key: 'prevAvg', label: 'TEMP. 25-26', align: 'right', widthWeight: 1.05 },
+          { key: 'last', label: 'ÚLTIMO PJ', align: 'right', widthWeight: 1.15 },
+        ],
+        rows: topRows.map((r, idx) => ({
+          rank: idx + 1,
+          teamAbbr: r.teamAbbr,
+          entityName: r.playerName,
+          entitySubtext: `${r.position} · ${r.gamesPlayed} PJ`,
+          cells: {
+            count: { text: `${r.count} PJ`, tone: 'accent' },
+            streakAvg: {
+              text: formatMetricNumber(
+                r.streakAvg,
+                activeMetric.decimals,
+                activeMetric.unit
+              ),
+              tone: isRulePositive(activeMetric, operator) ? 'positive' : 'negative',
+            },
+            winAvg: {
+              text: formatMetricNumber(
+                r.windowAvg,
+                activeMetric.decimals,
+                activeMetric.unit
+              ),
+            },
+            currAvg: {
+              text:
+                r.currentSeasonAvg !== null
+                  ? formatMetricNumber(
+                      r.currentSeasonAvg,
+                      activeMetric.decimals,
+                      activeMetric.unit
+                    )
+                  : '—',
+            },
+            prevAvg: {
+              text:
+                r.prevSeasonAvg !== null
+                  ? formatMetricNumber(
+                      r.prevSeasonAvg,
+                      activeMetric.decimals,
+                      activeMetric.unit
+                    )
+                  : '—',
+              tone: 'muted',
+            },
+            last: {
+              text: formatMetricNumber(
+                r.lastGameVal,
+                activeMetric.decimals,
+                activeMetric.unit
+              ),
+              subtext: `${r.lastIsHome ? 'vs' : '@'} ${r.lastOpponent} (${formatShortDate(
+                r.lastGameDate
+              )})`,
+            },
+          },
+        })),
+        footerNote: `Mostrando top ${topRows.length} de ${customEvaluatedRows.length} rachas activas`,
+      });
+    }
+
+    const topRows = filteredStreaks.slice(0, 20);
+    const filename = `radarnba-rachas-activas-${dateSlug}.png`;
+    return buildTableSnapshotBlob({
+      filename,
+      categoryTag: 'RACHAS Y CONSISTENCIA · RACHAS ACTIVAS',
+      title: `Rachas Estadísticas Activas NBA (≥ ${minStreakGames} PJ)`,
+      subtitle: `${filteredStreaks.length} rachas detectadas · Ventana de referencia Últ. ${windowSize} PJ`,
+      entityColumnLabel: 'JUGADOR / EQUIPO',
+      entityColumnWeight: 2.2,
+      kpis: [
+        {
+          label: 'RACHAS VISIBLES',
+          value: `${filteredStreaks.length}`,
+          sublabel: `Umbral ≥ ${minStreakGames} PJ`,
+          tone: 'accent',
+        },
+        {
+          label: 'MAYOR RACHA',
+          value: filteredStreaks[0] ? `${filteredStreaks[0].count} PJ` : '—',
+          sublabel: filteredStreaks[0]
+            ? `${filteredStreaks[0].entityName} (${filteredStreaks[0].thresholdLabel})`
+            : undefined,
+          tone: 'positive',
+        },
+        {
+          label: 'FILTRO DE SIGNO',
+          value:
+            autoSignFilter === 'positive'
+              ? 'En racha (+)'
+              : autoSignFilter === 'negative'
+              ? 'Bache (-)'
+              : 'Positivas + Baches',
+        },
+      ],
+      columns: [
+        { key: 'cond', label: 'CONDICIÓN / HITO', align: 'left', widthWeight: 1.75 },
+        { key: 'count', label: 'RACHA', align: 'right', widthWeight: 0.85 },
+        { key: 'inStreak', label: 'EN RACHA', align: 'right', widthWeight: 1.05 },
+        { key: 'season', label: 'MEDIA 26-27', align: 'right', widthWeight: 1.05 },
+        { key: 'delta', label: 'DESV. TEMP.', align: 'right', widthWeight: 1.05 },
+      ],
+      rows: topRows.map((s, idx) => {
+        const currAvg =
+          s.currentSeasonAvg !== undefined && s.currentSeasonAvg !== null
+            ? s.currentSeasonAvg
+            : s.seasonBaseline;
+        const delta = s.windowAvgDuringStreak - currAvg;
+        return {
+          rank: idx + 1,
+          teamAbbr: s.teamAbbr,
+          entityName: s.entityName,
+          entitySubtext: s.subtitle,
+          cells: {
+            cond: {
+              text: s.thresholdLabel,
+              subtext: s.metricLabel,
+              tone: s.isPositive ? 'positive' : 'negative',
+            },
+            count: { text: `${s.count} PJ`, tone: 'accent' },
+            inStreak: {
+              text: `${s.windowAvgDuringStreak.toFixed(1)}${s.unit}`,
+              tone: s.isPositive ? 'positive' : 'negative',
+            },
+            season: { text: `${currAvg.toFixed(1)}${s.unit}` },
+            delta: {
+              text: `${formatSigned(delta, 1)}${s.unit}`,
+              tone: s.isPositive ? 'positive' : 'negative',
+            },
+          },
+        };
+      }),
+      footerNote: `Mostrando top ${topRows.length} de ${filteredStreaks.length} rachas activas`,
+    });
+  };
   const mostVolatile =
     consistencyRows.length > 0
       ? consistencyRows[consistencyRows.length - 1]
@@ -1074,15 +1357,29 @@ export function StreaksConsistencyView({
           )}
         </div>
 
-        <div className="relative w-full xl:w-72 shrink-0">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Buscar jugador o franquicia..."
-            className="w-full pl-9 pr-3 py-2 text-xs bg-[#131C2E] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500 transition-colors"
-          />
+        <div className="flex items-center gap-2 w-full xl:w-auto shrink-0">
+          <div className="relative flex-1 xl:w-72">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Buscar jugador o franquicia..."
+              className="w-full pl-9 pr-3 py-2 text-xs bg-[#131C2E] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500 transition-colors"
+            />
+          </div>
+          {subTab !== 'history' && (
+            <ExportImageButton
+              onBuildImage={handleBuildStreakSnapshot}
+              disabled={
+                subTab === 'consistency'
+                  ? filteredConsistency.length === 0
+                  : streakEvalMode === 'custom'
+                  ? customEvaluatedRows.length === 0
+                  : filteredStreaks.length === 0
+              }
+            />
+          )}
         </div>
       </div>
 
@@ -1572,31 +1869,40 @@ export function StreaksConsistencyView({
         </div>
       )}
 
-      {/* Historial de Rachas (2-Season Progression Line Chart) */}
+      {/* Historial de Rachas (2-Season Progression Line Chart — lazy-loaded on demand) */}
       {(subTab === 'history' || showInlineHistoryChart) && (
         <div ref={chartSectionRef}>
-          <PlayerStreakHistoryChart
-            players={players}
-            players2027={players2027}
-            players2026={players2026}
-            selectedPlayerId={
-              historyPlayerId ||
-              (streakEvalMode === 'auto'
-                ? filteredStreaks.find((s) => s.entityType === 'player')?.entityId
-                : topCustomRow?.playerId) ||
-              topCustomRow?.playerId ||
-              players[0]?.id ||
-              null
+          <Suspense
+            fallback={
+              <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-6 flex items-center justify-center gap-2.5 text-xs font-medium text-slate-300">
+                <RefreshCw className="w-4 h-4 text-orange-400 animate-spin shrink-0" />
+                <span>Cargando gráfico interactivo de historial de rachas...</span>
+              </div>
             }
-            onSelectPlayerId={(pid) => setHistoryPlayerId(pid)}
-            onInspectPlayer={(pid) => onInspectEntity('player', pid)}
-            preloadRequest={chartPreloadRequest}
-            onCloseInline={
-              subTab !== 'history'
-                ? () => setShowInlineHistoryChart(false)
-                : undefined
-            }
-          />
+          >
+            <PlayerStreakHistoryChart
+              players={players}
+              players2027={players2027}
+              players2026={players2026}
+              selectedPlayerId={
+                historyPlayerId ||
+                (streakEvalMode === 'auto'
+                  ? filteredStreaks.find((s) => s.entityType === 'player')?.entityId
+                  : topCustomRow?.playerId) ||
+                topCustomRow?.playerId ||
+                players[0]?.id ||
+                null
+              }
+              onSelectPlayerId={(pid) => setHistoryPlayerId(pid)}
+              onInspectPlayer={(pid) => onInspectEntity('player', pid)}
+              preloadRequest={chartPreloadRequest}
+              onCloseInline={
+                subTab !== 'history'
+                  ? () => setShowInlineHistoryChart(false)
+                  : undefined
+              }
+            />
+          </Suspense>
         </div>
       )}
 

@@ -1,4 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type LazyExoticComponent,
+} from 'react';
 import {
   Activity,
   ArrowLeftRight,
@@ -14,6 +25,7 @@ import {
   Lock,
   Menu,
   RefreshCw,
+  Search,
   Shield,
   SlidersHorizontal,
   Star,
@@ -24,9 +36,11 @@ import {
 } from 'lucide-react';
 import type {
   ActiveSection,
+  AnomalySignal,
   AwardCategoryId,
   AwardSeasonScope,
   BootstrapPayload,
+  ConsistencyEntry,
   ExperienceMode,
   MilestonesPayload,
   PlayerSummary,
@@ -34,8 +48,10 @@ import type {
   SearchPlayerResult,
   SeasonAwardsPayload,
   SeasonMode,
+  StreakEntry,
   TeamSummary,
   ThresholdSettings,
+  TrendBreakoutAlert,
   TrendBreakoutAxis,
   WindowSize,
 } from './types/nba';
@@ -50,24 +66,230 @@ import {
   computeLeagueBenchmarks,
   describeSliderSurpriseLevel,
   detectActivePreset,
+  type LeagueBenchmarks,
 } from './utils/humanize';
-import { GuidedHomeView } from './components/GuidedHomeView';
-import { GameDayAnalyzerView } from './components/GameDayAnalyzerView';
-import { AnomalyRadarView } from './components/AnomalyRadarView';
-import { StreaksConsistencyView } from './components/StreaksConsistencyView';
-import { HeadToHeadBattleView } from './components/HeadToHeadBattleView';
-import { RangeComparatorView } from './components/RangeComparatorView';
-import { TeamsExplorerView } from './components/TeamsExplorerView';
-import { PlayersExplorerView } from './components/PlayersExplorerView';
-import { SeasonMilestonesView } from './components/SeasonMilestonesView';
-import { SeasonAwardsView } from './components/SeasonAwardsView';
 import { LiveGamedayBanner } from './components/LiveGamedayBanner';
-import { GlossaryView } from './components/GlossaryView';
-import { FantasyEspnAssistantView } from './components/FantasyEspnAssistantView';
-import { AdminSecurityConfigPanel } from './components/AdminSecurityConfigPanel';
-import { EntityInspectorDrawer } from './components/EntityInspectorDrawer';
 import { MetricInfoTooltip } from './components/MetricUiHelpers';
 import { TeamLogo } from './components/NbaVisuals';
+
+type PreloadableLazyComponent<T extends ComponentType<any>> =
+  LazyExoticComponent<T> & {
+    preload: () => Promise<{ default: T }>;
+  };
+
+function lazyWithPreload<T extends ComponentType<any>>(
+  factory: () => Promise<{ default: T }>
+): PreloadableLazyComponent<T> {
+  let cachedPromise: Promise<{ default: T }> | null = null;
+  const load = () => {
+    if (!cachedPromise) {
+      cachedPromise = factory().catch((err) => {
+        cachedPromise = null;
+        throw err;
+      });
+    }
+    return cachedPromise;
+  };
+  const LazyComp = lazy(load) as PreloadableLazyComponent<T>;
+  LazyComp.preload = load;
+  return LazyComp;
+}
+
+const GuidedHomeView = lazyWithPreload(() =>
+  import('./components/GuidedHomeView').then((m) => ({
+    default: m.GuidedHomeView,
+  }))
+);
+const GameDayAnalyzerView = lazyWithPreload(() =>
+  import('./components/GameDayAnalyzerView').then((m) => ({
+    default: m.GameDayAnalyzerView,
+  }))
+);
+const AnomalyRadarView = lazyWithPreload(() =>
+  import('./components/AnomalyRadarView').then((m) => ({
+    default: m.AnomalyRadarView,
+  }))
+);
+const StreaksConsistencyView = lazyWithPreload(() =>
+  import('./components/StreaksConsistencyView').then((m) => ({
+    default: m.StreaksConsistencyView,
+  }))
+);
+const HeadToHeadBattleView = lazyWithPreload(() =>
+  import('./components/HeadToHeadBattleView').then((m) => ({
+    default: m.HeadToHeadBattleView,
+  }))
+);
+const RangeComparatorView = lazyWithPreload(() =>
+  import('./components/RangeComparatorView').then((m) => ({
+    default: m.RangeComparatorView,
+  }))
+);
+const TeamsExplorerView = lazyWithPreload(() =>
+  import('./components/TeamsExplorerView').then((m) => ({
+    default: m.TeamsExplorerView,
+  }))
+);
+const PlayersExplorerView = lazyWithPreload(() =>
+  import('./components/PlayersExplorerView').then((m) => ({
+    default: m.PlayersExplorerView,
+  }))
+);
+const SeasonMilestonesView = lazyWithPreload(() =>
+  import('./components/SeasonMilestonesView').then((m) => ({
+    default: m.SeasonMilestonesView,
+  }))
+);
+const SeasonAwardsView = lazyWithPreload(() =>
+  import('./components/SeasonAwardsView').then((m) => ({
+    default: m.SeasonAwardsView,
+  }))
+);
+const GlossaryView = lazyWithPreload(() =>
+  import('./components/GlossaryView').then((m) => ({
+    default: m.GlossaryView,
+  }))
+);
+const ScatterAnalyticsView = lazyWithPreload(() =>
+  import('./components/ScatterAnalyticsView').then((m) => ({
+    default: m.ScatterAnalyticsView,
+  }))
+);
+const FantasyEspnAssistantView = lazyWithPreload(() =>
+  import('./components/FantasyEspnAssistantView').then((m) => ({
+    default: m.FantasyEspnAssistantView,
+  }))
+);
+const AdminSecurityConfigPanel = lazyWithPreload(() =>
+  import('./components/AdminSecurityConfigPanel').then((m) => ({
+    default: m.AdminSecurityConfigPanel,
+  }))
+);
+const EntityInspectorDrawer = lazyWithPreload(() =>
+  import('./components/EntityInspectorDrawer').then((m) => ({
+    default: m.EntityInspectorDrawer,
+  }))
+);
+const GlobalCommandPalette = lazyWithPreload(() =>
+  import('./components/GlobalCommandPalette').then((m) => ({
+    default: m.GlobalCommandPalette,
+  }))
+);
+
+function preloadSectionChunk(section: ActiveSection): void {
+  switch (section) {
+    case 'home':
+      void GuidedHomeView.preload();
+      break;
+    case 'gameday':
+      void GameDayAnalyzerView.preload();
+      break;
+    case 'anomalies':
+      void AnomalyRadarView.preload();
+      break;
+    case 'streaks':
+      void StreaksConsistencyView.preload();
+      break;
+    case 'duel':
+      void HeadToHeadBattleView.preload();
+      break;
+    case 'comparator':
+      void RangeComparatorView.preload();
+      break;
+    case 'teams':
+      void TeamsExplorerView.preload();
+      break;
+    case 'players':
+      void PlayersExplorerView.preload();
+      break;
+    case 'milestones':
+      void SeasonMilestonesView.preload();
+      break;
+    case 'awards':
+      void SeasonAwardsView.preload();
+      break;
+    case 'glossary':
+      void GlossaryView.preload();
+      break;
+    case 'fantasy_espn':
+      void FantasyEspnAssistantView.preload();
+      void AdminSecurityConfigPanel.preload();
+      break;
+  }
+}
+
+const EMPTY_STREAKS: StreakEntry[] = [];
+const EMPTY_ANOMALIES: AnomalySignal[] = [];
+const EMPTY_BREAKOUTS: TrendBreakoutAlert[] = [];
+const EMPTY_CONSISTENCY: ConsistencyEntry[] = [];
+const EMPTY_SLICE_REFS: {
+  players2027?: PlayerSummary[];
+  players2026?: PlayerSummary[];
+  teams2027?: TeamSummary[];
+  teams2026?: TeamSummary[];
+} = {};
+const EMPTY_BENCHMARKS = computeLeagueBenchmarks([], []);
+
+function areDepsIdentical(
+  prev: readonly unknown[],
+  next: readonly unknown[]
+): boolean {
+  if (prev.length !== next.length) return false;
+  for (let i = 0; i < prev.length; i++) {
+    if (!Object.is(prev[i], next[i])) return false;
+  }
+  return true;
+}
+
+function useOnDemandMemo<T>(
+  enabled: boolean,
+  emptyFallback: T,
+  factory: () => T,
+  deps: readonly unknown[]
+): { value: T; hasComputed: boolean } {
+  const cacheRef = useRef<{ deps: readonly unknown[]; value: T } | null>(null);
+  return useMemo(() => {
+    if (cacheRef.current && areDepsIdentical(cacheRef.current.deps, deps)) {
+      return { value: cacheRef.current.value, hasComputed: true };
+    }
+    if (!enabled) {
+      return { value: emptyFallback, hasComputed: false };
+    }
+    const computedValue = factory();
+    cacheRef.current = { deps, value: computedValue };
+    return { value: computedValue, hasComputed: true };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, ...deps]);
+}
+
+function SectionViewSkeleton() {
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y lg:divide-y-0 lg:divide-x divide-[#1E293B]">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="p-4 space-y-2 animate-pulse">
+            <div className="h-3 w-28 bg-[#1E293B] rounded" />
+            <div className="h-7 w-16 bg-[#1E293B] rounded" />
+            <div className="h-3 w-36 bg-[#1E293B] rounded" />
+          </div>
+        ))}
+      </div>
+      <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden divide-y divide-[#1E293B]">
+        {Array.from({ length: 9 }).map((_, idx) => (
+          <div
+            key={idx}
+            className="h-11 px-4 flex items-center justify-between gap-4 animate-pulse"
+          >
+            <div className="h-3.5 w-44 bg-[#1E293B] rounded" />
+            <div className="h-3.5 w-28 bg-[#1E293B] rounded" />
+            <div className="h-3.5 w-16 bg-[#1E293B] rounded" />
+            <div className="h-3.5 w-52 bg-[#1E293B] rounded hidden md:block" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 import {
   parseRouteFromSearch,
   readRadarHistoryMeta,
@@ -82,7 +304,6 @@ import {
   subscribeBootstrapSlicesClient,
 } from './utils/bootstrapWireCodec';
 import {
-  getStoredAdminToken,
   loginAdminWithPasscode,
   logoutAdminSession,
   verifyStoredAdminSession,
@@ -147,7 +368,7 @@ function loadSavedWatchlist(): Set<string> {
 function loadSavedSeasonMode(): SeasonMode {
   try {
     const raw = localStorage.getItem(STORAGE_SEASON_KEY);
-    if (raw === '2027' || raw === '2026' || raw === 'continuous') return raw;
+    if (raw === '2027' || raw === '2026' || raw === '2025' || raw === '2024' || raw === 'continuous') return raw;
     return 'continuous';
   } catch {
     return 'continuous';
@@ -182,7 +403,7 @@ export default function App() {
     loadSavedExperienceMode
   );
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [temporalSampleOpen, setTemporalSampleOpen] = useState(false);
   const [seasonMode, setSeasonMode] = useState<SeasonMode>(loadSavedSeasonMode);
   const [settings, setSettings] = useState<ThresholdSettings>(loadSavedThresholds);
   const [watchlistIds, setWatchlistIds] = useState<Set<string>>(loadSavedWatchlist);
@@ -215,9 +436,11 @@ export default function App() {
   const [awardsError, setAwardsError] = useState<string | null>(null);
   const [gamedayRefreshCounter, setGamedayRefreshCounter] = useState(0);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [isPrivateUnlocked, setIsPrivateUnlocked] = useState<boolean>(() =>
-    Boolean(getStoredAdminToken())
+  const [isPrivateUnlocked, setIsPrivateUnlocked] = useState<boolean>(false);
+  const [checkingAdminSession, setCheckingAdminSession] = useState<boolean>(
+    () => initialRoute.section === 'fantasy_espn'
   );
+  const skipNextAdminSessionCheckRef = useRef<boolean>(false);
   const [adminZoneSection, setAdminZoneSection] = useState<'fantasy' | 'web_config'>(
     'fantasy'
   );
@@ -379,23 +602,38 @@ export default function App() {
     [applyRouteState]
   );
 
-  // Verify stored admin session token against server on startup
+  const handleLockAdminSession = useCallback(() => {
+    skipNextAdminSessionCheckRef.current = true;
+    setIsPrivateUnlocked(false);
+    setCheckingAdminSession(false);
+    setPasscodeAttempt('');
+    void logoutAdminSession();
+  }, []);
+
+  // Verify HttpOnly admin session cookie against server when opening /admin
   useEffect(() => {
-    if (!getStoredAdminToken()) {
-      setIsPrivateUnlocked(false);
+    if (activeSection !== 'fantasy_espn' || isPrivateUnlocked) {
+      setCheckingAdminSession(false);
+      return;
+    }
+    if (skipNextAdminSessionCheckRef.current) {
+      skipNextAdminSessionCheckRef.current = false;
+      setCheckingAdminSession(false);
       return;
     }
     let cancelled = false;
+    setCheckingAdminSession(true);
     void (async () => {
       const valid = await verifyStoredAdminSession();
       if (!cancelled) {
         setIsPrivateUnlocked(valid);
+        setCheckingAdminSession(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [activeSection, isPrivateUnlocked]);
 
   // Sync Browser Back / Forward buttons (popstate)
   useEffect(() => {
@@ -616,8 +854,10 @@ export default function App() {
   }, [seasonMode, fetchBootstrap]);
 
   useEffect(() => {
+    if (activeSection !== 'milestones') return;
+    if (milestonesData) return;
     void fetchMilestones(false);
-  }, [fetchMilestones]);
+  }, [activeSection, milestonesData, fetchMilestones]);
 
   useEffect(() => {
     if (activeSection !== 'awards') return;
@@ -627,7 +867,9 @@ export default function App() {
 
   const handleManualRefresh = useCallback(() => {
     void fetchBootstrap(seasonMode, true, allPlayersLoaded);
-    void fetchMilestones(true);
+    if (activeSection === 'milestones' || milestonesData) {
+      void fetchMilestones(true);
+    }
     if (activeSection === 'awards' || awardsByScope[awardsSeasonScope]) {
       void fetchAwards(awardsSeasonScope, true);
     }
@@ -639,6 +881,7 @@ export default function App() {
     seasonMode,
     allPlayersLoaded,
     activeSection,
+    milestonesData,
     awardsByScope,
     awardsSeasonScope,
   ]);
@@ -710,6 +953,7 @@ export default function App() {
 
   const handleInspectEntity = useCallback(
     (entityType: 'player' | 'team', entityId: string) => {
+      void EntityInspectorDrawer.preload();
       const wasClosed = !routeRef.current.inspectedType;
       if (entityType === 'player') {
         void ensurePlayerInMemory(entityId);
@@ -876,6 +1120,64 @@ export default function App() {
     [commitRoute]
   );
 
+  const handleOpenInDuel = useCallback(
+    (playerAId: string, playerBId?: string) => {
+      setMobileMenuOpen(false);
+      void HeadToHeadBattleView.preload();
+      commitRoute(
+        (prev) => ({
+          ...prev,
+          section: 'duel',
+          duelPlayerAId: playerAId,
+          duelPlayerBId:
+            playerBId && playerBId !== playerAId
+              ? playerBId
+              : prev.duelPlayerAId && prev.duelPlayerAId !== playerAId
+              ? prev.duelPlayerAId
+              : prev.duelPlayerBId,
+          inspectedType: null,
+          inspectedId: null,
+        }),
+        'push',
+        null
+      );
+    },
+    [commitRoute]
+  );
+
+  const handleNavigateAwardFromPalette = useCallback(
+    (category: AwardCategoryId) => {
+      setMobileMenuOpen(false);
+      void SeasonAwardsView.preload();
+      commitRoute(
+        (prev) => ({
+          ...prev,
+          section: 'awards',
+          awardCategory: category,
+          inspectedType: null,
+          inspectedId: null,
+        }),
+        'push',
+        null
+      );
+    },
+    [commitRoute]
+  );
+
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+
+  useEffect(() => {
+    const onGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        void GlobalCommandPalette.preload();
+        setCommandPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', onGlobalKeyDown);
+    return () => window.removeEventListener('keydown', onGlobalKeyDown);
+  }, []);
+
   const handleAwardCategoryChange = useCallback(
     (category: AwardCategoryId) => {
       commitRoute(
@@ -967,49 +1269,123 @@ export default function App() {
     [importExternalPlayer]
   );
 
-  const seasonReferenceSlices = useMemo(() => {
-    void seasonSliceTick;
-    const { s2027, s2026 } = getCachedSeasonSlicesClient();
-    return {
-      players2027: s2027?.players,
-      players2026: s2026?.players,
-      teams2027: s2027?.teams,
-      teams2026: s2026?.teams,
-    };
-  }, [seasonSliceTick]);
+  // Defer interactive slider adjustments so controls remain 60fps while heavy rankings recompute
+  const deferredSettings = useDeferredValue(settings);
 
-  const streaks = useMemo(
+  const isFantasyRosterActive =
+    activeSection === 'fantasy_espn' &&
+    isPrivateUnlocked &&
+    adminZoneSection === 'fantasy';
+
+  const needsStreaks =
+    !loading &&
+    players.length > 0 &&
+    (activeSection === 'home' ||
+      activeSection === 'anomalies' ||
+      activeSection === 'streaks' ||
+      isFantasyRosterActive);
+
+  const needsAnomalies =
+    !loading &&
+    players.length > 0 &&
+    (activeSection === 'home' || activeSection === 'anomalies');
+
+  const needsTrendBreakouts =
+    !loading &&
+    players.length > 0 &&
+    (activeSection === 'home' ||
+      activeSection === 'anomalies' ||
+      activeSection === 'streaks' ||
+      isFantasyRosterActive);
+
+  const needsConsistencyRows =
+    !loading && players.length > 0 && activeSection === 'streaks';
+
+  const isInspectorOpen = Boolean(inspected.type && inspected.id);
+  const needsBenchmarks =
+    !loading &&
+    (players.length > 0 || teams.length > 0) &&
+    (isInspectorOpen ||
+      activeSection === 'home' ||
+      activeSection === 'anomalies' ||
+      activeSection === 'duel' ||
+      activeSection === 'comparator' ||
+      activeSection === 'teams' ||
+      activeSection === 'players');
+
+  const seasonSlicesMemo = useOnDemandMemo(
+    needsStreaks,
+    EMPTY_SLICE_REFS,
+    () => {
+      const { s2027, s2026 } = getCachedSeasonSlicesClient();
+      return {
+        players2027: s2027?.players,
+        players2026: s2026?.players,
+        teams2027: s2027?.teams,
+        teams2026: s2026?.teams,
+      };
+    },
+    [seasonSliceTick]
+  );
+  const seasonReferenceSlices = seasonSlicesMemo.value;
+
+  const streaksMemo = useOnDemandMemo(
+    needsStreaks,
+    EMPTY_STREAKS,
     () =>
       detectActiveStreaks(
         players,
         teams,
-        settings.minStreakGames,
-        settings.windowSize,
+        deferredSettings.minStreakGames,
+        deferredSettings.windowSize,
         seasonReferenceSlices
       ),
-    [players, teams, settings.minStreakGames, settings.windowSize, seasonReferenceSlices]
+    [
+      players,
+      teams,
+      deferredSettings.minStreakGames,
+      deferredSettings.windowSize,
+      seasonReferenceSlices,
+    ]
   );
+  const streaks = streaksMemo.value;
 
-  const anomalies = useMemo(
-    () => detectAnomalies(players, teams, settings, streaks),
-    [players, teams, settings, streaks]
+  const anomaliesMemo = useOnDemandMemo(
+    needsAnomalies,
+    EMPTY_ANOMALIES,
+    () => detectAnomalies(players, teams, deferredSettings, streaks),
+    [players, teams, deferredSettings, streaks]
   );
+  const anomalies = anomaliesMemo.value;
 
-  const trendBreakouts = useMemo(
-    () => detectTrendBreakouts(players, settings, streaks),
-    [players, settings, streaks]
+  const trendBreakoutsMemo = useOnDemandMemo(
+    needsTrendBreakouts,
+    EMPTY_BREAKOUTS,
+    () => detectTrendBreakouts(players, deferredSettings, streaks),
+    [players, deferredSettings, streaks]
   );
+  const trendBreakouts = trendBreakoutsMemo.value;
 
-  const consistencyRows = useMemo(
+  const consistencyMemo = useOnDemandMemo(
+    needsConsistencyRows,
+    EMPTY_CONSISTENCY,
     () =>
-      computeConsistencyTable(players, settings.minMinutes, settings.windowSize),
-    [players, settings.minMinutes, settings.windowSize]
+      computeConsistencyTable(
+        players,
+        deferredSettings.minMinutes,
+        deferredSettings.windowSize
+      ),
+    [players, deferredSettings.minMinutes, deferredSettings.windowSize]
   );
+  const consistencyRows = consistencyMemo.value;
 
-  const benchmarks = useMemo(
+  const benchmarksMemo = useOnDemandMemo<LeagueBenchmarks>(
+    needsBenchmarks,
+    EMPTY_BENCHMARKS,
     () => computeLeagueBenchmarks(players, teams),
     [players, teams]
   );
+  const benchmarks = benchmarksMemo.value;
 
   const activePreset = useMemo(() => detectActivePreset(settings), [settings]);
 
@@ -1032,13 +1408,13 @@ export default function App() {
     {
       id: 'anomalies',
       label: 'Radar de Anomalías',
-      count: anomalies.length,
+      count: anomaliesMemo.hasComputed ? anomalies.length : undefined,
       icon: Activity,
     },
     {
       id: 'streaks',
       label: 'Rachas y Consistencia',
-      count: streaks.length,
+      count: streaksMemo.hasComputed ? streaks.length : undefined,
       icon: Flame,
     },
     {
@@ -1077,6 +1453,11 @@ export default function App() {
       label: 'Jugadores NBA',
       count: players.length,
       icon: Users,
+    },
+    {
+      id: 'scatter',
+      label: 'Explorador Analítico',
+      icon: LayoutGrid,
     },
     {
       id: 'glossary',
@@ -1148,6 +1529,8 @@ export default function App() {
               <button
                 key={item.id}
                 type="button"
+                onMouseEnter={() => preloadSectionChunk(item.id)}
+                onFocus={() => preloadSectionChunk(item.id)}
                 onClick={() => handleNavigateSection(item.id)}
                 className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
                   active
@@ -1286,6 +1669,8 @@ export default function App() {
                   <button
                     key={item.id}
                     type="button"
+                    onMouseEnter={() => preloadSectionChunk(item.id)}
+                    onFocus={() => preloadSectionChunk(item.id)}
                     onClick={() => handleNavigateSection(item.id)}
                     className={`w-full min-h-[44px] flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                       active
@@ -1385,7 +1770,34 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+            {/* Global Command Palette Trigger (Ctrl+K / Cmd+K) */}
+            <button
+              type="button"
+              onMouseEnter={() => void GlobalCommandPalette.preload()}
+              onFocus={() => void GlobalCommandPalette.preload()}
+              onClick={() => {
+                void GlobalCommandPalette.preload();
+                setCommandPaletteOpen(true);
+              }}
+              aria-label="Abrir buscador rápido global (Ctrl+K)"
+              title="Buscador rápido: jugadores, equipos, vistas y duelos 1v1 (Ctrl+K / ⌘K)"
+              className="inline-flex items-center justify-between gap-2 min-w-[38px] min-h-[36px] sm:min-w-0 px-2.5 lg:px-3 py-1.5 text-xs font-medium rounded-lg border bg-[#131C2E] hover:bg-[#182338] border-[#1E293B] hover:border-[#283548] text-slate-300 hover:text-white transition-colors whitespace-nowrap shrink-0"
+            >
+              <span className="inline-flex items-center gap-1.5">
+                <Search className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+                <span className="hidden lg:inline text-slate-400">
+                  Buscar jugador, equipo, duelo…
+                </span>
+                <span className="hidden sm:inline lg:hidden text-slate-300">
+                  Buscar
+                </span>
+              </span>
+              <kbd className="hidden md:inline-block px-1.5 py-0.5 text-[10px] font-mono text-slate-400 bg-[#0B1120] border border-[#1E293B] rounded">
+                Ctrl K
+              </kbd>
+            </button>
+
             {/* Quick Mobile Detail Level Switcher */}
             <div
               aria-label="Nivel de detalle"
@@ -1463,44 +1875,68 @@ export default function App() {
             onOpenGameday={() => handleNavigateSection('gameday')}
           />
 
-          {/* Homogeneous Global Parameter & Threshold Strip (shown on rolling-window analytical views) */}
+          {/* Homogeneous Global "Muestra temporal:" Container (collapsed by default across all viewports) */}
           {activeSection !== 'milestones' &&
             activeSection !== 'awards' &&
             activeSection !== 'glossary' &&
             activeSection !== 'fantasy_espn' &&
             activeSection !== 'duel' &&
             activeSection !== 'gameday' && (
-            <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-2.5 sm:p-3.5 space-y-2.5 sm:space-y-3">
-              {/* Mobile Compact Quick Bar (< md) */}
-              <div className="flex md:hidden items-center justify-between gap-2">
-                <div className="flex items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg shrink-0">
-                  {([3, 5, 10] as WindowSize[]).map((w) => (
-                    <button
-                      key={w}
-                      type="button"
-                      onClick={() =>
-                        setSettings((prev) => ({ ...prev, windowSize: w }))
-                      }
-                      className={`min-h-[34px] px-2.5 py-1 text-xs font-mono rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                        settings.windowSize === w
-                          ? 'bg-orange-500 text-slate-950 font-semibold'
-                          : 'text-slate-300'
-                      }`}
-                    >
-                      {w}PJ
-                    </button>
-                  ))}
-                </div>
+            <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg px-3 py-1.5">
+              {/* Compact Single-Line Summary Header (always visible; collapsed height ~40px) */}
+              <div className="flex items-center justify-between gap-2 min-h-[32px]">
+                <button
+                  type="button"
+                  onClick={() => setTemporalSampleOpen((prev) => !prev)}
+                  aria-expanded={temporalSampleOpen}
+                  className="flex-1 min-w-0 flex items-center gap-1.5 sm:gap-2 text-left text-xs py-1 rounded-md text-slate-300 hover:text-white transition-colors"
+                >
+                  <CalendarDays className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+                  <span className="text-slate-400 whitespace-nowrap shrink-0">
+                    {experienceMode === 'simple' ? 'Temporada:' : 'Muestra temporal:'}
+                  </span>
+                  <span className="font-semibold text-slate-100 truncate">
+                    {seasonMode === 'continuous'
+                      ? experienceMode === 'simple'
+                        ? 'Actual + Pasada'
+                        : 'Continuo (26-27 + 25-26)'
+                      : seasonMode === '2027'
+                        ? 'Solo 2026-27'
+                        : seasonMode === '2026'
+                          ? '2025-26 Completa'
+                          : seasonMode === '2025'
+                            ? '2024-25 Completa'
+                            : '2023-24 Completa'}
+                  </span>
+                  <span className="text-slate-600 shrink-0" aria-hidden="true">
+                    ·
+                  </span>
+                  <span className="font-mono tabular-nums text-orange-400 font-semibold whitespace-nowrap shrink-0">
+                    Últ. {settings.windowSize} PJ
+                  </span>
+                  <span className="hidden md:inline text-slate-600 shrink-0" aria-hidden="true">
+                    ·
+                  </span>
+                  <span className="hidden md:inline text-slate-400 whitespace-nowrap shrink-0">
+                    Sensibilidad:{' '}
+                    <span className="text-slate-200 font-medium">
+                      {activePreset === 'custom'
+                        ? 'Ajuste manual'
+                        : FILTER_PRESETS[activePreset].label}
+                    </span>
+                  </span>
+                </button>
 
-                <div className="flex items-center gap-1.5 min-w-0">
+                <div className="flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
                     onClick={() => setOnlyWatchlist((prev) => !prev)}
                     aria-label="Filtrar solo favoritos"
-                    className={`min-h-[36px] inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                    title="Mostrar únicamente jugadores y equipos marcados en favoritos"
+                    className={`min-h-[30px] inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 ${
                       onlyWatchlist
                         ? 'bg-orange-500/15 border-orange-500/50 text-orange-300'
-                        : 'bg-[#0B1120] border-[#1E293B] text-slate-300'
+                        : 'bg-[#0B1120] hover:bg-[#182338] border-[#1E293B] text-slate-300 hover:text-white'
                     }`}
                   >
                     <Star
@@ -1508,291 +1944,302 @@ export default function App() {
                         onlyWatchlist ? 'fill-orange-400 text-orange-400' : ''
                       }`}
                     />
-                    <span className="font-mono tabular-nums">{watchlistIds.size}</span>
+                    <span className="hidden sm:inline">Favoritos</span>
+                    <span className="font-mono tabular-nums text-[11px] text-slate-400">
+                      ({watchlistIds.size})
+                    </span>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => setMobileFiltersOpen((prev) => !prev)}
-                    className={`min-h-[36px] inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
-                      mobileFiltersOpen || activePreset === 'custom'
+                    onClick={() => setTemporalSampleOpen((prev) => !prev)}
+                    aria-expanded={temporalSampleOpen}
+                    className={`min-h-[30px] inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 ${
+                      temporalSampleOpen || activePreset === 'custom'
                         ? 'bg-[#182338] border-orange-500/40 text-orange-300'
-                        : 'bg-[#0B1120] border-[#1E293B] text-slate-200'
+                        : 'bg-[#0B1120] hover:bg-[#182338] border-[#1E293B] text-slate-200 hover:text-white'
                     }`}
                   >
                     <SlidersHorizontal className="w-3.5 h-3.5 text-orange-400" />
-                    <span>Filtros</span>
+                    <span className="hidden sm:inline">
+                      {temporalSampleOpen ? 'Plegar' : 'Cambiar'}
+                    </span>
                     <ChevronDown
-                      className={`w-3.5 h-3.5 text-slate-400 transition-transform ${
-                        mobileFiltersOpen ? 'rotate-180' : ''
+                      className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-150 ${
+                        temporalSampleOpen ? 'rotate-180' : ''
                       }`}
                     />
                   </button>
                 </div>
               </div>
 
-              {/* Full Controls (Always visible on md+, collapsible on mobile) */}
-              <div
-                className={`${
-                  mobileFiltersOpen ? 'block pt-2 border-t border-[#1E293B]' : 'hidden'
-                } md:block md:pt-0 md:border-t-0 space-y-3`}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  {/* Season Dataset Selector */}
-                  <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                    <span className="text-xs text-slate-400 whitespace-nowrap">
-                      {experienceMode === 'simple' ? 'Temporada:' : 'Muestra temporal:'}
-                    </span>
-                    <div className="flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
-                      {(
-                        [
-                          {
-                            id: 'continuous',
-                            label:
-                              experienceMode === 'simple'
-                                ? 'Actual + Pasada'
-                                : 'Continuo (26-27 + 25-26)',
-                          },
-                          { id: '2027', label: 'Solo 2026-27' },
-                          { id: '2026', label: '2025-26 Completa' },
-                        ] as const
-                      ).map((m) => (
-                        <button
-                          key={m.id}
-                          type="button"
-                          onClick={() => setSeasonMode(m.id)}
-                          className={`min-h-[32px] sm:min-h-0 px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
-                            seasonMode === m.id
-                              ? 'bg-[#1E293B] text-orange-400 font-semibold'
-                              : 'text-slate-400 hover:text-slate-200'
-                          }`}
-                        >
-                          {m.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+              {/* Optimized Single-Band Expanded Controls */}
+              {temporalSampleOpen && (
+                <div className="mt-2 pt-2 border-t border-[#1E293B] space-y-2.5 pb-1">
+                  <div className="flex flex-wrap items-center justify-between gap-2.5">
+                    <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 max-w-full">
+                      {/* 1. Season Dataset Selector */}
+                      <div className="flex items-center gap-1.5 max-w-full">
+                        <span className="text-[11px] font-medium text-slate-400 whitespace-nowrap">
+                          {experienceMode === 'simple' ? 'Temporada:' : 'Muestra:'}
+                        </span>
+                        <div className="inline-flex items-center gap-0.5 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
+                          {(
+                            [
+                              {
+                                id: 'continuous',
+                                label:
+                                  experienceMode === 'simple'
+                                    ? 'Actual + Pasada'
+                                    : 'Continuo (25-27)',
+                                hint: 'Enlaza los partidos de 2026-27 con la base completa de 2025-26',
+                              },
+                              {
+                                id: '2027',
+                                label: 'Solo 2026-27',
+                                hint: 'Únicamente partidos disputados en el curso 2026-27',
+                              },
+                              {
+                                id: '2026',
+                                label: '2025-26',
+                                hint: 'Temporada regular 2025-26 completa (82 PJ)',
+                              },
+                              {
+                                id: '2025',
+                                label: '2024-25',
+                                hint: 'Temporada regular 2024-25 completa (82 PJ)',
+                              },
+                            ] as const
+                          ).map((m) => (
+                            <button
+                              key={m.id}
+                              type="button"
+                              title={m.hint}
+                              onClick={() => setSeasonMode(m.id)}
+                              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                                seasonMode === m.id
+                                  ? 'bg-[#1E293B] text-orange-400 font-semibold'
+                                  : 'text-slate-400 hover:text-slate-200'
+                              }`}
+                            >
+                              {m.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
 
-                  {/* Window Size + Watchlist Filter (Desktop/Tablet) */}
-                  <div className="hidden md:flex flex-wrap items-center gap-2">
-                    <div className="flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg">
-                      {([3, 5, 10] as WindowSize[]).map((w) => (
-                        <button
-                          key={w}
-                          type="button"
-                          onClick={() =>
-                            setSettings((prev) => ({ ...prev, windowSize: w }))
-                          }
-                          className={`px-2.5 py-1 text-xs font-mono rounded transition-colors whitespace-nowrap shrink-0 ${
-                            settings.windowSize === w
-                              ? 'bg-orange-500 text-slate-950 font-semibold'
-                              : 'text-slate-300 hover:text-white'
-                          }`}
-                        >
-                          Últ. {w} PJ
-                        </button>
-                      ))}
-                    </div>
+                      {/* 2. Rolling Window Selector */}
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[11px] font-medium text-slate-400 whitespace-nowrap">
+                          Ventana:
+                        </span>
+                        <div className="inline-flex items-center gap-0.5 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg">
+                          {([3, 5, 10] as WindowSize[]).map((w) => (
+                            <button
+                              key={w}
+                              type="button"
+                              onClick={() =>
+                                setSettings((prev) => ({ ...prev, windowSize: w }))
+                              }
+                              className={`px-2 py-1 text-xs font-mono tabular-nums rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                                settings.windowSize === w
+                                  ? 'bg-orange-500 text-slate-950 font-semibold'
+                                  : 'text-slate-300 hover:text-white'
+                              }`}
+                            >
+                              Últ. {w} PJ
+                            </button>
+                          ))}
+                        </div>
+                      </div>
 
-                    <button
-                      type="button"
-                      onClick={() => setOnlyWatchlist((prev) => !prev)}
-                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
-                        onlyWatchlist
-                          ? 'bg-orange-500/15 border-orange-500/50 text-orange-300'
-                          : 'bg-[#0B1120] border-[#1E293B] text-slate-300 hover:text-white'
-                      }`}
-                    >
-                      <Star
-                        className={`w-3.5 h-3.5 ${
-                          onlyWatchlist ? 'fill-orange-400 text-orange-400' : ''
-                        }`}
-                      />
-                      <span>Solo favoritos ({watchlistIds.size})</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Row B: 3 One-Click Sensitivity Presets + "Personalizar filtros" Toggle */}
-                <div className="pt-2.5 border-t border-[#1E293B] flex flex-wrap items-center justify-between gap-2.5">
-                  <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                    <span className="text-xs text-slate-400 whitespace-nowrap">
-                      Sensibilidad de alertas:
-                    </span>
-                    <div className="flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
-                      {(['broad', 'balanced', 'blockbusters'] as const).map((presetKey) => {
-                        const preset = FILTER_PRESETS[presetKey];
-                        const isActive = activePreset === presetKey;
-                        return (
-                          <button
-                            key={presetKey}
-                            type="button"
-                            title={preset.shortHint}
-                            onClick={() =>
-                              setSettings((prev) => ({
-                                ...prev,
-                                ...preset.values,
-                              }))
+                      {/* 3. Sensitivity Presets */}
+                      <div className="flex items-center gap-1.5 max-w-full">
+                        <span className="text-[11px] font-medium text-slate-400 whitespace-nowrap">
+                          Sensibilidad:
+                        </span>
+                        <div className="inline-flex items-center gap-0.5 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
+                          {(['broad', 'balanced', 'blockbusters'] as const).map(
+                            (presetKey) => {
+                              const preset = FILTER_PRESETS[presetKey];
+                              const isActive = activePreset === presetKey;
+                              const shortLabel =
+                                presetKey === 'broad'
+                                  ? 'Amplio'
+                                  : presetKey === 'balanced'
+                                    ? 'Equilibrado'
+                                    : 'Bombazos';
+                              return (
+                                <button
+                                  key={presetKey}
+                                  type="button"
+                                  title={`${preset.label}: ${preset.shortHint}`}
+                                  onClick={() =>
+                                    setSettings((prev) => ({
+                                      ...prev,
+                                      ...preset.values,
+                                    }))
+                                  }
+                                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                                    isActive
+                                      ? 'bg-orange-500 text-slate-950 font-semibold'
+                                      : 'text-slate-300 hover:text-white'
+                                  }`}
+                                >
+                                  {shortLabel}
+                                </button>
+                              );
                             }
-                            className={`min-h-[32px] sm:min-h-0 px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
-                              isActive
-                                ? 'bg-orange-500 text-slate-950 font-semibold'
-                                : 'text-slate-300 hover:text-white'
-                            }`}
-                          >
-                            {preset.label}
-                          </button>
-                        );
-                      })}
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    {activePreset !== 'custom' ? (
-                      <span className="text-xs text-slate-400 hidden xl:inline">
-                        · {FILTER_PRESETS[activePreset].shortHint}
-                      </span>
-                    ) : (
-                      <span className="text-xs text-orange-300">
-                        · Ajuste manual activo
-                      </span>
-                    )}
+
+                    {/* 4. Fine-Tuning Sliders Toggle (folded by default) */}
+                    <div className="flex items-center gap-2 ml-auto">
+                      <button
+                        type="button"
+                        onClick={() => setShowThresholdBar((prev) => !prev)}
+                        aria-expanded={showThresholdBar}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 ${
+                          showThresholdBar
+                            ? 'bg-[#182338] border-[#283548] text-orange-300'
+                            : 'bg-[#0B1120] hover:bg-[#182338] border-[#1E293B] text-slate-300 hover:text-white'
+                        }`}
+                      >
+                        <SlidersHorizontal className="w-3.5 h-3.5 text-orange-400" />
+                        <span>
+                          {showThresholdBar ? 'Ocultar ajustes finos' : 'Ajustes finos'}
+                        </span>
+                        <ChevronDown
+                          className={`w-3 h-3 text-slate-400 transition-transform duration-150 ${
+                            showThresholdBar ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleNavigateSection('glossary')}
+                        className="md:hidden text-xs font-medium text-orange-400 whitespace-nowrap"
+                      >
+                        Guía →
+                      </button>
+                    </div>
                   </div>
 
-                  <div className="flex items-center justify-between w-full sm:w-auto gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowThresholdBar((prev) => !prev)}
-                      className={`min-h-[36px] sm:min-h-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
-                        showThresholdBar
-                          ? 'bg-[#182338] border-[#283548] text-orange-300'
-                          : 'bg-[#0B1120] hover:bg-[#182338] border-[#1E293B] text-slate-300'
-                      }`}
-                    >
-                      <SlidersHorizontal className="w-3.5 h-3.5 text-orange-400" />
-                      <span>
-                        {showThresholdBar ? 'Ocultar ajustes finos' : 'Personalizar filtros'}
-                      </span>
-                    </button>
+                  {/* Fine-Tuning Sliders (collapsed by default unless user opens "Ajustes finos") */}
+                  {showThresholdBar && (
+                    <div className="pt-2.5 border-t border-[#1E293B] grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 text-xs">
+                      <div>
+                        <div className="flex items-center justify-between text-slate-300 mb-1 gap-2">
+                          <span className="inline-flex items-center gap-1.5">
+                            <span>Nivel de sorpresa</span>
+                            <MetricInfoTooltip helpKey="zScore" align="left" />
+                          </span>
+                          <span className="font-mono tabular-nums text-orange-400 font-semibold shrink-0">
+                            {experienceMode === 'simple'
+                              ? describeSliderSurpriseLevel(settings.minZScore)
+                              : `${describeSliderSurpriseLevel(settings.minZScore)} · ${settings.minZScore.toFixed(1)}σ`}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min={0.8}
+                          max={2.4}
+                          step={0.1}
+                          value={settings.minZScore}
+                          onChange={(e) =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              minZScore: Number(e.target.value),
+                            }))
+                          }
+                          className="w-full accent-orange-500"
+                        />
+                      </div>
 
-                    <button
-                      type="button"
-                      onClick={() => handleNavigateSection('glossary')}
-                      className="md:hidden text-xs font-medium text-orange-400 whitespace-nowrap"
-                    >
-                      Guía (i) →
-                    </button>
-                  </div>
+                      <div>
+                        <div className="flex items-center justify-between text-slate-300 mb-1 gap-2">
+                          <span className="inline-flex items-center gap-1.5">
+                            <span>Cambio mínimo</span>
+                            <MetricInfoTooltip helpKey="pctDelta" align="left" />
+                          </span>
+                          <span className="font-mono tabular-nums text-orange-400 font-semibold shrink-0">
+                            {settings.minPctDelta}%
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min={8}
+                          max={35}
+                          step={2}
+                          value={settings.minPctDelta}
+                          onChange={(e) =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              minPctDelta: Number(e.target.value),
+                            }))
+                          }
+                          className="w-full accent-orange-500"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between text-slate-300 mb-1 gap-2">
+                          <span className="inline-flex items-center gap-1.5">
+                            <span>Minutos mínimos</span>
+                            <MetricInfoTooltip helpKey="minMinutesFilter" align="right" />
+                          </span>
+                          <span className="font-mono tabular-nums text-slate-200 font-semibold shrink-0">
+                            ≥ {settings.minMinutes} MIN
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min={12}
+                          max={34}
+                          step={2}
+                          value={settings.minMinutes}
+                          onChange={(e) =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              minMinutes: Number(e.target.value),
+                            }))
+                          }
+                          className="w-full accent-orange-500"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between text-slate-300 mb-1 gap-2">
+                          <span className="inline-flex items-center gap-1.5">
+                            <span>Partidos en racha</span>
+                            <MetricInfoTooltip helpKey="consecutiveStreak" align="right" />
+                          </span>
+                          <span className="font-mono tabular-nums text-slate-200 font-semibold shrink-0">
+                            {settings.minStreakGames}+ PJ
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min={2}
+                          max={7}
+                          step={1}
+                          value={settings.minStreakGames}
+                          onChange={(e) =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              minStreakGames: Number(e.target.value),
+                            }))
+                          }
+                          className="w-full accent-orange-500"
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
-
-                {/* Row C: 4 Sliders Renamed to Everyday Spanish */}
-                {showThresholdBar && (
-                  <div className="pt-3 border-t border-[#1E293B] grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
-                  <div>
-                    <div className="flex items-center justify-between text-slate-300 mb-1 gap-2">
-                      <span className="inline-flex items-center gap-1.5">
-                        <span>Nivel de sorpresa respecto a su media</span>
-                        <MetricInfoTooltip helpKey="zScore" align="left" />
-                      </span>
-                      <span className="font-mono tabular-nums text-orange-400 font-semibold shrink-0">
-                        {experienceMode === 'simple'
-                          ? describeSliderSurpriseLevel(settings.minZScore)
-                          : `${describeSliderSurpriseLevel(settings.minZScore)} · ${settings.minZScore.toFixed(1)}σ`}
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min={0.8}
-                      max={2.4}
-                      step={0.1}
-                      value={settings.minZScore}
-                      onChange={(e) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          minZScore: Number(e.target.value),
-                        }))
-                      }
-                      className="w-full accent-orange-500"
-                    />
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between text-slate-300 mb-1 gap-2">
-                      <span className="inline-flex items-center gap-1.5">
-                        <span>Cambio mínimo en sus números</span>
-                        <MetricInfoTooltip helpKey="pctDelta" align="left" />
-                      </span>
-                      <span className="font-mono tabular-nums text-orange-400 font-semibold shrink-0">
-                        {settings.minPctDelta}%
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min={8}
-                      max={35}
-                      step={2}
-                      value={settings.minPctDelta}
-                      onChange={(e) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          minPctDelta: Number(e.target.value),
-                        }))
-                      }
-                      className="w-full accent-orange-500"
-                    />
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between text-slate-300 mb-1 gap-2">
-                      <span className="inline-flex items-center gap-1.5">
-                        <span>Minutos mínimos por partido</span>
-                        <MetricInfoTooltip helpKey="minMinutesFilter" align="right" />
-                      </span>
-                      <span className="font-mono tabular-nums text-slate-200 font-semibold shrink-0">
-                        ≥ {settings.minMinutes} MIN
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min={12}
-                      max={34}
-                      step={2}
-                      value={settings.minMinutes}
-                      onChange={(e) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          minMinutes: Number(e.target.value),
-                        }))
-                      }
-                      className="w-full accent-orange-500"
-                    />
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between text-slate-300 mb-1 gap-2">
-                      <span className="inline-flex items-center gap-1.5">
-                        <span>Partidos seguidos en racha</span>
-                        <MetricInfoTooltip helpKey="consecutiveStreak" align="right" />
-                      </span>
-                      <span className="font-mono tabular-nums text-slate-200 font-semibold shrink-0">
-                        {settings.minStreakGames}+ PJ
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min={2}
-                      max={7}
-                      step={1}
-                      value={settings.minStreakGames}
-                      onChange={(e) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          minStreakGames: Number(e.target.value),
-                        }))
-                      }
-                      className="w-full accent-orange-500"
-                    />
-                  </div>
-                  </div>
-                )}
-              </div>
+              )}
             </section>
           )}
 
@@ -1818,364 +2265,357 @@ export default function App() {
             </div>
           )}
 
-          {activeSection === 'glossary' ? (
-            <GlossaryView onNavigateSection={handleNavigateSection} />
-          ) : activeSection === 'fantasy_espn' ? (
-            !isPrivateUnlocked ? (
-              <div className="max-w-md mx-auto mt-12 bg-[#131C2E] border border-[#1E293B] rounded-xl p-6 shadow-2xl space-y-5">
-                <div className="space-y-1 text-center">
-                  <div className="w-12 h-12 bg-orange-500/10 border border-orange-500/30 rounded-full flex items-center justify-center mx-auto text-orange-400 mb-2">
-                    <Shield className="w-6 h-6" />
-                  </div>
-                  <h3 className="text-lg font-bold text-slate-100">Zona Privada · Administración</h3>
-                  <p className="text-xs text-slate-400">
-                    Introduce la clave de acceso para desbloquear tu panel privado.
-                  </p>
+          <Suspense fallback={<SectionViewSkeleton />}>
+            {activeSection === 'glossary' ? (
+              <GlossaryView onNavigateSection={handleNavigateSection} />
+            ) : activeSection === 'fantasy_espn' ? (
+              checkingAdminSession ? (
+                <div className="max-w-md mx-auto mt-12 bg-[#131C2E] border border-[#1E293B] rounded-xl p-6 shadow-2xl flex items-center justify-center gap-2.5 text-xs font-medium text-slate-300">
+                  <RefreshCw className="w-4 h-4 text-orange-400 animate-spin shrink-0" />
+                  <span>Verificando sesión privada...</span>
                 </div>
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    if (verifyingPasscode || !passcodeAttempt.trim()) return;
-                    setVerifyingPasscode(true);
-                    setPasscodeErrorMsg(null);
-                    void (async () => {
-                      const result = await loginAdminWithPasscode(passcodeAttempt.trim());
-                      setVerifyingPasscode(false);
-                      if (result.ok) {
-                        setPasscodeAttempt('');
-                        setPasscodeLockedOut(false);
-                        setPasscodeErrorMsg(null);
-                        setIsPrivateUnlocked(true);
-                      } else {
-                        setPasscodeLockedOut(Boolean(result.lockedOut));
-                        setPasscodeErrorMsg(
-                          result.error || 'Clave incorrecta. Inténtalo de nuevo.'
-                        );
-                      }
-                    })();
-                  }}
-                  className="space-y-4"
-                >
-                  <div>
-                    <input
-                      type="password"
-                      placeholder="Clave de acceso"
-                      disabled={verifyingPasscode}
-                      value={passcodeAttempt}
-                      onChange={(e) => {
-                        setPasscodeAttempt(e.target.value);
-                        if (passcodeErrorMsg && !passcodeLockedOut) {
-                          setPasscodeErrorMsg(null);
-                        }
-                      }}
-                      className="w-full px-3.5 py-2 bg-[#0B1120] border border-[#1E293B] rounded-lg text-sm text-slate-100 focus:outline-none focus:border-orange-500 disabled:opacity-60"
-                      autoFocus
-                    />
-                    {passcodeErrorMsg && (
-                      <p
-                        className={`mt-2 text-xs leading-relaxed ${
-                          passcodeLockedOut
-                            ? 'p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 font-medium'
-                            : 'text-rose-400'
-                        }`}
-                      >
-                        {passcodeErrorMsg}
-                      </p>
-                    )}
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={verifyingPasscode || !passcodeAttempt.trim()}
-                    className="w-full py-2.5 bg-orange-500 hover:bg-orange-400 disabled:opacity-60 font-semibold text-slate-950 text-xs rounded-lg transition-colors inline-flex items-center justify-center gap-2"
-                  >
-                    {verifyingPasscode && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                    <span>
-                      {verifyingPasscode ? 'Verificando acceso...' : 'Desbloquear Zona Privada'}
-                    </span>
-                  </button>
-                </form>
-              </div>
-            ) : (
-              <div className="space-y-6">
-                {/* Admin Top-Level Section Switcher */}
-                <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 shadow-lg">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold uppercase tracking-wider text-orange-400 px-2">
-                      Zona Privada Admin:
-                    </span>
-                    <div className="inline-flex items-center gap-1 bg-[#0B1120] border border-[#1E293B] p-1 rounded-lg">
-                      <button
-                        type="button"
-                        onClick={() => setAdminZoneSection('fantasy')}
-                        className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-2 whitespace-nowrap ${
-                          adminZoneSection === 'fantasy'
-                            ? 'bg-orange-500 text-slate-950 shadow-sm'
-                            : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
-                        }`}
-                      >
-                        <Trophy className="w-3.5 h-3.5 shrink-0" />
-                        <span>Zona Fantasy y Asistente</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setAdminZoneSection('web_config')}
-                        className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-2 whitespace-nowrap ${
-                          adminZoneSection === 'web_config'
-                            ? 'bg-orange-500 text-slate-950 shadow-sm'
-                            : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
-                        }`}
-                      >
-                        <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" />
-                        <span>Configuración de la Web</span>
-                      </button>
+              ) : !isPrivateUnlocked ? (
+                <div className="max-w-md mx-auto mt-12 bg-[#131C2E] border border-[#1E293B] rounded-xl p-6 shadow-2xl space-y-5">
+                  <div className="space-y-1 text-center">
+                    <div className="w-12 h-12 bg-orange-500/10 border border-orange-500/30 rounded-full flex items-center justify-center mx-auto text-orange-400 mb-2">
+                      <Shield className="w-6 h-6" />
                     </div>
+                    <h3 className="text-lg font-bold text-slate-100">Zona Privada · Administración</h3>
+                    <p className="text-xs text-slate-400">
+                      Introduce la clave de acceso para desbloquear tu panel privado.
+                    </p>
+                  </div>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (verifyingPasscode || !passcodeAttempt.trim()) return;
+                      setVerifyingPasscode(true);
+                      setPasscodeErrorMsg(null);
+                      void (async () => {
+                        const result = await loginAdminWithPasscode(passcodeAttempt.trim());
+                        setVerifyingPasscode(false);
+                        if (result.ok) {
+                          setPasscodeAttempt('');
+                          setPasscodeLockedOut(false);
+                          setPasscodeErrorMsg(null);
+                          setIsPrivateUnlocked(true);
+                        } else {
+                          setPasscodeLockedOut(
+                            Boolean(result.lockedOut || result.notConfigured)
+                          );
+                          setPasscodeErrorMsg(
+                            result.error || 'Clave incorrecta. Inténtalo de nuevo.'
+                          );
+                        }
+                      })();
+                    }}
+                    className="space-y-4"
+                  >
+                    <div>
+                      <input
+                        type="password"
+                        placeholder="Clave de acceso"
+                        disabled={verifyingPasscode}
+                        value={passcodeAttempt}
+                        onChange={(e) => {
+                          setPasscodeAttempt(e.target.value);
+                          if (passcodeErrorMsg && !passcodeLockedOut) {
+                            setPasscodeErrorMsg(null);
+                          }
+                        }}
+                        className="w-full px-3.5 py-2 bg-[#0B1120] border border-[#1E293B] rounded-lg text-sm text-slate-100 focus:outline-none focus:border-orange-500 disabled:opacity-60"
+                        autoFocus
+                      />
+                      {passcodeErrorMsg && (
+                        <p
+                          className={`mt-2 text-xs leading-relaxed ${
+                            passcodeLockedOut
+                              ? 'p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 font-medium'
+                              : 'text-rose-400'
+                          }`}
+                        >
+                          {passcodeErrorMsg}
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={verifyingPasscode || !passcodeAttempt.trim()}
+                      className="w-full py-2.5 bg-orange-500 hover:bg-orange-400 disabled:opacity-60 font-semibold text-slate-950 text-xs rounded-lg transition-colors inline-flex items-center justify-center gap-2"
+                    >
+                      {verifyingPasscode && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                      <span>
+                        {verifyingPasscode ? 'Verificando acceso...' : 'Desbloquear Zona Privada'}
+                      </span>
+                    </button>
+                  </form>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {/* Admin Top-Level Section Switcher */}
+                  <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 shadow-lg">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-orange-400 px-2">
+                        Zona Privada Admin:
+                      </span>
+                      <div className="inline-flex items-center gap-1 bg-[#0B1120] border border-[#1E293B] p-1 rounded-lg">
+                        <button
+                          type="button"
+                          onClick={() => setAdminZoneSection('fantasy')}
+                          className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-2 whitespace-nowrap ${
+                            adminZoneSection === 'fantasy'
+                              ? 'bg-orange-500 text-slate-950 shadow-sm'
+                              : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
+                          }`}
+                        >
+                          <Trophy className="w-3.5 h-3.5 shrink-0" />
+                          <span>Zona Fantasy y Asistente</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAdminZoneSection('web_config')}
+                          className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-2 whitespace-nowrap ${
+                            adminZoneSection === 'web_config'
+                              ? 'bg-orange-500 text-slate-950 shadow-sm'
+                              : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
+                          }`}
+                        >
+                          <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" />
+                          <span>Configuración de la Web</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleLockAdminSession}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#0B1120] hover:bg-rose-500/10 border border-[#1E293B] hover:border-rose-500/40 text-rose-400 text-xs font-medium rounded-lg transition-colors"
+                    >
+                      <Lock className="w-3.5 h-3.5" />
+                      <span>Bloquear sesión</span>
+                    </button>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsPrivateUnlocked(false);
-                      setPasscodeAttempt('');
-                      void logoutAdminSession();
-                    }}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#0B1120] hover:bg-rose-500/10 border border-[#1E293B] hover:border-rose-500/40 text-rose-400 text-xs font-medium rounded-lg transition-colors"
-                  >
-                    <Lock className="w-3.5 h-3.5" />
-                    <span>Bloquear sesión</span>
-                  </button>
+                  {/* Active Section Content */}
+                  <Suspense fallback={<SectionViewSkeleton />}>
+                    {adminZoneSection === 'fantasy' ? (
+                      <FantasyEspnAssistantView
+                        players={players}
+                        teams={teams}
+                        trendBreakouts={trendBreakouts}
+                        onOpenRadarMinutesUsage={() =>
+                          handleOpenBreakoutAxis('minutes_usage')
+                        }
+                        onInspectEntity={handleInspectEntity}
+                        initialTab={fantasyTab}
+                        onTabChange={handleFantasyTabChange}
+                      />
+                    ) : (
+                      <AdminSecurityConfigPanel
+                        onLockSession={handleLockAdminSession}
+                      />
+                    )}
+                  </Suspense>
                 </div>
-
-                {/* Active Section Content */}
-                {adminZoneSection === 'fantasy' ? (
-                  <FantasyEspnAssistantView
+              )
+            ) : activeSection === 'gameday' ? (
+              <GameDayAnalyzerView
+                experienceMode={experienceMode}
+                watchlistIds={watchlistIds}
+                onToggleWatchlist={handleToggleWatchlist}
+                onInspectEntity={handleInspectEntity}
+                externalRefreshCounter={gamedayRefreshCounter}
+                selectedDateParam={gamedayDateParam}
+                onChangeDateParam={handleGamedayDateChange}
+                selectedReportEventIdProp={gamedayReportId}
+                onChangeReportEventId={handleGamedayReportChange}
+              />
+            ) : activeSection === 'awards' ? (
+              <SeasonAwardsView
+                data={awardsByScope[awardsSeasonScope]}
+                loading={awardsLoading && !awardsByScope[awardsSeasonScope]}
+                errorMsg={awardsError}
+                seasonScope={awardsSeasonScope}
+                onChangeSeasonScope={setAwardsSeasonScope}
+                activeCategory={awardCategory}
+                onChangeCategory={handleAwardCategoryChange}
+                experienceMode={experienceMode}
+                watchlistIds={watchlistIds}
+                onlyWatchlist={onlyWatchlist}
+                onToggleOnlyWatchlist={() => setOnlyWatchlist((prev) => !prev)}
+                onToggleWatchlist={handleToggleWatchlist}
+                onInspectEntity={handleInspectEntity}
+                onRetry={() => void fetchAwards(awardsSeasonScope, false)}
+              />
+            ) : activeSection === 'milestones' ? (
+              <SeasonMilestonesView
+                data={milestonesData}
+                loading={milestonesLoading && !milestonesData}
+                errorMsg={milestonesError}
+                experienceMode={experienceMode}
+                onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
+                onRetry={() => void fetchMilestones(false)}
+                onInspectEntity={handleInspectEntity}
+              />
+            ) : loading ? (
+              <SectionViewSkeleton />
+            ) : (
+              <>
+                {activeSection === 'home' && (
+                  <GuidedHomeView
                     players={players}
                     teams={teams}
+                    anomalies={anomalies}
                     trendBreakouts={trendBreakouts}
-                    onOpenRadarMinutesUsage={() =>
-                      handleOpenBreakoutAxis('minutes_usage')
-                    }
+                    streaks={streaks}
+                    benchmarks={benchmarks}
+                    windowSize={settings.windowSize}
+                    onChangeWindowSize={handleChangeWindowSize}
+                    onOpenBreakoutAxis={handleOpenBreakoutAxis}
+                    experienceMode={experienceMode}
+                    watchlistIds={watchlistIds}
+                    onlyWatchlist={onlyWatchlist}
+                    onToggleWatchlist={handleToggleWatchlist}
                     onInspectEntity={handleInspectEntity}
-                    initialTab={fantasyTab}
-                    onTabChange={handleFantasyTabChange}
-                  />
-                ) : (
-                  <AdminSecurityConfigPanel
-                    onLockSession={() => {
-                      setIsPrivateUnlocked(false);
-                      setPasscodeAttempt('');
-                      void logoutAdminSession();
-                    }}
+                    onNavigateSection={handleNavigateSection}
                   />
                 )}
-              </div>
-            )
-          ) : activeSection === 'gameday' ? (
-            <GameDayAnalyzerView
-              experienceMode={experienceMode}
-              watchlistIds={watchlistIds}
-              onToggleWatchlist={handleToggleWatchlist}
-              onInspectEntity={handleInspectEntity}
-              externalRefreshCounter={gamedayRefreshCounter}
-              selectedDateParam={gamedayDateParam}
-              onChangeDateParam={handleGamedayDateChange}
-              selectedReportEventIdProp={gamedayReportId}
-              onChangeReportEventId={handleGamedayReportChange}
-            />
-          ) : activeSection === 'awards' ? (
-            <SeasonAwardsView
-              data={awardsByScope[awardsSeasonScope]}
-              loading={awardsLoading && !awardsByScope[awardsSeasonScope]}
-              errorMsg={awardsError}
-              seasonScope={awardsSeasonScope}
-              onChangeSeasonScope={setAwardsSeasonScope}
-              activeCategory={awardCategory}
-              onChangeCategory={handleAwardCategoryChange}
-              experienceMode={experienceMode}
-              watchlistIds={watchlistIds}
-              onlyWatchlist={onlyWatchlist}
-              onToggleOnlyWatchlist={() => setOnlyWatchlist((prev) => !prev)}
-              onToggleWatchlist={handleToggleWatchlist}
-              onInspectEntity={handleInspectEntity}
-              onRetry={() => void fetchAwards(awardsSeasonScope, false)}
-            />
-          ) : activeSection === 'milestones' ? (
-            <SeasonMilestonesView
-              data={milestonesData}
-              loading={milestonesLoading && !milestonesData}
-              errorMsg={milestonesError}
-              experienceMode={experienceMode}
-              onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
-              onRetry={() => void fetchMilestones(false)}
-              onInspectEntity={handleInspectEntity}
-            />
-          ) : loading ? (
-            <div className="space-y-5">
-              <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y lg:divide-y-0 lg:divide-x divide-[#1E293B]">
-                {[0, 1, 2, 3].map((i) => (
-                  <div key={i} className="p-4 space-y-2 animate-pulse">
-                    <div className="h-3 w-28 bg-[#1E293B] rounded" />
-                    <div className="h-7 w-16 bg-[#1E293B] rounded" />
-                    <div className="h-3 w-36 bg-[#1E293B] rounded" />
-                  </div>
-                ))}
-              </div>
-              <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden divide-y divide-[#1E293B]">
-                {Array.from({ length: 9 }).map((_, idx) => (
-                  <div
-                    key={idx}
-                    className="h-11 px-4 flex items-center justify-between gap-4 animate-pulse"
-                  >
-                    <div className="h-3.5 w-44 bg-[#1E293B] rounded" />
-                    <div className="h-3.5 w-28 bg-[#1E293B] rounded" />
-                    <div className="h-3.5 w-16 bg-[#1E293B] rounded" />
-                    <div className="h-3.5 w-52 bg-[#1E293B] rounded hidden md:block" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <>
-              {activeSection === 'home' && (
-                <GuidedHomeView
-                  players={players}
-                  teams={teams}
-                  anomalies={anomalies}
-                  trendBreakouts={trendBreakouts}
-                  streaks={streaks}
-                  benchmarks={benchmarks}
-                  windowSize={settings.windowSize}
-                  onChangeWindowSize={handleChangeWindowSize}
-                  onOpenBreakoutAxis={handleOpenBreakoutAxis}
-                  experienceMode={experienceMode}
-                  watchlistIds={watchlistIds}
-                  onlyWatchlist={onlyWatchlist}
-                  onToggleWatchlist={handleToggleWatchlist}
-                  onInspectEntity={handleInspectEntity}
-                  onNavigateSection={handleNavigateSection}
-                />
-              )}
 
-              {activeSection === 'anomalies' && (
-                <AnomalyRadarView
-                  signals={anomalies}
-                  trendBreakouts={trendBreakouts}
-                  benchmarks={benchmarks}
-                  experienceMode={experienceMode}
-                  watchlistIds={watchlistIds}
-                  onlyWatchlist={onlyWatchlist}
-                  onToggleWatchlist={handleToggleWatchlist}
-                  onInspectEntity={handleInspectEntity}
-                  onResetThresholds={() => {
-                    setSettings(DEFAULT_THRESHOLDS);
-                    setOnlyWatchlist(false);
-                  }}
-                  windowSize={settings.windowSize}
-                  onChangeWindowSize={handleChangeWindowSize}
-                  initialBreakoutAxis={requestedBreakoutAxis}
-                  onConsumeInitialAxis={() => setRequestedBreakoutAxis('all')}
-                  onNavigateStreaks={() => handleNavigateSection('streaks')}
-                />
-              )}
+                {activeSection === 'anomalies' && (
+                  <AnomalyRadarView
+                    signals={anomalies}
+                    trendBreakouts={trendBreakouts}
+                    benchmarks={benchmarks}
+                    experienceMode={experienceMode}
+                    watchlistIds={watchlistIds}
+                    onlyWatchlist={onlyWatchlist}
+                    onToggleWatchlist={handleToggleWatchlist}
+                    onInspectEntity={handleInspectEntity}
+                    onResetThresholds={() => {
+                      setSettings(DEFAULT_THRESHOLDS);
+                      setOnlyWatchlist(false);
+                    }}
+                    windowSize={settings.windowSize}
+                    onChangeWindowSize={handleChangeWindowSize}
+                    initialBreakoutAxis={requestedBreakoutAxis}
+                    onConsumeInitialAxis={() => setRequestedBreakoutAxis('all')}
+                    onNavigateStreaks={() => handleNavigateSection('streaks')}
+                  />
+                )}
 
-              {activeSection === 'streaks' && (
-                <StreaksConsistencyView
-                  players={players}
-                  players2027={seasonReferenceSlices.players2027}
-                  players2026={seasonReferenceSlices.players2026}
-                  streaks={streaks}
-                  consistencyRows={consistencyRows}
-                  trendBreakouts={trendBreakouts}
-                  windowSize={settings.windowSize}
-                  onChangeWindowSize={handleChangeWindowSize}
-                  experienceMode={experienceMode}
-                  watchlistIds={watchlistIds}
-                  onlyWatchlist={onlyWatchlist}
-                  onToggleWatchlist={handleToggleWatchlist}
-                  onInspectEntity={handleInspectEntity}
-                  minStreakGames={settings.minStreakGames}
-                  allPlayersLoaded={allPlayersLoaded}
-                  loadingAllPlayers={loadingAllPlayers}
-                  totalLeaguePlayersAvailable={totalLeaguePlayersAvailable}
-                  onLoadAllPlayers={handleLoadAllPlayers}
-                />
-              )}
+                {activeSection === 'scatter' && (
+                  <ScatterAnalyticsView
+                    players={players}
+                    teams={teams}
+                    benchmarks={benchmarks}
+                    experienceMode={experienceMode}
+                    watchlistIds={watchlistIds}
+                    onToggleWatchlist={handleToggleWatchlist}
+                    onInspectEntity={handleInspectEntity}
+                    windowSize={settings.windowSize}
+                  />
+                )}
 
-              {activeSection === 'duel' && (
-                <HeadToHeadBattleView
-                  players={players}
-                  experienceMode={experienceMode}
-                  benchmarks={benchmarks}
-                  seasonMode={seasonMode}
-                  onChangeSeasonMode={setSeasonMode}
-                  windowSize={settings.windowSize}
-                  onChangeWindowSize={(w) =>
-                    setSettings((prev) => ({ ...prev, windowSize: w }))
-                  }
-                  watchlistIds={watchlistIds}
-                  onToggleWatchlist={handleToggleWatchlist}
-                  onInspectEntity={handleInspectEntity}
-                  onAddExternalPlayer={handleAddPlayerForComparator}
-                  onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
-                  initialPlayerAId={duelTarget.playerAId}
-                  initialPlayerBId={duelTarget.playerBId}
-                  onPairChange={handleDuelPairChange}
-                  allPlayersLoaded={allPlayersLoaded}
-                  loadingAllPlayers={loadingAllPlayers}
-                  totalLeaguePlayersAvailable={totalLeaguePlayersAvailable}
-                  onLoadAllPlayers={handleLoadAllPlayers}
-                />
-              )}
+                {activeSection === 'streaks' && (
+                  <StreaksConsistencyView
+                    players={players}
+                    players2027={seasonReferenceSlices.players2027}
+                    players2026={seasonReferenceSlices.players2026}
+                    streaks={streaks}
+                    consistencyRows={consistencyRows}
+                    trendBreakouts={trendBreakouts}
+                    windowSize={settings.windowSize}
+                    onChangeWindowSize={handleChangeWindowSize}
+                    experienceMode={experienceMode}
+                    watchlistIds={watchlistIds}
+                    onlyWatchlist={onlyWatchlist}
+                    onToggleWatchlist={handleToggleWatchlist}
+                    onInspectEntity={handleInspectEntity}
+                    minStreakGames={settings.minStreakGames}
+                    allPlayersLoaded={allPlayersLoaded}
+                    loadingAllPlayers={loadingAllPlayers}
+                    totalLeaguePlayersAvailable={totalLeaguePlayersAvailable}
+                    onLoadAllPlayers={handleLoadAllPlayers}
+                  />
+                )}
 
-              {activeSection === 'comparator' && (
-                <RangeComparatorView
-                  players={players}
-                  teams={teams}
-                  experienceMode={experienceMode}
-                  benchmarks={benchmarks}
-                  onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
-                  initialEntityType={comparatorTarget.type}
-                  initialEntityId={comparatorTarget.id}
-                  onSelectionChange={handleComparatorSelectionChange}
-                  onInspectEntity={handleInspectEntity}
-                  onAddExternalPlayer={handleAddPlayerForComparator}
-                />
-              )}
+                {activeSection === 'duel' && (
+                  <HeadToHeadBattleView
+                    players={players}
+                    experienceMode={experienceMode}
+                    benchmarks={benchmarks}
+                    seasonMode={seasonMode}
+                    onChangeSeasonMode={setSeasonMode}
+                    windowSize={settings.windowSize}
+                    onChangeWindowSize={(w) =>
+                      setSettings((prev) => ({ ...prev, windowSize: w }))
+                    }
+                    watchlistIds={watchlistIds}
+                    onToggleWatchlist={handleToggleWatchlist}
+                    onInspectEntity={handleInspectEntity}
+                    onAddExternalPlayer={handleAddPlayerForComparator}
+                    onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
+                    initialPlayerAId={duelTarget.playerAId}
+                    initialPlayerBId={duelTarget.playerBId}
+                    onPairChange={handleDuelPairChange}
+                    allPlayersLoaded={allPlayersLoaded}
+                    loadingAllPlayers={loadingAllPlayers}
+                    totalLeaguePlayersAvailable={totalLeaguePlayersAvailable}
+                    onLoadAllPlayers={handleLoadAllPlayers}
+                  />
+                )}
 
-              {activeSection === 'teams' && (
-                <TeamsExplorerView
-                  teams={teams}
-                  experienceMode={experienceMode}
-                  benchmarks={benchmarks}
-                  onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
-                  windowSize={settings.windowSize}
-                  watchlistIds={watchlistIds}
-                  onlyWatchlist={onlyWatchlist}
-                  onToggleWatchlist={handleToggleWatchlist}
-                  onInspectEntity={handleInspectEntity}
-                />
-              )}
+                {activeSection === 'comparator' && (
+                  <RangeComparatorView
+                    players={players}
+                    teams={teams}
+                    experienceMode={experienceMode}
+                    benchmarks={benchmarks}
+                    onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
+                    initialEntityType={comparatorTarget.type}
+                    initialEntityId={comparatorTarget.id}
+                    onSelectionChange={handleComparatorSelectionChange}
+                    onInspectEntity={handleInspectEntity}
+                    onAddExternalPlayer={handleAddPlayerForComparator}
+                  />
+                )}
 
-              {activeSection === 'players' && (
-                <PlayersExplorerView
-                  players={players}
-                  experienceMode={experienceMode}
-                  benchmarks={benchmarks}
-                  onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
-                  totalLeaguePlayersAvailable={totalLeaguePlayersAvailable}
-                  allPlayersLoaded={allPlayersLoaded}
-                  loadingAllPlayers={loadingAllPlayers}
-                  onLoadAllPlayers={handleLoadAllPlayers}
-                  windowSize={settings.windowSize}
-                  watchlistIds={watchlistIds}
-                  onlyWatchlist={onlyWatchlist}
-                  onToggleWatchlist={handleToggleWatchlist}
-                  onInspectEntity={handleInspectEntity}
-                  onAddExternalPlayer={handleAddExternalPlayer}
-                  addingPlayerId={addingPlayerId}
-                />
-              )}
-            </>
-          )}
+                {activeSection === 'teams' && (
+                  <TeamsExplorerView
+                    teams={teams}
+                    experienceMode={experienceMode}
+                    benchmarks={benchmarks}
+                    onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
+                    windowSize={settings.windowSize}
+                    watchlistIds={watchlistIds}
+                    onlyWatchlist={onlyWatchlist}
+                    onToggleWatchlist={handleToggleWatchlist}
+                    onInspectEntity={handleInspectEntity}
+                  />
+                )}
+
+                {activeSection === 'players' && (
+                  <PlayersExplorerView
+                    players={players}
+                    experienceMode={experienceMode}
+                    benchmarks={benchmarks}
+                    onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
+                    totalLeaguePlayersAvailable={totalLeaguePlayersAvailable}
+                    allPlayersLoaded={allPlayersLoaded}
+                    loadingAllPlayers={loadingAllPlayers}
+                    onLoadAllPlayers={handleLoadAllPlayers}
+                    windowSize={settings.windowSize}
+                    watchlistIds={watchlistIds}
+                    onlyWatchlist={onlyWatchlist}
+                    onToggleWatchlist={handleToggleWatchlist}
+                    onInspectEntity={handleInspectEntity}
+                    onAddExternalPlayer={handleAddExternalPlayer}
+                    addingPlayerId={addingPlayerId}
+                  />
+                )}
+              </>
+            )}
+          </Suspense>
 
           {/* Discreet Workspace Page Footer (accessible on mobile & desktop) */}
           <footer className="pt-4 mt-6 border-t border-[#1E293B]/70 flex items-center justify-between text-xs text-slate-500">
@@ -2213,6 +2653,8 @@ export default function App() {
               <button
                 key={tab.id}
                 type="button"
+                onMouseEnter={() => preloadSectionChunk(tab.id)}
+                onFocus={() => preloadSectionChunk(tab.id)}
                 onClick={() => handleNavigateSection(tab.id)}
                 className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 rounded-lg transition-colors whitespace-nowrap ${
                   active
@@ -2259,22 +2701,61 @@ export default function App() {
         </div>
       </nav>
 
-      {/* Unified Side Inspector Drawer / Mobile Bottom Sheet */}
-      <EntityInspectorDrawer
-        entityType={inspected.type}
-        entityId={inspected.id}
-        players={players}
-        teams={teams}
-        experienceMode={experienceMode}
-        benchmarks={benchmarks}
-        onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
-        windowSize={settings.windowSize}
-        watchlistIds={watchlistIds}
-        onToggleWatchlist={handleToggleWatchlist}
-        onClose={handleCloseInspector}
-        onOpenInComparator={handleOpenInComparator}
-        onSelectRosterPlayer={handleAddExternalPlayer}
-      />
+      {/* Unified Side Inspector Drawer / Mobile Bottom Sheet (lazy-loaded on demand) */}
+      {isInspectorOpen && (
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-[2px] flex items-center justify-end">
+              <div className="w-full max-w-2xl h-full bg-[#0F172A] border-l border-[#1E293B] p-6 flex items-center justify-center gap-2.5 text-xs font-medium text-slate-300">
+                <RefreshCw className="w-4 h-4 text-orange-400 animate-spin shrink-0" />
+                <span>Cargando ficha completa...</span>
+              </div>
+            </div>
+          }
+        >
+          <EntityInspectorDrawer
+            entityType={inspected.type}
+            entityId={inspected.id}
+            players={players}
+            teams={teams}
+            experienceMode={experienceMode}
+            benchmarks={benchmarks}
+            onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
+            windowSize={settings.windowSize}
+            watchlistIds={watchlistIds}
+            onToggleWatchlist={handleToggleWatchlist}
+            onClose={handleCloseInspector}
+            onOpenInComparator={handleOpenInComparator}
+            onSelectRosterPlayer={handleAddExternalPlayer}
+          />
+        </Suspense>
+      )}
+
+      {/* Global Command Palette (Ctrl+K / Cmd+K) */}
+      {commandPaletteOpen && (
+        <Suspense fallback={null}>
+          <GlobalCommandPalette
+            open={commandPaletteOpen}
+            onClose={() => setCommandPaletteOpen(false)}
+            players={players}
+            teams={teams}
+            watchlistIds={watchlistIds}
+            activeSection={activeSection}
+            experienceMode={experienceMode}
+            onNavigateSection={handleNavigateSection}
+            onNavigateAward={handleNavigateAwardFromPalette}
+            onToggleExperienceMode={() =>
+              handleChangeExperienceMode(
+                experienceMode === 'simple' ? 'advanced' : 'simple'
+              )
+            }
+            onInspectEntity={handleInspectEntity}
+            onOpenInComparator={handleOpenInComparator}
+            onOpenInDuel={handleOpenInDuel}
+            onImportExternalPlayer={handleAddPlayerForComparator}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

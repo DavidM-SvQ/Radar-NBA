@@ -36,6 +36,8 @@ import {
   useTableSort,
 } from '../utils/tableSort';
 import { EntityBadge, PlayerAvatar, TeamLogo } from './NbaVisuals';
+import { ExportImageButton } from './ExportImageButton';
+import { buildComparisonSnapshotBlob } from '../utils/exportImageCard';
 
 interface RangeComparatorViewProps {
   players: PlayerSummary[];
@@ -399,6 +401,105 @@ export function RangeComparatorView({
     experienceMode === 'simple'
       ? comparison?.plainInsights || []
       : comparison?.insights || [];
+
+  const handleBuildRangeSnapshot = async () => {
+    if (!comparison) {
+      throw new Error('Sin comparativa activa');
+    }
+    const visibleLayerRows = comparison.rows.filter(
+      (r) => metricLayer === 'all' || r.group === metricLayer
+    );
+    const subjectTeamAbbr =
+      entityType === 'player'
+        ? activePlayer?.teamAbbr
+        : activeTeam?.abbreviation;
+    const slug = comparison.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '');
+    const filename = `radarnba-tramos-${slug || 'comparativa'}.png`;
+
+    let winsA = 0;
+    let winsB = 0;
+    for (const r of visibleLayerRows) {
+      if (Math.abs(r.pctDiff) < 0.5 && Math.abs(r.absDiff) < 0.05) continue;
+      const aBetter = r.inverseGood ? r.absDiff < 0 : r.absDiff > 0;
+      if (aBetter) winsA += 1;
+      else winsB += 1;
+    }
+
+    return buildComparisonSnapshotBlob({
+      filename,
+      categoryTag: 'COMPARADOR DE TRAMOS TEMPORALES',
+      title: `${comparison.name} — Evolución entre Tramos`,
+      subtitle: comparison.subtitle,
+      verdictLabel: 'LECTURA CLAVE DEL CAMBIO DE TRAMO',
+      verdictPrimary:
+        activeTakeaways[0] ||
+        `Tramo A domina en ${winsA} métricas frente a ${winsB} de Tramo B`,
+      verdictPrimaryTone:
+        winsA > winsB ? 'positive' : winsB > winsA ? 'warning' : 'accent',
+      verdictSecondary: activeTakeaways[1] || `${visibleLayerRows.length} métricas evaluadas`,
+      sideA: {
+        headerLabel: 'TRAMO A (MUESTRA RECIENTE / FOCO)',
+        accentTone: 'orange',
+        headlineTitle: `${comparison.countA} Partidos Jugados`,
+        headlineValue: `${winsA} vent.`,
+        headlineSubtext: comparison.spanA,
+        items: [
+          {
+            name: comparison.name,
+            teamAbbr: subjectTeamAbbr,
+            detail: `Ventana: ${comparison.spanA}`,
+            badgeText: `${comparison.countA} PJ`,
+            badgeTone: 'accent',
+          },
+        ],
+      },
+      sideB: {
+        headerLabel: 'TRAMO B (BASE DE REFERENCIA)',
+        accentTone: 'sky',
+        headlineTitle: `${comparison.countB} Partidos Jugados`,
+        headlineValue: `${winsB} vent.`,
+        headlineSubtext: comparison.spanB,
+        items: [
+          {
+            name: comparison.name,
+            teamAbbr: subjectTeamAbbr,
+            detail: `Referencia: ${comparison.spanB}`,
+            badgeText: `${comparison.countB} PJ`,
+            badgeTone: 'sky',
+          },
+        ],
+      },
+      breakdownTitle: 'COMPARATIVA MÉTRICA A MÉTRICA (TRAMO A VS TRAMO B)',
+      colALabel: `TRAMO A (${comparison.countA} PJ)`,
+      colBLabel: `TRAMO B (${comparison.countB} PJ)`,
+      colDeltaLabel: 'DIFERENCIA (A − B)',
+      rows: visibleLayerRows.slice(0, 16).map((r) => {
+        const tied = Math.abs(r.absDiff) < 0.05;
+        const isGood = r.inverseGood ? r.absDiff < 0 : r.absDiff > 0;
+        const denom = Math.abs(r.rangeAValue) + Math.abs(r.rangeBValue);
+        const shareA =
+          denom > 0
+            ? Math.max(12, Math.min(88, (Math.abs(r.rangeAValue) / denom) * 100))
+            : 50;
+        return {
+          label: r.label,
+          valAText: `${r.rangeAValue.toFixed(1)}${r.unit}`,
+          valBText: `${r.rangeBValue.toFixed(1)}${r.unit}`,
+          deltaText: `${formatSigned(r.absDiff, 1)}${r.unit} (${formatSigned(
+            r.pctDiff,
+            1
+          )}%)`,
+          deltaTone: tied ? 'muted' : isGood ? 'positive' : 'negative',
+          winner: tied ? 'tie' : isGood ? 'A' : 'B',
+          shareA,
+        };
+      }),
+      footerNote: `Comparativa generada con ${comparison.countA} PJ (Tramo A) frente a ${comparison.countB} PJ (Tramo B)`,
+    });
+  };
 
   return (
     <div className="space-y-5">
@@ -952,6 +1053,13 @@ export function RangeComparatorView({
                   <span>Pasar a Modo Avanzado</span>
                 </button>
               )}
+
+              <ExportImageButton
+                onBuildImage={handleBuildRangeSnapshot}
+                disabled={
+                  !comparison || comparison.countA === 0 || comparison.countB === 0
+                }
+              />
             </div>
           </div>
         )}

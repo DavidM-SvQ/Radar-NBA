@@ -25,6 +25,11 @@ import {
 } from './MetricUiHelpers';
 import { STICKY_THEAD_CLASS, compareSortValues } from '../utils/tableSort';
 import { PlayerAvatar } from './NbaVisuals';
+import { ExportImageButton } from './ExportImageButton';
+import {
+  buildTableSnapshotBlob,
+  type TableSnapshotCell,
+} from '../utils/exportImageCard';
 
 interface PlayersExplorerViewProps {
   players: PlayerSummary[];
@@ -281,6 +286,139 @@ export function PlayersExplorerView({
     const topPie = [...pool].sort((a, b) => b.pie - a.pie)[0];
     return { topScorer, topUsage, topPie };
   }, [rows]);
+
+  const handleBuildPlayersSnapshot = async () => {
+    const dateSlug = new Date().toISOString().slice(0, 10);
+    const topRows = filtered.slice(0, 20);
+    const modeSlug = experienceMode === 'simple' ? 'esencial' : viewMode;
+    const filename = `radarnba-jugadores-${modeSlug}-${dateSlug}.png`;
+
+    const posLabel =
+      posFilter === 'all'
+        ? 'Todas las posiciones'
+        : posFilter === 'G'
+        ? 'Bases / Escoltas (G)'
+        : posFilter === 'F'
+        ? 'Aleros (F)'
+        : 'Pívots (C)';
+
+    const isAdvancedLayer = experienceMode === 'advanced' && viewMode === 'advanced';
+    const isHustleLayer =
+      experienceMode === 'advanced' && viewMode === 'zones_hustle';
+
+    return buildTableSnapshotBlob({
+      filename,
+      categoryTag: 'EXPLORADOR DE JUGADORES NBA',
+      title: isAdvancedLayer
+        ? 'Ranking de Impacto Avanzado y Eficiencia NBA'
+        : isHustleLayer
+        ? 'Ranking de Pintura, Creación e Intangibles (Hustle)'
+        : 'Ranking Estadístico de Jugadores NBA',
+      subtitle: `${posLabel} · ${filtered.length} jugadores · Ventana reciente Últ. ${windowSize} PJ`,
+      entityColumnLabel: 'JUGADOR',
+      entityColumnWeight: 2.3,
+      kpis: [
+        {
+          label: 'MUESTRA FILTRADA',
+          value: `${filtered.length} jug.`,
+          sublabel: query.trim() ? `Búsqueda: "${query.trim()}"` : posLabel,
+        },
+        {
+          label: 'LÍDER ANOTACIÓN',
+          value: summary?.topScorer ? summary.topScorer.name : '—',
+          sublabel: summary?.topScorer
+            ? `${summary.topScorer.ptsBase.toFixed(1)} PTS (${summary.topScorer.teamAbbr})`
+            : undefined,
+          tone: 'accent',
+        },
+        {
+          label: 'MAYOR IMPACTO PIE',
+          value: summary?.topPie ? summary.topPie.name : '—',
+          sublabel: summary?.topPie
+            ? `${summary.topPie.pie.toFixed(1)}% PIE (${summary.topPie.teamAbbr})`
+            : undefined,
+          tone: 'positive',
+        },
+      ],
+      columns: isAdvancedLayer
+        ? [
+            { key: 'min', label: 'MIN', align: 'right', widthWeight: 0.8 },
+            { key: 'pie', label: 'PIE%', align: 'right', widthWeight: 0.95 },
+            { key: 'usg', label: 'USG%', align: 'right', widthWeight: 0.95 },
+            { key: 'ts', label: 'TS%', align: 'right', widthWeight: 0.95 },
+            { key: 'net', label: 'NET RTG', align: 'right', widthWeight: 1.0 },
+            { key: 'gmsc', label: 'GMSC', align: 'right', widthWeight: 0.95 },
+          ]
+        : isHustleLayer
+        ? [
+            { key: 'paint', label: 'PINTURA', align: 'right', widthWeight: 0.95 },
+            { key: 'astPct', label: 'AST%', align: 'right', widthWeight: 0.9 },
+            { key: 'orebPct', label: 'OREB%', align: 'right', widthWeight: 0.9 },
+            { key: 'defl', label: 'DESVÍOS', align: 'right', widthWeight: 0.95 },
+            { key: 'cont', label: 'PUNTEADOS', align: 'right', widthWeight: 1.0 },
+            { key: 'scr', label: 'PANTALLAS', align: 'right', widthWeight: 1.0 },
+          ]
+        : [
+            { key: 'min', label: 'MIN', align: 'right', widthWeight: 0.8 },
+            { key: 'pts', label: 'PTS', align: 'right', widthWeight: 0.9 },
+            { key: 'win', label: `ÚLT. ${windowSize} PJ`, align: 'right', widthWeight: 1.05 },
+            { key: 'reb', label: 'REB', align: 'right', widthWeight: 0.85 },
+            { key: 'ast', label: 'AST', align: 'right', widthWeight: 0.85 },
+            { key: 'ts', label: 'TS%', align: 'right', widthWeight: 0.95 },
+          ],
+      rows: topRows.map((r, idx) => {
+        const cells: Record<string, TableSnapshotCell | string> = isAdvancedLayer
+          ? {
+              min: { text: r.minBase.toFixed(1) },
+              pie: { text: `${r.pie.toFixed(1)}%`, tone: 'accent' },
+              usg: { text: `${r.usgPct.toFixed(1)}%` },
+              ts: {
+                text: `${r.tsPct.toFixed(1)}%`,
+                tone: r.tsPct >= 60 ? 'positive' : r.tsPct < 53 ? 'warning' : 'neutral',
+              },
+              net: {
+                text: formatSigned(r.netRtg, 1),
+                tone: r.netRtg >= 4 ? 'positive' : r.netRtg <= -4 ? 'negative' : 'neutral',
+              },
+              gmsc: { text: r.gmSc.toFixed(1) },
+            }
+          : isHustleLayer
+          ? {
+              paint: { text: r.ptsPaint.toFixed(1), tone: 'accent' },
+              astPct: { text: `${r.astPct.toFixed(1)}%` },
+              orebPct: { text: `${r.orebPct.toFixed(1)}%` },
+              defl: { text: r.deflections.toFixed(1), tone: 'positive' },
+              cont: { text: r.contestedShots.toFixed(1) },
+              scr: { text: r.screenAssists.toFixed(1) },
+            }
+          : {
+              min: { text: r.minBase.toFixed(1) },
+              pts: { text: r.ptsBase.toFixed(1), tone: 'accent' },
+              win: {
+                text: r.ptsWin.toFixed(1),
+                subtext: `${formatSigned(r.pctDelta, 0)}%`,
+                tone:
+                  r.pctDelta >= 12
+                    ? 'positive'
+                    : r.pctDelta <= -12
+                    ? 'negative'
+                    : 'neutral',
+              },
+              reb: { text: r.rebBase.toFixed(1) },
+              ast: { text: r.astBase.toFixed(1) },
+              ts: { text: `${r.tsPct.toFixed(1)}%` },
+            };
+        return {
+          rank: idx + 1,
+          teamAbbr: r.teamAbbr,
+          entityName: r.name,
+          entitySubtext: `${r.position} · ${r.gamesPlayed} PJ`,
+          cells,
+        };
+      }),
+      footerNote: `Mostrando top ${topRows.length} de ${filtered.length} jugadores según el orden actual de la tabla`,
+    });
+  };
 
   const handleModeSwitch = (mode: TableViewMode) => {
     setViewMode(mode);
@@ -605,14 +743,20 @@ export function PlayersExplorerView({
             ))}
           </div>
 
-          <div className="relative w-full lg:w-96 shrink-0">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => void handleQueryChange(e.target.value)}
-              placeholder="Buscar jugador (Jokic, Doncic, Aldama)..."
-              className="w-full pl-9 pr-3 py-2 sm:py-1.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500 transition-colors"
+          <div className="flex items-center gap-2 w-full lg:w-auto shrink-0">
+            <div className="relative flex-1 lg:w-80">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => void handleQueryChange(e.target.value)}
+                placeholder="Buscar jugador (Jokic, Doncic, Aldama)..."
+                className="w-full pl-9 pr-3 py-2 sm:py-1.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500 transition-colors"
+              />
+            </div>
+            <ExportImageButton
+              onBuildImage={handleBuildPlayersSnapshot}
+              disabled={filtered.length === 0}
             />
           </div>
         </div>

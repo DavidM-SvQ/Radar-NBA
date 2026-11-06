@@ -5,7 +5,7 @@ function stripControlChars(raw) {
 }
 const FORBIDDEN_PROTOTYPE_KEYS = /* @__PURE__ */ new Set(["__proto__", "constructor", "prototype"]);
 const safeEntityIdSchema = z.string({ error: "Identificador requerido." }).trim().min(1, "El identificador no puede estar vac\xEDo.").max(48, "Identificador demasiado largo (m\xE1x. 48 caracteres).").regex(/^[a-zA-Z0-9:_-]+$/, 'Formato de identificador no v\xE1lido (solo letras, n\xFAmeros, ":", "_" o "-").').refine((val) => !val.includes("..") && !FORBIDDEN_PROTOTYPE_KEYS.has(val.toLowerCase()), "Identificador reservado o secuencia no permitida.");
-const seasonModeSchema = z.enum(["continuous", "2027", "2026"], { error: "Modo de temporada no v\xE1lido (permitidos: continuous, 2027, 2026)." });
+const seasonModeSchema = z.enum(["continuous", "2027", "2026", "2025", "2024"], { error: "Modo de temporada no v\xE1lido (permitidos: continuous, 2027, 2026, 2025, 2024)." });
 const booleanQueryFlagSchema = z.enum(["0", "1", "true", "false"], { error: "Par\xE1metro booleano no v\xE1lido (usa 0 o 1)." }).optional().transform((val) => val === "1" || val === "true");
 const isoDateSchema = z.string({ error: "Fecha no v\xE1lida." }).trim().regex(/^\d{4}-\d{2}-\d{2}$/, "La fecha debe tener formato estricto YYYY-MM-DD.").refine((val) => {
   const [yStr, mStr, dStr] = val.split("-");

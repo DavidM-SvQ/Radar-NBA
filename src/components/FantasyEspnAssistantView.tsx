@@ -49,12 +49,18 @@ import {
   parseCopiedEspnTextToPlayers,
 } from '../utils/fantasyScoring';
 import { PlayerAvatar, TeamLogo } from './NbaVisuals';
+import { ExportImageButton } from './ExportImageButton';
+import {
+  buildComparisonSnapshotBlob,
+  buildTableSnapshotBlob,
+} from '../utils/exportImageCard';
 import { SortableTh } from './MetricUiHelpers';
 import { STICKY_THEAD_CLASS, sortRows, useTableSort } from '../utils/tableSort';
 import { buildAdminAuthHeaders } from '../utils/adminAuthClient';
 import {
   addDaysIso,
   buildStaticFantasyWeeks,
+  countRemainingGamesForTeam,
   formatDayShortEs,
   getEasternTodayIso,
 } from '../utils/staticSchedule';
@@ -441,6 +447,7 @@ export function FantasyEspnAssistantView({
     try {
       const res = await fetch('/api/nba/fantasy/manual-state', {
         method: 'PUT',
+        credentials: 'same-origin',
         headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(stateToSave),
       });
@@ -700,6 +707,7 @@ export function FantasyEspnAssistantView({
       if (savingInFlightCountRef.current > 0) return;
       try {
         const res = await fetch('/api/nba/fantasy/manual-state', {
+          credentials: 'same-origin',
           headers: buildAdminAuthHeaders(),
           cache: 'no-store',
         });
@@ -781,6 +789,7 @@ export function FantasyEspnAssistantView({
           ? '/api/nba/fantasy/context?refresh=1'
           : '/api/nba/fantasy/context';
         const res = await fetch(url, {
+          credentials: 'same-origin',
           headers: buildAdminAuthHeaders(),
           cache: 'no-store',
         });
@@ -1531,8 +1540,9 @@ export function FantasyEspnAssistantView({
     return healthyFAs[0] || null;
   }, [enrichedCatalog, unavailableIds]);
 
-  // Trade Analyzer Evaluation
+  // Trade Analyzer Evaluation (Simulador de Traspasos Proyectivo Net Impact)
   const tradeEvaluation = useMemo(() => {
+    const todayIso = getEasternTodayIso();
     const sendItems = tradeSendIds
       .map((id) => enrichedById.get(id))
       .filter((x): x is NonNullable<typeof x> => Boolean(x));
@@ -1542,22 +1552,35 @@ export function FantasyEspnAssistantView({
 
     const sumMetrics = (arr: typeof sendItems) =>
       arr.reduce(
-        (acc, x) => ({
-          seasonFpts: acc.seasonFpts + x.stats.seasonAvgFpts,
-          weightedFpts: acc.weightedFpts + x.stats.weightedFptsPerGame,
-          weekFpts: acc.weekFpts + x.weekly.lockAdjustedFpts,
-          weekGames: acc.weekGames + x.teamSched.gamesCount,
-          makePts: acc.makePts + x.stats.avgShootingMakePts,
-          missPenaltyPts: acc.missPenaltyPts + x.stats.avgShootingMissPenaltyPts,
-          rebPts: acc.rebPts + x.stats.avgReboundPts,
-          playDefPts: acc.playDefPts + x.stats.avgPlaymakingDefensePts,
-          negPts: acc.negPts + x.stats.avgNegativeDisciplinePts,
-        }),
+        (acc, x) => {
+          const rosRemainingGames = countRemainingGamesForTeam(
+            x.player.teamAbbr,
+            todayIso
+          );
+          const rosTotalFpts =
+            x.stats.weightedFptsPerGame * rosRemainingGames;
+          return {
+            seasonFpts: acc.seasonFpts + x.stats.seasonAvgFpts,
+            weightedFpts: acc.weightedFpts + x.stats.weightedFptsPerGame,
+            weekFpts: acc.weekFpts + x.weekly.lockAdjustedFpts,
+            weekGames: acc.weekGames + x.teamSched.gamesCount,
+            rosRemainingGames: acc.rosRemainingGames + rosRemainingGames,
+            rosTotalFpts: acc.rosTotalFpts + rosTotalFpts,
+            makePts: acc.makePts + x.stats.avgShootingMakePts,
+            missPenaltyPts:
+              acc.missPenaltyPts + x.stats.avgShootingMissPenaltyPts,
+            rebPts: acc.rebPts + x.stats.avgReboundPts,
+            playDefPts: acc.playDefPts + x.stats.avgPlaymakingDefensePts,
+            negPts: acc.negPts + x.stats.avgNegativeDisciplinePts,
+          };
+        },
         {
           seasonFpts: 0,
           weightedFpts: 0,
           weekFpts: 0,
           weekGames: 0,
+          rosRemainingGames: 0,
+          rosTotalFpts: 0,
           makePts: 0,
           missPenaltyPts: 0,
           rebPts: 0,
@@ -1585,15 +1608,33 @@ export function FantasyEspnAssistantView({
       addedStreamItem = topReplacementFreeAgent || null;
     }
 
+    const forcedDropRosGames = forcedDropItem
+      ? countRemainingGamesForTeam(forcedDropItem.player.teamAbbr, todayIso)
+      : 0;
+    const forcedDropRosFpts = forcedDropItem
+      ? forcedDropItem.stats.weightedFptsPerGame * forcedDropRosGames
+      : 0;
+
+    const addedStreamRosGames = addedStreamItem
+      ? countRemainingGamesForTeam(addedStreamItem.player.teamAbbr, todayIso)
+      : 0;
+    const addedStreamRosFpts = addedStreamItem
+      ? addedStreamItem.stats.weightedFptsPerGame * addedStreamRosGames
+      : 0;
+
     const effectiveOutPerGame =
       sendSum.weightedFpts + (forcedDropItem?.stats.weightedFptsPerGame || 0);
     const effectiveInPerGame =
-      receiveSum.weightedFpts + (addedStreamItem?.stats.weightedFptsPerGame || 0);
+      receiveSum.weightedFpts +
+      (addedStreamItem?.stats.weightedFptsPerGame || 0);
 
     const effectiveOutWeek =
       sendSum.weekFpts + (forcedDropItem?.weekly.lockAdjustedFpts || 0);
     const effectiveInWeek =
       receiveSum.weekFpts + (addedStreamItem?.weekly.lockAdjustedFpts || 0);
+
+    const effectiveOutRosFpts = sendSum.rosTotalFpts + forcedDropRosFpts;
+    const effectiveInRosFpts = receiveSum.rosTotalFpts + addedStreamRosFpts;
 
     return {
       sendItems,
@@ -1604,6 +1645,8 @@ export function FantasyEspnAssistantView({
       addedStreamItem,
       netPerGame: Math.round((effectiveInPerGame - effectiveOutPerGame) * 10) / 10,
       netWeek: Math.round((effectiveInWeek - effectiveOutWeek) * 10) / 10,
+      netRosTotalFpts:
+        Math.round((effectiveInRosFpts - effectiveOutRosFpts) * 10) / 10,
     };
   }, [
     tradeSendIds,
@@ -3307,6 +3350,95 @@ export function FantasyEspnAssistantView({
                 >
                   Gestionar Rivales ({totalRivalPlayersCount} ocupados)
                 </button>
+                <ExportImageButton
+                  label="Exportar Waivers PNG"
+                  disabled={availableWaiverPool.length === 0}
+                  title="Descargar ranking filtrado de Agentes Libres en imagen PNG"
+                  onBuildImage={() =>
+                    buildTableSnapshotBlob({
+                      filename: `radarnba-fantasy-waivers-${activeWeek?.id || 'semana'}`,
+                      categoryTag: 'Fantasy · Mercado de Agentes Libres',
+                      title: `Ranking Filtrado de Waivers (${activeWeek?.label || 'Semana activa'})`,
+                      subtitle: `Posición: ${waiverPosFilter === 'ALL' ? 'Todas' : waiverPosFilter}${
+                        waiverMinGames > 0 ? ` · ≥${waiverMinGames} PJ` : ''
+                      }${
+                        effectiveDropMember
+                          ? ` · Corte simulado: ${effectiveDropMember.player.name} (${effectiveDropMember.weekly.lockAdjustedFpts.toFixed(1)} FPTS)`
+                          : ''
+                      }`,
+                      entityColumnLabel: 'Agente Libre',
+                      kpis: [
+                        {
+                          label: 'Disponibles en filtro',
+                          value: `${availableWaiverPool.length}`,
+                          sublabel: `${totalRivalPlayersCount} ocupados en rivales`,
+                        },
+                        {
+                          label: 'Mejor proyección semanal',
+                          value: availableWaiverPool[0]
+                            ? `${availableWaiverPool[0].weekly.lockAdjustedFpts.toFixed(1)} FPTS`
+                            : '—',
+                          sublabel: availableWaiverPool[0]?.player.name,
+                          tone: 'accent',
+                        },
+                        {
+                          label: 'Mayor ganancia vs corte',
+                          value: availableWaiverPool[0]
+                            ? `${availableWaiverPool[0].netWeekGain >= 0 ? '+' : ''}${availableWaiverPool[0].netWeekGain.toFixed(1)}`
+                            : '—',
+                          sublabel: effectiveDropMember
+                            ? `vs ${effectiveDropMember.player.name}`
+                            : 'Hueco directo',
+                          tone:
+                            (availableWaiverPool[0]?.netWeekGain ?? 0) >= 0
+                              ? 'positive'
+                              : 'negative',
+                        },
+                      ],
+                      columns: [
+                        { key: 'sched', label: 'PJ Sem.', align: 'right', widthWeight: 0.85 },
+                        { key: 'seasonAvg', label: 'Media FPTS', align: 'right', widthWeight: 0.95 },
+                        { key: 'last5', label: 'Últ. 5 PJ', align: 'right', widthWeight: 1.05 },
+                        { key: 'weekProj', label: 'Proy. Sem.', align: 'right', widthWeight: 1.0 },
+                        { key: 'netGain', label: 'Ganancia vs Corte', align: 'right', widthWeight: 1.15 },
+                      ],
+                      rows: availableWaiverPool.slice(0, 15).map((it, idx) => ({
+                        rank: idx + 1,
+                        teamAbbr: it.player.teamAbbr,
+                        entityName: it.player.name,
+                        entitySubtext: `${it.player.position} · ${it.stats.minutesAvg.toFixed(1)} MIN${
+                          it.roleBreakout ? ` · ▲ +${it.roleBreakout.minDelta.toFixed(1)} MIN` : ''
+                        }`,
+                        cells: {
+                          sched: {
+                            text: `${it.weekly.playableGamesEst}/${it.teamSched.gamesCount} PJ`,
+                            tone: 'neutral',
+                          },
+                          seasonAvg: {
+                            text: it.stats.seasonAvgFpts.toFixed(1),
+                            tone: 'neutral',
+                          },
+                          last5: {
+                            text: `${it.stats.last5AvgFpts.toFixed(1)} (${
+                              it.stats.formDeltaLast5 >= 0 ? '+' : ''
+                            }${it.stats.formDeltaLast5.toFixed(1)})`,
+                            tone:
+                              it.stats.formDeltaLast5 >= 0 ? 'positive' : 'negative',
+                          },
+                          weekProj: {
+                            text: `${it.weekly.lockAdjustedFpts.toFixed(1)}`,
+                            tone: 'accent',
+                          },
+                          netGain: {
+                            text: `${it.netWeekGain >= 0 ? '+' : ''}${it.netWeekGain.toFixed(1)} sem.`,
+                            subtext: `${it.netPerGameGain >= 0 ? '+' : ''}${it.netPerGameGain.toFixed(1)} / PJ`,
+                            tone: it.netWeekGain >= 0 ? 'positive' : 'negative',
+                          },
+                        },
+                      })),
+                    })
+                  }
+                />
               </div>
             </div>
 
@@ -3607,43 +3739,47 @@ export function FantasyEspnAssistantView({
                 </p>
               ) : (
                 <div className="space-y-2">
-                  {tradeEvaluation.sendItems.map((item) => (
-                    <div
-                      key={item.player.id}
-                      className="flex items-center justify-between px-3 py-2 bg-[#131C2E] border border-[#1E293B] rounded-lg text-xs"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <PlayerAvatar
-                          playerId={item.player.id}
-                          name={item.player.name}
-                          teamAbbr={item.player.teamAbbr}
-                          size="xs"
-                        />
-                        <div>
-                          <span className="font-semibold text-slate-100">
-                            {item.player.name}
-                          </span>
-                          <span className="block text-[11px] text-slate-400 font-mono">
-                            {item.player.teamAbbr} ·{' '}
-                            {formatFptsExact(item.stats.seasonTotalFpts)} tot ·{' '}
-                            {item.stats.seasonAvgFpts.toFixed(1)} FPTS/PJ ·{' '}
-                            {item.teamSched.gamesCount} PJ sem.
-                          </span>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setTradeSendIds((prev) =>
-                            prev.filter((id) => id !== item.player.id)
-                          )
-                        }
-                        className="text-slate-400 hover:text-rose-400"
+                  {tradeEvaluation.sendItems.map((item) => {
+                    const rosGames = countRemainingGamesForTeam(
+                      item.player.teamAbbr,
+                      getEasternTodayIso()
+                    );
+                    const rosFpts = item.stats.weightedFptsPerGame * rosGames;
+                    return (
+                      <div
+                        key={item.player.id}
+                        className="flex items-center justify-between px-3 py-2 bg-[#131C2E] border border-[#1E293B] rounded-lg text-xs"
                       >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
+                        <div className="flex items-center gap-2.5">
+                          <PlayerAvatar
+                            playerId={item.player.id}
+                            name={item.player.name}
+                            teamAbbr={item.player.teamAbbr}
+                            size="xs"
+                          />
+                          <div>
+                            <span className="font-semibold text-slate-100">
+                              {item.player.name}
+                            </span>
+                            <span className="block text-[11px] text-slate-400 font-mono">
+                              {item.player.teamAbbr} · {item.stats.seasonAvgFpts.toFixed(1)} FPTS/PJ · {rosGames} PJ ROS (~{rosFpts.toFixed(0)} FPTS)
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setTradeSendIds((prev) =>
+                              prev.filter((id) => id !== item.player.id)
+                            )
+                          }
+                          className="text-slate-400 hover:text-rose-400"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 
@@ -3687,6 +3823,11 @@ export function FantasyEspnAssistantView({
                 <div className="space-y-2">
                   {tradeEvaluation.receiveItems.map((item) => {
                     const rivalOwner = rivalOwnerByPlayerId.get(item.player.id);
+                    const rosGames = countRemainingGamesForTeam(
+                      item.player.teamAbbr,
+                      getEasternTodayIso()
+                    );
+                    const rosFpts = item.stats.weightedFptsPerGame * rosGames;
                     return (
                       <div
                         key={item.player.id}
@@ -3704,9 +3845,7 @@ export function FantasyEspnAssistantView({
                               {item.player.name}
                             </span>
                             <span className="block text-[11px] text-slate-400 font-mono">
-                              {item.player.teamAbbr} ·{' '}
-                              {formatFptsExact(item.stats.seasonTotalFpts)} tot ·{' '}
-                              {item.stats.seasonAvgFpts.toFixed(1)} FPTS/PJ
+                              {item.player.teamAbbr} · {item.stats.seasonAvgFpts.toFixed(1)} FPTS/PJ · {rosGames} PJ ROS (~{rosFpts.toFixed(0)} FPTS)
                               {rivalOwner ? ` · En ${rivalOwner.teamName}` : ''}
                             </span>
                           </div>
@@ -3747,7 +3886,7 @@ export function FantasyEspnAssistantView({
             tradeEvaluation.receiveItems.length > 0) && (
             <div className="bg-[#0B1120] border border-[#1E293B] rounded-lg overflow-hidden">
               <div className="px-4 py-3 border-b border-[#1E293B] flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-4 font-mono tabular-nums text-xs sm:text-sm font-bold">
+                <div className="flex flex-wrap items-center gap-3 font-mono tabular-nums text-xs sm:text-sm font-bold">
                   <span className="font-sans text-xs font-semibold text-slate-200">
                     Veredicto Neto Oficial:
                   </span>
@@ -3772,18 +3911,181 @@ export function FantasyEspnAssistantView({
                     {tradeEvaluation.netWeek >= 0 ? '+' : ''}
                     {tradeEvaluation.netWeek.toFixed(1)} FPTS
                   </span>
+                  <span
+                    className={
+                      tradeEvaluation.netRosTotalFpts >= 0
+                        ? 'text-cyan-300 bg-cyan-950/60 border border-cyan-500/40 px-2 py-0.5 rounded text-xs'
+                        : 'text-amber-300 bg-amber-950/60 border border-amber-500/40 px-2 py-0.5 rounded text-xs'
+                    }
+                  >
+                    Impacto ROS: {tradeEvaluation.netRosTotalFpts >= 0 ? '+' : ''}
+                    {tradeEvaluation.netRosTotalFpts.toFixed(1)} FPTS Resto Temporada ({tradeEvaluation.receiveSum.rosRemainingGames} PJ vs {tradeEvaluation.sendSum.rosRemainingGames} PJ rest.)
+                  </span>
                 </div>
 
-                {tradeEvaluation.sendItems.length > 0 &&
-                  tradeEvaluation.receiveItems.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={handleApplyTradeToLeague}
-                      className="px-3.5 py-1.5 text-xs font-semibold bg-orange-500 hover:bg-orange-400 text-slate-950 rounded-lg transition-colors whitespace-nowrap"
-                    >
-                      Aplicar traspaso en plantillas guardadas
-                    </button>
-                  )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <ExportImageButton
+                    label="Exportar tarjeta traspaso"
+                    title="Descargar tarjeta comparativa del traspaso Fantasy en imagen PNG"
+                    onBuildImage={() => {
+                      const rawBlocks = [
+                        {
+                          label: 'Aciertos de tiro (+2 FGM · +1 3PM · +1 FTM)',
+                          a: tradeEvaluation.sendSum.makePts,
+                          b: tradeEvaluation.receiveSum.makePts,
+                        },
+                        {
+                          label: 'Castigo por fallos (-1 FGMI · +0.5 3PMI · -1 FTMI)',
+                          a: tradeEvaluation.sendSum.missPenaltyPts,
+                          b: tradeEvaluation.receiveSum.missPenaltyPts,
+                        },
+                        {
+                          label: 'Rebotes (+1.5 OREB · +0.75 DREB)',
+                          a: tradeEvaluation.sendSum.rebPts,
+                          b: tradeEvaluation.receiveSum.rebPts,
+                        },
+                        {
+                          label: 'Creación y Defensa (+1.5 AST · +2.5 STL · +2.5 BLK)',
+                          a: tradeEvaluation.sendSum.playDefPts,
+                          b: tradeEvaluation.receiveSum.playDefPts,
+                        },
+                        {
+                          label: 'Penalizaciones (-2.0 TO · -5.0 EJ)',
+                          a: tradeEvaluation.sendSum.negPts,
+                          b: tradeEvaluation.receiveSum.negPts,
+                        },
+                      ];
+
+                      return buildComparisonSnapshotBlob({
+                        filename: `radarnba-traspaso-fantasy-${
+                          tradeEvaluation.sendItems[0]?.player.name || 'envia'
+                        }-vs-${
+                          tradeEvaluation.receiveItems[0]?.player.name || 'recibe'
+                        }`,
+                        categoryTag: 'Fantasy · Analizador Oficial de Traspasos',
+                        title: `Evaluación de Traspaso · ${leagueState.myTeamName}`,
+                        subtitle: `Reglamento oficial FPTS (Tope 12 contratos · ${
+                          activeWeek?.label || 'Semana activa'
+                        })`,
+                        verdictLabel: 'Veredicto Neto Oficial:',
+                        verdictPrimary: `Por partido: ${
+                          tradeEvaluation.netPerGame >= 0 ? '+' : ''
+                        }${tradeEvaluation.netPerGame.toFixed(1)} FPTS/PJ`,
+                        verdictPrimaryTone:
+                          tradeEvaluation.netPerGame >= 0
+                            ? 'positive'
+                            : 'negative',
+                        verdictSecondary: `${activeWeek?.label || 'Semana'}: ${
+                          tradeEvaluation.netWeek >= 0 ? '+' : ''
+                        }${tradeEvaluation.netWeek.toFixed(1)} FPTS`,
+                        verdictSecondaryTone:
+                          tradeEvaluation.netWeek >= 0 ? 'positive' : 'negative',
+                        sideA: {
+                          headerLabel: 'Jugadores que Entregas',
+                          accentTone: 'orange',
+                          headlineTitle: `${tradeEvaluation.sendItems.length} jugador${
+                            tradeEvaluation.sendItems.length === 1 ? '' : 'es'
+                          } saliente${
+                            tradeEvaluation.sendItems.length === 1 ? '' : 's'
+                          }`,
+                          headlineValue: `${tradeEvaluation.sendSum.weightedFpts.toFixed(
+                            1
+                          )} FPTS/PJ`,
+                          headlineSubtext: `Volumen ${
+                            activeWeek?.label || 'semanal'
+                          }: ${tradeEvaluation.sendSum.weekFpts.toFixed(1)} FPTS (${
+                            tradeEvaluation.sendSum.weekGames
+                          } PJ)`,
+                          items: tradeEvaluation.sendItems.map((it) => ({
+                            name: it.player.name,
+                            teamAbbr: it.player.teamAbbr,
+                            detail: `${it.player.position} · ${formatFptsExact(
+                              it.stats.seasonTotalFpts
+                            )} tot · ${it.teamSched.gamesCount} PJ sem.`,
+                            badgeText: `${it.stats.seasonAvgFpts.toFixed(1)} / PJ`,
+                            badgeTone: 'accent',
+                          })),
+                          calloutText: tradeEvaluation.forcedDropItem
+                            ? `Corte obligatorio (tope 12): ${tradeEvaluation.forcedDropItem.player.name} (-${tradeEvaluation.forcedDropItem.stats.weightedFptsPerGame.toFixed(1)} FPTS/PJ)`
+                            : undefined,
+                          calloutTone: 'negative',
+                        },
+                        sideB: {
+                          headerLabel: 'Jugadores que Recibes',
+                          accentTone: 'emerald',
+                          headlineTitle: `${tradeEvaluation.receiveItems.length} jugador${
+                            tradeEvaluation.receiveItems.length === 1 ? '' : 'es'
+                          } entrante${
+                            tradeEvaluation.receiveItems.length === 1 ? '' : 's'
+                          }`,
+                          headlineValue: `${tradeEvaluation.receiveSum.weightedFpts.toFixed(
+                            1
+                          )} FPTS/PJ`,
+                          headlineSubtext: `Volumen ${
+                            activeWeek?.label || 'semanal'
+                          }: ${tradeEvaluation.receiveSum.weekFpts.toFixed(1)} FPTS (${
+                            tradeEvaluation.receiveSum.weekGames
+                          } PJ)`,
+                          items: tradeEvaluation.receiveItems.map((it) => ({
+                            name: it.player.name,
+                            teamAbbr: it.player.teamAbbr,
+                            detail: `${it.player.position} · ${formatFptsExact(
+                              it.stats.seasonTotalFpts
+                            )} tot · ${it.teamSched.gamesCount} PJ sem.`,
+                            badgeText: `${it.stats.seasonAvgFpts.toFixed(1)} / PJ`,
+                            badgeTone: 'positive',
+                          })),
+                          calloutText: tradeEvaluation.addedStreamItem
+                            ? `Hueco streaming 2x1: +${tradeEvaluation.addedStreamItem.player.name} (+${tradeEvaluation.addedStreamItem.stats.weightedFptsPerGame.toFixed(1)} FPTS/PJ)`
+                            : undefined,
+                          calloutTone: 'positive',
+                        },
+                        breakdownTitle: 'Bloque del Reglamento Oficial FPTS',
+                        colALabel: 'Entregas / PJ',
+                        colBLabel: 'Recibes / PJ',
+                        colDeltaLabel: 'Diferencia',
+                        rows: rawBlocks.map((b) => {
+                          const diff = b.b - b.a;
+                          const absSum = Math.abs(b.a) + Math.abs(b.b);
+                          const shareA =
+                            absSum > 0.01
+                              ? Math.round((Math.abs(b.a) / absSum) * 100)
+                              : 50;
+                          return {
+                            label: b.label,
+                            valAText: b.a.toFixed(2),
+                            valBText: b.b.toFixed(2),
+                            deltaText: `${diff >= 0 ? '+' : ''}${diff.toFixed(2)}`,
+                            deltaTone:
+                              Math.abs(diff) < 0.02
+                                ? 'muted'
+                                : diff > 0
+                                ? 'positive'
+                                : 'negative',
+                            winner:
+                              Math.abs(diff) < 0.02
+                                ? 'tie'
+                                : diff > 0
+                                ? 'B'
+                                : 'A',
+                            shareA,
+                          };
+                        }),
+                      });
+                    }}
+                  />
+
+                  {tradeEvaluation.sendItems.length > 0 &&
+                    tradeEvaluation.receiveItems.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleApplyTradeToLeague}
+                        className="px-3.5 py-1.5 text-xs font-semibold bg-orange-500 hover:bg-orange-400 text-slate-950 rounded-lg transition-colors whitespace-nowrap"
+                      >
+                        Aplicar traspaso en plantillas guardadas
+                      </button>
+                    )}
+                </div>
               </div>
 
               <div className="overflow-auto max-h-[52vh]">
@@ -3827,6 +4129,11 @@ export function FantasyEspnAssistantView({
                   <tbody className="divide-y divide-[#1E293B]/60 font-mono tabular-nums">
                     {(() => {
                       const rawTradeRows = [
+                        {
+                          label: 'Simulación Proyectiva ROS (FPTS totales Resto Temporada por volumen de calendario)',
+                          a: tradeEvaluation.sendSum.rosTotalFpts,
+                          b: tradeEvaluation.receiveSum.rosTotalFpts,
+                        },
                         {
                           label: 'Aciertos de tiro (+2 FGM · +1 3PM · +1 FTM)',
                           a: tradeEvaluation.sendSum.makePts,
