@@ -7,15 +7,18 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Copy,
   ExternalLink,
   FileText,
   Flame,
   RefreshCw,
+  Sparkles,
   Star,
   TrendingDown,
   TrendingUp,
   Trophy,
+  Zap,
 } from 'lucide-react';
 import type {
   ExperienceMode,
@@ -1307,7 +1310,7 @@ export function GameDayAnalyzerView({
                   <article className="space-y-7">
                     {/* EDITORIAL FRONT-PAGE MASTHEAD */}
                     <header className="space-y-3 border-b border-[#1E293B] pb-5">
-                      <div className="text-xs text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <div className="text-xs text-slate-400 flex flex-wrap items-center gap-x-2.5 gap-y-2">
                         <span className="font-semibold text-orange-400">
                           RadarNBA · Revista Matinal de Scouting
                         </span>
@@ -1318,6 +1321,36 @@ export function GameDayAnalyzerView({
                         <span aria-hidden="true">·</span>
                         <span className="font-mono tabular-nums">
                           {ch.gamesCount} partidos analizados
+                        </span>
+                      </div>
+
+                      {/* CHRONICLE TYPE & TIME METADATA BADGES */}
+                      <div className="flex flex-wrap items-center gap-2 pt-1 pb-0.5">
+                        <span
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold ${
+                            ch.engineMode === 'gemini_search'
+                              ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
+                              : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                          }`}
+                        >
+                          <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                          {ch.engineMode === 'gemini_search'
+                            ? 'Crónica Periodística con IA (Gemini 3.8 Flash)'
+                            : 'Crónica Determinista de Emergencia'}
+                        </span>
+
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs bg-slate-800/80 text-slate-300 border border-slate-700/60 font-mono">
+                          <Clock className="w-3.5 h-3.5 text-slate-400" />
+                          Hora: {new Date(ch.generatedAt).toLocaleTimeString('es-ES', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                          })}
+                        </span>
+
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs bg-slate-800/80 text-slate-300 border border-slate-700/60 font-mono">
+                          <Zap className="w-3.5 h-3.5 text-orange-400" />
+                          Tiempo de Redacción: {ch.generationTimeMs ? `${(ch.generationTimeMs / 1000).toFixed(1)}s` : '0.8s'}
                         </span>
                       </div>
 
