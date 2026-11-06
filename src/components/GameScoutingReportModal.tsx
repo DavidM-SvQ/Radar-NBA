@@ -591,7 +591,7 @@ export function GameScoutingReportModal({
       }
       const controller = new AbortController();
       narrativeAbortRef.current = controller;
-      const timeoutId = window.setTimeout(() => controller.abort(), 24000);
+      const timeoutId = window.setTimeout(() => controller.abort(), 30000);
 
       setLoadingNarrative(true);
       setNarrativeError(null);

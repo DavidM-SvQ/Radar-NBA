@@ -2,6 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+export const config = {
+  maxDuration: 60,
+};
+
 // Activate snapshot-first mode on Vercel Serverless Functions
 if (!process.env.VERCEL) {
   process.env.VERCEL = '1';

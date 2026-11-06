@@ -359,8 +359,8 @@ async function generateWithGeminiCascade(params: {
         model,
         systemInstruction: params.systemInstruction,
         contents: params.contents,
-        firstChunkTimeoutMs: 14000,
-        totalTimeoutMs: 20000,
+        firstChunkTimeoutMs: 7000,
+        totalTimeoutMs: 11000,
       });
       if (text && text.length > 80) {
         return {

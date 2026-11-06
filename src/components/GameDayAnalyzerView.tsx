@@ -213,7 +213,7 @@ export function GameDayAnalyzerView({
       setLoadingChronicle(true);
       setChronicleError(null);
       const controller = new AbortController();
-      const timeoutId = window.setTimeout(() => controller.abort(), 24000);
+      const timeoutId = window.setTimeout(() => controller.abort(), 30000);
       try {
         const params = new URLSearchParams({ date: targetDate });
         if (forceRefresh) params.set('refresh', '1');
