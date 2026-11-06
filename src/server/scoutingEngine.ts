@@ -304,7 +304,15 @@ async function streamGeminiContentWithBudget(params) {
       }, params.totalTimeoutMs);
     });
     const streamWork = (async () => {
-      const responseStream = await params.ai.models.generateContentStream({ model: params.model, contents: params.contents, config: { systemInstruction: params.systemInstruction, temperature: 0.2, abortSignal: controller.signal, ...params.thinkingLevel !== void 0 ? { thinkingConfig: { thinkingLevel: params.thinkingLevel } } : {} } });
+      const responseStream = await params.ai.models.generateContentStream({
+        model: params.model,
+        contents: params.contents,
+        config: {
+          systemInstruction: params.systemInstruction,
+          temperature: 0.2,
+          abortSignal: controller.signal,
+        },
+      });
       let fullText = "";
       let lastChunk = null;
       let receivedFirstText = false;
@@ -330,25 +338,46 @@ async function streamGeminiContentWithBudget(params) {
     controller.abort();
   }
 }
-async function generateWithGeminiCascade(params) {
-  const ai = getGeminiClient(16e3);
+
+async function generateWithGeminiCascade(params: {
+  systemInstruction: string;
+  contents: string;
+  seedSources?: Array<{ uri: string; title: string }>;
+}) {
+  const ai = getGeminiClient(20000);
   if (!ai) {
     throw new Error("GEMINI_API_KEY unavailable");
   }
-  if (Date.now() >= flashLiteQuotaCooldownUntil) {
+
+  const modelsToTry = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+  let lastErr: unknown = null;
+
+  for (const model of modelsToTry) {
     try {
-      const { text: liteText, lastChunk } = await streamGeminiContentWithBudget({ ai, model: "gemini-3.1-flash-lite", systemInstruction: params.systemInstruction, contents: params.contents, thinkingLevel: ThinkingLevel.MINIMAL, firstChunkTimeoutMs: 12500, totalTimeoutMs: 15e3 });
-      if (liteText.length > 80) {
-        return { text: liteText, sources: extractGroundingSources(lastChunk, params.seedSources) };
+      const { text, lastChunk } = await streamGeminiContentWithBudget({
+        ai,
+        model,
+        systemInstruction: params.systemInstruction,
+        contents: params.contents,
+        firstChunkTimeoutMs: 14000,
+        totalTimeoutMs: 20000,
+      });
+      if (text && text.length > 80) {
+        return {
+          text,
+          sources: extractGroundingSources(lastChunk, params.seedSources),
+        };
       }
     } catch (err) {
-      if (isQuotaExhaustedError(err)) {
-        flashLiteQuotaCooldownUntil = Date.now() + 45 * 1e3;
-      }
-      throw err;
+      lastErr = err;
+      console.warn(
+        `[RadarNBA] Gemini model ${model} failed, trying cascade fallback:`,
+        err instanceof Error ? err.message : String(err)
+      );
     }
   }
-  throw new Error("Gemini flash-lite temporarily cooling down");
+
+  throw lastErr || new Error("All Gemini cascade models failed");
 }
 function cleanSectionText(raw, preserveHorizontalRules = false) {
   const withoutHeadings = (raw || "").replace(/^#+\s+.*$/gm, "").replace(/^\*\*PASO B.*?\*\*$/gim, "");
