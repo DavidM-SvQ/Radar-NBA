@@ -1416,7 +1416,9 @@ ${benchAndAbsences}`, dynamicSpotlight, xFactorSection, spanishSection: report.s
     if (!forceRefresh) {
       const cached = reportMemoryCache.get(cacheKey);
       if (cached && cached.expiresAt > Date.now()) {
-        return cached.data;
+        if (!(cached.data.engineMode === 'empirical_fallback' && getGeminiClient())) {
+          return cached.data;
+        }
       }
     }
     const existing = reportInflight.get(cacheKey);
@@ -1501,7 +1503,9 @@ De los ${gd.pulse.gamesCount} duelos disputados, ${gd.pulse.closeGamesCount} se 
     if (!forceRefresh) {
       const cached = reportMemoryCache.get(cacheKey);
       if (cached && cached.expiresAt > Date.now()) {
-        return cached.data;
+        if (!(cached.data.engineMode === 'empirical_fallback' && getGeminiClient())) {
+          return cached.data;
+        }
       }
     }
     const existing = reportInflight.get(cacheKey);
