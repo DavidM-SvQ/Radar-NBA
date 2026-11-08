@@ -1,16 +1,19 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
+  AlertTriangle,
   Calendar,
   Check,
   Clock,
   Copy,
   FileSpreadsheet,
+  FileText,
   MapPin,
   Newspaper,
   RefreshCw,
   Scale,
   X,
+  Zap,
 } from 'lucide-react';
 import type {
   ExperienceMode,
@@ -2443,17 +2446,61 @@ export function GameScoutingReportModal({
                       {/* EDITORIAL FRONT-PAGE MASTHEAD */}
                       {narrative && (
                         <header className="space-y-3 border-b border-[#1E293B] pb-5">
-                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
-                            <span className="font-semibold text-orange-400">
-                              Crónica y Scouting Táctico
+                          {/* Metadata Bar: Tipo de Artículo, Hora y Tiempo de Redacción */}
+                          <div className="flex flex-wrap items-center gap-2 text-xs">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-orange-500/10 text-orange-400 border border-orange-500/30">
+                              <FileText className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+                              <span>
+                                {narrative.engineMode === 'gemini_search'
+                                  ? 'Crónica Periodística con IA (Gemini)'
+                                  : 'Crónica Determinista de Partido'}
+                              </span>
+
+                              {narrative.engineMode !== 'gemini_search' && (
+                                <span
+                                  className="group/diag relative inline-flex items-center ml-0.5 cursor-help"
+                                  tabIndex={0}
+                                  aria-label="Motivo de la crónica determinista"
+                                >
+                                  <AlertTriangle className="w-3.5 h-3.5 text-amber-400 hover:text-amber-200 transition-colors shrink-0" />
+                                  <span
+                                    role="tooltip"
+                                    className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 sm:w-80 p-2.5 rounded-lg bg-slate-900/95 text-slate-200 border border-amber-500/40 shadow-2xl text-[11px] leading-relaxed font-normal opacity-0 group-hover/diag:opacity-100 group-focus-within/diag:opacity-100 transition-opacity z-50 backdrop-blur-md"
+                                  >
+                                    <span className="block font-semibold text-amber-300 mb-1">
+                                      {narrative.missingApiKey
+                                        ? 'Falta GEMINI_API_KEY en el entorno'
+                                        : narrative.quotaExhausted || narrative.fallbackReason === 'quota_exhausted_429'
+                                        ? 'Límite de cuota diaria alcanzado (Free Tier)'
+                                        : 'Agotado tiempo de respuesta de IA'}
+                                    </span>
+                                    {narrative.missingApiKey
+                                      ? 'El backend no detecta la variable GEMINI_API_KEY en este entorno de ejecución. Asegúrate de que la variable esté asignada en Vercel o tu entorno local.'
+                                      : narrative.quotaExhausted || narrative.fallbackReason === 'quota_exhausted_429'
+                                      ? 'Se alcanzó el límite diario de peticiones para este modelo Gemini en el Free Tier de Google AI Studio.'
+                                      : 'La llamada a los modelos de Gemini agotó el tiempo de espera o la API no respondió a tiempo. Se muestra esta crónica determinista de respaldo sin pérdida de datos.'}
+                                    <span className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900/95" />
+                                  </span>
+                                </span>
+                              )}
                             </span>
-                            <span aria-hidden="true">·</span>
-                            <span>
-                              {report.arenaName}, {report.arenaCity}
+
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs bg-slate-800/80 text-slate-300 border border-slate-700/60 font-mono">
+                              <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              Hora: {new Date(narrative.generatedAt || Date.now()).toLocaleTimeString('es-ES', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit',
+                              })}
                             </span>
-                            <span aria-hidden="true">·</span>
-                            <span className="font-mono tabular-nums">
-                              {report.attendanceFormatted}
+
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs bg-slate-800/80 text-slate-300 border border-slate-700/60 font-mono">
+                              <Zap className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+                              Tiempo de Redacción: {narrative.generationTimeMs ? `${(narrative.generationTimeMs / 1000).toFixed(1)}s` : '0.9s'}
+                            </span>
+
+                            <span className="text-slate-400 font-mono text-[11px] sm:ml-auto">
+                              {report.arenaName}, {report.arenaCity} · {report.attendanceFormatted}
                             </span>
                           </div>
 
