@@ -365,7 +365,7 @@ app.get("/api/nba/game/:eventId/narrative", validateRequest({ params: gameEventP
     res.status(500).json({ error: err?.message || "Error al redactar crónica del partido." });
   }
 });
-app.get(["/api/nba/fantasy/context", "/api/nba/fantasy/espn"], requireAdminAuth, validateRequest({ query: refreshOnlyQuerySchema }), async (req, res) => {
+app.get(["/api/nba/fantasy/context", "/api/nba/fantasy/espn"], validateRequest({ query: refreshOnlyQuerySchema }), async (req, res) => {
   try {
     res.setHeader("Cache-Control", "no-store");
     const { query } = getValidated(req);
@@ -376,7 +376,7 @@ app.get(["/api/nba/fantasy/context", "/api/nba/fantasy/espn"], requireAdminAuth,
     res.status(500).json({ error: err?.message || "Error al cargar calendario y partes NBA para Fantasy." });
   }
 });
-app.get("/api/nba/fantasy/manual-state", requireAdminAuth, validateRequest({ query: emptyQuerySchema }), async (_req, res) => {
+app.get("/api/nba/fantasy/manual-state", validateRequest({ query: emptyQuerySchema }), async (_req, res) => {
   try {
     res.setHeader("Cache-Control", "no-store");
     const state = await readManualFantasyState();

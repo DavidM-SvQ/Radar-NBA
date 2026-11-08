@@ -270,7 +270,8 @@ export interface PlayerOfficialFantasyStats {
 
 export function computePlayerOfficialFantasyStats(
   player: PlayerSummary,
-  seasonEjections = 0
+  seasonEjections = 0,
+  gameCorrections?: Record<string, { fptsDelta: number; reason?: string }>
 ): PlayerOfficialFantasyStats {
   const allGames = player.games || [];
   if (allGames.length === 0) {
@@ -326,7 +327,18 @@ export function computePlayerOfficialFantasyStats(
   }
 
   const evalGames = g2027;
-  const breakdowns = evalGames.map((g) => computeOfficialGameFptsBreakdown(g, 0));
+  const breakdowns = evalGames.map((g) => {
+    const base = computeOfficialGameFptsBreakdown(g, 0);
+    if (!gameCorrections) return base;
+    const corr = gameCorrections[`${player.id}:${g.eventId}`] || gameCorrections[`${player.id}:${g.date}`];
+    if (corr && typeof corr.fptsDelta === 'number' && Number.isFinite(corr.fptsDelta)) {
+      return {
+        ...base,
+        totalFpts: round2(base.totalFpts + corr.fptsDelta),
+      };
+    }
+    return base;
+  });
   const ejPenaltyTotal =
     seasonEjections > 0 ? seasonEjections * OFFICIAL_LEAGUE_RULES.weights.ej : 0;
   const ejPenaltyPerGame =
@@ -817,7 +829,7 @@ export function computeWeeklyLockProjection(params: {
 }
 
 export function normalizePlayerLookupKey(raw: string): string {
-  return (raw || '')
+  const norm = (raw || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/\b(?:jr|sr|ii|iii|iv)\b\.?/gi, '')
@@ -825,6 +837,8 @@ export function normalizePlayerLookupKey(raw: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
+  if (norm === 'chet holmgrem') return 'chet holmgren';
+  return norm;
 }
 
 /**

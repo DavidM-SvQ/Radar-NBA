@@ -958,6 +958,12 @@ export interface FantasyRosterContract {
   slot: 'starter' | 'bench' | 'ir' | string;
 }
 
+export interface FantasyGameCorrection {
+  fptsDelta: number;
+  reason?: string;
+  updatedAt?: number;
+}
+
 export interface FantasyManualLeagueState {
   updatedAt: number;
   myTeamName: string;
@@ -965,6 +971,7 @@ export interface FantasyManualLeagueState {
   takenRivalIds: string[];
   rivalRosters: Record<string, string[]>;
   rivalTeamNames: Record<string, string>;
+  gameCorrections?: Record<string, FantasyGameCorrection>;
 }
 
 export type FantasyStorageMode = 'upstash-redis' | 'local-disk' | 'tmp-ephemeral';

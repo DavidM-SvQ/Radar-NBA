@@ -71,6 +71,7 @@ import {
 import { LiveGamedayBanner } from './components/LiveGamedayBanner';
 import { MetricInfoTooltip } from './components/MetricUiHelpers';
 import { TeamLogo } from './components/NbaVisuals';
+import { GuidedHomeView } from './components/GuidedHomeView';
 
 type PreloadableLazyComponent<T extends ComponentType<any>> =
   LazyExoticComponent<T> & {
@@ -84,8 +85,13 @@ function lazyWithPreload<T extends ComponentType<any>>(
   const load = () => {
     if (!cachedPromise) {
       cachedPromise = factory().catch((err) => {
-        cachedPromise = null;
-        throw err;
+        // Attempt a retry after a short delay to survive transient network / dev server chunk reloads
+        return new Promise<{ default: T }>((resolve) => setTimeout(resolve, 250))
+          .then(() => factory())
+          .catch((retryErr) => {
+            cachedPromise = null;
+            throw retryErr;
+          });
       });
     }
     return cachedPromise;
@@ -95,11 +101,6 @@ function lazyWithPreload<T extends ComponentType<any>>(
   return LazyComp;
 }
 
-const GuidedHomeView = lazyWithPreload(() =>
-  import('./components/GuidedHomeView').then((m) => ({
-    default: m.GuidedHomeView,
-  }))
-);
 const GameDayAnalyzerView = lazyWithPreload(() =>
   import('./components/GameDayAnalyzerView').then((m) => ({
     default: m.GameDayAnalyzerView,
@@ -179,7 +180,6 @@ const GlobalCommandPalette = lazyWithPreload(() =>
 function preloadSectionChunk(section: ActiveSection): void {
   switch (section) {
     case 'home':
-      void GuidedHomeView.preload();
       break;
     case 'gameday':
       void GameDayAnalyzerView.preload();

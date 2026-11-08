@@ -61,7 +61,35 @@ function sanitizeManualFantasyState(raw) {
       rivalTeamNames[cleanKey] = v.slice(0, 80);
     }
   }
-  return { updatedAt, myTeamName, roster, takenRivalIds, rivalRosters, rivalTeamNames };
+  const gameCorrections = {};
+  if (obj.gameCorrections && typeof obj.gameCorrections === "object") {
+    for (const [k, v] of Object.entries(obj.gameCorrections)) {
+      const cleanKey = String(k || "").trim().slice(0, 80);
+      if (!cleanKey || !v || typeof v !== "object") continue;
+      const numDelta = typeof v.fptsDelta === "number" && Number.isFinite(v.fptsDelta) ? v.fptsDelta : 0;
+      const reason = typeof v.reason === "string" ? v.reason.slice(0, 150) : "";
+      if (Math.abs(numDelta) > 0.001 || reason) {
+        gameCorrections[cleanKey] = {
+          fptsDelta: Number(numDelta.toFixed(2)),
+          reason,
+          updatedAt: typeof v.updatedAt === "number" ? v.updatedAt : Date.now(),
+        };
+      }
+    }
+  }
+  if (!gameCorrections["1642349:0022600007"] && !gameCorrections["1642349:2026-10-22"]) {
+    gameCorrections["1642349:0022600007"] = {
+      fptsDelta: 2.5,
+      reason: "6 stocks en ESPN/BBRef vs 5 en NBA.com (+2.5 FPTS)",
+      updatedAt: Date.now(),
+    };
+    gameCorrections["1642349:2026-10-22"] = {
+      fptsDelta: 2.5,
+      reason: "6 stocks en ESPN/BBRef vs 5 en NBA.com (+2.5 FPTS)",
+      updatedAt: Date.now(),
+    };
+  }
+  return { updatedAt, myTeamName, roster, takenRivalIds, rivalRosters, rivalTeamNames, gameCorrections };
 }
 function readManualFantasyStateFromDisk() {
   const candidates = process.env.VERCEL ? [SERVERLESS_TMP_STATE_FILE, MANUAL_STATE_FILE] : [MANUAL_STATE_FILE];
@@ -173,11 +201,27 @@ function mapInjuryStatusToSpanish(rawStatus, rawDetail) {
   }
   if (stLow.includes("out")) {
     if (hasLongTermKeywords) {
+      let finalDetail = translated;
+      if (!finalDetail || finalDetail === "baja médica") {
+        if (/patellar/i.test(detLow) || /8-10/i.test(detLow)) {
+          finalDetail = "Rotura de tendón rotuliano (~8-10 semanas de baja)";
+        } else if (/achilles/i.test(detLow)) {
+          finalDetail = "Rotura de tendón de Aquiles (Baja indefinida)";
+        } else if (/acl/i.test(detLow) || /cruzado/i.test(detLow)) {
+          finalDetail = "Rotura de ligamento cruzado anterior";
+        } else if (/meniscus|menisco/i.test(detLow)) {
+          finalDetail = "Lesión de menisco / cirugía";
+        } else if (/surgery|cirug/i.test(detLow)) {
+          finalDetail = "Intervención quirúrgica (Larga duración)";
+        } else {
+          finalDetail = "Baja médica prolongada confirmada";
+        }
+      }
       return {
         severity: "out",
         absenceTier: "long_term",
-        statusLabelEs: "Baja larga duraci\xF3n",
-        detailEs: translated || "Baja m\xE9dica prolongada confirmada",
+        statusLabelEs: "Baja larga duración",
+        detailEs: finalDetail,
       };
     }
     if (hasRestKeywords) {
@@ -261,8 +305,10 @@ async function buildFantasyEspnSyncPayload(params) {
     }
   }
   const resolveNbaPlayerId = __name((fullName) => {
-    const kRaw = (fullName || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9\s]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
-    const kClean = normalizePlayerLookupKey(fullName);
+    let raw = fullName || "";
+    if (/chet\s+holmgrem/i.test(raw)) raw = "Chet Holmgren";
+    const kRaw = raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9\s]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+    const kClean = normalizePlayerLookupKey(raw);
     const cands = playersByRawNorm.get(kRaw) || playersByNorm.get(kClean) || [];
     return cands.length > 0 ? cands[0].id : null;
   }, "resolveNbaPlayerId");

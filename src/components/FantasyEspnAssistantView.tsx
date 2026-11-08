@@ -6,6 +6,8 @@ import {
   ClipboardPaste,
   Cloud,
   Download,
+  Edit3,
+  Info,
   Plus,
   RefreshCw,
   Search,
@@ -23,6 +25,7 @@ import {
 import type {
   FantasyAbsenceTier,
   FantasyEspnSyncPayload,
+  FantasyGameCorrection,
   FantasyInjurySeverity,
   FantasyManualLeagueState,
   FantasyPlayerInjuryAlert,
@@ -285,6 +288,46 @@ function parseStoredFantasyState(rawJson: string | null, fallbackUpdatedAt: numb
       }
     }
 
+    const gameCorrections: Record<string, FantasyGameCorrection> = {};
+    if (parsed.gameCorrections && typeof parsed.gameCorrections === 'object') {
+      for (const [k, v] of Object.entries(parsed.gameCorrections as Record<string, unknown>)) {
+        if (!k || !v || typeof v !== 'object') continue;
+        const delta =
+          typeof (v as { fptsDelta?: unknown }).fptsDelta === 'number' &&
+          Number.isFinite((v as { fptsDelta: number }).fptsDelta)
+            ? (v as { fptsDelta: number }).fptsDelta
+            : 0;
+        const reason =
+          typeof (v as { reason?: unknown }).reason === 'string'
+            ? (v as { reason: string }).reason.slice(0, 150)
+            : '';
+        if (Math.abs(delta) > 0.001 || reason) {
+          gameCorrections[k] = {
+            fptsDelta: Number(delta.toFixed(2)),
+            reason,
+            updatedAt:
+              typeof (v as { updatedAt?: unknown }).updatedAt === 'number'
+                ? (v as { updatedAt: number }).updatedAt
+                : Date.now(),
+          };
+        }
+      }
+    }
+
+    // Default seed for Ajay Mitchell vs Denver (+2.5 FPTS to match official ESPN 213.25)
+    if (!gameCorrections['1642349:0022600007'] && !gameCorrections['1642349:2026-10-22']) {
+      gameCorrections['1642349:0022600007'] = {
+        fptsDelta: 2.5,
+        reason: '6 stocks en ESPN/BBRef vs 5 en NBA.com (+2.5 FPTS)',
+        updatedAt: Date.now(),
+      };
+      gameCorrections['1642349:2026-10-22'] = {
+        fptsDelta: 2.5,
+        reason: '6 stocks en ESPN/BBRef vs 5 en NBA.com (+2.5 FPTS)',
+        updatedAt: Date.now(),
+      };
+    }
+
     const updatedAt =
       typeof parsed.updatedAt === 'number' && Number.isFinite(parsed.updatedAt)
         ? parsed.updatedAt
@@ -297,6 +340,7 @@ function parseStoredFantasyState(rawJson: string | null, fallbackUpdatedAt: numb
       takenRivalIds,
       rivalRosters,
       rivalTeamNames,
+      gameCorrections,
     };
   } catch {
     return null;
@@ -312,6 +356,9 @@ function hasAnyUserLeagueData(st: FantasyManualLeagueState | null | undefined): 
     return true;
   }
   if (Object.values(st.rivalTeamNames || {}).some((n) => Boolean(n && n.trim()))) {
+    return true;
+  }
+  if (st.gameCorrections && Object.keys(st.gameCorrections).length > 0) {
     return true;
   }
   return false;
@@ -345,19 +392,31 @@ function loadInitialFantasyLeagueState(): FantasyManualLeagueState {
     takenRivalIds: [],
     rivalRosters: {},
     rivalTeamNames: {},
+    gameCorrections: {
+      '1642349:0022600007': {
+        fptsDelta: 2.5,
+        reason: '6 stocks en ESPN/BBRef vs 5 en NBA.com (+2.5 FPTS)',
+        updatedAt: Date.now(),
+      },
+      '1642349:2026-10-22': {
+        fptsDelta: 2.5,
+        reason: '6 stocks en ESPN/BBRef vs 5 en NBA.com (+2.5 FPTS)',
+        updatedAt: Date.now(),
+      },
+    },
   };
 }
 
 function renderScheduleBadges(teamSched: { gamesCount: number; b2bCount: number; games: FantasyTeamGameSlot[] }) {
   if (!teamSched || !teamSched.games || teamSched.games.length === 0) {
-    return <span className="text-[11px] text-slate-500 font-mono mt-0.5 block">Sin partidos</span>;
+    return <span className="text-[10px] text-slate-500 font-mono mt-0.5 block">Sin partidos</span>;
   }
   return (
-    <div className="flex flex-wrap items-center gap-1 mt-1">
+    <div className="flex flex-wrap items-center gap-1 mt-0.5 max-w-[160px]">
       {teamSched.games.map((g, idx) => (
         <span
           key={`${g.gameId || idx}-${g.dateIso}-${g.opponentAbbr}`}
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#182338] border border-[#1E293B] text-[10px] font-mono whitespace-nowrap"
+          className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded bg-[#182338] border border-[#1E293B] text-[9px] font-mono whitespace-nowrap"
           title={`${g.dateIso}: ${g.isHome ? 'En casa vs' : 'A domicilio @'} ${g.opponentAbbr}`}
         >
           <span className="text-slate-400 font-normal">{g.dayShortEs}</span>
@@ -586,8 +645,12 @@ export function FantasyEspnAssistantView({
     }
   };
 
-  // Player Game Logs Breakdown Modal State
+  // Player Game Logs Breakdown Modal State & Game Corrections
   const [inspectedPlayerForLogsId, setInspectedPlayerForLogsId] = useState<string | null>(null);
+  const [editingLogKey, setEditingLogKey] = useState<string | null>(null);
+  const [editingLogDelta, setEditingLogDelta] = useState<string>('');
+  const [editingLogReason, setEditingLogReason] = useState<string>('');
+
   const {
     sortKey: modalLogSortKey,
     sortAsc: modalLogSortAsc,
@@ -607,6 +670,39 @@ export function FantasyEspnAssistantView({
     | 'tov'
     | 'fpts'
   >('date', false, ['opp', 'tov']);
+
+  const handleSaveGameCorrection = useCallback(
+    (playerId: string, eventId: string, date: string, delta: number, reason: string) => {
+      commitLeagueState((prev) => {
+        const nextCorrections = { ...(prev.gameCorrections || {}) };
+        const keyEvent = `${playerId}:${eventId}`;
+        const keyDate = `${playerId}:${date}`;
+        if (Math.abs(delta) < 0.001 && !reason.trim()) {
+          delete nextCorrections[keyEvent];
+          delete nextCorrections[keyDate];
+        } else {
+          const entry = {
+            fptsDelta: Number(delta.toFixed(2)),
+            reason: reason.trim(),
+            updatedAt: Date.now(),
+          };
+          nextCorrections[keyEvent] = entry;
+          if (eventId !== date) {
+            nextCorrections[keyDate] = entry;
+          }
+        }
+        return {
+          ...prev,
+          gameCorrections: nextCorrections,
+        };
+      });
+      setEditingLogKey(null);
+      setEditingLogDelta('');
+      setEditingLogReason('');
+      setActionBannerMsg('Ajuste de puntos Fantasy guardado correctamente para el partido.');
+    },
+    [commitLeagueState]
+  );
 
   // Trade Analyzer State
   const [tradeSendIds, setTradeSendIds] = useState<string[]>([]);
@@ -886,10 +982,24 @@ export function FantasyEspnAssistantView({
 
   const getPlayerInjury = useCallback(
     (p: PlayerSummary): FantasyPlayerInjuryAlert | null => {
+      const norm = normalizePlayerLookupKey(p.name);
+      if (p.id === '1631096' || norm === 'chet holmgren') {
+        const byId = nbaContext?.injuriesByPlayerId?.[p.id];
+        if (byId && byId.severity !== 'healthy') return byId;
+        const byNorm = nbaContext?.injuriesByNormName?.[norm];
+        if (byNorm && byNorm.severity !== 'healthy') return byNorm;
+        return {
+          playerNameNorm: 'chet holmgren',
+          displayName: 'Chet Holmgren',
+          severity: 'out',
+          absenceTier: 'long_term',
+          statusLabelEs: 'Baja larga duración',
+          detailEs: 'Rotura de tendón rotuliano (~8-10 semanas de baja) [Regreso est: 2027-01-02]',
+        };
+      }
       if (!nbaContext) return null;
       const byId = nbaContext.injuriesByPlayerId[p.id];
       if (byId) return byId;
-      const norm = normalizePlayerLookupKey(p.name);
       return nbaContext.injuriesByNormName[norm] || null;
     },
     [nbaContext]
@@ -906,7 +1016,7 @@ export function FantasyEspnAssistantView({
   // Precompute official Fantasy profile + smart injury/B2B weekly schedule projection for all NBA players
   const enrichedCatalog = useMemo(() => {
     return effectivePlayers.map((p) => {
-      const stats = computePlayerOfficialFantasyStats(p, 0);
+      const stats = computePlayerOfficialFantasyStats(p, 0, leagueState.gameCorrections);
       const teamSched = activeWeek?.teamSchedules?.[p.teamAbbr] || {
         gamesCount: 0,
         b2bCount: 0,
@@ -939,7 +1049,7 @@ export function FantasyEspnAssistantView({
         weekly,
       };
     });
-  }, [effectivePlayers, activeWeek, getPlayerInjury, teamsByAbbr, projectionMode]);
+  }, [effectivePlayers, activeWeek, getPlayerInjury, teamsByAbbr, projectionMode, leagueState.gameCorrections]);
 
   const enrichedById = useMemo(() => {
     const map = new Map<string, (typeof enrichedCatalog)[number]>();
@@ -2423,8 +2533,8 @@ export function FantasyEspnAssistantView({
         </div>
       )}
 
-      {/* 4-Column Summary Strip */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y lg:divide-y-0 lg:divide-x divide-[#1E293B]">
+      {/* 3-Column Summary Strip */}
+      <div className="grid grid-cols-1 md:grid-cols-3 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y md:divide-y-0 md:divide-x divide-[#1E293B]">
         <div className="p-4">
           <p className="text-xs text-slate-400">Contratos en {leagueState.myTeamName}</p>
           <p className="mt-1 text-xl sm:text-2xl font-bold font-mono tabular-nums text-slate-100">
@@ -2436,41 +2546,30 @@ export function FantasyEspnAssistantView({
         </div>
 
         <div className="p-4">
-          <p className="text-xs text-slate-400">Puntos acumulados 2026-27 (Plantilla)</p>
-          <p className="mt-1 text-xl sm:text-2xl font-bold font-mono tabular-nums text-slate-100">
-            {formatFptsExact(lineupTotals.seasonAccumulatedFpts)} FPTS
-          </p>
-          <p className="mt-1 text-xs text-slate-400">
-            Suma oficial acumulada de tus {myRosterEnriched.length} jugadores
-          </p>
-        </div>
-
-        <div className="p-4">
-          <p className="text-xs text-slate-400">
-            Fórmula semana ({lineupTotals.totalGames} PJ × Media)
+          <p className="text-xs text-slate-400 flex items-center gap-1.5">
+            <span>Fórmula semana ({lineupTotals.totalGames} PJ × Media)</span>
+            <span
+              className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-orange-500/20 text-orange-400 cursor-help hover:bg-orange-500/30 transition-colors"
+              title="¿Qué muestra este KPI? Es la proyección teórica previa al arranque de la semana (34 PJ en calendario de tus 10 titulares × su media de temporada). No refleja los puntos reales acumulados hasta hoy (llevas 511,75 FPTS en ESPN), sino el volumen teórico total de la semana si todos jugaran sus partidos previstos sin imprevistos."
+            >
+              <Info className="w-2.5 h-2.5" />
+            </span>
           </p>
           <p className="mt-1 text-xl sm:text-2xl font-bold font-mono tabular-nums text-orange-400">
             {lineupTotals.rawFormulaSum.toFixed(1)} FPTS
           </p>
           <p className="mt-1 text-xs text-slate-400 font-mono tabular-nums">
-            {lineupTotals.playableGamesSum.toFixed(1)} de {lineupTotals.totalGames} PJ reales est. ({activeWeek?.label || 'Semana'})
+            Volumen teórico a priori ({lineupTotals.totalGames} PJ programados sin bajas)
           </p>
         </div>
 
         <div className="p-4">
-          <p className="text-xs text-slate-400">Proyección real cierre lunes</p>
-          <p className="mt-1 text-xl sm:text-2xl font-bold font-mono tabular-nums text-emerald-400">
+          <p className="text-xs text-slate-400">Proyección ajustada de cierre</p>
+          <p className="mt-1 text-xl sm:text-2xl font-bold font-mono tabular-nums text-cyan-400">
             {lineupTotals.adjustedLockSum.toFixed(1)} FPTS
           </p>
           <p className="mt-1 text-xs text-slate-400">
-            {lineupTotals.potentialGainFromOptimization > 0.5
-              ? `+${lineupTotals.potentialGainFromOptimization.toFixed(
-                  1
-                )} FPTS posibles optimizando titulares`
-              : lineupTotals.longTermStartersCount > 0 ||
-                lineupTotals.punctualOrB2BStartersCount > 0
-              ? `${lineupTotals.longTermStartersCount} larga dur. · ${lineupTotals.punctualOrB2BStartersCount} puntual/B2B`
-              : 'Quinteto y rotación optimizados'}
+            {lineupTotals.playableGamesSum.toFixed(1)} de {lineupTotals.totalGames} PJ est. tras bajas (Chet 0 PJ) y B2B
           </p>
         </div>
       </div>
@@ -2594,6 +2693,22 @@ export function FantasyEspnAssistantView({
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
+                    onClick={() => {
+                      const ajayOrFirst =
+                        myStarters.find((s) => s.player.name.includes('Ajay'))?.player.id ||
+                        myStarters[0]?.player.id ||
+                        effectivePlayers[0]?.id ||
+                        null;
+                      setInspectedPlayerForLogsId(ajayOrFirst);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold bg-amber-500/25 hover:bg-amber-500/35 border-2 border-amber-500/60 text-amber-200 rounded-lg transition-all shadow-sm whitespace-nowrap shrink-0"
+                    title="Abre el panel de corrección manual de puntos por partido (± FPTS), explicación y desglose oficial"
+                  >
+                    <Edit3 className="w-3.5 h-3.5 text-amber-400" />
+                    <span>✏️ Auditar / Corregir Puntos de Partido (±)</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={handleAutoOptimizeStarters}
                     className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg transition-colors whitespace-nowrap shrink-0"
                   >
@@ -2684,8 +2799,8 @@ export function FantasyEspnAssistantView({
               )}
 
               {/* Roster Table (Starters + Bench Split) */}
-              <div className="overflow-auto max-h-[70vh]">
-                <table className="w-full text-left border-collapse">
+              <div className="w-full overflow-x-auto lg:overflow-x-visible max-h-[75vh]">
+                <table className="w-full text-left border-collapse table-auto text-xs">
                   <thead className={STICKY_THEAD_CLASS}>
                     <tr className="border-b border-[#1E293B] text-[11px] text-slate-400">
                       <SortableTh
@@ -2694,7 +2809,7 @@ export function FantasyEspnAssistantView({
                         active={rosterSortKey === 'slot'}
                         asc={rosterSortAsc}
                         onSort={() => handleRosterSort('slot')}
-                        className="py-2.5 pl-4 pr-2"
+                        className="py-2 pl-3 pr-1 w-12"
                       />
                       <SortableTh
                         label="Jugador"
@@ -2702,6 +2817,7 @@ export function FantasyEspnAssistantView({
                         active={rosterSortKey === 'name'}
                         asc={rosterSortAsc}
                         onSort={() => handleRosterSort('name')}
+                        className="py-2 px-1.5 min-w-[130px]"
                       />
                       <SortableTh
                         label="Salud / Parte"
@@ -2709,56 +2825,63 @@ export function FantasyEspnAssistantView({
                         active={rosterSortKey === 'severity'}
                         asc={rosterSortAsc}
                         onSort={() => handleRosterSort('severity')}
+                        className="py-2 px-1.5"
                       />
                       <SortableTh
-                        label={`Calendario (${activeWeek?.label || 'Semana'})`}
+                        label="Calendario"
                         align="left"
                         active={rosterSortKey === 'gamesCount'}
                         asc={rosterSortAsc}
                         onSort={() => handleRosterSort('gamesCount')}
+                        className="py-2 px-1.5"
                       />
                       <SortableTh
-                        label="Total FPTS"
+                        label="Total"
                         align="right"
                         active={rosterSortKey === 'seasonTotalFpts'}
                         asc={rosterSortAsc}
                         onSort={() => handleRosterSort('seasonTotalFpts')}
+                        className="py-2 px-1.5"
                       />
                       <SortableTh
-                        label="Media FPTS"
+                        label="Media"
                         align="right"
                         active={rosterSortKey === 'seasonAvgFpts'}
                         asc={rosterSortAsc}
                         onSort={() => handleRosterSort('seasonAvgFpts')}
+                        className="py-2 px-1.5"
                       />
                       <SortableTh
-                        label="Últ. 5 PJ"
+                        label="Últ. 5"
                         align="right"
                         active={rosterSortKey === 'last5AvgFpts'}
                         asc={rosterSortAsc}
                         onSort={() => handleRosterSort('last5AvgFpts')}
+                        className="py-2 px-1.5"
                       />
                       <SortableTh
-                        label="PJ × Media"
+                        label="Fórmula"
                         align="right"
                         active={rosterSortKey === 'rawFormulaFpts'}
                         asc={rosterSortAsc}
                         onSort={() => handleRosterSort('rawFormulaFpts')}
+                        className="py-2 px-1.5"
                       />
                       <SortableTh
-                        label="Proy. Cierre"
+                        label="Proy."
                         align="right"
                         active={rosterSortKey === 'lockAdjustedFpts'}
                         asc={rosterSortAsc}
                         onSort={() => handleRosterSort('lockAdjustedFpts')}
+                        className="py-2 px-1.5"
                       />
                       <SortableTh
-                        label="Acción"
+                        label="Slot"
                         align="right"
                         active={rosterSortKey === 'action'}
                         asc={rosterSortAsc}
                         onSort={() => handleRosterSort('action')}
-                        className="py-2.5 pl-2 pr-4"
+                        className="py-2 pl-1 pr-3 w-16"
                       />
                     </tr>
                   </thead>
@@ -2767,19 +2890,25 @@ export function FantasyEspnAssistantView({
                     <tr className="bg-[#0B1120]/50">
                       <td
                         colSpan={10}
-                        className="py-2 px-4 text-[11px] font-semibold text-emerald-400"
+                        className="py-1.5 px-3 text-[11px] font-semibold text-emerald-400"
                       >
                         Titulares Activos que Puntúan ({myStarters.length}/10)
                       </td>
                     </tr>
                     {myStarters.map((item, idx) => {
                       const shouldBench = !optimalStarterIds.has(item.player.id);
+                      const hasCorrection = Boolean(
+                        leagueState.gameCorrections &&
+                          Object.keys(leagueState.gameCorrections).some(
+                            (k) => k.startsWith(`${item.player.id}:`)
+                          )
+                      );
                       return (
                         <tr
                           key={item.player.id}
                           className="hover:bg-[#182338] transition-colors"
                         >
-                          <td className="py-2.5 pl-4 pr-2 font-mono tabular-nums whitespace-nowrap">
+                          <td className="py-2 pl-3 pr-1 font-mono tabular-nums whitespace-nowrap">
                             <span className="font-semibold text-emerald-400">
                               TIT #{idx + 1}
                             </span>
@@ -2789,8 +2918,8 @@ export function FantasyEspnAssistantView({
                               </span>
                             )}
                           </td>
-                          <td className="py-2.5 px-3 whitespace-nowrap">
-                            <div className="flex items-center gap-2.5">
+                          <td className="py-2 px-1.5 whitespace-nowrap">
+                            <div className="flex items-center gap-2">
                               <PlayerAvatar
                                 playerId={item.player.id}
                                 name={item.player.name}
@@ -2807,22 +2936,23 @@ export function FantasyEspnAssistantView({
                                 >
                                   {item.player.name}
                                 </button>
-                                <div className="text-[11px] text-slate-400 font-mono flex items-center gap-1.5">
+                                <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1">
                                   <span>{item.player.teamAbbr} · {item.player.position}</span>
-                                  <span>·</span>
+                                  <span className="text-slate-600">·</span>
                                   <button
                                     type="button"
                                     onClick={() => setInspectedPlayerForLogsId(item.player.id)}
-                                    className="text-orange-400 hover:text-orange-300 font-semibold hover:underline"
-                                    title="Ver desglose de partidos y FPTS obtenidas"
+                                    className="inline-flex items-center gap-1 text-[10px] text-amber-300 hover:text-amber-100 font-semibold bg-amber-500/15 hover:bg-amber-500/25 px-1.5 py-0.5 rounded border border-amber-500/35 transition-colors"
+                                    title="Abrir desglose y panel de corrección manual de puntos"
                                   >
-                                    {item.stats.currentSeasonGamesPlayed} PJ (Ver partidos)
+                                    <Edit3 className="w-2.5 h-2.5 text-amber-400" />
+                                    <span>Auditar / Corregir ({item.stats.currentSeasonGamesPlayed} PJ) ✏️</span>
                                   </button>
                                 </div>
                               </div>
                             </div>
                           </td>
-                          <td className="py-2.5 px-3 max-w-[215px]">
+                          <td className="py-2 px-1.5 max-w-[130px] xl:max-w-[160px]">
                             <div>
                               {renderSeverityText(
                                 item.severity,
@@ -2833,15 +2963,15 @@ export function FantasyEspnAssistantView({
                             </div>
                             {(item.weekly.riskWarningEs || item.injury?.detailEs) && (
                               <div
-                                className="text-[11px] text-slate-400 truncate"
+                                className="text-[10px] text-slate-400 truncate"
                                 title={item.weekly.riskWarningEs || item.injury?.detailEs}
                               >
                                 {item.injury?.detailEs || item.weekly.riskWarningEs}
                               </div>
                             )}
                           </td>
-                          <td className="py-2.5 px-3 min-w-[210px]">
-                            <div className="font-mono tabular-nums font-semibold text-slate-200">
+                          <td className="py-2 px-1.5">
+                            <div className="font-mono tabular-nums font-semibold text-slate-200 text-xs">
                               {item.teamSched.gamesCount} PJ
                               {item.teamSched.b2bCount > 0
                                 ? ` · ${item.teamSched.b2bCount} B2B`
@@ -2849,14 +2979,31 @@ export function FantasyEspnAssistantView({
                             </div>
                             {renderScheduleBadges(item.teamSched)}
                           </td>
-                          <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-slate-100">
-                            {formatFptsExact(item.stats.seasonTotalFpts)}
+                          <td className="py-2 px-1.5 text-right font-mono tabular-nums whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => setInspectedPlayerForLogsId(item.player.id)}
+                              className="group inline-flex items-center justify-end gap-1 hover:text-amber-300 transition-colors"
+                              title="Ver auditoría y corregir puntos de este jugador"
+                            >
+                              <span className="font-semibold text-slate-100 group-hover:text-amber-300">{formatFptsExact(item.stats.seasonTotalFpts)}</span>
+                              <span
+                                className={`text-xs ml-0.5 ${
+                                  hasCorrection
+                                    ? 'text-amber-400 font-bold'
+                                    : 'opacity-0 group-hover:opacity-100 text-amber-400/80'
+                                }`}
+                                title={hasCorrection ? 'Incluye corrección manual en auditoría oficial' : 'Corregir puntos'}
+                              >
+                                ✏️
+                              </span>
+                            </button>
                           </td>
-                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-200">
+                          <td className="py-2 px-1.5 text-right font-mono tabular-nums text-slate-200">
                             {item.stats.seasonAvgFpts.toFixed(1)}
                           </td>
                           <td
-                            className={`py-2.5 px-3 text-right font-mono tabular-nums font-medium ${
+                            className={`py-2 px-1.5 text-right font-mono tabular-nums font-medium ${
                               item.stats.formDeltaLast5 >= 0
                                 ? 'text-emerald-400'
                                 : 'text-rose-400'
@@ -2864,10 +3011,10 @@ export function FantasyEspnAssistantView({
                           >
                             {item.stats.last5AvgFpts.toFixed(1)}
                           </td>
-                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-300">
+                          <td className="py-2 px-1.5 text-right font-mono tabular-nums text-slate-300">
                             {item.weekly.rawFormulaFpts.toFixed(1)}
                           </td>
-                          <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                          <td className="py-2 px-1.5 text-right font-mono tabular-nums whitespace-nowrap">
                             <span className="font-bold text-orange-400 block">
                               {item.weekly.lockAdjustedFpts.toFixed(1)}
                             </span>
@@ -2877,13 +3024,13 @@ export function FantasyEspnAssistantView({
                               </span>
                             )}
                           </td>
-                          <td className="py-2.5 pl-2 pr-4 text-right whitespace-nowrap">
+                          <td className="py-2 pl-1 pr-3 text-right whitespace-nowrap">
                             <button
                               type="button"
                               onClick={() => handleTogglePlayerSlot(item.player.id)}
-                              className="px-2.5 py-1 rounded bg-[#0B1120] border border-[#1E293B] hover:border-slate-500 text-slate-300 hover:text-white transition-colors"
+                              className="px-2 py-0.5 rounded text-[10px] bg-[#0B1120] border border-[#1E293B] hover:border-slate-500 text-slate-300 hover:text-white transition-colors"
                             >
-                              Al banquillo
+                              Banquillo
                             </button>
                           </td>
                         </tr>
@@ -2894,28 +3041,34 @@ export function FantasyEspnAssistantView({
                     <tr className="bg-[#0B1120]/50 border-t border-[#1E293B]">
                       <td
                         colSpan={10}
-                        className="py-2 px-4 text-[11px] font-semibold text-slate-400"
+                        className="py-1.5 px-3 text-[11px] font-semibold text-slate-400"
                       >
                         Reservas en Banquillo — No Puntúan ({myBench.length}/2)
                       </td>
                     </tr>
                     {myBench.map((item, idx) => {
                       const shouldStart = optimalStarterIds.has(item.player.id);
+                      const hasCorrection = Boolean(
+                        leagueState.gameCorrections &&
+                          Object.keys(leagueState.gameCorrections).some(
+                            (k) => k.startsWith(`${item.player.id}:`)
+                          )
+                      );
                       return (
                         <tr
                           key={item.player.id}
                           className="bg-[#0B1120]/25 hover:bg-[#182338] transition-colors"
                         >
-                          <td className="py-2.5 pl-4 pr-2 font-mono tabular-nums whitespace-nowrap">
+                          <td className="py-2 pl-3 pr-1 font-mono tabular-nums whitespace-nowrap">
                             <span className="text-slate-400">RES #{idx + 1}</span>
                             {shouldStart && (
                               <span className="block text-[10px] text-emerald-400 font-sans font-semibold">
-                                Subir a titular
+                                Subir
                               </span>
                             )}
                           </td>
-                          <td className="py-2.5 px-3 whitespace-nowrap">
-                            <div className="flex items-center gap-2.5">
+                          <td className="py-2 px-1.5 whitespace-nowrap">
+                            <div className="flex items-center gap-2">
                               <PlayerAvatar
                                 playerId={item.player.id}
                                 name={item.player.name}
@@ -2932,22 +3085,23 @@ export function FantasyEspnAssistantView({
                                 >
                                   {item.player.name}
                                 </button>
-                                <div className="text-[11px] text-slate-500 font-mono flex items-center gap-1.5">
+                                <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1">
                                   <span>{item.player.teamAbbr} · {item.player.position}</span>
-                                  <span>·</span>
+                                  <span className="text-slate-600">·</span>
                                   <button
                                     type="button"
                                     onClick={() => setInspectedPlayerForLogsId(item.player.id)}
-                                    className="text-orange-400 hover:text-orange-300 font-semibold hover:underline"
-                                    title="Ver desglose de partidos y FPTS obtenidas"
+                                    className="inline-flex items-center gap-1 text-[10px] text-amber-300 hover:text-amber-100 font-semibold bg-amber-500/15 hover:bg-amber-500/25 px-1.5 py-0.5 rounded border border-amber-500/35 transition-colors"
+                                    title="Abrir desglose y panel de corrección manual de puntos"
                                   >
-                                    {item.stats.currentSeasonGamesPlayed} PJ (Ver partidos)
+                                    <Edit3 className="w-2.5 h-2.5 text-amber-400" />
+                                    <span>Auditar / Corregir ({item.stats.currentSeasonGamesPlayed} PJ) ✏️</span>
                                   </button>
                                 </div>
                               </div>
                             </div>
                           </td>
-                          <td className="py-2.5 px-3 max-w-[215px]">
+                          <td className="py-2 px-1.5 max-w-[130px] xl:max-w-[160px]">
                             <div>
                               {renderSeverityText(
                                 item.severity,
@@ -2958,15 +3112,15 @@ export function FantasyEspnAssistantView({
                             </div>
                             {(item.weekly.riskWarningEs || item.injury?.detailEs) && (
                               <div
-                                className="text-[11px] text-slate-400 truncate"
+                                className="text-[10px] text-slate-400 truncate"
                                 title={item.weekly.riskWarningEs || item.injury?.detailEs}
                               >
                                 {item.injury?.detailEs || item.weekly.riskWarningEs}
                               </div>
                             )}
                           </td>
-                          <td className="py-2.5 px-3 min-w-[210px]">
-                            <div className="font-mono tabular-nums text-slate-300 font-semibold">
+                          <td className="py-2 px-1.5">
+                            <div className="font-mono tabular-nums text-slate-300 font-semibold text-xs">
                               {item.teamSched.gamesCount} PJ
                               {item.teamSched.b2bCount > 0
                                 ? ` · ${item.teamSched.b2bCount} B2B`
@@ -2974,19 +3128,36 @@ export function FantasyEspnAssistantView({
                             </div>
                             {renderScheduleBadges(item.teamSched)}
                           </td>
-                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-200">
-                            {formatFptsExact(item.stats.seasonTotalFpts)}
+                          <td className="py-2 px-1.5 text-right font-mono tabular-nums whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => setInspectedPlayerForLogsId(item.player.id)}
+                              className="group inline-flex items-center justify-end gap-1 hover:text-amber-300 transition-colors"
+                              title="Ver auditoría y corregir puntos de este jugador"
+                            >
+                              <span className="font-semibold text-slate-200 group-hover:text-amber-300">{formatFptsExact(item.stats.seasonTotalFpts)}</span>
+                              <span
+                                className={`text-xs ml-0.5 ${
+                                  hasCorrection
+                                    ? 'text-amber-400 font-bold'
+                                    : 'opacity-0 group-hover:opacity-100 text-amber-400/80'
+                                }`}
+                                title={hasCorrection ? 'Incluye corrección manual en auditoría oficial' : 'Corregir puntos'}
+                              >
+                                ✏️
+                              </span>
+                            </button>
                           </td>
-                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-300">
+                          <td className="py-2 px-1.5 text-right font-mono tabular-nums text-slate-300">
                             {item.stats.seasonAvgFpts.toFixed(1)}
                           </td>
-                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-300">
+                          <td className="py-2 px-1.5 text-right font-mono tabular-nums text-slate-300">
                             {item.stats.last5AvgFpts.toFixed(1)}
                           </td>
-                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-400">
+                          <td className="py-2 px-1.5 text-right font-mono tabular-nums text-slate-400">
                             {item.weekly.rawFormulaFpts.toFixed(1)}
                           </td>
-                          <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                          <td className="py-2 px-1.5 text-right font-mono tabular-nums whitespace-nowrap">
                             <span className="font-semibold text-slate-300 block">
                               {item.weekly.lockAdjustedFpts.toFixed(1)}
                             </span>
@@ -2996,13 +3167,13 @@ export function FantasyEspnAssistantView({
                               </span>
                             )}
                           </td>
-                          <td className="py-2.5 pl-2 pr-4 text-right whitespace-nowrap">
+                          <td className="py-2 pl-1 pr-3 text-right whitespace-nowrap">
                             <button
                               type="button"
                               onClick={() => handleTogglePlayerSlot(item.player.id)}
-                              className="px-2.5 py-1 rounded bg-orange-500 hover:bg-orange-400 text-slate-950 font-semibold transition-colors"
+                              className="px-2 py-0.5 rounded text-[10px] bg-orange-500 hover:bg-orange-400 text-slate-950 font-semibold transition-colors"
                             >
-                              Subir a titular
+                              Titular
                             </button>
                           </td>
                         </tr>
@@ -3063,8 +3234,8 @@ export function FantasyEspnAssistantView({
             <div className="px-4 py-3.5 bg-[#0F172A]/70 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
               <div className="space-y-0.5">
                 <div className="flex flex-wrap items-center gap-x-2 text-xs text-slate-400">
-                  <span className="font-semibold text-emerald-400">
-                    Radar Minutos/Uso × Agentes Libres
+                  <span className="font-semibold text-emerald-400 flex items-center gap-1">
+                    <span>⚡ Radar de Chollos (Smart Waiver Watcher)</span>
                   </span>
                   <span aria-hidden="true">·</span>
                   <span>
@@ -3075,10 +3246,10 @@ export function FantasyEspnAssistantView({
                   </span>
                 </div>
                 <h3 className="text-sm font-bold text-slate-100">
-                  Alertas de Streaming · Jugadores Libres que Acaban de Ganar Rol
+                  Detección Automática de Oportunidades en Agentes Libres
                 </h3>
                 <p className="text-xs text-slate-400">
-                  Cruza automáticamente los Agentes Libres de tu liga con las rupturas positivas de Minutos, Uso (USG%) y titularidades recientes priorizando tus días con menor cobertura.
+                  Detección automática en agentes libres de aumentos en USG% y minutos en suplentes tras confirmarse lesiones de titulares o promociones en la rotación.
                 </p>
               </div>
 
@@ -3694,11 +3865,14 @@ export function FantasyEspnAssistantView({
         <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-5">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-[#1E293B]">
             <div>
-              <h3 className="text-base font-bold text-slate-100">
-                Analizador y Ejecutor de Traspasos (Fórmula Oficial + Tope de 12 Contratos)
+              <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                <span>⚡ Simulador de Traspasos Proyectivo (Net Impact)</span>
+                <span className="text-xs px-2 py-0.5 rounded bg-orange-500/20 text-orange-300 font-mono font-normal">
+                  Proyecciones ROS & Densidad
+                </span>
               </h3>
-              <p className="text-xs text-slate-400">
-                Evalúa intercambios 1x1, 2x2 o 2x1 descontando el corte obligatorio si superas 12 contratos o sumando el hueco libre de streaming, y aplica el traspaso en tus plantillas guardadas cuando se cierre.
+              <p className="text-xs text-slate-400 mt-0.5">
+                Impacto neto calculado con proyecciones Rest-of-Season (ROS), densidad de partidos restantes según el calendario oficial y simulación de hueco streaming o corte obligatorio (Tope 12 contratos).
               </p>
             </div>
 
@@ -5713,42 +5887,271 @@ export function FantasyEspnAssistantView({
             />
             <div className="relative z-10 w-full max-w-4xl bg-[#0F172A] border border-[#1E293B] rounded-xl p-5 space-y-4 shadow-2xl max-h-[90vh] flex flex-col">
               {/* Header */}
-              <div className="flex items-center justify-between pb-3 border-b border-[#1E293B]">
-                <div className="flex items-center gap-3">
-                  <PlayerAvatar
-                    playerId={item.player.id}
-                    name={item.player.name}
-                    teamAbbr={item.player.teamAbbr}
-                    size="md"
-                  />
-                  <div>
-                    <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
-                      <span>{item.player.name}</span>
-                      <span className="text-xs px-2 py-0.5 bg-[#182338] text-orange-400 font-mono rounded">
-                        {item.player.teamAbbr} · {item.player.position}
-                      </span>
-                    </h3>
-                    <p className="text-xs text-slate-400 font-mono mt-0.5">
-                      {g2027.length} PJ disputados en 2026-27 · Total Acumulado:{' '}
-                      <span className="font-bold text-emerald-400">
-                        {formatFptsExact(item.stats.seasonTotalFpts)} FPTS
-                      </span>{' '}
-                      · Media:{' '}
-                      <span className="font-bold text-orange-400">
-                        {item.stats.seasonAvgFpts.toFixed(1)} FPTS/PJ
-                      </span>
-                    </p>
-                  </div>
-                </div>
+              {(() => {
+                const totalDeltas = g2027.reduce((acc, g) => {
+                  const corr =
+                    leagueState.gameCorrections?.[`${item.player.id}:${g.eventId}`] ||
+                    leagueState.gameCorrections?.[`${item.player.id}:${g.date}`];
+                  return acc + (corr?.fptsDelta || 0);
+                }, 0);
+                const rawTotalNba = item.stats.seasonTotalFpts - totalDeltas;
 
-                <button
-                  type="button"
-                  onClick={() => setInspectedPlayerForLogsId(null)}
-                  className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-[#1E293B] transition-colors"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
+                return (
+                  <div className="flex items-center justify-between pb-3 border-b border-[#1E293B]">
+                    <div className="flex items-center gap-3">
+                      <PlayerAvatar
+                        playerId={item.player.id}
+                        name={item.player.name}
+                        teamAbbr={item.player.teamAbbr}
+                        size="md"
+                      />
+                      <div>
+                        <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                          <span>{item.player.name}</span>
+                          <span className="text-xs px-2 py-0.5 bg-[#182338] text-orange-400 font-mono rounded">
+                            {item.player.teamAbbr} · {item.player.position}
+                          </span>
+                        </h3>
+                        <p className="text-xs text-slate-400 font-mono mt-0.5 flex flex-wrap items-center gap-x-2">
+                          <span>{g2027.length} PJ disputados en 2026-27</span>
+                          <span>·</span>
+                          <span>
+                            Base NBA.com:{' '}
+                            <strong className="text-slate-200">
+                              {formatFptsExact(rawTotalNba)} FPTS
+                            </strong>
+                          </span>
+                          {Math.abs(totalDeltas) > 0.001 && (
+                            <>
+                              <span>·</span>
+                              <span className="text-amber-400">
+                                Ajuste Fantasy:{' '}
+                                <strong>
+                                  {totalDeltas >= 0 ? '+' : ''}
+                                  {totalDeltas.toFixed(2)} FPTS
+                                </strong>
+                              </span>
+                            </>
+                          )}
+                          <span>·</span>
+                          <span>
+                            Total Oficial Fantasy:{' '}
+                            <strong className="text-emerald-400">
+                              {formatFptsExact(item.stats.seasonTotalFpts)} FPTS
+                            </strong>
+                          </span>
+                          <span>·</span>
+                          <span>
+                            Media Oficial:{' '}
+                            <strong className="text-orange-400">
+                              {item.stats.seasonAvgFpts.toFixed(1)} FPTS/PJ
+                            </strong>
+                          </span>
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setInspectedPlayerForLogsId(null)}
+                      className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-[#1E293B] transition-colors"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+                );
+              })()}
+
+              {/* TOP PROMINENT PANEL: MANUAL FPTS CORRECTION & REASON */}
+              {g2027.length > 0 && (() => {
+                const activeFormGameKey =
+                  editingLogKey ||
+                  g2027.find((g) => {
+                    const corr =
+                      leagueState.gameCorrections?.[`${item.player.id}:${g.eventId}`] ||
+                      leagueState.gameCorrections?.[`${item.player.id}:${g.date}`];
+                    return Boolean(corr && Math.abs(corr.fptsDelta) > 0.001);
+                  })?.eventId ||
+                  g2027[0]?.eventId ||
+                  g2027[0]?.date ||
+                  '';
+
+                const targetGame =
+                  g2027.find((g) => (g.eventId || g.date) === activeFormGameKey) || g2027[0];
+
+                const existingCorr = targetGame
+                  ? leagueState.gameCorrections?.[`${item.player.id}:${targetGame.eventId}`] ||
+                    leagueState.gameCorrections?.[`${item.player.id}:${targetGame.date}`]
+                  : null;
+
+                const formDeltaValue =
+                  editingLogKey === (targetGame?.eventId || targetGame?.date)
+                    ? editingLogDelta
+                    : existingCorr
+                    ? String(existingCorr.fptsDelta)
+                    : editingLogDelta;
+
+                const formReasonValue =
+                  editingLogKey === (targetGame?.eventId || targetGame?.date)
+                    ? editingLogReason
+                    : existingCorr?.reason || editingLogReason;
+
+                return (
+                  <div className="bg-[#111C33] border-2 border-amber-500/50 rounded-xl p-3.5 space-y-3 shadow-lg shrink-0">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <div className="p-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300">
+                          <Edit3 className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h4 className="text-xs font-bold text-amber-200 uppercase tracking-wider flex items-center gap-2">
+                            <span>Panel de Corrección Manual de Puntos Fantasy (±)</span>
+                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-normal">
+                              Personalizable por partido
+                            </span>
+                          </h4>
+                          <p className="text-[11px] text-slate-300">
+                            ¿Detectas una discrepancia estadística? (ej: 6 stocks de Ajay Mitchell vs Denver en ESPN vs 5 en NBA.com). Ajusta los puntos y escribe la justificación.
+                          </p>
+                        </div>
+                      </div>
+                      <span className="text-[10px] text-emerald-400 bg-emerald-950/40 border border-emerald-500/30 px-2 py-0.5 rounded font-mono">
+                        Base NBA.com intacta · Corrección Fantasy aplicada
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 pt-0.5">
+                      {/* Game selector */}
+                      <div className="md:col-span-4 space-y-1">
+                        <label className="text-[10px] font-semibold text-slate-300 block">
+                          1. Partido a corregir:
+                        </label>
+                        <select
+                          value={activeFormGameKey}
+                          onChange={(e) => {
+                            const newKey = e.target.value;
+                            setEditingLogKey(newKey);
+                            const found = g2027.find((g) => (g.eventId || g.date) === newKey);
+                            const corr = found
+                              ? leagueState.gameCorrections?.[`${item.player.id}:${found.eventId}`] ||
+                                leagueState.gameCorrections?.[`${item.player.id}:${found.date}`]
+                              : null;
+                            setEditingLogDelta(corr ? String(corr.fptsDelta) : '');
+                            setEditingLogReason(corr?.reason || '');
+                          }}
+                          className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-amber-500/40 rounded-lg text-slate-100 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
+                        >
+                          {g2027.map((g) => {
+                            const corr =
+                              leagueState.gameCorrections?.[`${item.player.id}:${g.eventId}`] ||
+                              leagueState.gameCorrections?.[`${item.player.id}:${g.date}`];
+                            const hasC = corr && Math.abs(corr.fptsDelta) > 0.001;
+                            const key = g.eventId || g.date;
+                            return (
+                              <option key={key} value={key}>
+                                {g.date} {g.isHome ? 'vs' : '@'}{g.opponentAbbr} ({g.points}p, {g.steals}rob, {g.blocks}tap)
+                                {hasC ? ` · [Ajuste: ${corr.fptsDelta >= 0 ? '+' : ''}${corr.fptsDelta.toFixed(2)} FPTS]` : ''}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+
+                      {/* Delta points */}
+                      <div className="md:col-span-3 space-y-1">
+                        <label className="text-[10px] font-semibold text-slate-300 block">
+                          2. Diferencial (± FPTS):
+                        </label>
+                        <div>
+                          <input
+                            type="number"
+                            step="0.25"
+                            placeholder="Ej: +2.5 ó -1.0"
+                            value={formDeltaValue}
+                            onChange={(e) => {
+                              setEditingLogKey(targetGame?.eventId || targetGame?.date || null);
+                              setEditingLogDelta(e.target.value);
+                            }}
+                            className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-amber-500/40 rounded-lg text-amber-200 font-mono font-bold text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
+                          />
+                          <div className="flex gap-1 mt-1">
+                            {['+0.5', '+1.0', '+2.0', '+2.5', '-1.0'].map((preset) => (
+                              <button
+                                key={preset}
+                                type="button"
+                                onClick={() => {
+                                  setEditingLogKey(targetGame?.eventId || targetGame?.date || null);
+                                  setEditingLogDelta(preset);
+                                }}
+                                className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#182338] hover:bg-amber-500/20 text-slate-300 hover:text-amber-300 transition-colors"
+                              >
+                                {preset}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Reason & Buttons */}
+                      <div className="md:col-span-5 space-y-1">
+                        <label className="text-[10px] font-semibold text-slate-300 block">
+                          3. Explicación / Motivo justificado:
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Ej: 6 stocks en ESPN/BBRef vs 5 en NBA.com (+2.5 FPTS)"
+                          value={formReasonValue}
+                          onChange={(e) => {
+                            setEditingLogKey(targetGame?.eventId || targetGame?.date || null);
+                            setEditingLogReason(e.target.value);
+                          }}
+                          className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-amber-500/40 rounded-lg text-slate-100 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
+                        />
+                        <div className="flex items-center justify-end gap-2 pt-0.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!targetGame) return;
+                              const numDelta = parseFloat(formDeltaValue) || 0;
+                              handleSaveGameCorrection(
+                                item.player.id,
+                                targetGame.eventId,
+                                targetGame.date,
+                                numDelta,
+                                formReasonValue
+                              );
+                            }}
+                            className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs transition-colors shadow-sm inline-flex items-center gap-1"
+                          >
+                            <span>💾 Guardar Corrección</span>
+                          </button>
+                          {existingCorr && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!targetGame) return;
+                                handleSaveGameCorrection(
+                                  item.player.id,
+                                  targetGame.eventId,
+                                  targetGame.date,
+                                  0,
+                                  ''
+                                );
+                                setEditingLogDelta('');
+                                setEditingLogReason('');
+                              }}
+                              className="px-2 py-1 text-rose-400 hover:text-rose-300 hover:bg-rose-950/30 rounded-lg text-xs transition-colors"
+                              title="Eliminar esta corrección"
+                            >
+                              Quitar
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Game Log Table */}
               <div className="overflow-auto flex-1 pr-1 space-y-2">
@@ -5767,7 +6170,7 @@ export function FantasyEspnAssistantView({
                           active={modalLogSortKey === 'date'}
                           asc={modalLogSortAsc}
                           onSort={() => toggleModalLogSort('date')}
-                          className="py-2.5 pl-3 pr-2"
+                          className="py-2.5 pl-3 pr-1"
                         />
                         <SortableTh
                           label="Rival"
@@ -5776,7 +6179,7 @@ export function FantasyEspnAssistantView({
                           active={modalLogSortKey === 'opp'}
                           asc={modalLogSortAsc}
                           onSort={() => toggleModalLogSort('opp')}
-                          className="py-2.5 px-2"
+                          className="py-2.5 px-1.5"
                         />
                         <SortableTh
                           label="Min"
@@ -5785,7 +6188,7 @@ export function FantasyEspnAssistantView({
                           active={modalLogSortKey === 'min'}
                           asc={modalLogSortAsc}
                           onSort={() => toggleModalLogSort('min')}
-                          className="py-2.5 px-2"
+                          className="py-2.5 px-1"
                         />
                         <SortableTh
                           label="PTS"
@@ -5794,43 +6197,43 @@ export function FantasyEspnAssistantView({
                           active={modalLogSortKey === 'pts'}
                           asc={modalLogSortAsc}
                           onSort={() => toggleModalLogSort('pts')}
-                          className="py-2.5 px-2"
+                          className="py-2.5 px-1"
                         />
                         <SortableTh
-                          label="TC (FGM/A)"
+                          label="TC"
                           align="left"
                           compact
                           active={modalLogSortKey === 'fgm'}
                           asc={modalLogSortAsc}
                           onSort={() => toggleModalLogSort('fgm')}
-                          className="py-2.5 px-2"
+                          className="py-2.5 px-1"
                         />
                         <SortableTh
-                          label="3P (3PM/A)"
+                          label="3P"
                           align="left"
                           compact
                           active={modalLogSortKey === 'fg3m'}
                           asc={modalLogSortAsc}
                           onSort={() => toggleModalLogSort('fg3m')}
-                          className="py-2.5 px-2"
+                          className="py-2.5 px-1"
                         />
                         <SortableTh
-                          label="TL (FTM/A)"
+                          label="TL"
                           align="left"
                           compact
                           active={modalLogSortKey === 'ftm'}
                           asc={modalLogSortAsc}
                           onSort={() => toggleModalLogSort('ftm')}
-                          className="py-2.5 px-2"
+                          className="py-2.5 px-1"
                         />
                         <SortableTh
-                          label="REB (O/D)"
+                          label="REB"
                           align="left"
                           compact
                           active={modalLogSortKey === 'reb'}
                           asc={modalLogSortAsc}
                           onSort={() => toggleModalLogSort('reb')}
-                          className="py-2.5 px-2"
+                          className="py-2.5 px-1"
                         />
                         <SortableTh
                           label="AST"
@@ -5839,7 +6242,7 @@ export function FantasyEspnAssistantView({
                           active={modalLogSortKey === 'ast'}
                           asc={modalLogSortAsc}
                           onSort={() => toggleModalLogSort('ast')}
-                          className="py-2.5 px-2"
+                          className="py-2.5 px-1"
                         />
                         <SortableTh
                           label="ROB"
@@ -5848,7 +6251,7 @@ export function FantasyEspnAssistantView({
                           active={modalLogSortKey === 'stl'}
                           asc={modalLogSortAsc}
                           onSort={() => toggleModalLogSort('stl')}
-                          className="py-2.5 px-2"
+                          className="py-2.5 px-1"
                         />
                         <SortableTh
                           label="TAP"
@@ -5857,7 +6260,7 @@ export function FantasyEspnAssistantView({
                           active={modalLogSortKey === 'blk'}
                           asc={modalLogSortAsc}
                           onSort={() => toggleModalLogSort('blk')}
-                          className="py-2.5 px-2"
+                          className="py-2.5 px-1"
                         />
                         <SortableTh
                           label="PER"
@@ -5866,29 +6269,41 @@ export function FantasyEspnAssistantView({
                           active={modalLogSortKey === 'tov'}
                           asc={modalLogSortAsc}
                           onSort={() => toggleModalLogSort('tov')}
-                          className="py-2.5 px-2"
+                          className="py-2.5 px-1"
                         />
                         <SortableTh
-                          label="FPTS Obtenidos"
+                          label="NBA.com"
                           align="right"
                           compact
                           active={modalLogSortKey === 'fpts'}
                           asc={modalLogSortAsc}
                           onSort={() => toggleModalLogSort('fpts')}
-                          className="py-2.5 pl-2 pr-3"
+                          className="py-2.5 px-1.5"
                         />
+                        <th className="py-2.5 px-2 text-left font-medium text-slate-400 min-w-[140px]">
+                          Ajuste Fantasy (±)
+                        </th>
+                        <th className="py-2.5 pl-1.5 pr-3 text-right font-medium text-slate-400">
+                          Total Fantasy
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#1E293B]/70 font-mono text-[11px]">
                       {(() => {
-                        const baseModalRows = g2027.map((g) => ({
-                          g,
-                          breakdown: computeOfficialGameFptsBreakdown(g, 0),
-                        }));
+                        const baseModalRows = g2027.map((g) => {
+                          const corr =
+                            leagueState.gameCorrections?.[`${item.player.id}:${g.eventId}`] ||
+                            leagueState.gameCorrections?.[`${item.player.id}:${g.date}`];
+                          return {
+                            g,
+                            breakdown: computeOfficialGameFptsBreakdown(g, 0),
+                            corr,
+                          };
+                        });
                         if (!modalLogSortKey) return baseModalRows;
                         return sortRows(
                           baseModalRows,
-                          ({ g, breakdown }) => {
+                          ({ g, breakdown, corr }) => {
                             switch (modalLogSortKey) {
                               case 'date':
                                 return g.date;
@@ -5915,44 +6330,190 @@ export function FantasyEspnAssistantView({
                               case 'tov':
                                 return g.turnovers;
                               case 'fpts':
-                                return breakdown.totalFpts;
+                                return breakdown.totalFpts + (corr?.fptsDelta || 0);
                               default:
                                 return g.date;
                             }
                           },
                           modalLogSortAsc
                         );
-                      })().map(({ g, breakdown }) => {
+                      })().map(({ g, breakdown, corr }) => {
+                        const rowKey = g.eventId || g.date;
+                        const isEditingThisRow = editingLogKey === rowKey;
+                        const delta = corr?.fptsDelta || 0;
+                        const finalGameFpts = breakdown.totalFpts + delta;
+
                         return (
-                          <tr key={`${g.eventId}-${g.date}`} className="hover:bg-[#182338] transition-colors">
-                            <td className="py-2.5 pl-3 pr-2 whitespace-nowrap text-slate-300 font-sans font-medium">
+                          <tr
+                            key={`${g.eventId}-${g.date}`}
+                            className={`hover:bg-[#182338] transition-colors ${
+                              Math.abs(delta) > 0.001 ? 'bg-amber-500/5' : ''
+                            }`}
+                          >
+                            <td className="py-2.5 pl-3 pr-1 whitespace-nowrap text-slate-300 font-sans font-medium">
                               {g.date}
                             </td>
-                            <td className="py-2.5 px-2 whitespace-nowrap">
-                              <span className={g.isHome ? 'text-emerald-400 font-semibold' : 'text-slate-300'}>
+                            <td className="py-2.5 px-1.5 whitespace-nowrap">
+                              <span
+                                className={
+                                  g.isHome ? 'text-emerald-400 font-semibold' : 'text-slate-300'
+                                }
+                              >
                                 {g.isHome ? 'vs' : '@'}{g.opponentAbbr}
                               </span>
                             </td>
-                            <td className="py-2.5 px-2 text-slate-300">{g.minutes}m</td>
-                            <td className="py-2.5 px-2 font-bold text-slate-100">{g.points}</td>
-                            <td className="py-2.5 px-2 text-slate-400">
+                            <td className="py-2.5 px-1 text-slate-300">{g.minutes}m</td>
+                            <td className="py-2.5 px-1 font-bold text-slate-100">{g.points}</td>
+                            <td className="py-2.5 px-1 text-slate-400">
                               {g.fgm}/{g.fga}
                             </td>
-                            <td className="py-2.5 px-2 text-slate-400">
+                            <td className="py-2.5 px-1 text-slate-400">
                               {g.fg3m}/{g.fg3a}
                             </td>
-                            <td className="py-2.5 px-2 text-slate-400">
+                            <td className="py-2.5 px-1 text-slate-400">
                               {g.ftm}/{g.fta}
                             </td>
-                            <td className="py-2.5 px-2 text-slate-300">
+                            <td className="py-2.5 px-1 text-slate-300">
                               {g.rebounds} ({g.oreb}/{g.dreb})
                             </td>
-                            <td className="py-2.5 px-2 text-slate-300">{g.assists}</td>
-                            <td className="py-2.5 px-2 text-emerald-400 font-semibold">{g.steals}</td>
-                            <td className="py-2.5 px-2 text-emerald-400 font-semibold">{g.blocks}</td>
-                            <td className="py-2.5 px-2 text-rose-400">{g.turnovers}</td>
-                            <td className="py-2.5 pr-3 text-right font-bold tabular-nums text-orange-400 text-xs">
-                              {formatFptsExact(breakdown.totalFpts)} FPTS
+                            <td className="py-2.5 px-1 text-slate-300">{g.assists}</td>
+                            <td className="py-2.5 px-1 text-emerald-400 font-semibold">
+                              {g.steals}
+                            </td>
+                            <td className="py-2.5 px-1 text-emerald-400 font-semibold">
+                              {g.blocks}
+                            </td>
+                            <td className="py-2.5 px-1 text-rose-400">{g.turnovers}</td>
+                            <td className="py-2.5 px-1.5 text-right font-medium tabular-nums text-slate-300">
+                              {formatFptsExact(breakdown.totalFpts)}
+                            </td>
+
+                            {/* Manual Correction Column */}
+                            <td className="py-2 px-2 font-sans">
+                              {isEditingThisRow ? (
+                                <div className="space-y-1 bg-[#131C2E] p-1.5 rounded border border-orange-500/40">
+                                  <div className="flex items-center gap-1">
+                                    <input
+                                      type="number"
+                                      step="0.25"
+                                      placeholder="± FPTS (ej: 2.5)"
+                                      value={editingLogDelta}
+                                      onChange={(e) => setEditingLogDelta(e.target.value)}
+                                      className="w-20 px-1.5 py-0.5 bg-[#0B1120] border border-[#1E293B] rounded text-slate-100 font-mono text-xs focus:outline-none focus:border-orange-500"
+                                      autoFocus
+                                    />
+                                    <span className="text-[10px] text-slate-400 font-mono">
+                                      FPTS
+                                    </span>
+                                  </div>
+                                  <input
+                                    type="text"
+                                    placeholder="Motivo (ej: 6 stocks en ESPN)"
+                                    value={editingLogReason}
+                                    onChange={(e) => setEditingLogReason(e.target.value)}
+                                    className="w-full px-1.5 py-0.5 bg-[#0B1120] border border-[#1E293B] rounded text-slate-100 text-[10px] focus:outline-none focus:border-orange-500"
+                                  />
+                                  <div className="flex items-center gap-1.5 pt-0.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const numDelta = parseFloat(editingLogDelta) || 0;
+                                        handleSaveGameCorrection(
+                                          item.player.id,
+                                          g.eventId,
+                                          g.date,
+                                          numDelta,
+                                          editingLogReason
+                                        );
+                                      }}
+                                      className="px-2 py-0.5 bg-orange-500 hover:bg-orange-400 text-slate-950 font-semibold rounded text-[10px]"
+                                    >
+                                      Guardar
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingLogKey(null)}
+                                      className="px-2 py-0.5 bg-[#182338] hover:bg-slate-700 text-slate-300 rounded text-[10px]"
+                                    >
+                                      Cancelar
+                                    </button>
+                                    {corr && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          handleSaveGameCorrection(
+                                            item.player.id,
+                                            g.eventId,
+                                            g.date,
+                                            0,
+                                            ''
+                                          );
+                                        }}
+                                        className="px-1.5 py-0.5 text-rose-400 hover:text-rose-300 text-[10px]"
+                                        title="Eliminar corrección manual"
+                                      >
+                                        Quitar
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              ) : corr && Math.abs(corr.fptsDelta) > 0.001 ? (
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-mono font-bold text-amber-300 text-xs px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/35">
+                                      {corr.fptsDelta >= 0 ? '+' : ''}
+                                      {corr.fptsDelta.toFixed(2)} FPTS
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingLogKey(rowKey);
+                                        setEditingLogDelta(String(corr.fptsDelta));
+                                        setEditingLogReason(corr.reason || '');
+                                      }}
+                                      className="inline-flex items-center gap-1 text-[10px] text-amber-300 hover:text-amber-100 font-semibold px-1.5 py-0.5 rounded bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 transition-colors"
+                                      title="Editar corrección"
+                                    >
+                                      <Edit3 className="w-2.5 h-2.5" />
+                                      <span>Modificar</span>
+                                    </button>
+                                  </div>
+                                  {corr.reason && (
+                                    <p
+                                      className="text-[10px] text-amber-200/90 font-sans italic max-w-[210px] leading-tight"
+                                      title={corr.reason}
+                                    >
+                                      💬 {corr.reason}
+                                    </p>
+                                  )}
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingLogKey(rowKey);
+                                    setEditingLogDelta('');
+                                    setEditingLogReason('');
+                                  }}
+                                  className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-300 hover:text-amber-100 bg-amber-500/15 hover:bg-amber-500/25 px-2 py-1 rounded border border-amber-500/35 transition-all shadow-sm"
+                                >
+                                  <Plus className="w-3 h-3 text-amber-400" />
+                                  <span>Corregir partido</span>
+                                </button>
+                              )}
+                            </td>
+
+                            {/* Total Final Fantasy Column */}
+                            <td className="py-2.5 pl-1.5 pr-3 text-right font-bold tabular-nums text-xs whitespace-nowrap">
+                              <span
+                                className={
+                                  Math.abs(delta) > 0.001
+                                    ? 'text-amber-300'
+                                    : 'text-orange-400'
+                                }
+                              >
+                                {formatFptsExact(finalGameFpts)} FPTS
+                              </span>
                             </td>
                           </tr>
                         );
@@ -5965,7 +6526,7 @@ export function FantasyEspnAssistantView({
               {/* Explanatory Footer */}
               <div className="pt-3 border-t border-[#1E293B] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-slate-400 font-sans">
                 <p>
-                  Desglose exacto de regla ESPN: FGM +2, FGMI -1, FTM +1, FTMI -1, 3PM +1, 3PMI +0.5, OREB +1.5, DREB +0.75, AST +1.5, STL +2.5, BLK +2.5, TO -2.0.
+                  Regla oficial ESPN: FGM +2, FGMI -1, FTM +1, FTMI -1, 3PM +1, 3PMI +0.5, OREB +1.5, DREB +0.75, AST +1.5, STL +2.5, BLK +2.5, TO -2.0. Las correcciones manuales se guardan como overlay oficial sin desvirtuar los datos brutos de NBA.com.
                 </p>
                 <button
                   type="button"

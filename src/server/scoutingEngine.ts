@@ -241,7 +241,13 @@ function sanitizeEditorialSpanishGrammar(text) {
 }
 let flashLiteQuotaCooldownUntil = 0;
 function getGeminiClient(timeoutMs = 2e4) {
-  const apiKey = (process.env.GEMINI_API_KEY || "").trim();
+  const apiKey = (
+    process.env.GEMINI_API_KEY ||
+    process.env.API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.VITE_GEMINI_API_KEY ||
+    ""
+  ).trim();
   if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
     return null;
   }
@@ -274,49 +280,54 @@ function extractGroundingSources(response, seedSources = []) {
   }
   return links;
 }
-function isQuotaExhaustedError(err) {
-  const msg = String(err?.message || err || "");
-  return msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED");
+const modelCooldownMap = new Map<string, number>();
+
+function isQuotaExhaustedError(err: unknown): boolean {
+  const msg = String(err instanceof Error ? err.message : err || "");
+  return msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("Quota exceeded");
 }
+
 async function generateWithGeminiCascade(params: {
   systemInstruction: string;
   contents: string;
   seedSources?: Array<{ uri: string; title: string }>;
 }) {
-  const ai = getGeminiClient(30000);
+  const ai = getGeminiClient(35000);
   if (!ai) {
     throw new Error("GEMINI_API_KEY unavailable");
   }
 
-  const modelsToTry = [
-    { name: "gemini-3.8-flash", thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }, timeoutMs: 25000 },
-    { name: "gemini-3.1-flash-lite", thinkingConfig: undefined, timeoutMs: 18000 },
+  const allModels = [
+    { name: "gemini-3.8-flash", timeoutMs: 25000 },
+    { name: "gemini-3.1-flash-lite", timeoutMs: 25000 },
+    { name: "gemini-flash-latest", timeoutMs: 25000 },
   ];
+
+  const now = Date.now();
+  const activeModels = allModels.filter(
+    (m) => (modelCooldownMap.get(m.name) || 0) < now
+  );
+  const modelsToTry = activeModels.length > 0 ? activeModels : allModels;
   let lastErr: unknown = null;
 
-  for (const { name: model, thinkingConfig, timeoutMs } of modelsToTry) {
+  for (const { name: model, timeoutMs } of modelsToTry) {
     try {
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error(`Timeout ${timeoutMs}ms for ${model}`)), timeoutMs)
       );
-      const config: Record<string, unknown> = {
-        systemInstruction: params.systemInstruction,
-        temperature: 0.2,
-      };
-      if (thinkingConfig) {
-        config.thinkingConfig = thinkingConfig;
-      }
-
       const callPromise = ai.models.generateContent({
         model,
         contents: params.contents,
-        config,
+        config: {
+          systemInstruction: params.systemInstruction,
+        },
       });
 
       const response = (await Promise.race([callPromise, timeoutPromise])) as any;
 
       const text = (response?.text || "").trim();
       if (text && text.length > 80) {
+        modelCooldownMap.delete(model);
         return {
           text,
           sources: extractGroundingSources(response, params.seedSources),
@@ -324,9 +335,13 @@ async function generateWithGeminiCascade(params: {
       }
     } catch (err) {
       lastErr = err;
-      console.warn(
-        `[RadarNBA] Gemini model ${model} failed, trying cascade fallback:`,
-        err instanceof Error ? err.message : String(err)
+      if (isQuotaExhaustedError(err)) {
+        modelCooldownMap.set(model, Date.now() + 15 * 60 * 1000);
+      }
+      console.info(
+        `[RadarNBA] Modelo Gemini ${model} no completó la respuesta: ${
+          err instanceof Error ? err.message.slice(0, 140) : String(err).slice(0, 140)
+        }`
       );
     }
   }
@@ -586,12 +601,21 @@ function createScoutingEngine(deps) {
           const typeDesc = cleanField(inj?.details?.type);
           const sideDesc = cleanField(inj?.details?.side);
           const detailDesc = cleanField(inj?.details?.detail);
-          let combinedDetail = [sideDesc, typeDesc, detailDesc].filter(Boolean).join(" ").trim();
-          if (!combinedDetail && inj?.shortComment) {
-            const parenMatch = String(inj.shortComment).match(/\(([^)]{2,40})\)/);
-            if (parenMatch) {
-              combinedDetail = parenMatch[1].trim();
-            }
+          const returnDate = cleanField(inj?.details?.returnDate);
+          const comment = String(
+            inj?.shortComment ||
+            inj?.athlete?.notes?.items?.[0]?.headline ||
+            inj?.details?.fantasyStatus?.description ||
+            ""
+          ).trim();
+
+          const baseDetail = [sideDesc, typeDesc, detailDesc].filter(Boolean).join(" ").trim();
+          let combinedDetail = baseDetail;
+          if (comment) {
+            combinedDetail = combinedDetail ? `${combinedDetail} (${comment})` : comment;
+          }
+          if (returnDate) {
+            combinedDetail = combinedDetail ? `${combinedDetail} [Regreso est: ${returnDate}]` : `Regreso est: ${returnDate}`;
           }
           map.set(normalizePlain(dispName), { status, detail: combinedDetail });
         }
@@ -1533,6 +1557,7 @@ ${benchAndAbsences}`, dynamicSpotlight, xFactorSection, spanishSection: report.s
       gamesCount: gd.pulse.gamesCount,
       generatedAt: new Date().toISOString(),
       engineMode: "empirical_fallback",
+      missingApiKey: !getGeminiClient(),
       headline: sanitizeEditorialSpanishGrammar(headline),
       lead: sanitizeEditorialSpanishGrammar(lead),
       dynamicSections,
@@ -1553,7 +1578,9 @@ ${benchAndAbsences}`, dynamicSpotlight, xFactorSection, spanishSection: report.s
     if (!forceRefresh) {
       const cached = reportMemoryCache.get(cacheKey);
       if (cached && cached.expiresAt > Date.now()) {
-        return cached.data;
+        if (cached.data.engineMode === 'gemini_search' || !getGeminiClient()) {
+          return cached.data;
+        }
       }
     }
     const existing = reportInflight.get(cacheKey);
@@ -1587,6 +1614,8 @@ ${benchAndAbsences}`, dynamicSpotlight, xFactorSection, spanishSection: report.s
       if (!getGeminiClient() || gd.matchups.length === 0) {
         const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes);
         fallback.generationTimeMs = Date.now() - startTime;
+        fallback.missingApiKey = !getGeminiClient();
+        fallback.fallbackReason = !getGeminiClient() ? "missing_api_key" : "no_matchups";
         return fallback;
       }
       const daySeedSources = [{ uri: `https://www.nba.com/games?date=${gd.selectedDate}`, title: `NBA.com \u2014 Resultados y Actas Oficiales (${gd.selectedDate})` }, ...pressCtx.daySources].slice(0, 6);
@@ -1602,10 +1631,20 @@ ${pressCtx.dayNotes.slice(0, 12).map((n) => `  \u2022 ${n}`).join("\n")}` : "", 
         reportMemoryCache.set(cacheKey, { expiresAt: Date.now() + 4 * 60 * 60 * 1e3, data: payload });
         return payload;
       } catch (err) {
-        console.info(`[RadarNBA] Activado motor determinista de jornada para ${gd.selectedDate} (${err?.status || err?.code || "timeout/offline"})`);
+        const isQuota = isQuotaExhaustedError(err);
+        console.info(
+          `[RadarNBA] Activado motor determinista de jornada para ${gd.selectedDate} (${
+            isQuota ? "cuota_diaria_429_agotada" : err?.status || err?.code || "timeout/offline"
+          })`
+        );
         const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes);
         fallback.generationTimeMs = Date.now() - startTime;
-        reportMemoryCache.set(cacheKey, { expiresAt: Date.now() + 10 * 60 * 1e3, data: fallback });
+        fallback.missingApiKey = !getGeminiClient();
+        fallback.quotaExhausted = isQuota;
+        fallback.fallbackReason = isQuota
+          ? "quota_exhausted_429"
+          : err instanceof Error ? err.message : String(err);
+        reportMemoryCache.set(cacheKey, { expiresAt: Date.now() + (isQuota ? 5 * 60 * 1e3 : 30 * 1e3), data: fallback });
         return fallback;
       }
     })();
