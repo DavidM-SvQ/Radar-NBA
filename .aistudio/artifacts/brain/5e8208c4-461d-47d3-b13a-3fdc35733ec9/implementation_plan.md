@@ -24,12 +24,14 @@
 - [ ] **15. Integración en el Panel de Rachas y Radar de Anomalías**: Sección dedicada en la vista de Rachas con filtros por tipo de hito (Anotación, Versatilidad, Playmaking, Defensa) y extensión de la racha active/broken.
 - [ ] **16. Insignias e Hitos en la Crónica Diaria e Inspector**: Inclusión automática de estas rachas multi-estadísticas en los dossiers del motor Gemini para destacarlas en la revista editorial de la jornada y en la ficha del jugador.
 
-### Fase 4: Fantasy Edge & Herramientas de Mánager (Completada)
+### Fase 4: Fantasy Edge & Herramientas de Mánager (En Ejecución)
 - [x] **17. Simulador de Traspasos Proyectivo (Net Impact)**: Impacto neto calculado con proyecciones Rest-of-Season (ROS), densidad de partidos restantes según el calendario y simulación de hueco streaming o corte obligatorio (Tope 12 contratos).
 - [x] **18. Radar de Chollos (Smart Waiver Watcher)**: Detección automática en agentes libres de aumentos en USG% y minutos en suplentes tras confirmarse lesiones de titulares o promociones en la rotación.
-- [ ] **19. Optimizador de Alineación Semanal**: Matriz de densidad de partidos por semana, identificando días con pocos partidos (Quality Starts) para maximizar puntuación.
-- [ ] **20. Persistencia de Filtros en URL (Deep Linking)**: Sincronización de la vista actual (filtros, temporada, ventana temporal) con la barra de direcciones para compartir análisis.
-- [ ] **21. Virtualización de Listados Voluminosos**: Implementación de `Windowing` en tablas de 500+ filas para garantizar 60 FPS en móviles.
+- [x] **19. Tabla Mi Equipo Fantasy Compacta & Botón Lápiz**: Altura de fila reducida, botón de auditar/corregir con icono exclusivo de lápiz sin texto e insignias de partidos en una sola línea horizontal sin salto.
+- [x] **20. Tabla Agentes Libres sin Scroll Horizontal & Desglose Descendente**: Tabla real y compacta que encaja en pantalla completa con Total FPTS, Media FPTS, Próx. Sem. (con tooltip `(i)` de partidos/rivales), FPTS Últ. 7D / 15D / 30D, menú popover flotante al pasar el ratón con desglose descendente de partidos jugados y filtros rápidos reparados con `(i)` de información.
+- [ ] **21. Optimizador de Alineación Semanal**: Matriz de densidad de partidos por semana, identificando días con pocos partidos (Quality Starts) para maximizar puntuación.
+- [ ] **22. Persistencia de Filtros en URL (Deep Linking)**: Sincronización de la vista actual (filtros, temporada, ventana temporal) con la barra de direcciones para compartir análisis.
+- [ ] **23. Virtualización de Listados Voluminosos**: Implementación de `Windowing` en tablas de 500+ filas para garantizar 60 FPS en móviles.
 
 ### Fase 5: Módulo Histórico & Career Highs (En reserva)
 - [ ] **20. Registro de Career Highs**: Detector de récords personales históricos en 5 categorías principales.

@@ -291,17 +291,30 @@ async function generateWithGeminiCascade(params: {
   systemInstruction: string;
   contents: string;
   seedSources?: Array<{ uri: string; title: string }>;
+  isServerless?: boolean;
 }) {
-  const ai = getGeminiClient(35000);
+  const isServerless =
+    Boolean(params.isServerless) ||
+    Boolean(process.env.VERCEL) ||
+    Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME) ||
+    process.env.NBA_SNAPSHOT_ONLY === "1";
+
+  const ai = getGeminiClient(isServerless ? 8000 : 35000);
   if (!ai) {
     throw new Error("GEMINI_API_KEY unavailable");
   }
 
-  const allModels = [
-    { name: "gemini-3.8-flash", timeoutMs: 25000 },
-    { name: "gemini-3.1-flash-lite", timeoutMs: 25000 },
-    { name: "gemini-flash-latest", timeoutMs: 25000 },
-  ];
+  const modelTimeout = isServerless ? 5500 : 25000;
+  const allModels = isServerless
+    ? [
+        { name: "gemini-3.8-flash", timeoutMs: modelTimeout },
+        { name: "gemini-3.1-flash-lite", timeoutMs: modelTimeout },
+      ]
+    : [
+        { name: "gemini-3.8-flash", timeoutMs: 25000 },
+        { name: "gemini-3.1-flash-lite", timeoutMs: 25000 },
+        { name: "gemini-flash-latest", timeoutMs: 25000 },
+      ];
 
   const now = Date.now();
   const activeModels = allModels.filter(
@@ -785,15 +798,17 @@ function createScoutingEngine(deps) {
     let homeLog;
     let awayTeamObj;
     let awayLog;
+    const staticSched = STATIC_SCHEDULE_2027.find((s) => s.gameId === eventId) || scheduleGames.find((s) => s.gameId === eventId);
     for (const t of full.teams) {
       const g = t.games.find((x) => x.eventId === eventId);
       if (g) {
-        if (g.isHome) {
+        const isHome = staticSched ? t.abbreviation === staticSched.homeAbbr : g.isHome;
+        if (isHome) {
           homeTeamObj = t;
-          homeLog = g;
+          homeLog = { ...g, isHome: true };
         } else {
           awayTeamObj = t;
-          awayLog = g;
+          awayLog = { ...g, isHome: false };
         }
       }
     }
@@ -1433,10 +1448,25 @@ ${benchAndAbsences}`, dynamicSpotlight, xFactorSection, spanishSection: report.s
       return existing;
     }
     const promise = (async () => {
+      const isServerless =
+        Boolean(process.env.VERCEL) ||
+        Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME) ||
+        process.env.NBA_SNAPSHOT_ONLY === "1";
       const report = await buildGameOfficialReportData(eventId, forceRefresh);
-      const pressCtx = await fetchLivePressContext(report.date, forceRefresh);
       if (!getGeminiClient()) {
         return buildDeterministicGameNarrative(report);
+      }
+      let pressCtx = { byMatchup: new Map(), globalNotes: [] };
+      try {
+        const pressTimeoutMs = isServerless ? 2000 : 7000;
+        pressCtx = (await Promise.race([
+          fetchLivePressContext(report.date, forceRefresh),
+          new Promise((resolve) =>
+            setTimeout(() => resolve({ byMatchup: new Map(), globalNotes: [] }), pressTimeoutMs)
+          ),
+        ])) as any;
+      } catch {
+        pressCtx = { byMatchup: new Map(), globalNotes: [] };
       }
       const matchPress = pressCtx.byMatchup.get(`${report.away.abbr}@${report.home.abbr}`);
       const seedSources = [{ uri: `https://www.nba.com/game/${report.away.abbr.toLowerCase()}-vs-${report.home.abbr.toLowerCase()}-${report.eventId}/box-score`, title: `NBA.com Acta Oficial \u2014 ${report.away.abbr} vs ${report.home.abbr}` }, { uri: `https://www.nba.com/game/${report.away.abbr.toLowerCase()}-vs-${report.home.abbr.toLowerCase()}-${report.eventId}/play-by-play`, title: `NBA.com Play-by-Play \u2014 ${report.away.abbr} vs ${report.home.abbr}` }, ...matchPress?.sources || []];
@@ -1445,7 +1475,17 @@ ${benchAndAbsences}`, dynamicSpotlight, xFactorSection, spanishSection: report.s
       const dossier = [`AVISO CR\xCDTICO DE MUNDO CERRADO: Fecha real del encuentro ${report.date} (Temporada ${report.seasonLabel}). Tu memoria interna de entrenamiento est\xE1 desactualizada varios a\xF1os respecto a entrenadores actuales, traspasos, contratos y palmar\xE9s. NO des NING\xDAN dato por supuesto fuera de los hechos expl\xEDcitos de este dossier.`, `PARTIDO OFICIAL NBA (${report.date} \xB7 Temporada ${report.seasonLabel}):`, `T\xCDTULO: ${report.pasoBTitle}`, `PARCIALES POR CUARTOS: ${report.periods.length > 0 ? report.periods.map((p) => `${p.label} (${report.away.abbr} ${p.awayScore} - ${p.homeScore} ${report.home.abbr})`).join(" | ") : "Sin desglose parcial"} \xB7 Tramo clave: ${report.decisivePeriodLabel}`, `FLUJO DE MARCADOR: Cambios de l\xEDder=${report.leadChanges ?? "No consta"}, Empates=${report.timesTied ?? "No consta"}, M\xE1xima ventaja ${report.away.abbr}=+${report.away.totals.biggestLead ?? 0} (mejor parcial ${report.away.totals.biggestRun ?? 0}-0), M\xE1xima ventaja ${report.home.abbr}=+${report.home.totals.biggestLead ?? 0} (mejor parcial ${report.home.totals.biggestRun ?? 0}-0).`, `RITMO DEL ENCUENTRO (PACE VS MEDIA NBA): ${report.away.totals.pace.toFixed(1)} posesiones/48m (${report.paceDiffVsLeague >= 0 ? `+${report.paceDiffVsLeague.toFixed(1)}` : report.paceDiffVsLeague.toFixed(1)} frente al promedio oficial NBA ${report.seasonLabel} de ${report.leagueAvgPace.toFixed(1)} posesiones).`, matchPress && matchPress.notes.length > 0 ? `TELETIPO DE PRENSA DE ESTE PARTIDO (${report.date}): ${matchPress.notes.join(" | ")}` : "", ``, `ESTAD\xCDSTICAS COLECTIVAS:`, `- VISITANTE ${report.away.name} (${report.away.abbr}, r\xE9cord ${report.away.recordAfter}${report.away.isBackToBack ? ", en Back-to-Back" : ""}): ${report.away.score} PTS | ${report.away.totals.fgm}/${report.away.totals.fga} TC (${report.away.totals.fgPct}%) | ${report.away.totals.fg3m}/${report.away.totals.fg3a} T3 (${report.away.totals.fg3Pct}%) | ${report.away.totals.ftm}/${report.away.totals.fta} TL | ${report.away.totals.reb} REB (${report.away.totals.oreb} OR) | ${report.away.totals.ast} AST | ${report.away.totals.stl} ROB | ${report.away.totals.blk} TAP | ${report.away.totals.tov} PER | OffRtg ${report.away.totals.offRtg} | eFG% ${report.away.totals.efgPct}% | Pintura: ${report.away.totals.ptsPaint ?? "s/d"} | Contraataque: ${report.away.totals.ptsFastBreak ?? "s/d"} | Tras p\xE9rdida: ${report.away.totals.ptsOffTov ?? "s/d"} | 2\xAA jugada: ${report.away.totals.ptsSecondChance ?? "s/d"} | Banquillo: ${report.away.totals.benchPoints} PTS.`, `- LOCAL ${report.home.name} (${report.home.abbr}, r\xE9cord ${report.home.recordAfter}${report.home.isBackToBack ? ", en Back-to-Back" : ""}): ${report.home.score} PTS | ${report.home.totals.fgm}/${report.home.totals.fga} TC (${report.home.totals.fgPct}%) | ${report.home.totals.fg3m}/${report.home.totals.fg3a} T3 (${report.home.totals.fg3Pct}%) | ${report.home.totals.ftm}/${report.home.totals.fta} TL | ${report.home.totals.reb} REB (${report.home.totals.oreb} OR) | ${report.home.totals.ast} AST | ${report.home.totals.stl} ROB | ${report.home.totals.blk} TAP | ${report.home.totals.tov} PER | OffRtg ${report.home.totals.offRtg} | eFG% ${report.home.totals.efgPct}% | Pintura: ${report.home.totals.ptsPaint ?? "s/d"} | Contraataque: ${report.home.totals.ptsFastBreak ?? "s/d"} | Tras p\xE9rdida: ${report.home.totals.ptsOffTov ?? "s/d"} | 2\xAA jugada: ${report.home.totals.ptsSecondChance ?? "s/d"} | Banquillo: ${report.home.totals.benchPoints} PTS.`, ``, `PLANTILLA ${report.away.abbr} EN PISTA:`, ...[...report.away.starters, ...report.away.bench].map(formatPlayerDossier), `BAJAS M\xC9DICAS / LESIONADOS E INCIDENCIAS EN PISTA ${report.away.abbr}: ${report.away.absencesAndDnp.filter((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague").length > 0 ? report.away.absencesAndDnp.filter((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague").map((a) => `#${a.jersey} ${a.name} [${a.statusLabel || "Lesionado"} \u2014 ${a.note}]`).join("; ") : "Ninguna baja m\xE9dica ni incidencia registrada"}`, `SIN MINUTOS POR DECISI\xD3N T\xC9CNICA / G-LEAGUE ${report.away.abbr}: ${report.away.absencesAndDnp.filter((a) => a.statusType === "coach_decision" || a.statusType === "gleague").length > 0 ? report.away.absencesAndDnp.filter((a) => a.statusType === "coach_decision" || a.statusType === "gleague").map((a) => `#${a.jersey} ${a.name} [${a.statusLabel || "Decisi\xF3n t\xE9cnica"} \u2014 ${a.note}]`).join("; ") : "Ninguno"}`, ``, `PLANTILLA ${report.home.abbr} EN PISTA:`, ...[...report.home.starters, ...report.home.bench].map(formatPlayerDossier), `BAJAS M\xC9DICAS / LESIONADOS E INCIDENCIAS EN PISTA ${report.home.abbr}: ${report.home.absencesAndDnp.filter((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague").length > 0 ? report.home.absencesAndDnp.filter((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague").map((a) => `#${a.jersey} ${a.name} [${a.statusLabel || "Lesionado"} \u2014 ${a.note}]`).join("; ") : "Ninguna baja m\xE9dica ni incidencia registrada"}`, `SIN MINUTOS POR DECISI\xD3N T\xC9CNICA / G-LEAGUE ${report.home.abbr}: ${report.home.absencesAndDnp.filter((a) => a.statusType === "coach_decision" || a.statusType === "gleague").length > 0 ? report.home.absencesAndDnp.filter((a) => a.statusType === "coach_decision" || a.statusType === "gleague").map((a) => `#${a.jersey} ${a.name} [${a.statusLabel || "Decisi\xF3n t\xE9cnica"} \u2014 ${a.note}]`).join("; ") : "Ninguno"}`, ``, `DETECTOR OFICIAL DE JUGADORES ESPA\xD1OLES: ${report.spanishPlayersReport.summaryLine}`, `DOBLES-DOBLES Y TRIPLES-DOBLES VERIFICADOS: ${report.milestonesList.length > 0 ? report.milestonesList.map((m) => `${m.type}: ${m.detail}`).join(" | ") : "Ninguno en este encuentro"}`, `PODIO CALCULADO: ${report.away.abbr} (${report.away.podium.map((p) => `${"\u2B50".repeat(p.stars)} #${p.jersey} ${p.name}`).join(" | ")}) // ${report.home.abbr} (${report.home.podium.map((p) => `${"\u2B50".repeat(p.stars)} #${p.jersey} ${p.name}`).join(" | ")})`].filter(Boolean).join("\n");
       const systemInstruction = ["Eres un periodista s\xE9nior de prensa deportiva espa\xF1ola y scout t\xE1ctico profesional de la NBA (estilo The Athletic, Gigantes del Basket y NBAManiacs).", "REGLAS INQUEBRANTABLES DE RIGOR Y MUNDO CERRADO (CERO DATOS POR SUPUESTOS):", '1. RIGOR EMP\xCDRICO ABSOLUTO: Usa EXCLUSIVAMENTE las cifras estad\xEDsticas exactas, el pabell\xF3n oficial indicado en T\xCDTULO y la informaci\xF3n expl\xEDcita del dossier adjunto. Jam\xE1s inventes puntos, rebotes, parciales, jugadas concretas segundo a segundo (ej. "triple desde la esquina a falta de 2 segundos") ni dorsales que no figuren en el acta.', '2. PROHIBICI\xD3N TOTAL DE DAR DATOS POR SUPUESTOS O USAR MEMORIA PREENTRENADA: Tu conocimiento interno previo est\xE1 desactualizado respecto a la temporada actual. Tienes TERMINANTEMENTE PROHIBIDO dar por supuesto o mencionar: (a) nombres propios o apodos de entrenadores, asistentes o directivos (ej. Tom Thibodeau dej\xF3 los NY Knicks hace a\xF1os; NUNCA cites nombres de entrenadores, usa SIEMPRE "el cuerpo t\xE9cnico de [Equipo]", "la direcci\xF3n t\xE9cnica de [Equipo]" o "la pizarra de [Equipo]"); (b) antig\xFCedad, edad, rondas de Draft, condici\xF3n de rookie, contratos, exequipos o traspasos de jugadores; (c) premios pasados, anillos, "vigente campe\xF3n" o series de temporadas anteriores; (d) puestos exactos en la tabla clasificatoria (ej. "3\xBA del Este") o pr\xF3ximos rivales del calendario; (e) diagn\xF3sticos m\xE9dicos o plazos de recuperaci\xF3n m\xE1s all\xE1 de la nota literal del dossier.', '3. PULCRITUD EN BAJAS (LESI\xD3N VS DECISI\xD3N T\xC9CNICA) Y RITMO: Al mencionar ausencias o jugadores sin minutos en PIZARRA_Y_ROTACION o ESPANOLES, s\xE9 escrupulosamente pulcro distinguiendo entre quienes causaron baja por lesi\xF3n / parte m\xE9dico (bloque BAJAS M\xC9DICAS / LESIONADOS) y quienes no participaron por decisi\xF3n t\xE9cnica o asignaci\xF3n a G-League (bloque SIN MINUTOS POR DECISI\xD3N T\xC9CNICA). Jam\xE1s llames "lesionado" a un descarte por decisi\xF3n t\xE9cnica ni viceversa. Integra tambi\xE9n el Pace frente a la media oficial NBA y, si hubo expulsados por 6 faltas, cita cuarto y reloj exactos.', "4. REDACCI\xD3N 100% NATURAL Y HUMANA: Escribe en espa\xF1ol de Espa\xF1a fluido, con vocabulario t\xE1ctico aut\xE9ntico (espaciado, pintura, bloqueo directo, ajuste tras descanso, transici\xF3n defensiva, segunda unidad, rebote ofensivo, clutch).", '5. CERO CLICH\xC9S NI RELLENO: Prohibido usar "En conclusi\xF3n", "Cabe destacar", "Sin lugar a dudas", "Sin duda" o metatexto. Redacta p\xE1rrafos cohesivos, sin listas de vi\xF1etas ni tablas Markdown.', '6. JERARQU\xCDA VISUAL Y \xC9NFASIS EN NEGRITA (**...**): En todos los p\xE1rrafos del cuerpo (ENTRADILLA, GUION_Y_QUIEBRE, PIZARRA_Y_ROTACION, cuerpo de FOCO_ESPECIAL, FACTOR_X_Y_LIDERES, ESPANOLES y VEREDICTO_E_HITOS), utiliza negrita Markdown (**texto**) EXCLUSIVAMENTE para estos tres elementos: (a) nombres de jugadores (incluyendo su dorsal cuando lo cites, ej. **#15 Nikola Joki\u0107**), (b) nombres o apodos oficiales de equipos/franquicias (ej. **Boston Celtics**, **Knicks**), y (c) UNA sola idea t\xE1ctica clave por p\xE1rrafo (una frase corta de 4 a 10 palabras que resuma la clave del juego, ej. **colapsando la pintura tras cada bloqueo directo**). PROHIBIDO poner en negrita cifras o estad\xEDsticas sueltas (como "49 puntos", "12 rebotes" o "58.4%"): int\xE9gralas en texto normal sin formato especial. PROHIBIDO usar ** en TITULAR_PRENSA ni en el t\xEDtulo corto previo a || en FOCO_ESPECIAL.', "7. ESTRUCTURA EXACTA DE SALIDA CON ESTAS 8 ETIQUETAS EN MAY\xDASCULAS:", "===TITULAR_PRENSA===", "(Titular period\xEDstico vibrante y directo de 1 l\xEDnea sobre el partido, sin almohadillas # ni asteriscos **).", "===ENTRADILLA===", "(Entradilla destacada de 2 l\xEDneas sintetizando la tesis t\xE1ctica y el protagonista del encuentro, aplicando la regla de negritas).", "===GUION_Y_QUIEBRE===", "(2 p\xE1rrafos fluidos: evoluci\xF3n del partido por cuartos, ritmo comparado con la media NBA, alternancias, rachas anotadoras y el momento exacto donde se rompi\xF3 o decidi\xF3 el choque).", "===PIZARRA_Y_ROTACION===", "(2 p\xE1rrafos de scouting profundo: ajustes t\xE1cticos colectivos, batallas en pintura/triple/rebote, impacto real diferenciando con pulcritud bajas por lesi\xF3n frente a ausencias por decisi\xF3n t\xE9cnica o expulsiones por faltas con su cuarto/reloj, rendimiento de la segunda unidad y puntos tras p\xE9rdida/contraataque).", "===FOCO_ESPECIAL===", '(Si el partido tuvo un \xE1ngulo singular \u2014pr\xF3rroga, remontada grande, exhibici\xF3n hist\xF3rica, cortocircuito en el clutch, cl\xEDnica defensiva\u2014, escribe en una l\xEDnea el t\xEDtulo corto sin ** seguido de || y 1 p\xE1rrafo anal\xEDtico con la regla de negritas: ej. "Supervivencia en la pr\xF3rroga || Texto...". Si fue un guion convencional sin \xE1ngulo extra, escribe \xFAnicamente: NINGUNO).', "===FACTOR_X_Y_LIDERES===", "(2 p\xE1rrafos analizando el duelo de estrellas y qui\xE9n emergi\xF3 como Factor X inesperado para inclinar la balanza, citando siempre dorsales # y cifras reales).", "===ESPANOLES===", "(Si hay espa\xF1oles en el detector oficial, analiza en 1 p\xE1rrafo su impacto o situaci\xF3n en convocatoria; si NO los hay, escribe UNA SOLA FRASE breve, limpia y directa confirm\xE1ndolo).", "===VEREDICTO_E_HITOS===", "(2 p\xE1rrafos integrando con total naturalidad los dobles-dobles o triples-dobles verificados y cerrando con el veredicto estrictamente t\xE1ctico del scout sobre qu\xE9 deja este choque a ambos equipos)."].join("\n");
       try {
-        const { text: rawText, sources } = await generateWithGeminiCascade({ systemInstruction, contents: dossier, seedSources });
+        const cascadeBudgetMs = isServerless ? 6500 : 25000;
+        const geminiCall = generateWithGeminiCascade({
+          systemInstruction,
+          contents: dossier,
+          seedSources,
+          isServerless,
+        });
+        const cascadeTimer = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`Timeout ${cascadeBudgetMs}ms en Vercel/serverless`)), cascadeBudgetMs)
+        );
+        const { text: rawText, sources } = (await Promise.race([geminiCall, cascadeTimer])) as any;
         const safeRawText = sanitizeUnverifiedCoachClaims(rawText, verifiedGamePlayers);
         const parsed = parseDelimitedSections(safeRawText, ["TITULAR_PRENSA", "ENTRADILLA", "GUION_Y_QUIEBRE", "PIZARRA_Y_ROTACION", "FOCO_ESPECIAL", "FACTOR_X_Y_LIDERES", "ESPANOLES", "VEREDICTO_E_HITOS"]);
         const fallback = buildDeterministicGameNarrative(report);
@@ -1453,7 +1493,7 @@ ${benchAndAbsences}`, dynamicSpotlight, xFactorSection, spanishSection: report.s
         reportMemoryCache.set(cacheKey, { expiresAt: Date.now() + 6 * 60 * 60 * 1e3, data: payload });
         return payload;
       } catch (err) {
-        console.info(`[RadarNBA] Activado motor determinista de cr\xF3nica para ${eventId} (${err?.status || err?.code || "timeout/offline"})`);
+        console.info(`[RadarNBA] Activado motor determinista de cr\xF3nica para ${eventId} (${err?.message || err?.status || err?.code || "timeout/offline"})`);
         const fallback = buildDeterministicGameNarrative(report);
         reportMemoryCache.set(cacheKey, { expiresAt: Date.now() + 10 * 60 * 1e3, data: fallback });
         return fallback;
@@ -1655,7 +1695,7 @@ ${pressCtx.dayNotes.slice(0, 12).map((n) => `  \u2022 ${n}`).join("\n")}` : "", 
       reportInflight.delete(cacheKey);
     }
   }
-  return { buildGameOfficialReportData, buildGameNarrativePayload, buildGameDayChroniclePayload, fetchLeagueScheduleGames, fetchEspnInjuriesByName };
+  return { buildGameOfficialReportData, buildGameNarrativePayload, buildDeterministicGameNarrative, buildGameDayChroniclePayload, fetchLeagueScheduleGames, fetchEspnInjuriesByName };
 }
 export {
   createScoutingEngine,

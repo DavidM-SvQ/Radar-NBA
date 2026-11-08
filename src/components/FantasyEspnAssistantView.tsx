@@ -3,10 +3,12 @@ import {
   ArrowLeftRight,
   Calendar,
   Check,
+  ChevronDown,
   ClipboardPaste,
   Cloud,
   Download,
   Edit3,
+  Eye,
   Info,
   Plus,
   RefreshCw,
@@ -407,27 +409,139 @@ function loadInitialFantasyLeagueState(): FantasyManualLeagueState {
   };
 }
 
-function renderScheduleBadges(teamSched: { gamesCount: number; b2bCount: number; games: FantasyTeamGameSlot[] }) {
+function renderScheduleInfoIcon(teamSched: { gamesCount: number; b2bCount: number; games: FantasyTeamGameSlot[] }) {
   if (!teamSched || !teamSched.games || teamSched.games.length === 0) {
-    return <span className="text-[10px] text-slate-500 font-mono mt-0.5 block">Sin partidos</span>;
+    return <span className="text-[10px] text-slate-500 font-mono">Sin partidos</span>;
   }
+  const summaryTooltip = teamSched.games
+    .map((g) => `${g.dayShortEs || g.dateIso} ${g.isHome ? 'vs' : '@'}${g.opponentAbbr}`)
+    .join(' · ');
+
   return (
-    <div className="flex flex-wrap items-center gap-1 mt-0.5 max-w-[160px]">
-      {teamSched.games.map((g, idx) => (
-        <span
-          key={`${g.gameId || idx}-${g.dateIso}-${g.opponentAbbr}`}
-          className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded bg-[#182338] border border-[#1E293B] text-[9px] font-mono whitespace-nowrap"
-          title={`${g.dateIso}: ${g.isHome ? 'En casa vs' : 'A domicilio @'} ${g.opponentAbbr}`}
-        >
-          <span className="text-slate-400 font-normal">{g.dayShortEs}</span>
-          <span className={g.isHome ? 'text-emerald-400 font-semibold' : 'text-slate-200 font-medium'}>
-            {g.isHome ? 'vs' : '@'}{g.opponentAbbr}
+    <div className="relative group/sched inline-flex items-center">
+      <button
+        type="button"
+        className="p-0.5 rounded text-slate-400 hover:text-orange-400 focus:outline-none transition-colors cursor-help"
+        title={summaryTooltip}
+        aria-label="Ver detalle de partidos de la semana"
+      >
+        <Info className="w-3.5 h-3.5" />
+      </button>
+      <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1.5 hidden group-hover/sched:flex flex-col z-[80] w-52 p-2.5 rounded-lg bg-[#0F172A] border border-[#1E293B] shadow-2xl text-[11px] pointer-events-none">
+        <div className="flex items-center justify-between pb-1.5 border-b border-[#1E293B] mb-1.5">
+          <span className="font-bold text-orange-400 text-xs">Partidos Semana</span>
+          <span className="font-mono text-[10px] text-slate-400">
+            {teamSched.gamesCount} PJ{teamSched.b2bCount > 0 ? ` · ${teamSched.b2bCount} B2B` : ''}
           </span>
-        </span>
-      ))}
+        </div>
+        <div className="space-y-1 text-[11px]">
+          {teamSched.games.map((g, idx) => (
+            <div key={`${g.gameId || idx}-${g.dateIso}-${g.opponentAbbr}`} className="flex items-center justify-between font-mono">
+              <span className="text-slate-400">{g.dayShortEs || g.dateIso}</span>
+              <span className={g.isHome ? 'text-emerald-400 font-semibold' : 'text-slate-200 font-medium'}>
+                {g.isHome ? 'vs ' : '@ '}{g.opponentAbbr}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
+
+const renderScheduleBadges = renderScheduleInfoIcon;
+
+const WAIVER_QUICK_FILTERS = [
+  {
+    id: 'netGainWeek' as const,
+    label: 'Ganancia Semanal',
+    info: 'Ordena los agentes libres por los puntos netos adicionales (+FPTS) que sumarían a tu alineación en la semana activa en comparación con cortar a tu jugador prescindible.',
+  },
+  {
+    id: 'streamingRole' as const,
+    label: 'Streaming Rol/Huecos',
+    info: 'Prioriza agentes libres que cubren días con huecos en tu quinteto titular y además se benefician de aumento de minutos/uso por bajas de titulares en su equipo NBA.',
+  },
+  {
+    id: 'formDelta' as const,
+    label: 'Explosión Últ. 5 PJ',
+    info: 'Ordena por el mejor momento de forma reciente: diferencia positiva entre el promedio de sus últimos 5 partidos y su media global de la temporada.',
+  },
+  {
+    id: 'seasonAvg' as const,
+    label: 'Media FPTS/PJ',
+    info: 'Ordena por el promedio oficial de puntos Fantasy por partido disputado a lo largo de toda la temporada 2026-27.',
+  },
+] as const;
+
+const round2 = (val: number): number => Math.round(val * 100) / 100;
+
+function computePlayerRecentWindowStats(
+  player: PlayerSummary,
+  gameCorrections?: Record<string, { fptsDelta: number; reason?: string }>
+) {
+  const allGames = player.games || [];
+  const g2027 = allGames.filter((g) => g.seasonLabel === '2026-27');
+  const gamesDesc = [...g2027].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+  const evaluatedGames = gamesDesc.map((g) => {
+    const base = computeOfficialGameFptsBreakdown(g, 0);
+    const corr =
+      gameCorrections?.[`${player.id}:${g.eventId}`] ||
+      gameCorrections?.[`${player.id}:${g.date}`];
+    const totalFpts =
+      corr && typeof corr.fptsDelta === 'number' && Number.isFinite(corr.fptsDelta)
+        ? round2(base.totalFpts + corr.fptsDelta)
+        : base.totalFpts;
+    return {
+      game: g,
+      totalFpts,
+      breakdown: base,
+    };
+  });
+
+  const refDateIso = '2026-11-08';
+  const d7Iso = addDaysIso(refDateIso, -6);
+  const d15Iso = addDaysIso(refDateIso, -14);
+  const d30Iso = addDaysIso(refDateIso, -29);
+
+  const games7d = evaluatedGames.filter(
+    (x) => x.game.date >= d7Iso && x.game.date <= refDateIso
+  );
+  const games15d = evaluatedGames.filter(
+    (x) => x.game.date >= d15Iso && x.game.date <= refDateIso
+  );
+  const games30d = evaluatedGames.filter(
+    (x) => x.game.date >= d30Iso && x.game.date <= refDateIso
+  );
+
+  const sumFpts = (arr: typeof evaluatedGames) =>
+    arr.reduce((acc, curr) => acc + curr.totalFpts, 0);
+
+  const total7d = round2(sumFpts(games7d));
+  const avg7d =
+    games7d.length > 0
+      ? round2(total7d / games7d.length)
+      : evaluatedGames.length > 0
+      ? evaluatedGames[0].totalFpts
+      : 0;
+
+  const total15d = round2(sumFpts(games15d));
+  const avg15d =
+    games15d.length > 0 ? round2(total15d / games15d.length) : avg7d;
+
+  const total30d = round2(sumFpts(games30d));
+  const avg30d =
+    games30d.length > 0 ? round2(total30d / games30d.length) : avg15d;
+
+  return {
+    gamesDesc: evaluatedGames,
+    stats7d: { total: total7d, count: games7d.length, avg: avg7d },
+    stats15d: { total: total15d, count: games15d.length, avg: avg15d },
+    stats30d: { total: total30d, count: games30d.length, avg: avg30d },
+  };
+}
+
 
 export function FantasyEspnAssistantView({
   players,
@@ -624,16 +738,16 @@ export function FantasyEspnAssistantView({
   };
 
   type WaiverSortKey =
+    | 'default'
     | 'name'
-    | 'severity'
-    | 'gamesCount'
     | 'seasonTotalFpts'
     | 'seasonAvgFpts'
-    | 'last5AvgFpts'
-    | 'lockAdjustedFpts'
-    | 'netWeekGain'
-    | 'action';
-  const [waiverTableSortKey, setWaiverTableSortKey] = useState<WaiverSortKey>('lockAdjustedFpts');
+    | 'gamesNextWeek'
+    | 'fpts7d'
+    | 'fpts15d'
+    | 'fpts30d'
+    | 'netWeekGain';
+  const [waiverTableSortKey, setWaiverTableSortKey] = useState<WaiverSortKey>('default');
   const [waiverTableSortAsc, setWaiverTableSortAsc] = useState<boolean>(false);
 
   const handleWaiverTableSort = (key: WaiverSortKey) => {
@@ -641,9 +755,18 @@ export function FantasyEspnAssistantView({
       setWaiverTableSortAsc(!waiverTableSortAsc);
     } else {
       setWaiverTableSortKey(key);
-      setWaiverTableSortAsc(key === 'name' || key === 'severity');
+      setWaiverTableSortAsc(key === 'name');
     }
   };
+
+  const [activeActionMenuId, setActiveActionMenuId] = useState<string | null>(null);
+
+  // Hover Breakdown Popover state for Free Agents
+  const [hoveredBreakdown, setHoveredBreakdown] = useState<{
+    playerId: string;
+    top: number;
+    right: number;
+  } | null>(null);
 
   // Player Game Logs Breakdown Modal State & Game Corrections
   const [inspectedPlayerForLogsId, setInspectedPlayerForLogsId] = useState<string | null>(null);
@@ -1537,6 +1660,11 @@ export function FantasyEspnAssistantView({
     effectiveDropMember,
   ]);
 
+  // Next week window for schedule and matchups
+  const nextWeekWindow = useMemo(() => {
+    return effectiveWeeks.find((w) => w.id === 'next') || null;
+  }, [effectiveWeeks]);
+
   // Available Waiver / Free Agent Pool
   const availableWaiverPool = useMemo(() => {
     const q = normalizeSearchText(waiverQuery);
@@ -1565,62 +1693,82 @@ export function FantasyEspnAssistantView({
       return true;
     });
 
-    const withDeltas = filtered.map((item) => ({
-      ...item,
-      roleBreakout: roleBreakoutByPlayerId.get(item.player.id) || null,
-      netWeekGain: Math.round((item.weekly.lockAdjustedFpts - dropWeekFpts) * 10) / 10,
-      netPerGameGain: Math.round((item.stats.weightedFptsPerGame - dropPerGame) * 10) / 10,
-    }));
+    const withDeltas = filtered.map((item) => {
+      const recent = computePlayerRecentWindowStats(item.player, leagueState.gameCorrections);
+      const nextWeekSched = nextWeekWindow?.teamSchedules?.[item.player.teamAbbr] || null;
+      const nextWeekGamesCount = nextWeekSched?.gamesCount ?? 0;
+      const nextWeekGamesList = nextWeekSched?.games ?? [];
+
+      return {
+        ...item,
+        roleBreakout: roleBreakoutByPlayerId.get(item.player.id) || null,
+        netWeekGain: Math.round((item.weekly.lockAdjustedFpts - dropWeekFpts) * 10) / 10,
+        netPerGameGain: Math.round((item.stats.weightedFptsPerGame - dropPerGame) * 10) / 10,
+        recentStats: recent,
+        nextWeekSched,
+        nextWeekGamesCount,
+        nextWeekGamesList,
+      };
+    });
 
     withDeltas.sort((a, b) => {
       let cmp = 0;
-      switch (waiverTableSortKey) {
-        case 'name':
-          cmp = a.player.name.localeCompare(b.player.name);
-          break;
-        case 'severity':
-          cmp = (a.severity || '').localeCompare(b.severity || '');
-          break;
-        case 'gamesCount':
-          cmp = a.teamSched.gamesCount - b.teamSched.gamesCount;
-          break;
-        case 'seasonTotalFpts':
-          cmp = a.stats.seasonTotalFpts - b.stats.seasonTotalFpts;
-          break;
-        case 'seasonAvgFpts':
-          cmp = a.stats.seasonAvgFpts - b.stats.seasonAvgFpts;
-          break;
-        case 'last5AvgFpts':
-          cmp = a.stats.last5AvgFpts - b.stats.last5AvgFpts;
-          break;
-        case 'netWeekGain':
-          cmp = a.netWeekGain - b.netWeekGain;
-          break;
-        case 'action':
-          cmp =
-            (a.roleBreakout?.streamingPriorityScore ?? 0) +
-            a.netWeekGain -
-            ((b.roleBreakout?.streamingPriorityScore ?? 0) + b.netWeekGain);
-          break;
-        case 'lockAdjustedFpts':
-        default:
-          if (waiverSortBy === 'streamingRole') {
-            cmp =
-              (a.roleBreakout?.streamingPriorityScore ?? -999) -
-                (b.roleBreakout?.streamingPriorityScore ?? -999) ||
-              a.netWeekGain - b.netWeekGain;
-          } else if (waiverSortBy === 'formDelta') {
-            cmp = a.stats.formDeltaLast5 - b.stats.formDeltaLast5;
-          } else if (waiverSortBy === 'seasonAvg') {
+      if (waiverTableSortKey && waiverTableSortKey !== 'default') {
+        switch (waiverTableSortKey) {
+          case 'name':
+            cmp = a.player.name.localeCompare(b.player.name);
+            break;
+          case 'seasonTotalFpts':
+            cmp = a.stats.seasonTotalFpts - b.stats.seasonTotalFpts;
+            break;
+          case 'seasonAvgFpts':
             cmp = a.stats.seasonAvgFpts - b.stats.seasonAvgFpts;
-          } else {
-            cmp =
-              a.netWeekGain - b.netWeekGain ||
-              a.weekly.lockAdjustedFpts - b.weekly.lockAdjustedFpts;
-          }
-          break;
+            break;
+          case 'gamesNextWeek':
+            cmp = a.nextWeekGamesCount - b.nextWeekGamesCount;
+            break;
+          case 'fpts7d':
+            cmp = a.recentStats.stats7d.total - b.recentStats.stats7d.total;
+            break;
+          case 'fpts15d':
+            cmp = a.recentStats.stats15d.total - b.recentStats.stats15d.total;
+            break;
+          case 'fpts30d':
+            cmp = a.recentStats.stats30d.total - b.recentStats.stats30d.total;
+            break;
+          case 'netWeekGain':
+            cmp = a.netWeekGain - b.netWeekGain;
+            break;
+          default:
+            cmp = a.netWeekGain - b.netWeekGain;
+            break;
+        }
+        return waiverTableSortAsc ? cmp : -cmp;
       }
-      return waiverTableSortAsc ? cmp : -cmp;
+
+      // Quick filter active (default)
+      switch (waiverSortBy) {
+        case 'streamingRole': {
+          const aScore = a.roleBreakout
+            ? (a.roleBreakout.streamingPriorityScore ?? (a.roleBreakout.gapGamesCount * 5 + a.roleBreakout.minDelta * 2))
+            : -999;
+          const bScore = b.roleBreakout
+            ? (b.roleBreakout.streamingPriorityScore ?? (b.roleBreakout.gapGamesCount * 5 + b.roleBreakout.minDelta * 2))
+            : -999;
+          cmp = bScore - aScore || b.netWeekGain - a.netWeekGain || b.stats.seasonAvgFpts - a.stats.seasonAvgFpts;
+          return cmp;
+        }
+        case 'formDelta':
+          cmp = b.stats.formDeltaLast5 - a.stats.formDeltaLast5 || b.stats.last5AvgFpts - a.stats.last5AvgFpts;
+          return cmp;
+        case 'seasonAvg':
+          cmp = b.stats.seasonAvgFpts - a.stats.seasonAvgFpts || b.stats.seasonTotalFpts - a.stats.seasonTotalFpts;
+          return cmp;
+        case 'netGainWeek':
+        default:
+          cmp = b.netWeekGain - a.netWeekGain || b.weekly.lockAdjustedFpts - a.weekly.lockAdjustedFpts;
+          return cmp;
+      }
     });
 
     return withDeltas;
@@ -1636,6 +1784,8 @@ export function FantasyEspnAssistantView({
     waiverTableSortKey,
     waiverTableSortAsc,
     effectiveDropMember,
+    nextWeekWindow,
+    leagueState.gameCorrections,
   ]);
 
   const topReplacementFreeAgent = useMemo(() => {
@@ -2918,7 +3068,7 @@ export function FantasyEspnAssistantView({
                               </span>
                             )}
                           </td>
-                          <td className="py-2 px-1.5 whitespace-nowrap">
+                          <td className="py-1 px-1.5 whitespace-nowrap">
                             <div className="flex items-center gap-2">
                               <PlayerAvatar
                                 playerId={item.player.id}
@@ -2927,32 +3077,33 @@ export function FantasyEspnAssistantView({
                                 size="xs"
                               />
                               <div>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    onInspectEntity('player', item.player.id)
-                                  }
-                                  className="font-semibold text-slate-100 hover:text-orange-400 transition-colors"
-                                >
-                                  {item.player.name}
-                                </button>
-                                <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1">
-                                  <span>{item.player.teamAbbr} · {item.player.position}</span>
-                                  <span className="text-slate-600">·</span>
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      onInspectEntity('player', item.player.id)
+                                    }
+                                    className="font-semibold text-slate-100 hover:text-orange-400 transition-colors"
+                                  >
+                                    {item.player.name}
+                                  </button>
                                   <button
                                     type="button"
                                     onClick={() => setInspectedPlayerForLogsId(item.player.id)}
-                                    className="inline-flex items-center gap-1 text-[10px] text-amber-300 hover:text-amber-100 font-semibold bg-amber-500/15 hover:bg-amber-500/25 px-1.5 py-0.5 rounded border border-amber-500/35 transition-colors"
-                                    title="Abrir desglose y panel de corrección manual de puntos"
+                                    className="p-1 text-amber-400 hover:text-amber-200 hover:bg-amber-500/20 rounded transition-colors"
+                                    title={`Auditar / Corregir puntos (${item.stats.currentSeasonGamesPlayed} PJ)`}
+                                    aria-label={`Auditar o corregir puntos de ${item.player.name}`}
                                   >
-                                    <Edit3 className="w-2.5 h-2.5 text-amber-400" />
-                                    <span>Auditar / Corregir ({item.stats.currentSeasonGamesPlayed} PJ) ✏️</span>
+                                    <Edit3 className="w-3.5 h-3.5" />
                                   </button>
+                                </div>
+                                <div className="text-[10px] text-slate-400 font-mono">
+                                  <span>{item.player.teamAbbr} · {item.player.position}</span>
                                 </div>
                               </div>
                             </div>
                           </td>
-                          <td className="py-2 px-1.5 max-w-[130px] xl:max-w-[160px]">
+                          <td className="py-1 px-1.5 max-w-[130px] xl:max-w-[160px]">
                             <div>
                               {renderSeverityText(
                                 item.severity,
@@ -2970,14 +3121,13 @@ export function FantasyEspnAssistantView({
                               </div>
                             )}
                           </td>
-                          <td className="py-2 px-1.5">
-                            <div className="font-mono tabular-nums font-semibold text-slate-200 text-xs">
-                              {item.teamSched.gamesCount} PJ
-                              {item.teamSched.b2bCount > 0
-                                ? ` · ${item.teamSched.b2bCount} B2B`
-                                : ''}
+                          <td className="py-1 px-1.5 whitespace-nowrap">
+                            <div className="flex items-center gap-1.5 whitespace-nowrap">
+                              <span className="font-mono tabular-nums font-semibold text-slate-200 text-xs shrink-0">
+                                {item.teamSched.gamesCount} PJ{item.teamSched.b2bCount > 0 ? ` (${item.teamSched.b2bCount}B)` : ''}
+                              </span>
+                              {renderScheduleInfoIcon(item.teamSched)}
                             </div>
-                            {renderScheduleBadges(item.teamSched)}
                           </td>
                           <td className="py-2 px-1.5 text-right font-mono tabular-nums whitespace-nowrap">
                             <button
@@ -3067,7 +3217,7 @@ export function FantasyEspnAssistantView({
                               </span>
                             )}
                           </td>
-                          <td className="py-2 px-1.5 whitespace-nowrap">
+                          <td className="py-1 px-1.5 whitespace-nowrap">
                             <div className="flex items-center gap-2">
                               <PlayerAvatar
                                 playerId={item.player.id}
@@ -3076,32 +3226,33 @@ export function FantasyEspnAssistantView({
                                 size="xs"
                               />
                               <div>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    onInspectEntity('player', item.player.id)
-                                  }
-                                  className="font-semibold text-slate-200 hover:text-orange-400 transition-colors"
-                                >
-                                  {item.player.name}
-                                </button>
-                                <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1">
-                                  <span>{item.player.teamAbbr} · {item.player.position}</span>
-                                  <span className="text-slate-600">·</span>
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      onInspectEntity('player', item.player.id)
+                                    }
+                                    className="font-semibold text-slate-200 hover:text-orange-400 transition-colors"
+                                  >
+                                    {item.player.name}
+                                  </button>
                                   <button
                                     type="button"
                                     onClick={() => setInspectedPlayerForLogsId(item.player.id)}
-                                    className="inline-flex items-center gap-1 text-[10px] text-amber-300 hover:text-amber-100 font-semibold bg-amber-500/15 hover:bg-amber-500/25 px-1.5 py-0.5 rounded border border-amber-500/35 transition-colors"
-                                    title="Abrir desglose y panel de corrección manual de puntos"
+                                    className="p-1 text-amber-400 hover:text-amber-200 hover:bg-amber-500/20 rounded transition-colors"
+                                    title={`Auditar / Corregir puntos (${item.stats.currentSeasonGamesPlayed} PJ)`}
+                                    aria-label={`Auditar o corregir puntos de ${item.player.name}`}
                                   >
-                                    <Edit3 className="w-2.5 h-2.5 text-amber-400" />
-                                    <span>Auditar / Corregir ({item.stats.currentSeasonGamesPlayed} PJ) ✏️</span>
+                                    <Edit3 className="w-3.5 h-3.5" />
                                   </button>
+                                </div>
+                                <div className="text-[10px] text-slate-500 font-mono">
+                                  <span>{item.player.teamAbbr} · {item.player.position}</span>
                                 </div>
                               </div>
                             </div>
                           </td>
-                          <td className="py-2 px-1.5 max-w-[130px] xl:max-w-[160px]">
+                          <td className="py-1 px-1.5 max-w-[130px] xl:max-w-[160px]">
                             <div>
                               {renderSeverityText(
                                 item.severity,
@@ -3119,14 +3270,13 @@ export function FantasyEspnAssistantView({
                               </div>
                             )}
                           </td>
-                          <td className="py-2 px-1.5">
-                            <div className="font-mono tabular-nums text-slate-300 font-semibold text-xs">
-                              {item.teamSched.gamesCount} PJ
-                              {item.teamSched.b2bCount > 0
-                                ? ` · ${item.teamSched.b2bCount} B2B`
-                                : ''}
+                          <td className="py-1 px-1.5 whitespace-nowrap">
+                            <div className="flex items-center gap-1.5 whitespace-nowrap">
+                              <span className="font-mono tabular-nums text-slate-300 font-semibold text-xs shrink-0">
+                                {item.teamSched.gamesCount} PJ{item.teamSched.b2bCount > 0 ? ` (${item.teamSched.b2bCount}B)` : ''}
+                              </span>
+                              {renderScheduleInfoIcon(item.teamSched)}
                             </div>
-                            {renderScheduleBadges(item.teamSched)}
                           </td>
                           <td className="py-2 px-1.5 text-right font-mono tabular-nums whitespace-nowrap">
                             <button
@@ -3475,28 +3625,40 @@ export function FantasyEspnAssistantView({
                 </button>
 
                 {/* Sort Mode */}
-                <div className="flex items-center p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg">
-                  {(
-                    [
-                      { id: 'netGainWeek', label: 'Ganancia Semanal' },
-                      { id: 'streamingRole', label: 'Streaming Rol/Huecos' },
-                      { id: 'formDelta', label: 'Explosión Últ. 5 PJ' },
-                      { id: 'seasonAvg', label: 'Media FPTS/PJ' },
-                    ] as const
-                  ).map((sOpt) => (
-                    <button
-                      key={sOpt.id}
-                      type="button"
-                      onClick={() => setWaiverSortBy(sOpt.id)}
-                      className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-                        waiverSortBy === sOpt.id
-                          ? 'bg-[#1E293B] text-orange-400 font-semibold'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      {sOpt.label}
-                    </button>
-                  ))}
+                {/* Sort Mode with Info icons */}
+                <div className="flex flex-wrap items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg">
+                  {WAIVER_QUICK_FILTERS.map((sOpt) => {
+                    const isActive = waiverSortBy === sOpt.id && waiverTableSortKey === 'default';
+                    return (
+                      <div
+                        key={sOpt.id}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs transition-colors ${
+                          isActive
+                            ? 'bg-[#1E293B] text-orange-400 font-semibold shadow-sm'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWaiverSortBy(sOpt.id);
+                            setWaiverTableSortKey('default');
+                            setWaiverTableSortAsc(false);
+                          }}
+                          className="whitespace-nowrap"
+                        >
+                          {sOpt.label}
+                        </button>
+                        <span
+                          className="text-slate-500 hover:text-orange-400 cursor-help"
+                          title={sOpt.info}
+                          aria-label={sOpt.info}
+                        >
+                          <Info className="w-3 h-3" />
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -3613,31 +3775,17 @@ export function FantasyEspnAssistantView({
               </div>
             </div>
 
-            <div className="overflow-auto max-h-[70vh]">
-              <table className="w-full text-left border-collapse">
+            <div className="overflow-x-auto max-h-[70vh] rounded-lg border border-[#1E293B]">
+              <table className="w-full text-left border-collapse table-auto">
                 <thead className={STICKY_THEAD_CLASS}>
                   <tr className="border-b border-[#1E293B] text-[11px] text-slate-400">
                     <SortableTh
-                      label="Agente Libre Disponible"
+                      label="Agente Libre"
                       align="left"
                       active={waiverTableSortKey === 'name'}
                       asc={waiverTableSortAsc}
                       onSort={() => handleWaiverTableSort('name')}
-                      className="py-2.5 pl-4 pr-3"
-                    />
-                    <SortableTh
-                      label="Salud"
-                      align="left"
-                      active={waiverTableSortKey === 'severity'}
-                      asc={waiverTableSortAsc}
-                      onSort={() => handleWaiverTableSort('severity')}
-                    />
-                    <SortableTh
-                      label={`Partidos (${activeWeek?.label || 'Semana'})`}
-                      align="left"
-                      active={waiverTableSortKey === 'gamesCount'}
-                      asc={waiverTableSortAsc}
-                      onSort={() => handleWaiverTableSort('gamesCount')}
+                      className="py-2 pl-3 pr-2 whitespace-nowrap"
                     />
                     <SortableTh
                       label="Total FPTS"
@@ -3645,6 +3793,7 @@ export function FantasyEspnAssistantView({
                       active={waiverTableSortKey === 'seasonTotalFpts'}
                       asc={waiverTableSortAsc}
                       onSort={() => handleWaiverTableSort('seasonTotalFpts')}
+                      className="py-2 px-2 whitespace-nowrap"
                     />
                     <SortableTh
                       label="Media FPTS"
@@ -3652,210 +3801,395 @@ export function FantasyEspnAssistantView({
                       active={waiverTableSortKey === 'seasonAvgFpts'}
                       asc={waiverTableSortAsc}
                       onSort={() => handleWaiverTableSort('seasonAvgFpts')}
+                      className="py-2 px-2 whitespace-nowrap"
                     />
                     <SortableTh
-                      label="Últ. 5 PJ"
-                      align="right"
-                      active={waiverTableSortKey === 'last5AvgFpts'}
+                      label="Próx. Sem."
+                      align="center"
+                      active={waiverTableSortKey === 'gamesNextWeek'}
                       asc={waiverTableSortAsc}
-                      onSort={() => handleWaiverTableSort('last5AvgFpts')}
+                      onSort={() => handleWaiverTableSort('gamesNextWeek')}
+                      className="py-2 px-2 whitespace-nowrap"
                     />
                     <SortableTh
-                      label="Proy. Semana"
+                      label="Últ. 7D"
                       align="right"
-                      active={waiverTableSortKey === 'lockAdjustedFpts'}
+                      active={waiverTableSortKey === 'fpts7d'}
                       asc={waiverTableSortAsc}
-                      onSort={() => handleWaiverTableSort('lockAdjustedFpts')}
+                      onSort={() => handleWaiverTableSort('fpts7d')}
+                      className="py-2 px-2 whitespace-nowrap"
                     />
                     <SortableTh
-                      label="Ganancia vs Corte"
+                      label="Últ. 15D"
+                      align="right"
+                      active={waiverTableSortKey === 'fpts15d'}
+                      asc={waiverTableSortAsc}
+                      onSort={() => handleWaiverTableSort('fpts15d')}
+                      className="py-2 px-2 whitespace-nowrap"
+                    />
+                    <SortableTh
+                      label="Últ. 30D"
+                      align="right"
+                      active={waiverTableSortKey === 'fpts30d'}
+                      asc={waiverTableSortAsc}
+                      onSort={() => handleWaiverTableSort('fpts30d')}
+                      className="py-2 px-2 whitespace-nowrap"
+                    />
+                    <th className="py-2 px-2 text-center font-medium text-slate-400 whitespace-nowrap">
+                      Desglose
+                    </th>
+                    <SortableTh
+                      label="Acción"
                       align="right"
                       active={waiverTableSortKey === 'netWeekGain'}
                       asc={waiverTableSortAsc}
                       onSort={() => handleWaiverTableSort('netWeekGain')}
-                    />
-                    <SortableTh
-                      label="Acciones de Mercado"
-                      align="right"
-                      active={waiverTableSortKey === 'action'}
-                      asc={waiverTableSortAsc}
-                      onSort={() => handleWaiverTableSort('action')}
-                      className="py-2.5 pl-2 pr-4"
+                      className="py-2 pl-2 pr-3 whitespace-nowrap"
                     />
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#1E293B]/80 text-xs">
-                  {availableWaiverPool.slice(0, 40).map((item) => (
-                    <tr
-                      key={item.player.id}
-                      className="hover:bg-[#182338] transition-colors"
-                    >
-                      <td className="py-2.5 pl-4 pr-3 whitespace-nowrap">
-                        <div className="flex items-center gap-2.5">
-                          <PlayerAvatar
-                            playerId={item.player.id}
-                            name={item.player.name}
-                            teamAbbr={item.player.teamAbbr}
-                            size="xs"
-                          />
-                          <div>
+                <tbody className="divide-y divide-[#1E293B]/70 text-xs font-sans">
+                  {availableWaiverPool.slice(0, 50).map((item) => {
+                    const nextGamesTooltip =
+                      item.nextWeekGamesList.length > 0
+                        ? item.nextWeekGamesList
+                            .map((g) => `${g.dayShortEs || ''} ${g.isHome ? 'vs' : '@'}${g.opponentAbbr}`)
+                            .join(' · ')
+                        : 'Sin partidos programados la próxima semana';
+
+                    return (
+                      <tr
+                        key={item.player.id}
+                        className="hover:bg-[#182338] transition-colors"
+                      >
+                        {/* 1. Player Info */}
+                        <td className="py-1.5 pl-3 pr-2 whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <PlayerAvatar
+                              playerId={item.player.id}
+                              name={item.player.name}
+                              teamAbbr={item.player.teamAbbr}
+                              size="xs"
+                            />
+                            <div className="min-w-0">
+                              <button
+                                type="button"
+                                onClick={() => onInspectEntity('player', item.player.id)}
+                                className="font-semibold text-slate-100 hover:text-orange-400 text-left transition-colors truncate block max-w-[140px] xl:max-w-[180px]"
+                                title={item.player.name}
+                              >
+                                {item.player.name}
+                              </button>
+                              <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1">
+                                <span>{item.player.teamAbbr} · {item.player.position}</span>
+                                {item.stats.minutesAvg > 0 && (
+                                  <>
+                                    <span className="text-slate-600">·</span>
+                                    <span>{item.stats.minutesAvg.toFixed(1)}m</span>
+                                  </>
+                                )}
+                                {item.roleBreakout && (
+                                  <span
+                                    className="text-emerald-400 font-semibold ml-0.5"
+                                    title={`Aumento de rol: +${item.roleBreakout.minDelta.toFixed(1)} MIN · +${item.roleBreakout.usgDelta.toFixed(1)}% USG`}
+                                  >
+                                    ▲
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* 2. Total FPTS */}
+                        <td className="py-1.5 px-2 text-right font-mono tabular-nums whitespace-nowrap">
+                          <span className="font-semibold text-slate-100">
+                            {formatFptsExact(item.stats.seasonTotalFpts)}
+                          </span>
+                        </td>
+
+                        {/* 3. Media FPTS */}
+                        <td className="py-1.5 px-2 text-right font-mono tabular-nums whitespace-nowrap">
+                          <span className="font-semibold text-slate-200">
+                            {item.stats.seasonAvgFpts.toFixed(1)}
+                          </span>
+                        </td>
+
+                        {/* 4. Próxima Semana con Tooltip Info */}
+                        <td className="py-1.5 px-2 text-center whitespace-nowrap">
+                          <div className="inline-flex items-center justify-center gap-1 font-mono tabular-nums text-xs">
+                            <span className="font-semibold text-slate-200">
+                              {item.nextWeekGamesCount} PJ
+                            </span>
+                            <div className="relative group/nxtwk inline-flex">
+                              <button
+                                type="button"
+                                className="p-0.5 rounded text-slate-400 hover:text-orange-400 cursor-help"
+                                title={nextGamesTooltip}
+                                aria-label="Ver calendario próxima semana"
+                              >
+                                <Info className="w-3 h-3" />
+                              </button>
+                              <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1.5 hidden group-hover/nxtwk:flex flex-col z-[80] w-56 p-2 rounded-lg bg-[#0F172A] border border-[#1E293B] shadow-2xl text-[11px] pointer-events-none">
+                                <span className="font-bold text-orange-400 pb-1 border-b border-[#1E293B] mb-1">
+                                  Próxima Semana ({nextWeekWindow?.label || '9-15 nov'}): {item.nextWeekGamesCount} PJ
+                                </span>
+                                {item.nextWeekGamesList.length > 0 ? (
+                                  <div className="space-y-0.5 font-mono text-[10px] text-slate-300">
+                                    {item.nextWeekGamesList.map((g, idx) => (
+                                      <div key={idx} className="flex items-center justify-between">
+                                        <span className="text-slate-400">{g.dayShortEs || g.dateIso}</span>
+                                        <span className={g.isHome ? 'text-emerald-400 font-semibold' : 'text-slate-200'}>
+                                          {g.isHome ? 'vs ' : '@ '}{g.opponentAbbr}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-400 text-[10px]">Sin partidos programados</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* 5. Últimos 7 Días */}
+                        <td className="py-1.5 px-2 text-right font-mono tabular-nums whitespace-nowrap">
+                          <span
+                            className="font-semibold text-slate-100"
+                            title={`Últimos 7 días: ${formatFptsExact(item.recentStats.stats7d.total)} FPTS en ${item.recentStats.stats7d.count} PJ`}
+                          >
+                            {item.recentStats.stats7d.total > 0
+                              ? formatFptsExact(item.recentStats.stats7d.total)
+                              : '—'}
+                          </span>
+                          <span className="text-[10px] text-slate-400 block">
+                            {item.recentStats.stats7d.count > 0
+                              ? `${item.recentStats.stats7d.avg.toFixed(1)}/PJ (${item.recentStats.stats7d.count}P)`
+                              : '0 PJ'}
+                          </span>
+                        </td>
+
+                        {/* 6. Últimos 15 Días */}
+                        <td className="py-1.5 px-2 text-right font-mono tabular-nums whitespace-nowrap">
+                          <span
+                            className="font-semibold text-slate-100"
+                            title={`Últimos 15 días: ${formatFptsExact(item.recentStats.stats15d.total)} FPTS en ${item.recentStats.stats15d.count} PJ`}
+                          >
+                            {item.recentStats.stats15d.total > 0
+                              ? formatFptsExact(item.recentStats.stats15d.total)
+                              : '—'}
+                          </span>
+                          <span className="text-[10px] text-slate-400 block">
+                            {item.recentStats.stats15d.count > 0
+                              ? `${item.recentStats.stats15d.avg.toFixed(1)}/PJ (${item.recentStats.stats15d.count}P)`
+                              : '0 PJ'}
+                          </span>
+                        </td>
+
+                        {/* 7. Últimos 30 Días */}
+                        <td className="py-1.5 px-2 text-right font-mono tabular-nums whitespace-nowrap">
+                          <span
+                            className="font-semibold text-slate-100"
+                            title={`Últimos 30 días: ${formatFptsExact(item.recentStats.stats30d.total)} FPTS en ${item.recentStats.stats30d.count} PJ`}
+                          >
+                            {item.recentStats.stats30d.total > 0
+                              ? formatFptsExact(item.recentStats.stats30d.total)
+                              : '—'}
+                          </span>
+                          <span className="text-[10px] text-slate-400 block">
+                            {item.recentStats.stats30d.count > 0
+                              ? `${item.recentStats.stats30d.avg.toFixed(1)}/PJ (${item.recentStats.stats30d.count}P)`
+                              : '0 PJ'}
+                          </span>
+                        </td>
+
+                        {/* 8. Desglose con Hover y Click */}
+                        <td className="py-1.5 px-2 text-center whitespace-nowrap">
+                          <button
+                            type="button"
+                            onMouseEnter={(e) => {
+                              const r = e.currentTarget.getBoundingClientRect();
+                              setHoveredBreakdown({
+                                playerId: item.player.id,
+                                top: Math.min(window.innerHeight - 340, Math.max(10, r.top - 20)),
+                                right: Math.max(10, window.innerWidth - r.left + 8),
+                              });
+                            }}
+                            onMouseLeave={() => setHoveredBreakdown(null)}
+                            onClick={() => setInspectedPlayerForLogsId(item.player.id)}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-[#182338] hover:bg-[#1E293B] text-slate-300 hover:text-orange-300 border border-[#1E293B] transition-colors"
+                            title="Pasa el ratón para ver últimos partidos en orden descendente o haz click para auditar"
+                          >
+                            <Eye className="w-3 h-3 text-orange-400" />
+                            <span>PJ ({item.stats.currentSeasonGamesPlayed})</span>
+                          </button>
+                        </td>
+
+                        {/* 9. Acciones en Botón Único con Desplegable */}
+                        <td className="py-1.5 pl-2 pr-3 text-right whitespace-nowrap">
+                          <div className="relative inline-block text-left">
                             <button
                               type="button"
                               onClick={() =>
-                                onInspectEntity('player', item.player.id)
+                                setActiveActionMenuId(
+                                  activeActionMenuId === item.player.id ? null : item.player.id
+                                )
                               }
-                              className="font-semibold text-slate-100 hover:text-orange-400 text-left transition-colors"
+                              className="px-2 py-1 rounded bg-[#182338] hover:bg-orange-500/20 text-orange-400 hover:text-orange-300 border border-[#1E293B] hover:border-orange-500/50 transition-colors inline-flex items-center gap-1 shrink-0 shadow cursor-pointer"
+                              title="Asignar a mi equipo (Fichar/Alta×Corte) o a un rival"
+                              aria-label={`Asignar o traspasar ${item.player.name}`}
                             >
-                              {item.player.name}
+                              <ArrowLeftRight className="w-3.5 h-3.5" />
+                              <ChevronDown className="w-3 h-3 text-slate-400" />
                             </button>
-                            <div className="text-[11px] text-slate-400 font-mono flex items-center gap-1.5">
-                              <span>{item.player.teamAbbr} · {item.player.position} · {item.stats.minutesAvg.toFixed(1)} MIN</span>
-                              <span>·</span>
-                              <button
-                                type="button"
-                                onClick={() => setInspectedPlayerForLogsId(item.player.id)}
-                                className="text-orange-400 hover:text-orange-300 font-semibold hover:underline"
-                                title="Ver desglose de partidos y FPTS obtenidas"
-                              >
-                                Ver partidos ({item.stats.currentSeasonGamesPlayed})
-                              </button>
-                            </div>
-                            {item.roleBreakout && (
-                              <div className="text-[11px] font-mono tabular-nums text-emerald-400 mt-0.5">
-                                ▲ Rol: {item.roleBreakout.minDelta >= 0 ? '+' : ''}
-                                {item.roleBreakout.minDelta.toFixed(1)} MIN ·{' '}
-                                {item.roleBreakout.usgDelta >= 0 ? '+' : ''}
-                                {item.roleBreakout.usgDelta.toFixed(1)}% USG
-                                {item.roleBreakout.gapGamesCount > 0
-                                  ? ` · ${item.roleBreakout.gapGamesCount} PJ en huecos`
-                                  : ''}
+
+                            {activeActionMenuId === item.player.id && (
+                              <div
+                                className="fixed inset-0 z-40 cursor-default"
+                                onClick={() => setActiveActionMenuId(null)}
+                              />
+                            )}
+
+                            {activeActionMenuId === item.player.id && (
+                              <div className="absolute right-0 top-full mt-1 z-50 w-48 rounded-lg bg-[#0F172A] border border-[#334155] shadow-2xl py-1 text-left text-xs space-y-0.5 animate-in fade-in zoom-in-95 duration-100">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveActionMenuId(null);
+                                    handleExecuteWaiverSwap(
+                                      item.player.id,
+                                      effectiveDropMember?.player.id
+                                    );
+                                  }}
+                                  className="w-full text-left px-3 py-1.5 font-semibold text-orange-400 hover:bg-[#182338] transition-colors flex items-center gap-1.5"
+                                >
+                                  <span>⚡</span>
+                                  <span>
+                                    {myRosterEnriched.length >= OFFICIAL_LEAGUE_RULES.maxContracts
+                                      ? `Alta × Corte (${effectiveDropMember?.player.name || 'Seleccionar'})`
+                                      : 'Fichar a mi equipo'}
+                                  </span>
+                                </button>
+                                <div className="border-t border-[#1E293B] my-1" />
+                                <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                  Asignar a rival...
+                                </div>
+                                {rivalSlotKeys.map((tKey) => (
+                                  <button
+                                    key={tKey}
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveActionMenuId(null);
+                                      handleAssignPlayerToRival(item.player.id, tKey);
+                                    }}
+                                    className="w-full text-left px-3 py-1 text-slate-300 hover:text-white hover:bg-[#182338] transition-colors flex items-center justify-between"
+                                  >
+                                    <span>{getRivalDisplayName(tKey)}</span>
+                                  </button>
+                                ))}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveActionMenuId(null);
+                                    handleAssignPlayerToRival(item.player.id, '__generic__');
+                                  }}
+                                  className="w-full text-left px-3 py-1 text-rose-400 hover:bg-[#182338] transition-colors"
+                                >
+                                  Marcar como Ocupado
+                                </button>
                               </div>
                             )}
                           </div>
-                        </div>
-                      </td>
-
-                      <td className="py-2.5 px-3 whitespace-nowrap">
-                        {renderSeverityText(
-                          item.severity,
-                          item.injury?.statusLabelEs,
-                          item.weekly.absenceTier,
-                          item.weekly.absenceLabelEs
-                        )}
-                      </td>
-
-                      <td className="py-2.5 px-3 min-w-[210px]">
-                        <div className="font-mono tabular-nums font-semibold text-slate-200">
-                          {item.teamSched.gamesCount} PJ
-                          {item.teamSched.b2bCount > 0
-                            ? ` · ${item.teamSched.b2bCount} B2B`
-                            : ''}
-                        </div>
-                        {renderScheduleBadges(item.teamSched)}
-                      </td>
-
-                      <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-200">
-                        {formatFptsExact(item.stats.seasonTotalFpts)}
-                      </td>
-
-                      <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-200">
-                        {item.stats.seasonAvgFpts.toFixed(1)}
-                      </td>
-
-                      <td className="py-2.5 px-3 text-right font-mono tabular-nums">
-                        <span className="text-slate-100 font-medium">
-                          {item.stats.last5AvgFpts.toFixed(1)}
-                        </span>
-                        <span
-                          className={`ml-1 text-[11px] ${
-                            item.stats.formDeltaLast5 >= 0
-                              ? 'text-emerald-400'
-                              : 'text-rose-400'
-                          }`}
-                        >
-                          ({item.stats.formDeltaLast5 >= 0 ? '+' : ''}
-                          {item.stats.formDeltaLast5.toFixed(1)})
-                        </span>
-                      </td>
-
-                      <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
-                        <span className="font-bold text-orange-400 block">
-                          {item.weekly.lockAdjustedFpts.toFixed(1)}
-                        </span>
-                        {item.weekly.playableGamesEst !== item.teamSched.gamesCount && (
-                          <span className="text-[10px] text-slate-400 block">
-                            {item.weekly.playableGamesEst}/{item.teamSched.gamesCount} PJ est.
-                          </span>
-                        )}
-                      </td>
-
-                      <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
-                        {effectiveDropMember ? (
-                          <div>
-                            <span
-                              className={`font-bold ${
-                                item.netWeekGain >= 0
-                                  ? 'text-emerald-400'
-                                  : 'text-rose-400'
-                              }`}
-                            >
-                              {item.netWeekGain >= 0 ? '+' : ''}
-                              {item.netWeekGain.toFixed(1)} sem.
-                            </span>
-                            <span className="block text-[10px] text-slate-400">
-                              ({item.netPerGameGain >= 0 ? '+' : ''}
-                              {item.netPerGameGain.toFixed(1)} / PJ)
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="text-emerald-400 font-semibold">
-                            +{item.weekly.lockAdjustedFpts.toFixed(1)} sem.
-                          </span>
-                        )}
-                      </td>
-
-                      <td className="py-2.5 pl-2 pr-4 text-right whitespace-nowrap">
-                        <div className="inline-flex items-center gap-1.5">
-                          <select
-                            aria-label={`Asignar ${item.player.name} a un equipo rival`}
-                            value=""
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              if (val) handleAssignPlayerToRival(item.player.id, val);
-                            }}
-                            className="px-2 py-1 rounded bg-[#0B1120] border border-[#1E293B] hover:border-slate-600 text-slate-300 text-xs max-w-[125px] focus:outline-none focus:border-orange-500"
-                          >
-                            <option value="">Asignar rival...</option>
-                            {rivalSlotKeys.map((tKey) => (
-                              <option key={tKey} value={tKey}>
-                                {getRivalDisplayName(tKey)}
-                              </option>
-                            ))}
-                            <option value="__generic__">Ocupado (sin equipo)</option>
-                          </select>
-
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleExecuteWaiverSwap(
-                                item.player.id,
-                                effectiveDropMember?.player.id
-                              )
-                            }
-                            className="px-2.5 py-1 rounded bg-orange-500 hover:bg-orange-400 text-slate-950 font-semibold transition-colors"
-                          >
-                            {myRosterEnriched.length >=
-                            OFFICIAL_LEAGUE_RULES.maxContracts
-                              ? 'Alta × Corte'
-                              : 'Fichar'}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
+
+            {/* Hover Floating Breakdown Popover */}
+            {hoveredBreakdown && (() => {
+              const item = enrichedById.get(hoveredBreakdown.playerId);
+              if (!item) return null;
+              const recent = computePlayerRecentWindowStats(item.player, leagueState.gameCorrections);
+              const gamesDesc = recent.gamesDesc;
+
+              return (
+                <div
+                  style={{
+                    position: 'fixed',
+                    top: `${hoveredBreakdown.top}px`,
+                    right: `${hoveredBreakdown.right}px`,
+                  }}
+                  className="z-50 w-80 max-w-sm bg-[#0F172A] border border-[#334155] rounded-xl shadow-2xl p-3 text-xs pointer-events-auto space-y-2 backdrop-blur-md"
+                  onMouseEnter={() => {}}
+                  onMouseLeave={() => setHoveredBreakdown(null)}
+                >
+                  <div className="flex items-center justify-between pb-2 border-b border-[#1E293B]">
+                    <div className="flex items-center gap-2">
+                      <PlayerAvatar
+                        playerId={item.player.id}
+                        name={item.player.name}
+                        teamAbbr={item.player.teamAbbr}
+                        size="xs"
+                      />
+                      <div>
+                        <div className="font-bold text-slate-100">{item.player.name}</div>
+                        <div className="text-[10px] text-slate-400 font-mono">
+                          {item.player.teamAbbr} · {item.player.position} · {item.stats.seasonAvgFpts.toFixed(1)} FPTS/PJ
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInspectedPlayerForLogsId(item.player.id);
+                        setHoveredBreakdown(null);
+                      }}
+                      className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 font-semibold border border-amber-500/30"
+                      title="Abrir auditoría completa y correcciones"
+                    >
+                      Auditar ✏️
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between text-[10px] text-slate-400 px-0.5 font-semibold">
+                    <span>Partidos 2026-27 (Descendente)</span>
+                    <span className="text-orange-400 font-mono">{gamesDesc.length} PJ</span>
+                  </div>
+
+                  <div className="max-h-56 overflow-y-auto divide-y divide-[#1E293B]/60 pr-1 no-scrollbar">
+                    {gamesDesc.length === 0 ? (
+                      <div className="py-4 text-center text-slate-500 text-[11px]">Sin partidos 2026-27</div>
+                    ) : (
+                      gamesDesc.map(({ game, totalFpts }) => (
+                        <div key={game.eventId || game.date} className="py-1.5 flex items-center justify-between font-mono text-[11px]">
+                          <div>
+                            <span className="text-slate-200 font-semibold">{game.date?.slice(5) || ''}</span>{' '}
+                            <span className={game.isHome ? 'text-emerald-400 font-medium' : 'text-slate-400'}>
+                              {game.isHome ? 'vs ' : '@ '}{game.opponentAbbr}
+                            </span>
+                            <span className="text-slate-500 text-[10px] ml-1">{game.minutes}m</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-amber-300 font-bold">{formatFptsExact(totalFpts)}</span>
+                            <span className="text-slate-500 text-[9px] block">
+                              {game.points}p · {game.rebounds}r · {game.assists}a · {game.steals + game.blocks}st
+                            </span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="pt-1.5 border-t border-[#1E293B] text-[10px] text-slate-400 text-center">
+                    Pasa el ratón o pulsa <strong className="text-amber-300">Auditar</strong> para ver estadísticas completas.
+                  </div>
+                </div>
+              );
+            })()}
           </section>
         </div>
       )}

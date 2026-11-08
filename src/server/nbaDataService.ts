@@ -10,9 +10,11 @@ import { packBootstrapWirePayload } from "../utils/bootstrapWireCodec.ts";
 import { applyCdnDeltaGamesTo2027, hydrateSeasonDatasetFromSnapshot, readNbaSnapshotFromDisk, serializeSeasonDatasetForSnapshot, writeNbaSnapshotToDisk } from "./nbaSnapshotStore.ts";
 import { buildSeasonAwardsPayload, enrichBiosWithEspnRosters } from "./seasonAwardsService.ts";
 import { executeWithCircuitBreaker, identifyProviderFromUrl } from "./circuitBreaker.ts";
+import { STATIC_SCHEDULE_2027 } from "../utils/staticSchedule.ts";
 function isSnapshotOnlyRuntime() {
   return Boolean(process.env.VERCEL) || process.env.NBA_SNAPSHOT_ONLY === "1";
 }
+const staticScheduleByGameId = new Map(STATIC_SCHEDULE_2027.map((s) => [s.gameId, s]));
 const NBA_STATS_HEADERS = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36", Referer: "https://www.nba.com/", Origin: "https://www.nba.com", Accept: "application/json, text/plain, */*", "x-nba-stats-origin": "stats", "x-nba-stats-token": "true", "Accept-Language": "en-US,en;q=0.9" };
 const EAST_TEAM_ABBRS = /* @__PURE__ */ new Set(["ATL", "BOS", "BKN", "CHA", "CHI", "CLE", "DET", "IND", "MIA", "MIL", "NYK", "ORL", "PHI", "TOR", "WAS"]);
 const jsonCache = /* @__PURE__ */ new Map();
@@ -1068,9 +1070,13 @@ async function getGameDayPayload(requestedDate, forceRefresh = false) {
     const usgAvg = round1(meanNums(baselinePool.map((x) => x.usgEst)));
     const fgaAvg = round1(meanNums(baselinePool.map((x) => x.fga)));
     const ptsDelta = round1(g.points - ptsAvg);
-    const line = { playerId: p.id, playerName: p.name, teamAbbr: nightTeamAbbr, position: p.position, opponentAbbr: g.opponentAbbr, isHome: g.isHome, result: g.result, minutes: g.minutes, points: g.points, rebounds: g.rebounds, oreb: g.oreb, assists: g.assists, steals: g.steals, blocks: g.blocks, stocks: g.stocks, turnovers: g.turnovers, fgm: g.fgm, fga: g.fga, fg3m: g.fg3m, fg3a: g.fg3a, ftm: g.ftm, fta: g.fta, plusMinus: g.plusMinus, tsPct: g.tsPct, efgPct: g.efgPct, usgEst: g.usgEst, gameScore: g.gameScore, ptsBaselineAvg: ptsAvg, ptsDelta, gmScBaselineAvg: gmScAvg };
+    const staticSched = staticScheduleByGameId.get(g.eventId);
+    const resolvedIsHome = staticSched
+      ? (nightTeamAbbr === staticSched.homeAbbr || p.teamAbbr === staticSched.homeAbbr)
+      : g.isHome;
+    const line = { playerId: p.id, playerName: p.name, teamAbbr: nightTeamAbbr, position: p.position, opponentAbbr: g.opponentAbbr, isHome: resolvedIsHome, result: g.result, minutes: g.minutes, points: g.points, rebounds: g.rebounds, oreb: g.oreb, assists: g.assists, steals: g.steals, blocks: g.blocks, stocks: g.stocks, turnovers: g.turnovers, fgm: g.fgm, fga: g.fga, fg3m: g.fg3m, fg3a: g.fg3a, ftm: g.ftm, fta: g.fta, plusMinus: g.plusMinus, tsPct: g.tsPct, efgPct: g.efgPct, usgEst: g.usgEst, gameScore: g.gameScore, ptsBaselineAvg: ptsAvg, ptsDelta, gmScBaselineAvg: gmScAvg };
     allNightLines.push(line);
-    const sideKey = `${g.eventId}:${g.isHome ? "home" : "away"}`;
+    const sideKey = `${g.eventId}:${resolvedIsHome ? "home" : "away"}`;
     const bucket = nightLinesByEventSide.get(sideKey) || [];
     bucket.push(line);
     nightLinesByEventSide.set(sideKey, bucket);
@@ -1203,15 +1209,19 @@ async function getGameDayPayload(requestedDate, forceRefresh = false) {
     let homeLog;
     let awayTeam;
     let awayLog;
+    const staticSched = staticScheduleByGameId.get(eventId);
     for (const tm of full.teams) {
       const gl = tm.games.find((x) => x.eventId === eventId);
       if (!gl) continue;
-      if (gl.isHome) {
+      const isHomeTeam = staticSched
+        ? tm.abbreviation === staticSched.homeAbbr
+        : gl.isHome;
+      if (isHomeTeam) {
         homeTeam = tm;
-        homeLog = gl;
+        homeLog = { ...gl, isHome: true };
       } else {
         awayTeam = tm;
-        awayLog = gl;
+        awayLog = { ...gl, isHome: false };
       }
     }
     if (!homeTeam || !homeLog || !awayTeam || !awayLog) continue;

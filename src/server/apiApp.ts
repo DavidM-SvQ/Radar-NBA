@@ -361,8 +361,17 @@ app.get("/api/nba/game/:eventId/narrative", validateRequest({ params: gameEventP
     );
     res.json(narrative);
   } catch (err) {
-    console.error("Error in /api/nba/game/:eventId/narrative:", err);
-    res.status(500).json({ error: err?.message || "Error al redactar crónica del partido." });
+    console.error("Error in /api/nba/game/:eventId/narrative, attempting deterministic fallback:", err);
+    try {
+      const { params } = getValidated(req);
+      const report = await scoutingEngine.buildGameOfficialReportData(params.eventId, false);
+      const fallback = scoutingEngine.buildDeterministicGameNarrative(report);
+      res.setHeader("Cache-Control", "public, max-age=60, s-maxage=300, stale-while-revalidate=1800");
+      res.json(fallback);
+    } catch (innerErr) {
+      console.error("Complete narrative fallback failure:", innerErr);
+      res.status(500).json({ error: err?.message || "Error al redactar crónica del partido." });
+    }
   }
 });
 app.get(["/api/nba/fantasy/context", "/api/nba/fantasy/espn"], validateRequest({ query: refreshOnlyQuerySchema }), async (req, res) => {
