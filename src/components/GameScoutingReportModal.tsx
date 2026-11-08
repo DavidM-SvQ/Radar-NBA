@@ -2445,15 +2445,18 @@ export function GameScoutingReportModal({
 
                       {/* EDITORIAL FRONT-PAGE MASTHEAD */}
                       {narrative && (
-                        <header className="space-y-3 border-b border-[#1E293B] pb-5">
-                          {/* Metadata Bar: Tipo de Artículo, Hora y Tiempo de Redacción */}
-                          <div className="flex flex-wrap items-center gap-2 text-xs">
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-orange-500/10 text-orange-400 border border-orange-500/30">
-                              <FileText className="w-3.5 h-3.5 text-orange-400 shrink-0" />
-                              <span>
+                        <header className="space-y-2.5 border-b border-[#1E293B] pb-4 sm:pb-5">
+                          {/* Compact Mobile-Friendly Metadata Bar: Tipo, Hora y Tiempo */}
+                          <div className="flex flex-wrap items-center gap-1.5 text-[10px] sm:text-xs text-slate-300 font-mono">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] sm:text-xs font-semibold bg-orange-500/10 text-orange-400 border border-orange-500/30 font-sans">
+                              <FileText className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-orange-400 shrink-0" />
+                              <span className="hidden sm:inline">
                                 {narrative.engineMode === 'gemini_search'
                                   ? 'Crónica Periodística con IA (Gemini)'
                                   : 'Crónica Determinista de Partido'}
+                              </span>
+                              <span className="sm:hidden">
+                                {narrative.engineMode === 'gemini_search' ? 'Crónica IA' : 'Crónica Determinista'}
                               </span>
 
                               {narrative.engineMode !== 'gemini_search' && (
@@ -2462,7 +2465,7 @@ export function GameScoutingReportModal({
                                   tabIndex={0}
                                   aria-label="Motivo de la crónica determinista"
                                 >
-                                  <AlertTriangle className="w-3.5 h-3.5 text-amber-400 hover:text-amber-200 transition-colors shrink-0" />
+                                  <AlertTriangle className="w-3 h-3 text-amber-400 hover:text-amber-200 transition-colors shrink-0" />
                                   <span
                                     role="tooltip"
                                     className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 sm:w-80 p-2.5 rounded-lg bg-slate-900/95 text-slate-200 border border-amber-500/40 shadow-2xl text-[11px] leading-relaxed font-normal opacity-0 group-hover/diag:opacity-100 group-focus-within/diag:opacity-100 transition-opacity z-50 backdrop-blur-md"
@@ -2475,7 +2478,7 @@ export function GameScoutingReportModal({
                                         : 'Agotado tiempo de respuesta de IA'}
                                     </span>
                                     {narrative.missingApiKey
-                                      ? 'El backend no detecta la variable GEMINI_API_KEY en este entorno de ejecución. Asegúrate de que la variable esté asignada en Vercel o tu entorno local.'
+                                      ? 'El backend no detecta la variable GEMINI_API_KEY en este entorno de ejecución.'
                                       : narrative.quotaExhausted || narrative.fallbackReason === 'quota_exhausted_429'
                                       ? 'Se alcanzó el límite diario de peticiones para este modelo Gemini en el Free Tier de Google AI Studio.'
                                       : 'La llamada a los modelos de Gemini agotó el tiempo de espera o la API no respondió a tiempo. Se muestra esta crónica determinista de respaldo sin pérdida de datos.'}
@@ -2485,21 +2488,24 @@ export function GameScoutingReportModal({
                               )}
                             </span>
 
-                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs bg-slate-800/80 text-slate-300 border border-slate-700/60 font-mono">
-                              <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                              Hora: {new Date(narrative.generatedAt || Date.now()).toLocaleTimeString('es-ES', {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                                second: '2-digit',
-                              })}
+                            <span className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded-md bg-slate-800/80 text-slate-300 border border-slate-700/60">
+                              <Clock className="w-3 h-3 text-slate-400 shrink-0" />
+                              <span className="hidden sm:inline">Hora: </span>
+                              <span>
+                                {new Date(narrative.generatedAt || Date.now()).toLocaleTimeString('es-ES', {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}
+                              </span>
                             </span>
 
-                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs bg-slate-800/80 text-slate-300 border border-slate-700/60 font-mono">
-                              <Zap className="w-3.5 h-3.5 text-orange-400 shrink-0" />
-                              Tiempo de Redacción: {narrative.generationTimeMs ? `${(narrative.generationTimeMs / 1000).toFixed(1)}s` : '0.9s'}
+                            <span className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded-md bg-slate-800/80 text-slate-300 border border-slate-700/60">
+                              <Zap className="w-3 h-3 text-orange-400 shrink-0" />
+                              <span className="hidden sm:inline">Tiempo: </span>
+                              <span>{narrative.generationTimeMs ? `${(narrative.generationTimeMs / 1000).toFixed(1)}s` : '0.9s'}</span>
                             </span>
 
-                            <span className="text-slate-400 font-mono text-[11px] sm:ml-auto">
+                            <span className="hidden md:inline text-slate-400 font-mono text-[11px] ml-auto">
                               {report.arenaName}, {report.arenaCity} · {report.attendanceFormatted}
                             </span>
                           </div>

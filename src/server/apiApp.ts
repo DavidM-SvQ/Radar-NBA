@@ -361,7 +361,8 @@ app.get("/api/nba/game/:eventId/narrative", validateRequest({ params: gameEventP
     );
     res.json(narrative);
   } catch (err) {
-    console.error("Error in /api/nba/game/:eventId/narrative, attempting deterministic fallback:", err);
+    const cleanErr = String(err instanceof Error ? err.message : err || "").replace(/[\{\}\"\:]/g, " ").slice(0, 100);
+    console.info(`[RadarNBA API] Respuesta determinista para crónica -> ${cleanErr}`);
     try {
       const { params } = getValidated(req);
       const report = await scoutingEngine.buildGameOfficialReportData(params.eventId, false);
@@ -369,8 +370,9 @@ app.get("/api/nba/game/:eventId/narrative", validateRequest({ params: gameEventP
       res.setHeader("Cache-Control", "public, max-age=60, s-maxage=300, stale-while-revalidate=1800");
       res.json(fallback);
     } catch (innerErr) {
-      console.error("Complete narrative fallback failure:", innerErr);
-      res.status(500).json({ error: err?.message || "Error al redactar crónica del partido." });
+      const cleanInner = String(innerErr instanceof Error ? innerErr.message : innerErr || "").replace(/[\{\}\"\:]/g, " ").slice(0, 100);
+      console.warn(`[RadarNBA API] Fallback de crónica secundario -> ${cleanInner}`);
+      res.status(500).json({ error: "Error al redactar crónica del partido." });
     }
   }
 });

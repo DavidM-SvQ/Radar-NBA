@@ -281,10 +281,29 @@ function extractGroundingSources(response, seedSources = []) {
   return links;
 }
 const modelCooldownMap = new Map<string, number>();
+const deprecatedModelsSet = new Set<string>();
 
 function isQuotaExhaustedError(err: unknown): boolean {
   const msg = String(err instanceof Error ? err.message : err || "");
-  return msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("Quota exceeded");
+  return (
+    msg.includes("429") ||
+    msg.includes("503") ||
+    msg.includes("RESOURCE_EXHAUSTED") ||
+    msg.includes("Quota exceeded") ||
+    msg.includes("high demand") ||
+    msg.includes("UNAVAILABLE") ||
+    msg.includes("overloaded")
+  );
+}
+
+function isModelDeprecatedError(err: unknown): boolean {
+  const msg = String(err instanceof Error ? err.message : err || "");
+  return (
+    msg.includes("404") ||
+    msg.includes("NOT_FOUND") ||
+    msg.includes("no longer available") ||
+    msg.includes("is not found")
+  );
 }
 
 async function generateWithGeminiCascade(params: {
@@ -304,23 +323,35 @@ async function generateWithGeminiCascade(params: {
     throw new Error("GEMINI_API_KEY unavailable");
   }
 
-  const modelTimeout = isServerless ? 5500 : 25000;
-  const allModels = isServerless
-    ? [
-        { name: "gemini-3.8-flash", timeoutMs: modelTimeout },
-        { name: "gemini-3.1-flash-lite", timeoutMs: modelTimeout },
-      ]
-    : [
-        { name: "gemini-3.8-flash", timeoutMs: 25000 },
-        { name: "gemini-3.1-flash-lite", timeoutMs: 25000 },
-        { name: "gemini-flash-latest", timeoutMs: 25000 },
-      ];
+  const modelTimeout = isServerless ? 6500 : 25000;
+  
+  // Environment variable overrides take top priority, followed by stable models and floating aliases
+  const primaryModel = process.env.GEMINI_MODEL_PRIMARY || "gemini-3.1-flash-lite";
+  const secondaryModel = process.env.GEMINI_MODEL_SECONDARY || "gemini-3.8-flash";
+  const tertiaryModel = process.env.GEMINI_MODEL_TERTIARY || "gemini-flash-latest";
+
+  const rawCandidateModels = [
+    { name: primaryModel, timeoutMs: modelTimeout },
+    { name: secondaryModel, timeoutMs: modelTimeout },
+    { name: tertiaryModel, timeoutMs: modelTimeout },
+    { name: "gemini-flash-latest", timeoutMs: modelTimeout },
+  ];
+
+  // Remove duplicates and permanently skip models detected as deprecated (404) by Google API
+  const uniqueModels: Array<{ name: string; timeoutMs: number }> = [];
+  const seenNames = new Set<string>();
+  for (const item of rawCandidateModels) {
+    if (!seenNames.has(item.name) && !deprecatedModelsSet.has(item.name)) {
+      seenNames.add(item.name);
+      uniqueModels.push(item);
+    }
+  }
 
   const now = Date.now();
-  const activeModels = allModels.filter(
+  const activeModels = uniqueModels.filter(
     (m) => (modelCooldownMap.get(m.name) || 0) < now
   );
-  const modelsToTry = activeModels.length > 0 ? activeModels : allModels;
+  const modelsToTry = activeModels.length > 0 ? activeModels : uniqueModels;
   let lastErr: unknown = null;
 
   for (const { name: model, timeoutMs } of modelsToTry) {
@@ -348,14 +379,14 @@ async function generateWithGeminiCascade(params: {
       }
     } catch (err) {
       lastErr = err;
-      if (isQuotaExhaustedError(err)) {
-        modelCooldownMap.set(model, Date.now() + 15 * 60 * 1000);
+      if (isModelDeprecatedError(err)) {
+        deprecatedModelsSet.add(model);
+      } else if (isQuotaExhaustedError(err)) {
+        modelCooldownMap.set(model, Date.now() + 5 * 60 * 1000);
       }
-      console.info(
-        `[RadarNBA] Modelo Gemini ${model} no completó la respuesta: ${
-          err instanceof Error ? err.message.slice(0, 140) : String(err).slice(0, 140)
-        }`
-      );
+      const rawMsg = err instanceof Error ? err.message : String(err || "");
+      const cleanMsg = rawMsg.replace(/[\{\}\"\:]/g, " ").replace(/\s+/g, " ").slice(0, 100);
+      console.info(`[RadarNBA] Transición de modelo ${model} -> ${cleanMsg}`);
     }
   }
 
@@ -1497,7 +1528,9 @@ ${benchAndAbsences}`, dynamicSpotlight, xFactorSection, spanishSection: report.s
         reportMemoryCache.set(cacheKey, { expiresAt: Date.now() + 6 * 60 * 60 * 1e3, data: payload });
         return payload;
       } catch (err) {
-        console.info(`[RadarNBA] Activado motor determinista de cr\xF3nica para ${eventId} (${err?.message || err?.status || err?.code || "timeout/offline"})`);
+        const rawErrStr = String(err instanceof Error ? err.message : err || "timeout/offline");
+        const cleanReason = rawErrStr.replace(/[\{\}\"\:]/g, " ").replace(/\s+/g, " ").slice(0, 90);
+        console.info(`[RadarNBA] Motor determinista activo para ${eventId} -> ${cleanReason}`);
         const isQuota = isQuotaExhaustedError(err);
         const fallback = buildDeterministicGameNarrative(report);
         fallback.generationTimeMs = Date.now() - startTime;
