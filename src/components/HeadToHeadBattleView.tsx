@@ -1598,15 +1598,10 @@ export function HeadToHeadBattleView({
             <div className="flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
               {(
                 [
-                  {
-                    id: 'continuous',
-                    label:
-                      experienceMode === 'simple'
-                        ? 'Actual + Pasada'
-                        : 'Continuo (26-27 + 25-26)',
-                  },
-                  { id: '2027', label: 'Solo 2026-27' },
-                  { id: '2026', label: '2025-26 Completa' },
+                  { id: '2027', label: '2026-27 (Actual)' },
+                  { id: '2026', label: '2025-26' },
+                  { id: '2025', label: '2024-25' },
+                  { id: '2024', label: '2023-24' },
                 ] as const
               ).map((m) => (
                 <button
@@ -1615,8 +1610,8 @@ export function HeadToHeadBattleView({
                   onClick={() => onChangeSeasonMode(m.id)}
                   className={`min-h-[32px] sm:min-h-0 px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
                     seasonMode === m.id
-                      ? 'bg-[#1E293B] text-orange-400 font-semibold'
-                      : 'text-slate-400 hover:text-slate-200'
+                      ? 'bg-orange-500 text-slate-950 font-bold shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-[#1E293B]'
                   }`}
                 >
                   {m.label}
@@ -1830,10 +1825,10 @@ export function HeadToHeadBattleView({
               </span>
               <button
                 type="button"
-                onClick={() => onChangeSeasonMode('continuous')}
+                onClick={() => onChangeSeasonMode('2026')}
                 className="px-2.5 py-1 font-semibold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-200 rounded transition-colors whitespace-nowrap shrink-0"
               >
-                Ver nivel consolidado (Actual + Pasada) →
+                Ver temporada consolidada 2025-26 →
               </button>
             </div>
           )}

@@ -5,7 +5,10 @@ import {
   Check,
   ChevronDown,
   Columns3,
+  Expand,
+  Maximize2,
   Minus,
+  PanelRight,
   Plus,
   RotateCcw,
   Sliders,
@@ -387,6 +390,18 @@ export function EntityInspectorDrawer({
   onOpenInComparator,
   onSelectRosterPlayer,
 }: EntityInspectorDrawerProps) {
+  // Modal layout mode: wide popup (default), fullscreen, or side panel
+  const [displayMode, setDisplayMode] =
+    useState<'wide' | 'fullscreen' | 'sidebar'>('wide');
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   // Player Inspector configurable state
   const [samplePreset, setSamplePreset] =
     useState<PlayerSamplePreset>('slider');
@@ -1446,10 +1461,22 @@ export function EntityInspectorDrawer({
     });
   };
 
+  const wrapperClasses =
+    displayMode === 'sidebar'
+      ? 'fixed inset-0 z-50 flex items-end sm:items-stretch justify-end bg-black/75 backdrop-blur-[3px] p-0 animate-in fade-in duration-200'
+      : 'fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-[3px] p-0 sm:p-3 md:p-5 animate-in fade-in duration-200';
+
+  const containerClasses =
+    displayMode === 'fullscreen'
+      ? 'relative z-10 w-full h-[95dvh] sm:h-[96vh] sm:max-w-[98vw] bg-[#0F172A] border border-[#1E293B] rounded-t-3xl sm:rounded-2xl overflow-y-auto overscroll-contain flex flex-col shadow-2xl pb-safe transition-all duration-200'
+      : displayMode === 'sidebar'
+      ? 'relative z-10 w-full sm:max-w-2xl bg-[#0F172A] border-t sm:border-t-0 sm:border-l border-[#1E293B] rounded-t-3xl sm:rounded-none h-[92dvh] sm:h-full overflow-y-auto overscroll-contain flex flex-col shadow-2xl pb-safe transition-all duration-200'
+      : 'relative z-10 w-full sm:max-w-5xl md:max-w-6xl xl:max-w-7xl h-[94dvh] sm:h-[90vh] bg-[#0F172A] border border-[#1E293B] rounded-t-3xl sm:rounded-2xl overflow-y-auto overscroll-contain flex flex-col shadow-2xl pb-safe transition-all duration-200';
+
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-stretch justify-end bg-black/65 backdrop-blur-[2px]">
+    <div className={wrapperClasses}>
       <div className="fixed inset-0" onClick={onClose} aria-hidden="true" />
-      <aside className="relative z-10 w-full sm:max-w-3xl bg-[#0F172A] border-t sm:border-t-0 sm:border-l border-[#1E293B] rounded-t-3xl sm:rounded-none h-[92dvh] sm:h-full overflow-y-auto overscroll-contain flex flex-col pb-safe">
+      <aside className={containerClasses}>
         {/* Sticky Header */}
         <div className="sticky top-0 z-20 bg-[#0F172A]/95 backdrop-blur-md border-b border-[#1E293B] px-4 sm:px-6 pt-2.5 sm:pt-4 pb-3.5 sm:pb-4 space-y-2.5 sm:space-y-0">
           <div className="w-10 h-1 bg-slate-700 rounded-full mx-auto mb-2 sm:hidden" />
@@ -1493,6 +1520,49 @@ export function EntityInspectorDrawer({
             </div>
 
             <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+              {/* Selector de formato de ventana: Popup Ámplio / Completa / Panel Lateral */}
+              <div className="hidden sm:flex items-center bg-[#131C2E] border border-[#1E293B] rounded-lg p-0.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setDisplayMode('wide')}
+                  title="Modal centrado amplio"
+                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 ${
+                    displayMode === 'wide'
+                      ? 'bg-orange-500 text-slate-950 font-bold shadow-sm'
+                      : 'text-slate-400 hover:text-white hover:bg-[#182338]'
+                  }`}
+                >
+                  <Expand className="w-3.5 h-3.5" />
+                  <span className="hidden xl:inline">Modal</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDisplayMode('fullscreen')}
+                  title="Pantalla completa"
+                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 ${
+                    displayMode === 'fullscreen'
+                      ? 'bg-orange-500 text-slate-950 font-bold shadow-sm'
+                      : 'text-slate-400 hover:text-white hover:bg-[#182338]'
+                  }`}
+                >
+                  <Maximize2 className="w-3.5 h-3.5" />
+                  <span className="hidden xl:inline">Completa</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDisplayMode('sidebar')}
+                  title="Panel lateral"
+                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 ${
+                    displayMode === 'sidebar'
+                      ? 'bg-orange-500 text-slate-950 font-bold shadow-sm'
+                      : 'text-slate-400 hover:text-white hover:bg-[#182338]'
+                  }`}
+                >
+                  <PanelRight className="w-3.5 h-3.5" />
+                  <span className="hidden xl:inline">Lateral</span>
+                </button>
+              </div>
+
               <button
                 type="button"
                 onClick={() => onToggleWatchlist(wKey)}

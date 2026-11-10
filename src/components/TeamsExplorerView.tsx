@@ -10,6 +10,7 @@ import {
 import {
   evaluateVsLeague,
   type LeagueBenchmarks,
+  type MetricBenchmark,
 } from '../utils/humanize';
 import {
   MetricInfoTooltip,
@@ -35,7 +36,12 @@ interface TeamsExplorerViewProps {
   onInspectEntity: (entityType: 'player' | 'team', entityId: string) => void;
 }
 
-type TeamTableView = 'basic' | 'advanced' | 'zones_hustle';
+type TeamTableView =
+  | 'basic'
+  | 'advanced'
+  | 'shooting'
+  | 'playmaking_rebound'
+  | 'hustle_defense';
 
 type SortKey =
   | 'watched'
@@ -48,7 +54,24 @@ type SortKey =
   | 'differential'
   | 'windowDiff'
   | 'orebAvg'
+  | 'drebAvg'
+  | 'rebAvg'
+  | 'fgmAvg'
+  | 'fgaAvg'
+  | 'fgPct'
   | 'fg3mAvg'
+  | 'fg3aAvg'
+  | 'fg3Pct'
+  | 'ftmAvg'
+  | 'ftaAvg'
+  | 'ftPct'
+  | 'astAvg'
+  | 'stlAvg'
+  | 'blkAvg'
+  | 'tovAvg'
+  | 'astTovRatio'
+  | 'pctPts3p'
+  | 'pctPtsPaint'
   | 'offRtg'
   | 'defRtg'
   | 'netRtg'
@@ -74,6 +97,21 @@ function humanStreakCode(code: string): string {
   if (code.startsWith('W')) return `${num} ${num === '1' ? 'victoria' : 'victorias'}`;
   if (code.startsWith('L')) return `${num} ${num === '1' ? 'derrota' : 'derrotas'}`;
   return code;
+}
+
+function getHeatmapClass(
+  value: number,
+  benchmark: MetricBenchmark | undefined
+): string {
+  if (!benchmark || benchmark.sd === 0) return '';
+  const z = (value - benchmark.mean) / benchmark.sd;
+
+  if (Math.abs(z) < 0.5) return '';
+
+  const isPositive = z >= 0.5;
+  const isGood = benchmark.lowerIsBetter ? !isPositive : isPositive;
+
+  return isGood ? 'bg-emerald-500/10' : 'bg-rose-500/10';
 }
 
 export function TeamsExplorerView({
@@ -121,12 +159,38 @@ export function TeamsExplorerView({
         slice.length > 0
           ? round1(mean(slice.map((g) => g.differential)))
           : t.differential;
+
+      const ptsForAvg = t.avgPointsFor || round1(mean(games.map((g) => g.pointsFor)));
+      const ptsAgainstAvg = t.avgPointsAgainst || round1(mean(games.map((g) => g.pointsAgainst)));
       const orebAvg = round1(mean(games.map((g) => g.oreb)));
+      const drebAvg = round1(mean(games.map((g) => g.dreb)));
       const rebAvg = round1(mean(games.map((g) => g.reb)));
+
+      const fgmAvg = round1(mean(games.map((g) => g.fgm)));
+      const fgaAvg = round1(mean(games.map((g) => g.fga)));
+      const fgaTot = games.reduce((s, g) => s + g.fga, 0);
+      const fgmTot = games.reduce((s, g) => s + g.fgm, 0);
+      const fgPct = fgaTot > 0 ? round1((fgmTot / fgaTot) * 100) : 0;
+
       const fg3mAvg = round1(mean(games.map((g) => g.fg3m)));
+      const fg3aAvg = round1(mean(games.map((g) => g.fg3a)));
       const fg3aTot = games.reduce((s, g) => s + g.fg3a, 0);
       const fg3mTot = games.reduce((s, g) => s + g.fg3m, 0);
       const fg3Pct = fg3aTot > 0 ? round1((fg3mTot / fg3aTot) * 100) : 0;
+
+      const ftmAvg = round1(mean(games.map((g) => g.ftm)));
+      const ftaAvg = round1(mean(games.map((g) => g.fta)));
+      const ftaTot = games.reduce((s, g) => s + g.fta, 0);
+      const ftmTot = games.reduce((s, g) => s + g.ftm, 0);
+      const ftPct = ftaTot > 0 ? round1((ftmTot / ftaTot) * 100) : 0;
+
+      const astAvg = round1(mean(games.map((g) => g.ast)));
+      const stlAvg = round1(mean(games.map((g) => g.stl)));
+      const blkAvg = round1(mean(games.map((g) => g.blk)));
+      const tovAvg = round1(mean(games.map((g) => g.tov)));
+      const astTovRatio = tovAvg > 0 ? round1(astAvg / tovAvg) : astAvg;
+
+      const pctPts3p = ptsForAvg > 0 ? round1(((fg3mAvg * 3) / ptsForAvg) * 100) : 0;
 
       const adv = t.advanced;
       const offRtg = adv?.offRtg ?? round1(mean(games.map((g) => g.offRtg)));
@@ -150,13 +214,32 @@ export function TeamsExplorerView({
       const deflections = adv?.deflections ?? 0;
       const boxOuts = adv?.boxOuts ?? 0;
 
+      const pctPtsPaint = ptsForAvg > 0 ? round1((ptsPaint / ptsForAvg) * 100) : 0;
+
       return {
         ...t,
         windowDiff,
+        ptsForAvg,
+        ptsAgainstAvg,
         orebAvg,
+        drebAvg,
         rebAvg,
+        fgmAvg,
+        fgaAvg,
+        fgPct,
         fg3mAvg,
+        fg3aAvg,
         fg3Pct,
+        ftmAvg,
+        ftaAvg,
+        ftPct,
+        astAvg,
+        stlAvg,
+        blkAvg,
+        tovAvg,
+        astTovRatio,
+        pctPts3p,
+        pctPtsPaint,
         offRtg,
         defRtg,
         netRtg,
@@ -187,7 +270,7 @@ export function TeamsExplorerView({
         if (confFilter !== 'all' && t.conference !== confFilter) return false;
         if (q) {
           const hay = normalizeSearchText(
-            `${t.name} ${t.abbreviation} ${t.conference}`
+              `${t.name} ${t.abbreviation} ${t.conference}`
           );
           if (!hay.includes(q)) return false;
         }
@@ -238,8 +321,14 @@ export function TeamsExplorerView({
     } else if (mode === 'advanced') {
       setSortKey('netRtg');
       setSortAsc(false);
+    } else if (mode === 'shooting') {
+      setSortKey('fg3Pct');
+      setSortAsc(false);
+    } else if (mode === 'playmaking_rebound') {
+      setSortKey('astAvg');
+      setSortAsc(false);
     } else {
-      setSortKey('ptsPaint');
+      setSortKey('stlAvg');
       setSortAsc(false);
     }
   };
@@ -254,6 +343,7 @@ export function TeamsExplorerView({
           key === 'avgPointsAgainst' ||
           key === 'defRtg' ||
           key === 'tovPct' ||
+          key === 'tovAvg' ||
           key === 'oppPtsPaint'
       );
     }
@@ -308,13 +398,39 @@ export function TeamsExplorerView({
           { id: 'pace', label: 'Pace' },
           { id: 'tsPct', label: 'TS%' },
         ]
+      : viewMode === 'shooting'
+      ? [
+          { id: 'fg3Pct', label: '3P%' },
+          { id: 'fg3mAvg', label: '3PM' },
+          { id: 'fgPct', label: 'FG%' },
+          { id: 'ftPct', label: 'FT%' },
+          { id: 'pctPts3p', label: '% Pts 3P' },
+        ]
+      : viewMode === 'playmaking_rebound'
+      ? [
+          { id: 'astAvg', label: 'AST/PJ' },
+          { id: 'astTovRatio', label: 'AST/TO' },
+          { id: 'rebAvg', label: 'REB/PJ' },
+          { id: 'ptsPaint', label: 'Pintura' },
+          { id: 'pts2ndChance', label: '2ª Oportun.' },
+        ]
       : [
-          { id: 'ptsPaint', label: 'PTS Pintura' },
-          { id: 'pts2ndChance', label: '2ª Jugada' },
+          { id: 'stlAvg', label: 'Robos' },
+          { id: 'blkAvg', label: 'Tapones' },
           { id: 'ptsFastBreak', label: 'Contraataque' },
           { id: 'deflections', label: 'Desvíos' },
           { id: 'contestedShots', label: 'Punteados' },
         ];
+
+  const renderAverageCell = (key: keyof LeagueBenchmarks['team'], suffix = '') => {
+    const b = benchmarks.team[key];
+    if (!b) return <td className="py-2.5 px-2.5 text-right font-mono text-slate-500">—</td>;
+    return (
+      <td className="py-2.5 px-2.5 text-right font-mono text-slate-400 bg-slate-800/20 italic tabular-nums">
+        {b.mean.toFixed(b.decimals ?? 1)}{suffix || b.suffix}
+      </td>
+    );
+  };
 
   return (
     <div className="space-y-5">
@@ -432,7 +548,7 @@ export function TeamsExplorerView({
         </div>
       </div>
 
-      {/* Row 2: Homogeneous Layer / Guidance + Conference + Search */}
+      {/* Row 2: Homogeneous Layer Selector + Conference + Search */}
       <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3.5 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           {experienceMode === 'simple' ? (
@@ -446,7 +562,7 @@ export function TeamsExplorerView({
                 className="inline-flex items-center gap-1.5 text-xs font-medium text-orange-400 hover:text-orange-300 transition-colors whitespace-nowrap shrink-0"
               >
                 <Sliders className="w-3.5 h-3.5" />
-                <span>Ver Cuatro Factores, Pintura y Hustle</span>
+                <span>Ver Capas de Tiro, Creación, Pintura y Hustle</span>
               </button>
             </div>
           ) : (
@@ -457,9 +573,11 @@ export function TeamsExplorerView({
               <div className="flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
                 {(
                   [
-                    { id: 'basic', label: '1. Básicas y Balance' },
-                    { id: 'advanced', label: '2. Avanzadas y 4 Factores' },
-                    { id: 'zones_hustle', label: '3. Pintura y Hustle' },
+                    { id: 'basic', label: '1. Balance y Racha' },
+                    { id: 'advanced', label: '2. Ratings y 4 Factores' },
+                    { id: 'shooting', label: '3. Tiro Exterior y %' },
+                    { id: 'playmaking_rebound', label: '4. Creación y Rebotes' },
+                    { id: 'hustle_defense', label: '5. Defensa y Hustle' },
                   ] as const
                 ).map((m) => (
                   <button
@@ -559,18 +677,36 @@ export function TeamsExplorerView({
                   <div
                     key={t.id}
                     onClick={() => onInspectEntity('team', t.id)}
-                    className="p-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-2.5"
+                    className="p-3.5 space-y-2 hover:bg-[#182338]/50 active:bg-[#182338] transition-colors cursor-pointer"
                   >
-                    <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2.5 min-w-0">
+                        <TeamLogo
+                          abbr={t.abbreviation}
+                          teamId={t.id}
+                          logoUrl={t.logoUrl}
+                          size="md"
+                          framed
+                        />
+                        <div className="min-w-0">
+                          <h3 className="font-semibold text-sm text-slate-100 truncate">
+                            {t.name}
+                          </h3>
+                          <p className="text-xs text-slate-400 truncate">
+                            {t.abbreviation} · Conf. {t.conference} · {t.wins}-
+                            {t.losses} ({(t.winPct * 100).toFixed(0)}%)
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
                         <button
                           type="button"
-                          aria-label="Alternar seguimiento"
                           onClick={(e) => {
                             e.stopPropagation();
                             onToggleWatchlist(wKey);
                           }}
-                          className="p-2 -m-1.5 rounded text-slate-400 hover:text-orange-400 shrink-0 touch-manipulation"
+                          className="p-1.5 rounded-md text-slate-400 hover:text-orange-400"
                         >
                           <Star
                             className={`w-4 h-4 ${
@@ -578,89 +714,28 @@ export function TeamsExplorerView({
                             }`}
                           />
                         </button>
-                        <TeamLogo
-                          abbr={t.abbreviation}
-                          teamId={t.id}
-                          logoUrl={t.logoUrl}
-                          size="sm"
-                          framed
-                        />
-                        <div className="min-w-0">
-                          <div className="font-semibold text-sm text-slate-100 truncate">
-                            {t.name}
-                          </div>
-                          <div className="text-xs text-slate-400 truncate">
-                            {t.abbreviation} · Conf. {t.conference} · Últ.10 {t.lastTenRecord}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="text-right font-mono tabular-nums shrink-0">
-                        <div className="text-sm font-bold text-slate-100">
-                          {t.wins}-{t.losses}{' '}
-                          <span className="text-xs font-normal text-slate-400">
-                            ({(t.winPct * 100).toFixed(0)}%)
-                          </span>
-                        </div>
-                        <div
-                          className={`text-[11px] font-semibold ${
+                        <span
+                          className={`text-xs font-semibold px-2 py-0.5 rounded ${
                             t.streakCode.startsWith('W')
-                              ? 'text-emerald-400'
-                              : 'text-rose-400'
+                              ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                              : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
                           }`}
                         >
-                          {experienceMode === 'simple'
-                            ? humanStreakCode(t.streakCode)
-                            : `Racha ${t.streakCode} · Casa ${t.homeRecord}`}
-                        </div>
+                          {t.streakCode}
+                        </span>
                       </div>
                     </div>
 
-                    {experienceMode === 'simple' ? (
-                      <>
-                        <div className="grid grid-cols-3 gap-2 bg-[#0B1120]/70 border border-[#1E293B]/80 rounded-lg px-3 py-2 text-xs">
-                          <div>
-                            <div className="text-[11px] text-slate-400">Anota</div>
-                            <div className="font-mono tabular-nums font-medium text-slate-100 mt-0.5">
-                              {t.avgPointsFor.toFixed(1)}
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-[11px] text-slate-400">Recibe</div>
-                            <div className="font-mono tabular-nums text-slate-200 mt-0.5">
-                              {t.avgPointsAgainst.toFixed(1)}
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-[11px] text-slate-400">
-                              Últ. {windowSize} PJ
-                            </div>
-                            <div
-                              className={`font-mono tabular-nums font-semibold mt-0.5 ${
-                                t.windowDiff >= 0
-                                  ? 'text-emerald-400'
-                                  : 'text-rose-400'
-                              }`}
-                            >
-                              {formatSigned(t.windowDiff)} PTS
-                            </div>
-                          </div>
-                        </div>
-                        <NbaComparisonBar
-                          value={t.netRtg}
-                          benchmark={benchmarks.team.netRtg}
-                          compact
-                        />
-                      </>
-                    ) : viewMode === 'basic' ? (
+                    {/* Stats Summary depending on active viewMode with Heatmap shading */}
+                    {viewMode === 'basic' ? (
                       <div className="grid grid-cols-4 gap-2 bg-[#0B1120]/70 border border-[#1E293B]/80 rounded-lg px-2.5 py-2 text-xs">
-                        <div>
+                        <div className={getHeatmapClass(t.avgPointsFor, benchmarks.team.avgPointsFor)}>
                           <div className="text-[10px] text-slate-400">PTS Fav/Con</div>
                           <div className="font-mono tabular-nums text-slate-100 mt-0.5">
                             {t.avgPointsFor.toFixed(0)}/{t.avgPointsAgainst.toFixed(0)}
                           </div>
                         </div>
-                        <div>
+                        <div className={getHeatmapClass(t.differential, benchmarks.team.differential)}>
                           <div className="text-[10px] text-slate-400">Dif. Base</div>
                           <div
                             className={`font-mono tabular-nums font-medium mt-0.5 ${
@@ -678,7 +753,7 @@ export function TeamsExplorerView({
                             {formatSigned(t.windowDiff)}
                           </div>
                         </div>
-                        <div className="text-right">
+                        <div className={`text-right ${getHeatmapClass(t.fg3Pct, benchmarks.team.fg3Pct)}`}>
                           <div className="text-[10px] text-slate-400">3PM (3P%)</div>
                           <div className="font-mono tabular-nums text-slate-200 mt-0.5">
                             {t.fg3mAvg.toFixed(1)} ({t.fg3Pct.toFixed(0)}%)
@@ -687,13 +762,13 @@ export function TeamsExplorerView({
                       </div>
                     ) : viewMode === 'advanced' ? (
                       <div className="grid grid-cols-4 gap-2 bg-[#0B1120]/70 border border-[#1E293B]/80 rounded-lg px-2.5 py-2 text-xs">
-                        <div>
+                        <div className={getHeatmapClass(t.offRtg, benchmarks.team.offRtg)}>
                           <div className="text-[10px] text-slate-400">Off / Def</div>
                           <div className="font-mono tabular-nums text-slate-100 mt-0.5">
                             {t.offRtg.toFixed(0)}/{t.defRtg.toFixed(0)}
                           </div>
                         </div>
-                        <div>
+                        <div className={getHeatmapClass(t.netRtg, benchmarks.team.netRtg)}>
                           <div className="text-[10px] text-slate-400">NetRtg</div>
                           <div
                             className={`font-mono tabular-nums font-semibold mt-0.5 ${
@@ -703,43 +778,97 @@ export function TeamsExplorerView({
                             {formatSigned(t.netRtg)}
                           </div>
                         </div>
-                        <div>
+                        <div className={getHeatmapClass(t.pace, benchmarks.team.pace)}>
                           <div className="text-[10px] text-slate-400">Pace</div>
                           <div className="font-mono tabular-nums text-slate-200 mt-0.5">
                             {t.pace.toFixed(1)}
                           </div>
                         </div>
-                        <div className="text-right">
+                        <div className={`text-right ${getHeatmapClass(t.tsPct, benchmarks.team.tsPct)}`}>
                           <div className="text-[10px] text-slate-400">TS% / eFG%</div>
                           <div className="font-mono tabular-nums text-orange-300 mt-0.5">
                             {t.tsPct.toFixed(0)}%/{t.efgPct.toFixed(0)}%
                           </div>
                         </div>
                       </div>
-                    ) : (
+                    ) : viewMode === 'shooting' ? (
                       <div className="grid grid-cols-4 gap-2 bg-[#0B1120]/70 border border-[#1E293B]/80 rounded-lg px-2.5 py-2 text-xs">
-                        <div>
-                          <div className="text-[10px] text-slate-400">Pintura</div>
-                          <div className="font-mono tabular-nums font-semibold text-slate-100 mt-0.5">
+                        <div className={getHeatmapClass(t.fg3Pct, benchmarks.team.fg3Pct)}>
+                          <div className="text-[10px] text-slate-400">3PM (3P%)</div>
+                          <div className="font-mono tabular-nums font-semibold text-orange-400 mt-0.5">
+                            {t.fg3mAvg.toFixed(1)} ({t.fg3Pct.toFixed(1)}%)
+                          </div>
+                        </div>
+                        <div className={getHeatmapClass(t.fgPct, benchmarks.team.fgPct)}>
+                          <div className="text-[10px] text-slate-400">TC % (FG%)</div>
+                          <div className="font-mono tabular-nums text-slate-100 mt-0.5">
+                            {t.fgPct.toFixed(1)}%
+                          </div>
+                        </div>
+                        <div className={getHeatmapClass(t.ftPct, benchmarks.team.ftPct)}>
+                          <div className="text-[10px] text-slate-400">TL % (FT%)</div>
+                          <div className="font-mono tabular-nums text-slate-200 mt-0.5">
+                            {t.ftPct.toFixed(1)}%
+                          </div>
+                        </div>
+                        <div className={`text-right ${getHeatmapClass(t.pctPts3p, benchmarks.team.pctPts3p)}`}>
+                          <div className="text-[10px] text-slate-400">% Pts Triple</div>
+                          <div className="font-mono tabular-nums text-emerald-400 mt-0.5">
+                            {t.pctPts3p.toFixed(0)}% Pts
+                          </div>
+                        </div>
+                      </div>
+                    ) : viewMode === 'playmaking_rebound' ? (
+                      <div className="grid grid-cols-4 gap-2 bg-[#0B1120]/70 border border-[#1E293B]/80 rounded-lg px-2.5 py-2 text-xs">
+                        <div className={getHeatmapClass(t.astAvg, benchmarks.team.astAvg)}>
+                          <div className="text-[10px] text-slate-400">AST / TO</div>
+                          <div className="font-mono tabular-nums font-semibold text-emerald-400 mt-0.5">
+                            {t.astAvg.toFixed(1)} ({t.astTovRatio.toFixed(2)})
+                          </div>
+                        </div>
+                        <div className={getHeatmapClass(t.rebAvg, benchmarks.team.rebAvg)}>
+                          <div className="text-[10px] text-slate-400">REB (OR/DR)</div>
+                          <div className="font-mono tabular-nums text-slate-100 mt-0.5">
+                            {t.rebAvg.toFixed(1)} ({t.orebAvg.toFixed(1)})
+                          </div>
+                        </div>
+                        <div className={getHeatmapClass(t.ptsPaint, benchmarks.team.ptsPaint)}>
+                          <div className="text-[10px] text-slate-400">PTS Pintura</div>
+                          <div className="font-mono tabular-nums text-slate-200 mt-0.5">
                             {t.ptsPaint.toFixed(1)}
                           </div>
                         </div>
-                        <div>
-                          <div className="text-[10px] text-slate-400">2ª Jugada</div>
+                        <div className={`text-right ${getHeatmapClass(t.pts2ndChance, benchmarks.team.pts2ndChance)}`}>
+                          <div className="text-[10px] text-slate-400">2ª Oport.</div>
                           <div className="font-mono tabular-nums text-orange-300 mt-0.5">
                             {t.pts2ndChance.toFixed(1)}
                           </div>
                         </div>
-                        <div>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-4 gap-2 bg-[#0B1120]/70 border border-[#1E293B]/80 rounded-lg px-2.5 py-2 text-xs">
+                        <div className={getHeatmapClass(t.stlAvg, benchmarks.team.stlAvg)}>
+                          <div className="text-[10px] text-slate-400">Rob/Tap</div>
+                          <div className="font-mono tabular-nums font-semibold text-slate-100 mt-0.5">
+                            {t.stlAvg.toFixed(1)}/{t.blkAvg.toFixed(1)}
+                          </div>
+                        </div>
+                        <div className={getHeatmapClass(t.ptsFastBreak, benchmarks.team.ptsFastBreak)}>
                           <div className="text-[10px] text-slate-400">Contraat.</div>
                           <div className="font-mono tabular-nums text-slate-200 mt-0.5">
                             {t.ptsFastBreak.toFixed(1)}
                           </div>
                         </div>
-                        <div className="text-right">
-                          <div className="text-[10px] text-slate-400">Desv./Punt.</div>
+                        <div className={getHeatmapClass(t.deflections, benchmarks.team.deflections)}>
+                          <div className="text-[10px] text-slate-400">Desvíos</div>
                           <div className="font-mono tabular-nums text-emerald-300 mt-0.5">
-                            {t.deflections.toFixed(1)}/{t.contestedShots.toFixed(0)}
+                            {t.deflections.toFixed(1)}
+                          </div>
+                        </div>
+                        <div className={`text-right ${getHeatmapClass(t.contestedShots, benchmarks.team.contestedShots)}`}>
+                          <div className="text-[10px] text-slate-400">Punteados</div>
+                          <div className="font-mono tabular-nums text-orange-300 mt-0.5">
+                            {t.contestedShots.toFixed(0)}
                           </div>
                         </div>
                       </div>
@@ -845,11 +974,43 @@ export function TeamsExplorerView({
                       </>
                     )}
 
-                    {viewMode === 'zones_hustle' && (
+                    {viewMode === 'shooting' && (
                       <>
+                        <SH label="3PM / 3PA" k="fg3mAvg" />
+                        <SH label="3P %" k="fg3Pct" />
+                        <SH label="TC % (FG%)" k="fgPct" />
+                        <SH label="TL % (FT%)" k="ftPct" />
+                        <SH label="TLM / TLA" k="ftmAvg" />
+                        <SH label="% Pts Triple" k="pctPts3p" />
+                        <SH
+                          label="% Pts Pintura"
+                          k="pctPtsPaint"
+                          className="py-3 pl-2.5 pr-4"
+                        />
+                      </>
+                    )}
+
+                    {viewMode === 'playmaking_rebound' && (
+                      <>
+                        <SH label="AST / PJ" k="astAvg" />
+                        <SH label="TOV / PJ" k="tovAvg" />
+                        <SH label="Ratio AST/TO" k="astTovRatio" />
+                        <SH label="REB / PJ" k="rebAvg" />
+                        <SH label="OREB / DREB" k="orebAvg" />
                         <SH label="PTS Pintura" k="ptsPaint" />
-                        <SH label="Pint. Rival" k="oppPtsPaint" />
-                        <SH label="2ª Jugada" k="pts2ndChance" />
+                        <SH label="Pintura Rival" k="oppPtsPaint" />
+                        <SH
+                          label="2ª Jugada"
+                          k="pts2ndChance"
+                          className="py-3 pl-2.5 pr-4"
+                        />
+                      </>
+                    )}
+
+                    {viewMode === 'hustle_defense' && (
+                      <>
+                        <SH label="Robos / PJ" k="stlAvg" />
+                        <SH label="Tapones / PJ" k="blkAvg" />
                         <SH label="Contraataque" k="ptsFastBreak" />
                         <SH label="Tras Pérdida" k="ptsOffTov" />
                         <SH label="Punteados" k="contestedShots" />
@@ -859,6 +1020,90 @@ export function TeamsExplorerView({
                           k="boxOuts"
                           className="py-3 pl-2.5 pr-4"
                         />
+                      </>
+                    )}
+                  </>
+                )}
+              </tr>
+
+              {/* Reference Row: PROMEDIO NBA */}
+              <tr className="border-b-2 border-[#1E293B] bg-[#1E293B]/30 sticky top-[41px] z-20">
+                <td className="py-2.5 pl-4 pr-2 bg-slate-800/40"></td>
+                <td className="py-2.5 px-3 bg-slate-800/40">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded bg-slate-700/50 flex items-center justify-center text-[10px] font-bold text-slate-400">NBA</div>
+                    <span className="text-xs font-bold text-slate-300 tracking-wider">PROMEDIO NBA</span>
+                  </div>
+                </td>
+                {experienceMode === 'simple' ? (
+                  <>
+                    {renderAverageCell('winPct')}
+                    {renderAverageCell('avgPointsFor')}
+                    {renderAverageCell('avgPointsAgainst')}
+                    <td className="py-2.5 px-2.5 text-right font-mono text-slate-500 bg-slate-800/20 italic tabular-nums">±{(benchmarks.team.differential.spreadMean || 0).toFixed(1)}</td>
+                    <td className="py-2.5 px-3 bg-slate-800/20"></td>
+                    <td className="py-2.5 pl-2.5 pr-4 bg-slate-800/20"></td>
+                  </>
+                ) : (
+                  <>
+                    {viewMode === 'basic' && (
+                      <>
+                        {renderAverageCell('winPct')}
+                        {renderAverageCell('avgPointsFor')}
+                        {renderAverageCell('avgPointsAgainst')}
+                        {renderAverageCell('differential')}
+                        <td className="py-2.5 px-2.5 text-right font-mono text-slate-500 bg-slate-800/20 italic tabular-nums">±{(benchmarks.team.differential.spreadMean || 0).toFixed(1)}</td>
+                        {renderAverageCell('orebAvg')}
+                        {renderAverageCell('fg3mAvg')}
+                        <td className="py-2.5 pl-2.5 pr-4 bg-slate-800/20"></td>
+                      </>
+                    )}
+                    {viewMode === 'advanced' && (
+                      <>
+                        {renderAverageCell('offRtg')}
+                        {renderAverageCell('defRtg')}
+                        {renderAverageCell('netRtg')}
+                        <td className="py-2.5 px-2.5 text-right font-mono text-slate-500 bg-slate-800/20 italic tabular-nums">±{(benchmarks.team.netRtg.spreadMean || 0).toFixed(1)}</td>
+                        {renderAverageCell('pace')}
+                        {renderAverageCell('efgPct')}
+                        {renderAverageCell('tsPct')}
+                        {renderAverageCell('orebPct')}
+                        {renderAverageCell('tovPct')}
+                        <td className="py-2.5 pl-2.5 pr-4 bg-slate-800/20"></td>
+                      </>
+                    )}
+                    {viewMode === 'shooting' && (
+                      <>
+                        {renderAverageCell('fg3mAvg')}
+                        {renderAverageCell('fg3Pct')}
+                        {renderAverageCell('fgPct')}
+                        {renderAverageCell('ftPct')}
+                        {renderAverageCell('ftmAvg')}
+                        {renderAverageCell('pctPts3p')}
+                        {renderAverageCell('pctPtsPaint')}
+                      </>
+                    )}
+                    {viewMode === 'playmaking_rebound' && (
+                      <>
+                        {renderAverageCell('astAvg')}
+                        {renderAverageCell('tovAvg')}
+                        {renderAverageCell('astTovRatio')}
+                        {renderAverageCell('rebAvg')}
+                        {renderAverageCell('orebAvg')}
+                        {renderAverageCell('ptsPaint')}
+                        {renderAverageCell('oppPtsPaint')}
+                        {renderAverageCell('pts2ndChance')}
+                      </>
+                    )}
+                    {viewMode === 'hustle_defense' && (
+                      <>
+                        {renderAverageCell('stlAvg')}
+                        {renderAverageCell('blkAvg')}
+                        {renderAverageCell('ptsFastBreak')}
+                        {renderAverageCell('ptsOffTov')}
+                        {renderAverageCell('contestedShots')}
+                        {renderAverageCell('deflections')}
+                        {renderAverageCell('boxOuts')}
                       </>
                     )}
                   </>
@@ -926,7 +1171,7 @@ export function TeamsExplorerView({
 
                     {experienceMode === 'simple' ? (
                       <>
-                        <td className="py-2.5 px-2.5 text-right font-mono tabular-nums whitespace-nowrap">
+                        <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums whitespace-nowrap ${getHeatmapClass(t.winPct*100, benchmarks.team.winPct)}`}>
                           <span className="font-semibold text-slate-100">
                             {t.wins}-{t.losses}
                           </span>
@@ -934,7 +1179,7 @@ export function TeamsExplorerView({
                             ({(t.winPct * 100).toFixed(0)}%)
                           </span>
                         </td>
-                        <td className="py-2.5 px-2.5 text-right whitespace-nowrap">
+                        <td className={`py-2.5 px-2.5 text-right whitespace-nowrap ${getHeatmapClass(t.avgPointsFor, benchmarks.team.avgPointsFor)}`}>
                           <div className="font-mono tabular-nums text-slate-100">
                             {t.avgPointsFor.toFixed(1)}
                           </div>
@@ -942,7 +1187,7 @@ export function TeamsExplorerView({
                             {offEval.tierLabel}
                           </div>
                         </td>
-                        <td className="py-2.5 px-2.5 text-right whitespace-nowrap">
+                        <td className={`py-2.5 px-2.5 text-right whitespace-nowrap ${getHeatmapClass(t.avgPointsAgainst, benchmarks.team.avgPointsAgainst)}`}>
                           <div className="font-mono tabular-nums text-slate-200">
                             {t.avgPointsAgainst.toFixed(1)}
                           </div>
@@ -987,7 +1232,7 @@ export function TeamsExplorerView({
                       <>
                         {viewMode === 'basic' && (
                           <>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums whitespace-nowrap ${getHeatmapClass(t.winPct*100, benchmarks.team.winPct)}`}>
                               <span className="font-semibold text-slate-100">
                                 {t.wins}-{t.losses}
                               </span>
@@ -995,13 +1240,13 @@ export function TeamsExplorerView({
                                 ({(t.winPct * 100).toFixed(1)}%)
                               </span>
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-200 whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-200 whitespace-nowrap ${getHeatmapClass(t.avgPointsFor, benchmarks.team.avgPointsFor)}`}>
                               {t.avgPointsFor.toFixed(1)}
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap ${getHeatmapClass(t.avgPointsAgainst, benchmarks.team.avgPointsAgainst)}`}>
                               {t.avgPointsAgainst.toFixed(1)}
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums whitespace-nowrap ${getHeatmapClass(t.differential, benchmarks.team.differential)}`}>
                               <span
                                 className={
                                   t.differential >= 0
@@ -1015,14 +1260,14 @@ export function TeamsExplorerView({
                             <td className="py-2.5 px-2.5 text-right font-mono tabular-nums font-medium text-slate-100 whitespace-nowrap">
                               {formatSigned(t.windowDiff)}
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap ${getHeatmapClass(t.orebAvg, benchmarks.team.orebAvg)}`}>
                               <span className="text-orange-300">
                                 {t.orebAvg.toFixed(1)}
                               </span>
                               <span className="text-slate-500"> / </span>
                               <span>{t.rebAvg.toFixed(1)}</span>
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap ${getHeatmapClass(t.fg3Pct, benchmarks.team.fg3Pct)}`}>
                               {t.fg3mAvg.toFixed(1)}{' '}
                               <span className="text-xs text-slate-400">
                                 ({t.fg3Pct.toFixed(1)}%)
@@ -1048,13 +1293,13 @@ export function TeamsExplorerView({
 
                         {viewMode === 'advanced' && (
                           <>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums font-medium text-slate-100 whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums font-medium text-slate-100 whitespace-nowrap ${getHeatmapClass(t.offRtg, benchmarks.team.offRtg)}`}>
                               {t.offRtg.toFixed(1)}
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-200 whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-200 whitespace-nowrap ${getHeatmapClass(t.defRtg, benchmarks.team.defRtg)}`}>
                               {t.defRtg.toFixed(1)}
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums whitespace-nowrap ${getHeatmapClass(t.netRtg, benchmarks.team.netRtg)}`}>
                               <span
                                 className={
                                   t.netRtg >= 0
@@ -1068,19 +1313,19 @@ export function TeamsExplorerView({
                             <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-orange-300 whitespace-nowrap">
                               {formatSigned(t.winNetRtg)}
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap ${getHeatmapClass(t.pace, benchmarks.team.pace)}`}>
                               {t.pace.toFixed(1)}
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-200 whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-200 whitespace-nowrap ${getHeatmapClass(t.efgPct, benchmarks.team.efgPct)}`}>
                               {t.efgPct.toFixed(1)}%
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap ${getHeatmapClass(t.tsPct, benchmarks.team.tsPct)}`}>
                               {t.tsPct.toFixed(1)}%
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-orange-300/90 whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-orange-300/90 whitespace-nowrap ${getHeatmapClass(t.orebPct, benchmarks.team.orebPct)}`}>
                               {t.orebPct.toFixed(1)}%
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap ${getHeatmapClass(t.tovPct, benchmarks.team.tovPct)}`}>
                               {t.tovPct.toFixed(1)}%
                             </td>
                             <td className="py-2.5 pl-2.5 pr-4 text-right font-mono tabular-nums font-medium text-slate-100 whitespace-nowrap">
@@ -1089,36 +1334,95 @@ export function TeamsExplorerView({
                           </>
                         )}
 
-                        {viewMode === 'zones_hustle' && (
+                        {viewMode === 'shooting' && (
                           <>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums font-semibold text-slate-100 whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums font-medium text-slate-100 whitespace-nowrap ${getHeatmapClass(t.fg3mAvg, benchmarks.team.fg3mAvg)}`}>
+                              <span className="text-orange-400 font-semibold">
+                                {t.fg3mAvg.toFixed(1)}
+                              </span>
+                              <span className="text-slate-500"> / </span>
+                              <span>{t.fg3aAvg.toFixed(1)}</span>
+                            </td>
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums font-semibold text-emerald-400 whitespace-nowrap ${getHeatmapClass(t.fg3Pct, benchmarks.team.fg3Pct)}`}>
+                              {t.fg3Pct.toFixed(1)}%
+                            </td>
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-200 whitespace-nowrap ${getHeatmapClass(t.fgPct, benchmarks.team.fgPct)}`}>
+                              {t.fgPct.toFixed(1)}%
+                            </td>
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap ${getHeatmapClass(t.ftPct, benchmarks.team.ftPct)}`}>
+                              {t.ftPct.toFixed(1)}%
+                            </td>
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap ${getHeatmapClass(t.ftmAvg, benchmarks.team.ftmAvg)}`}>
+                              {t.ftmAvg.toFixed(1)} / {t.ftaAvg.toFixed(1)}
+                            </td>
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-emerald-300 whitespace-nowrap ${getHeatmapClass(t.pctPts3p, benchmarks.team.pctPts3p)}`}>
+                              {t.pctPts3p.toFixed(1)}%
+                            </td>
+                            <td className={`py-2.5 pl-2.5 pr-4 text-right font-mono tabular-nums text-orange-300 whitespace-nowrap ${getHeatmapClass(t.pctPtsPaint, benchmarks.team.pctPtsPaint)}`}>
+                              {t.pctPtsPaint.toFixed(1)}%
+                            </td>
+                          </>
+                        )}
+
+                        {viewMode === 'playmaking_rebound' && (
+                          <>
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums font-semibold text-slate-100 whitespace-nowrap ${getHeatmapClass(t.astAvg, benchmarks.team.astAvg)}`}>
+                              {t.astAvg.toFixed(1)}
+                            </td>
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap ${getHeatmapClass(t.tovAvg, benchmarks.team.tovAvg)}`}>
+                              {t.tovAvg.toFixed(1)}
+                            </td>
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums font-semibold text-emerald-400 whitespace-nowrap ${getHeatmapClass(t.astTovRatio, benchmarks.team.astTovRatio)}`}>
+                              {t.astTovRatio.toFixed(2)}
+                            </td>
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-100 whitespace-nowrap ${getHeatmapClass(t.rebAvg, benchmarks.team.rebAvg)}`}>
+                              {t.rebAvg.toFixed(1)}
+                            </td>
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap ${getHeatmapClass(t.orebAvg, benchmarks.team.orebAvg)}`}>
+                              <span className="text-orange-300">{t.orebAvg.toFixed(1)}</span>
+                              <span className="text-slate-500"> / </span>
+                              <span>{t.drebAvg.toFixed(1)}</span>
+                            </td>
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-100 whitespace-nowrap ${getHeatmapClass(t.ptsPaint, benchmarks.team.ptsPaint)}`}>
                               {t.ptsPaint.toFixed(1)}
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-rose-300 whitespace-nowrap ${getHeatmapClass(t.oppPtsPaint, benchmarks.team.oppPtsPaint)}`}>
                               {t.oppPtsPaint.toFixed(1)}
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-orange-300 whitespace-nowrap">
+                            <td className={`py-2.5 pl-2.5 pr-4 text-right font-mono tabular-nums text-orange-300 whitespace-nowrap ${getHeatmapClass(t.pts2ndChance, benchmarks.team.pts2ndChance)}`}>
                               {t.pts2ndChance.toFixed(1)}
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-200 whitespace-nowrap">
+                          </>
+                        )}
+
+                        {viewMode === 'hustle_defense' && (
+                          <>
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums font-semibold text-emerald-400 whitespace-nowrap ${getHeatmapClass(t.stlAvg, benchmarks.team.stlAvg)}`}>
+                              {t.stlAvg.toFixed(1)}
+                            </td>
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums font-semibold text-orange-300 whitespace-nowrap ${getHeatmapClass(t.blkAvg, benchmarks.team.blkAvg)}`}>
+                              {t.blkAvg.toFixed(1)}
+                            </td>
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-200 whitespace-nowrap ${getHeatmapClass(t.ptsFastBreak, benchmarks.team.ptsFastBreak)}`}>
                               {t.ptsFastBreak.toFixed(1)}
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-200 whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-200 whitespace-nowrap ${getHeatmapClass(t.ptsOffTov, benchmarks.team.ptsOffTov)}`}>
                               {t.ptsOffTov.toFixed(1)}
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-200 whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap ${getHeatmapClass(t.contestedShots, benchmarks.team.contestedShots)}`}>
                               {t.contestedShots.toFixed(1)}
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-emerald-300 whitespace-nowrap">
+                            <td className={`py-2.5 px-2.5 text-right font-mono tabular-nums text-emerald-300 whitespace-nowrap ${getHeatmapClass(t.deflections, benchmarks.team.deflections)}`}>
                               {t.deflections.toFixed(1)}
                             </td>
-                            <td className="py-2.5 pl-2.5 pr-4 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap">
+                            <td className={`py-2.5 pl-2.5 pr-4 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap ${getHeatmapClass(t.boxOuts, benchmarks.team.boxOuts)}`}>
                               {t.boxOuts.toFixed(1)}
                             </td>
                           </>
                         )}
                       </>
-                    )}
+                    )
+}
                   </tr>
                 );
               })}

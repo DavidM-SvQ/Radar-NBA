@@ -1172,6 +1172,12 @@ export const STREAK_METRIC_OPTIONS: StreakMetricOption[] = [
 export function resolveAutoStreakPreload(
   st: StreakEntry
 ): StreakChartPreloadMetricRule {
+  if (st.id.endsWith('-pts40')) {
+    return { metricId: 'points', operator: 'gte', threshold: 40, isPositive: true };
+  }
+  if (st.id.endsWith('-pts35')) {
+    return { metricId: 'points', operator: 'gte', threshold: 35, isPositive: true };
+  }
   if (st.id.endsWith('-pts30')) {
     return { metricId: 'points', operator: 'gte', threshold: 30, isPositive: true };
   }
@@ -1181,17 +1187,59 @@ export function resolveAutoStreakPreload(
   if (st.id.endsWith('-pts20')) {
     return { metricId: 'points', operator: 'gte', threshold: 20, isPositive: true };
   }
+  if (st.id.endsWith('-pts15')) {
+    return { metricId: 'points', operator: 'gte', threshold: 15, isPositive: true };
+  }
   if (st.id.endsWith('-reb10')) {
     return { metricId: 'rebounds', operator: 'gte', threshold: 10, isPositive: true };
   }
   if (st.id.endsWith('-ast8')) {
     return { metricId: 'assists', operator: 'gte', threshold: 8, isPositive: true };
   }
+  if (st.id.endsWith('-3pm6')) {
+    return { metricId: 'fg3m', operator: 'gte', threshold: 6, isPositive: true };
+  }
+  if (st.id.endsWith('-3pm5')) {
+    return { metricId: 'fg3m', operator: 'gte', threshold: 5, isPositive: true };
+  }
   if (st.id.endsWith('-3pm4')) {
     return { metricId: 'fg3m', operator: 'gte', threshold: 4, isPositive: true };
   }
   if (st.id.endsWith('-3pm3')) {
     return { metricId: 'fg3m', operator: 'gte', threshold: 3, isPositive: true };
+  }
+  if (st.id.endsWith('-3pm2')) {
+    return { metricId: 'fg3m', operator: 'gte', threshold: 2, isPositive: true };
+  }
+  if (st.id.endsWith('-3pm1')) {
+    return { metricId: 'fg3m', operator: 'gte', threshold: 1, isPositive: true };
+  }
+  if (st.id.endsWith('-pts_reb27')) {
+    return { metricId: 'ptsReb', operator: 'gte', threshold: 27, isPositive: true };
+  }
+  if (st.id.endsWith('-pts_reb25')) {
+    return { metricId: 'ptsReb', operator: 'gte', threshold: 25, isPositive: true };
+  }
+  if (st.id.endsWith('-pts_reb20')) {
+    return { metricId: 'ptsReb', operator: 'gte', threshold: 20, isPositive: true };
+  }
+  if (st.id.endsWith('-pts_ast24')) {
+    return { metricId: 'ptsAst', operator: 'gte', threshold: 24, isPositive: true };
+  }
+  if (st.id.endsWith('-pts_ast20')) {
+    return { metricId: 'ptsAst', operator: 'gte', threshold: 20, isPositive: true };
+  }
+  if (st.id.endsWith('-pts_ast15')) {
+    return { metricId: 'ptsAst', operator: 'gte', threshold: 15, isPositive: true };
+  }
+  if (st.id.endsWith('-pra35')) {
+    return { metricId: 'pra', operator: 'gte', threshold: 35, isPositive: true };
+  }
+  if (st.id.endsWith('-pra30')) {
+    return { metricId: 'pra', operator: 'gte', threshold: 30, isPositive: true };
+  }
+  if (st.id.endsWith('-pra25')) {
+    return { metricId: 'pra', operator: 'gte', threshold: 25, isPositive: true };
   }
   if (st.id.endsWith('-hot_3pct')) {
     return {
@@ -1203,14 +1251,44 @@ export function resolveAutoStreakPreload(
       customQualifiesLabel: '≥5 3PA',
     };
   }
+  if (st.id.endsWith('-slump_sub10')) {
+    return {
+      metricId: 'points',
+      operator: 'lte',
+      threshold: 10,
+      isPositive: false,
+      customQualifies: (g) => g.minutes >= 24,
+      customQualifiesLabel: '≥24 MIN',
+    };
+  }
+  if (st.id.endsWith('-slump_sub12')) {
+    return {
+      metricId: 'points',
+      operator: 'lte',
+      threshold: 12,
+      isPositive: false,
+      customQualifies: (g) => g.minutes >= 26,
+      customQualifiesLabel: '≥26 MIN',
+    };
+  }
+  if (st.id.endsWith('-cold_3pm_zero')) {
+    return {
+      metricId: 'fg3m',
+      operator: 'lte',
+      threshold: 0,
+      isPositive: false,
+      customQualifies: (g) => g.fg3a >= 3,
+      customQualifiesLabel: '≥3 3PA',
+    };
+  }
   if (st.id.endsWith('-cold_3pct')) {
     return {
       metricId: 'fg3Pct',
       operator: 'lt',
       threshold: 25,
       isPositive: false,
-      customQualifies: (g) => g.fg3a >= 5,
-      customQualifiesLabel: '≥5 3PA',
+      customQualifies: (g) => g.fg3a >= 4,
+      customQualifiesLabel: '≥4 3PA',
     };
   }
   if (st.id.endsWith('-min35')) {
@@ -1245,8 +1323,74 @@ export function resolveAutoStreakPreload(
       operator: 'lt',
       threshold: 46,
       isPositive: false,
-      customQualifies: (g) => g.fga >= 12,
-      customQualifiesLabel: '≥12 TCI',
+      customQualifies: (g) => g.fga >= 10,
+      customQualifiesLabel: '≥10 TCI',
+    };
+  }
+  if (st.id.endsWith('-cold_ft')) {
+    return {
+      metricId: 'ftPct',
+      operator: 'lt',
+      threshold: 50,
+      isPositive: false,
+      customQualifies: (g) => g.fta >= 4,
+      customQualifiesLabel: '≥4 TLI',
+    };
+  }
+  if (st.id.endsWith('-to4')) {
+    return { metricId: 'turnovers', operator: 'gte', threshold: 4, isPositive: false };
+  }
+  if (st.id.endsWith('-to3')) {
+    return { metricId: 'turnovers', operator: 'gte', threshold: 3, isPositive: false };
+  }
+  if (st.id.endsWith('-cold_fg')) {
+    return {
+      metricId: 'fgPct',
+      operator: 'lt',
+      threshold: 38,
+      isPositive: false,
+      customQualifies: (g) => g.fga >= 8,
+      customQualifiesLabel: '≥8 TCI',
+    };
+  }
+  if (st.id.endsWith('-foul_trouble_4')) {
+    return {
+      metricId: 'fouls',
+      operator: 'gte',
+      threshold: 4,
+      isPositive: false,
+      customQualifies: (g) => g.minutes >= 16,
+      customQualifiesLabel: '≥16 MIN',
+    };
+  }
+  if (st.id.endsWith('-foul_trouble') || st.id.endsWith('-foul_trouble_3')) {
+    return {
+      metricId: 'fouls',
+      operator: 'gte',
+      threshold: 3,
+      isPositive: false,
+      customQualifies: (g) => g.minutes >= 18,
+      customQualifiesLabel: '≥18 MIN',
+    };
+  }
+  if (st.id.endsWith('-neg_pm10')) {
+    return {
+      metricId: 'plusMinus',
+      operator: 'lte',
+      threshold: -10,
+      isPositive: false,
+      customQualifies: (g) => g.minutes >= 20,
+      customQualifiesLabel: '≥20 MIN',
+    };
+  }
+  if (st.id.endsWith('-neg_pm') || st.id.endsWith('-neg_pm8')) {
+    return {
+      metricId: 'plusMinus',
+      operator: 'lte',
+      threshold: -8,
+      isPositive: false,
+      customQualifies: (g) => g.minutes >= 20,
+      customQualifiesLabel: '≥20 MIN',
     };
   }
 

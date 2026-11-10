@@ -1171,7 +1171,17 @@ async function getGameDayPayload(requestedDate, forceRefresh = false) {
       }
     }
     const olderChrono = p.games.slice(nightIdx + 1);
-    const streakRules = [{ id: "pts25", label: "25+ PTS", unit: "PTS", minCount: 3, check: __name((x) => x.points >= 25, "check"), val: __name((x) => x.points, "val") }, { id: "pts20", label: "20+ PTS", unit: "PTS", minCount: 4, check: __name((x) => x.points >= 20, "check"), val: __name((x) => x.points, "val") }, { id: "ast8", label: "8+ AST", unit: "AST", minCount: 3, check: __name((x) => x.assists >= 8, "check"), val: __name((x) => x.assists, "val") }, { id: "reb10", label: "10+ REB", unit: "REB", minCount: 3, check: __name((x) => x.rebounds >= 10, "check"), val: __name((x) => x.rebounds, "val") }];
+    const streakRules = [
+      { id: "pts25", label: "25+ PTS", unit: "PTS", minCount: 3, check: (x: any) => x.points >= 25, val: (x: any) => x.points },
+      { id: "pts20", label: "20+ PTS", unit: "PTS", minCount: 4, check: (x: any) => x.points >= 20, val: (x: any) => x.points },
+      { id: "pts_reb25", label: "25+ PTS+REB", unit: "P+R", minCount: 3, check: (x: any) => x.points + x.rebounds >= 25, val: (x: any) => x.points + x.rebounds },
+      { id: "pts_ast24", label: "24+ PTS+AST", unit: "P+A", minCount: 3, check: (x: any) => x.points + x.assists >= 24, val: (x: any) => x.points + x.assists },
+      { id: "pra30", label: "30+ PRA", unit: "PRA", minCount: 3, check: (x: any) => x.pra >= 30, val: (x: any) => x.pra },
+      { id: "3pm3", label: "3+ 3PM", unit: "3PM", minCount: 4, check: (x: any) => x.fg3m >= 3, val: (x: any) => x.fg3m },
+      { id: "3pm2", label: "2+ 3PM", unit: "3PM", minCount: 6, check: (x: any) => x.fg3m >= 2, val: (x: any) => x.fg3m },
+      { id: "ast8", label: "8+ AST", unit: "AST", minCount: 3, check: (x: any) => x.assists >= 8, val: (x: any) => x.assists },
+      { id: "reb10", label: "10+ REB", unit: "REB", minCount: 3, check: (x: any) => x.rebounds >= 10, val: (x: any) => x.rebounds }
+    ];
     for (const sr of streakRules) {
       let priorCount = 0;
       const vals = [];

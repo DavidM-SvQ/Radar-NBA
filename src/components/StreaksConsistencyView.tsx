@@ -196,6 +196,13 @@ const BREAKOUT_STREAK_PRESETS: Array<{
 
 function resolveAutoStreakHelpKey(st: StreakEntry): string {
   const lbl = `${st.metricLabel} ${st.thresholdLabel}`.toLowerCase();
+  if (lbl.includes('pérdidas') || lbl.includes('to')) return 'toRatio';
+  if (lbl.includes('faltas')) return 'consecutiveStreak';
+  if (lbl.includes('plus/minus') || lbl.includes('±')) return 'consecutiveStreak';
+  if (lbl.includes('tiro de campo') || lbl.includes('tc')) return 'tsPct';
+  if (lbl.includes('pts+reb')) return 'prCombo';
+  if (lbl.includes('pts+ast')) return 'paCombo';
+  if (lbl.includes('pra')) return 'pra';
   if (lbl.includes('3p') || lbl.includes('triples')) return 'fg3Pct';
   if (lbl.includes('usg') || lbl.includes('uso')) return 'usgPct';
   if (lbl.includes('min')) return 'minBase';
@@ -211,14 +218,35 @@ function resolveAutoStreakHelpKey(st: StreakEntry): string {
 
 function humanThresholdLabel(st: StreakEntry, mode: ExperienceMode): string {
   if (mode === 'advanced') return st.thresholdLabel;
-  if (st.thresholdLabel.includes('Menos de 46% TS')) {
-    return 'Mala puntería seguida (<46% acierto)';
+  if (st.thresholdLabel.includes('≤10 PTS') || st.thresholdLabel.includes('≤12 PTS')) {
+    return 'Desplome anotador en rotación';
   }
-  if (st.thresholdLabel.includes('64%+ TS')) {
-    return 'Puntería altísima seguida (64%+ TS)';
+  if (st.thresholdLabel.includes('0 Triples anotados')) {
+    return 'Sequía total de triples (0 3PM)';
   }
-  if (st.thresholdLabel.includes('GmSc')) {
-    return 'Partidazos seguidos (valoración élite)';
+  if (st.thresholdLabel.includes('Sequía <25%') || st.thresholdLabel.includes('Sequía en triples')) {
+    return 'Mala puntería exterior (<25% 3P)';
+  }
+  if (st.thresholdLabel.includes('Menos de 46% TS') || st.thresholdLabel.includes('Desafinado total')) {
+    return 'Mala puntería seguida (<46% TS)';
+  }
+  if (st.thresholdLabel.includes('Bache en TL')) {
+    return 'Fallos graves desde la personal (<50% TL)';
+  }
+  if (st.thresholdLabel.includes('4+ Pérdidas') || st.thresholdLabel.includes('Sangría grave')) {
+    return 'Sangría grave de pérdidas (4+ TO)';
+  }
+  if (st.thresholdLabel.includes('3+ Pérdidas') || st.thresholdLabel.includes('Sangría de pérdidas')) {
+    return 'Sangría de pérdidas continuada (3+ TO)';
+  }
+  if (st.thresholdLabel.includes('Castigo arbitral')) {
+    return 'Problemas de faltas reincidentes';
+  }
+  if (st.thresholdLabel.includes('Hundimiento')) {
+    return 'Impacto muy negativo en pista (diferencial bajo)';
+  }
+  if (st.thresholdLabel.includes('Bache en TC')) {
+    return 'Bache en tiro de campo (<38% TC)';
   }
   return st.thresholdLabel;
 }
@@ -446,6 +474,11 @@ export function StreaksConsistencyView({
 
     for (const player of players) {
       if (player.games.length === 0) continue;
+      const p27CheckGames =
+        players2027ById.get(player.id) ??
+        player.games.filter((g) => g.seasonLabel === '2026-27');
+      if (p27CheckGames.length === 0) continue;
+
       const wKey = `player:${player.id}`;
       if (onlyWatchlist && !watchlistIds.has(wKey)) continue;
       if (q) {

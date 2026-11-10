@@ -365,13 +365,43 @@ function loadSavedWatchlist(): Set<string> {
   }
 }
 
+export const ALL_AVAILABLE_SEASONS = [
+  {
+    id: '2027',
+    label: '2026-27 (Actual)',
+    short: '26-27',
+    hint: 'Temporada regular actual en curso 2026-27',
+  },
+  {
+    id: '2026',
+    label: '2025-26',
+    short: '25-26',
+    hint: 'Temporada regular 2025-26 completa (82 PJ)',
+  },
+  {
+    id: '2025',
+    label: '2024-25',
+    short: '24-25',
+    hint: 'Temporada regular 2024-25 completa (82 PJ)',
+  },
+  {
+    id: '2024',
+    label: '2023-24',
+    short: '23-24',
+    hint: 'Temporada regular 2023-24 completa (82 PJ)',
+  },
+] as const;
+
 function loadSavedSeasonMode(): SeasonMode {
   try {
     const raw = localStorage.getItem(STORAGE_SEASON_KEY);
-    if (raw === '2027' || raw === '2026' || raw === '2025' || raw === '2024' || raw === 'continuous') return raw;
-    return 'continuous';
+    if (!raw) return '2027';
+    const parts = raw.split(/[,+]/).map((s) => s.trim()).filter(Boolean);
+    const valid = parts.every((p) => p === '2027' || p === '2026' || p === '2025' || p === '2024');
+    if (valid && parts.length > 0) return raw;
+    return '2027';
   } catch {
-    return 'continuous';
+    return '2027';
   }
 }
 
@@ -409,6 +439,31 @@ export default function App() {
   const [watchlistIds, setWatchlistIds] = useState<Set<string>>(loadSavedWatchlist);
   const [onlyWatchlist, setOnlyWatchlist] = useState(false);
   const [showThresholdBar, setShowThresholdBar] = useState<boolean>(false);
+
+  const selectedSeasonTokens = useMemo(() => {
+    const parts = String(seasonMode || '2027')
+      .split(/[,+]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return parts.length > 0 ? parts : ['2027'];
+  }, [seasonMode]);
+
+  const handleToggleSeasonMode = useCallback((seasonId: string) => {
+    const current = String(seasonMode || '2027')
+      .split(/[,+]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    let next: string[];
+    if (current.includes(seasonId)) {
+      if (current.length === 1) return; // Keep at least one season active
+      next = current.filter((s) => s !== seasonId);
+    } else {
+      const set = new Set([...current, seasonId]);
+      next = ['2027', '2026', '2025', '2024'].filter((s) => set.has(s));
+    }
+    setSeasonMode(next.join(','));
+  }, [seasonMode]);
 
   const [teams, setTeams] = useState<TeamSummary[]>([]);
   const [players, setPlayers] = useState<PlayerSummary[]>([]);
@@ -1896,17 +1951,19 @@ export default function App() {
                     {experienceMode === 'simple' ? 'Temporada:' : 'Muestra temporal:'}
                   </span>
                   <span className="font-semibold text-slate-100 truncate">
-                    {seasonMode === 'continuous'
-                      ? experienceMode === 'simple'
-                        ? 'Actual + Pasada'
-                        : 'Continuo (26-27 + 25-26)'
-                      : seasonMode === '2027'
-                        ? 'Solo 2026-27'
-                        : seasonMode === '2026'
+                    {selectedSeasonTokens.length === 1
+                      ? selectedSeasonTokens[0] === '2027'
+                        ? '2026-27 (Actual)'
+                        : selectedSeasonTokens[0] === '2026'
                           ? '2025-26 Completa'
-                          : seasonMode === '2025'
+                          : selectedSeasonTokens[0] === '2025'
                             ? '2024-25 Completa'
-                            : '2023-24 Completa'}
+                            : '2023-24 Completa'
+                      : selectedSeasonTokens.length === 4
+                        ? 'Todas las temporadas (2023-27)'
+                        : `${selectedSeasonTokens
+                            .map((s) => (s === '2027' ? '26-27' : s === '2026' ? '25-26' : s === '2025' ? '24-25' : '23-24'))
+                            .join(' + ')} (${selectedSeasonTokens.length} temp.)`}
                   </span>
                   <span className="text-slate-600 shrink-0" aria-hidden="true">
                     ·
@@ -1978,53 +2035,82 @@ export default function App() {
                 <div className="mt-2 pt-2 border-t border-[#1E293B] space-y-2.5 pb-1">
                   <div className="flex flex-wrap items-center justify-between gap-2.5">
                     <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 max-w-full">
-                      {/* 1. Season Dataset Selector */}
+                      {/* 1. Multi-Season Dataset Selector */}
                       <div className="flex items-center gap-1.5 max-w-full">
                         <span className="text-[11px] font-medium text-slate-400 whitespace-nowrap">
-                          {experienceMode === 'simple' ? 'Temporada:' : 'Muestra:'}
+                          {experienceMode === 'simple' ? 'Temporadas:' : 'Muestra:'}
                         </span>
-                        <div className="inline-flex items-center gap-0.5 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
-                          {(
-                            [
-                              {
-                                id: 'continuous',
-                                label:
-                                  experienceMode === 'simple'
-                                    ? 'Actual + Pasada'
-                                    : 'Continuo (25-27)',
-                                hint: 'Enlaza los partidos de 2026-27 con la base completa de 2025-26',
-                              },
-                              {
-                                id: '2027',
-                                label: 'Solo 2026-27',
-                                hint: 'Únicamente partidos disputados en el curso 2026-27',
-                              },
-                              {
-                                id: '2026',
-                                label: '2025-26',
-                                hint: 'Temporada regular 2025-26 completa (82 PJ)',
-                              },
-                              {
-                                id: '2025',
-                                label: '2024-25',
-                                hint: 'Temporada regular 2024-25 completa (82 PJ)',
-                              },
-                            ] as const
-                          ).map((m) => (
-                            <button
-                              key={m.id}
-                              type="button"
-                              title={m.hint}
-                              onClick={() => setSeasonMode(m.id)}
-                              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                                seasonMode === m.id
-                                  ? 'bg-[#1E293B] text-orange-400 font-semibold'
-                                  : 'text-slate-400 hover:text-slate-200'
-                              }`}
-                            >
-                              {m.label}
-                            </button>
-                          ))}
+                        <div className="inline-flex items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
+                          {ALL_AVAILABLE_SEASONS.map((m) => {
+                            const isSelected = selectedSeasonTokens.includes(m.id);
+                            return (
+                              <button
+                                key={m.id}
+                                type="button"
+                                title={
+                                  isSelected
+                                    ? `Marcada. Pulsa para desmarcar ${m.label}`
+                                    : `Pulsa para añadir ${m.label} a la muestra analítica`
+                                }
+                                onClick={() => handleToggleSeasonMode(m.id)}
+                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-all whitespace-nowrap shrink-0 ${
+                                  isSelected
+                                    ? 'bg-orange-500 text-slate-950 font-bold shadow-sm'
+                                    : 'text-slate-400 hover:text-slate-200 hover:bg-[#1E293B]'
+                                }`}
+                              >
+                                <span
+                                  className={`w-3.5 h-3.5 rounded flex items-center justify-center text-[9px] font-bold transition-colors ${
+                                    isSelected
+                                      ? 'bg-slate-950/20 text-slate-950'
+                                      : 'border border-slate-600 text-transparent'
+                                  }`}
+                                >
+                                  ✓
+                                </span>
+                                <span>{m.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {/* Quick Presets */}
+                        <div className="hidden sm:inline-flex items-center gap-1 text-[11px]">
+                          <button
+                            type="button"
+                            onClick={() => setSeasonMode('2027')}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                              seasonMode === '2027'
+                                ? 'text-orange-400 font-bold'
+                                : 'text-slate-500 hover:text-slate-300'
+                            }`}
+                          >
+                            Solo Actual
+                          </button>
+                          <span className="text-slate-600">·</span>
+                          <button
+                            type="button"
+                            onClick={() => setSeasonMode('2027,2026')}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                              seasonMode === '2027,2026'
+                                ? 'text-orange-400 font-bold'
+                                : 'text-slate-500 hover:text-slate-300'
+                            }`}
+                          >
+                            Últ. 2 (25-27)
+                          </button>
+                          <span className="text-slate-600">·</span>
+                          <button
+                            type="button"
+                            onClick={() => setSeasonMode('2027,2026,2025,2024')}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                              seasonMode === '2027,2026,2025,2024'
+                                ? 'text-orange-400 font-bold'
+                                : 'text-slate-500 hover:text-slate-300'
+                            }`}
+                          >
+                            Todas (4)
+                          </button>
                         </div>
                       </div>
 

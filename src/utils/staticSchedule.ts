@@ -88,7 +88,19 @@ export function buildWeeklyWindowsFromSchedule(
   scheduleGames: StaticScheduledGame[],
   referenceTodayIso = getEasternTodayIso()
 ): FantasyWeekWindow[] {
-  const currentMonday = getMondayOfWeekIso(referenceTodayIso);
+  const [y, m, d] = referenceTodayIso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  const dow = dt.getUTCDay(); // 0=Dom, 1=Lun, ...
+
+  // Fantasy Pivot Logic:
+  // - Monday: Current actionable week is the one starting today.
+  // - Tuesday-Sunday: Current actionable week pivots to NEXT week (planning mode).
+  let pivotMonday = getMondayOfWeekIso(referenceTodayIso);
+  if (dow !== 1) {
+    pivotMonday = addDaysIso(pivotMonday, 7);
+  }
+
+  const currentMonday = pivotMonday;
   const specs: Array<{
     id: FantasyWeekWindow['id'];
     offsetWeeks: number;

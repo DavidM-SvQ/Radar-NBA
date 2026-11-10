@@ -15,7 +15,13 @@ export type ActiveSection =
 
 export type ExperienceMode = 'simple' | 'advanced';
 
-export type SeasonMode = 'continuous' | '2027' | '2026' | '2025' | '2024';
+export type SeasonMode =
+  | 'continuous'
+  | '2027'
+  | '2026'
+  | '2025'
+  | '2024'
+  | (string & {});
 
 export type DataSourceKind =
   | 'official_nba'

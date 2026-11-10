@@ -566,10 +566,8 @@ export function mergeBootstrapSeasonsClient(
 
 /* --- Client-side Season Slice Loader & Zero-Latency Memory Store --- */
 
-const clientBootstrapStore: Partial<Record<SeasonMode, BootstrapPayload>> = {};
-const clientInflightRequests: Partial<
-  Record<'2027' | '2026', Promise<BootstrapPayload>>
-> = {};
+const clientBootstrapStore: Partial<Record<string, BootstrapPayload>> = {};
+const clientInflightRequests: Partial<Record<string, Promise<BootstrapPayload>>> = {};
 const sliceSubscribers = new Set<() => void>();
 
 function notifySliceSubscribers(): void {
@@ -682,8 +680,8 @@ async function fetchJsonWithSingleRetry(url: string): Promise<any> {
     : new Error('No se pudo conectar con la fuente de datos NBA.');
 }
 
-async function loadSingleSeasonSliceClient(
-  season: '2027' | '2026',
+export async function loadSingleSeasonSliceClient(
+  season: '2027' | '2026' | '2025' | '2024' | string,
   forceRefresh = false
 ): Promise<BootstrapPayload> {
   if (!forceRefresh && clientBootstrapStore[season]) {
@@ -708,12 +706,6 @@ async function loadSingleSeasonSliceClient(
     );
     const unpacked = unpackBootstrapWirePayload(raw);
     clientBootstrapStore[season] = unpacked;
-    if (clientBootstrapStore['2027'] && clientBootstrapStore['2026']) {
-      clientBootstrapStore.continuous = mergeBootstrapSeasonsClient(
-        clientBootstrapStore['2027']!,
-        clientBootstrapStore['2026']!
-      );
-    }
     notifySliceSubscribers();
     return unpacked;
   })();
@@ -726,22 +718,116 @@ async function loadSingleSeasonSliceClient(
   }
 }
 
-function scheduleBackgroundSliceWarmup(season: '2027' | '2026'): void {
-  if (typeof window === 'undefined') return;
-  if (clientBootstrapStore[season] || clientInflightRequests[season]) return;
-  window.setTimeout(() => {
-    if (!clientBootstrapStore[season] && !clientInflightRequests[season]) {
-      void loadSingleSeasonSliceClient(season, false).catch(() => {
-        // Ignore background warmup errors; fetched on demand if user switches tab
-      });
-    }
-  }, 350);
+/**
+ * Merges multiple BootstrapPayloads into a single combined dataset.
+ * Combines team games and player games, recomputes records and averages.
+ */
+export function mergeMultipleBootstrapSeasonsClient(
+  payloads: BootstrapPayload[]
+): BootstrapPayload {
+  if (payloads.length === 0) {
+    throw new Error('No hay temporadas seleccionadas para combinar.');
+  }
+  if (payloads.length === 1) {
+    return payloads[0];
+  }
+
+  // 1. Merge Teams
+  const mergedTeams: TeamSummary[] = [];
+  for (const abbr of Object.keys(NBA_TEAMS_MAP)) {
+    const matchingTeams = payloads
+      .map((p) => p.teams.find((t) => t.abbreviation === abbr))
+      .filter((t): t is TeamSummary => Boolean(t));
+
+    if (matchingTeams.length === 0) continue;
+
+    const base = matchingTeams.find((t) => t.games.length > 0) || matchingTeams[0];
+    const combinedGames = matchingTeams
+      .flatMap((t) => t.games)
+      .sort((a, b) => b.date.localeCompare(a.date));
+
+    const wins = combinedGames.filter((g) => g.result === 'W').length;
+    const losses = combinedGames.filter((g) => g.result === 'L').length;
+    const total = wins + losses;
+    const winPct = total > 0 ? Math.round((wins / total) * 1000) / 1000 : base.winPct;
+
+    const ptsFor = combinedGames.map((g) => g.pointsFor);
+    const ptsAgainst = combinedGames.map((g) => g.pointsAgainst);
+    const avgPtsFor = ptsFor.length > 0 ? Math.round(meanNums(ptsFor) * 10) / 10 : base.avgPointsFor;
+    const avgPtsAgainst = ptsAgainst.length > 0 ? Math.round(meanNums(ptsAgainst) * 10) / 10 : base.avgPointsAgainst;
+    const differential = Math.round((avgPtsFor - avgPtsAgainst) * 10) / 10;
+
+    mergedTeams.push({
+      ...base,
+      wins,
+      losses,
+      winPct,
+      avgPointsFor: avgPtsFor,
+      avgPointsAgainst: avgPtsAgainst,
+      differential,
+      games: combinedGames,
+    });
+  }
+
+  mergedTeams.sort(
+    (a, b) =>
+      b.winPct - a.winPct ||
+      b.wins - a.wins ||
+      b.differential - a.differential
+  );
+
+  // 2. Merge Players
+  const allPids = new Set<string>();
+  payloads.forEach((p) => p.players.forEach((pl) => allPids.add(pl.id)));
+
+  const mergedPlayers: PlayerSummary[] = [];
+  for (const pid of allPids) {
+    const matchingPlayers = payloads
+      .map((p) => p.players.find((pl) => pl.id === pid))
+      .filter((pl): pl is PlayerSummary => Boolean(pl));
+
+    if (matchingPlayers.length === 0) continue;
+
+    const primary = matchingPlayers.find((pl) => pl.games.length > 0) || matchingPlayers[0];
+    const mergedGames = matchingPlayers
+      .flatMap((pl) => pl.games)
+      .sort((a, b) => b.date.localeCompare(a.date));
+
+    if (mergedGames.length === 0) continue;
+
+    mergedPlayers.push({
+      ...primary,
+      games: mergedGames,
+    });
+  }
+
+  mergedPlayers.sort((a, b) => {
+    const aRecent = meanNums(a.games.slice(0, 10).map((g) => g.points));
+    const bRecent = meanNums(b.games.slice(0, 10).map((g) => g.points));
+    return bRecent - aRecent || a.id.localeCompare(b.id);
+  });
+
+  const newest = payloads[0];
+  const combinedSeasonMode = payloads.map((p) => p.seasonMode).join(',');
+
+  return {
+    seasonMode: combinedSeasonMode as SeasonMode,
+    dataSource: newest.dataSource,
+    totalLeaguePlayersAvailable: Math.max(
+      ...payloads.map((p) => p.totalLeaguePlayersAvailable || 0),
+      mergedPlayers.length
+    ),
+    allPlayersLoaded: true,
+    generatedAt: newest.generatedAt,
+    teams: mergedTeams,
+    players: mergedPlayers,
+    scoreboard: payloads.find((p) => p.scoreboard && p.scoreboard.length > 0)?.scoreboard || [],
+  };
 }
 
 /**
- * Fetches BootstrapPayload by splitting seasons into independent compact HTTP slices
- * (each strictly <= ~2.1 MB uncompressed even on Game 82 of an NBA season, well under
- * Vercel's 4.5 MB Serverless Function ceiling) and merging 'continuous' in memory.
+ * Fetches BootstrapPayload for single or multi-season selections.
+ * Multiple seasons are fetched in parallel and merged seamlessly in memory.
  */
 export async function fetchBootstrapClient(
   mode: SeasonMode,
@@ -756,51 +842,39 @@ export async function fetchBootstrapClient(
     }
   }
 
-  if (mode === '2027') {
-    const b2027 = await loadSingleSeasonSliceClient('2027', forceRefresh);
-    scheduleBackgroundSliceWarmup('2026');
-    return b2027;
-  }
+  // Handle multi-season (e.g. '2027,2026' or '2027+2026')
+  const seasonTokens = String(mode)
+    .split(/[,+]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 
-  if (mode === '2026') {
-    // 2025-26 is an immutable completed season; only refetch if not yet in memory
-    const b2026 = await loadSingleSeasonSliceClient(
-      '2026',
-      forceRefresh && !clientBootstrapStore['2026']
+  if (seasonTokens.length > 1) {
+    const results = await Promise.all(
+      seasonTokens.map((s) => loadSingleSeasonSliceClient(s, forceRefresh))
     );
-    scheduleBackgroundSliceWarmup('2027');
-    return b2026;
-  }
-
-  // 'continuous': fetch 2027 (refreshable) and 2026 (cached archive) in parallel with graceful partial fallback
-  const [res2027, res2026] = await Promise.allSettled([
-    loadSingleSeasonSliceClient('2027', forceRefresh),
-    loadSingleSeasonSliceClient('2026', false),
-  ]);
-
-  if (res2027.status === 'fulfilled' && res2026.status === 'fulfilled') {
-    const merged = mergeBootstrapSeasonsClient(res2027.value, res2026.value);
-    clientBootstrapStore.continuous = merged;
+    const merged = mergeMultipleBootstrapSeasonsClient(results);
+    clientBootstrapStore[mode] = merged;
     return merged;
   }
 
-  if (res2027.status === 'fulfilled') {
-    scheduleBackgroundSliceWarmup('2026');
-    return {
-      ...res2027.value,
-      seasonMode: 'continuous',
-    };
+  // Single season
+  const singleSeason = seasonTokens[0] || '2027';
+  if (singleSeason === 'continuous') {
+    const [res2027, res2026] = await Promise.allSettled([
+      loadSingleSeasonSliceClient('2027', forceRefresh),
+      loadSingleSeasonSliceClient('2026', false),
+    ]);
+    if (res2027.status === 'fulfilled' && res2026.status === 'fulfilled') {
+      const merged = mergeBootstrapSeasonsClient(res2027.value, res2026.value);
+      clientBootstrapStore.continuous = merged;
+      return merged;
+    }
+    if (res2027.status === 'fulfilled') return res2027.value;
+    if (res2026.status === 'fulfilled') return res2026.value;
+    throw res2027.reason instanceof Error ? res2027.reason : new Error('No se pudo conectar con NBA Stats.');
   }
 
-  if (res2026.status === 'fulfilled') {
-    scheduleBackgroundSliceWarmup('2027');
-    return {
-      ...res2026.value,
-      seasonMode: 'continuous',
-    };
-  }
-
-  throw res2027.reason instanceof Error
-    ? res2027.reason
-    : new Error('No se pudo conectar con el servidor de estadísticas NBA.');
+  const payload = await loadSingleSeasonSliceClient(singleSeason, forceRefresh);
+  clientBootstrapStore[mode] = payload;
+  return payload;
 }

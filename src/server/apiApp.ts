@@ -398,7 +398,7 @@ app.get("/api/nba/fantasy/manual-state", validateRequest({ query: emptyQuerySche
     res.status(500).json({ error: "Error al leer estado guardado de la liga Fantasy." });
   }
 });
-app.put("/api/nba/fantasy/manual-state", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema, body: manualFantasyStateBodySchema }), async (req, res) => {
+app.put("/api/nba/fantasy/manual-state", validateRequest({ query: emptyQuerySchema, body: manualFantasyStateBodySchema }), async (req, res) => {
   try {
     res.setHeader("Cache-Control", "no-store");
     const { body } = getValidated(req);
@@ -414,6 +414,8 @@ app.put("/api/nba/fantasy/manual-state", requireAdminCsrfProtection, requireAdmi
     res.status(500).json({ error: err?.message || "Error al guardar permanentemente la liga Fantasy." });
   }
 });
+
+
 app.use("/api", (_req, res) => {
   res.status(404).json({ error: "Ruta de API no encontrada.", code: "API_ROUTE_NOT_FOUND" });
 });

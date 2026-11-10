@@ -38,6 +38,7 @@ export interface LeagueBenchmarks {
     min: MetricBenchmark;
   };
   team: {
+    winPct: MetricBenchmark;
     avgPointsFor: MetricBenchmark;
     avgPointsAgainst: MetricBenchmark;
     differential: MetricBenchmark;
@@ -49,7 +50,33 @@ export interface LeagueBenchmarks {
     tsPct: MetricBenchmark;
     orebPct: MetricBenchmark;
     tovPct: MetricBenchmark;
+    fgmAvg: MetricBenchmark;
+    fgaAvg: MetricBenchmark;
+    fgPct: MetricBenchmark;
+    fg3mAvg: MetricBenchmark;
+    fg3aAvg: MetricBenchmark;
+    fg3Pct: MetricBenchmark;
+    ftmAvg: MetricBenchmark;
+    ftaAvg: MetricBenchmark;
+    ftPct: MetricBenchmark;
+    astAvg: MetricBenchmark;
+    tovAvg: MetricBenchmark;
+    astTovRatio: MetricBenchmark;
+    rebAvg: MetricBenchmark;
+    orebAvg: MetricBenchmark;
+    drebAvg: MetricBenchmark;
     ptsPaint: MetricBenchmark;
+    oppPtsPaint: MetricBenchmark;
+    pts2ndChance: MetricBenchmark;
+    ptsFastBreak: MetricBenchmark;
+    ptsOffTov: MetricBenchmark;
+    stlAvg: MetricBenchmark;
+    blkAvg: MetricBenchmark;
+    contestedShots: MetricBenchmark;
+    deflections: MetricBenchmark;
+    boxOuts: MetricBenchmark;
+    pctPts3p: MetricBenchmark;
+    pctPtsPaint: MetricBenchmark;
   };
 }
 
@@ -217,40 +244,85 @@ export function computeLeagueBenchmarks(
   const tPool = teams.filter(
     (t) => t.games.length > 0 || t.wins + t.losses > 0
   );
-  const tPf = tPool.map((t) => t.avgPointsFor);
-  const tPa = tPool.map((t) => t.avgPointsAgainst);
+
+  const getTeamVal = (t: TeamSummary, key: string): number => {
+    const games = t.games;
+    switch (key) {
+      case 'winPct': return t.winPct * 100;
+      case 'avgPointsFor': return t.avgPointsFor || mean(games.map(g => g.pointsFor));
+      case 'avgPointsAgainst': return t.avgPointsAgainst || mean(games.map(g => g.pointsAgainst));
+      case 'differential': return t.differential;
+      case 'offRtg': return t.advanced?.offRtg ?? mean(games.map(g => g.offRtg));
+      case 'defRtg': return t.advanced?.defRtg ?? mean(games.map(g => g.defRtg));
+      case 'netRtg': return t.advanced?.netRtg ?? (getTeamVal(t, 'offRtg') - getTeamVal(t, 'defRtg'));
+      case 'pace': return t.advanced?.pace ?? mean(games.map(g => g.pace));
+      case 'efgPct': return t.advanced?.efgPct ?? mean(games.map(g => g.efgPct));
+      case 'tsPct': return t.advanced?.tsPct ?? mean(games.map(g => g.tsPct));
+      case 'orebPct': return t.advanced?.orebPct ?? mean(games.map(g => g.orebPct));
+      case 'tovPct': return t.advanced?.tovPct ?? mean(games.map(g => g.tovPct));
+      case 'fgmAvg': return mean(games.map(g => g.fgm));
+      case 'fgaAvg': return mean(games.map(g => g.fga));
+      case 'fgPct': {
+        const fga = games.reduce((s, g) => s + g.fga, 0);
+        const fgm = games.reduce((s, g) => s + g.fgm, 0);
+        return fga > 0 ? (fgm / fga) * 100 : 47;
+      }
+      case 'fg3mAvg': return mean(games.map(g => g.fg3m));
+      case 'fg3aAvg': return mean(games.map(g => g.fg3a));
+      case 'fg3Pct': {
+        const fga = games.reduce((s, g) => s + g.fg3a, 0);
+        const fgm = games.reduce((s, g) => s + g.fg3m, 0);
+        return fga > 0 ? (fgm / fga) * 100 : 36;
+      }
+      case 'ftmAvg': return mean(games.map(g => g.ftm));
+      case 'ftaAvg': return mean(games.map(g => g.fta));
+      case 'ftPct': {
+        const fta = games.reduce((s, g) => s + g.fta, 0);
+        const ftm = games.reduce((s, g) => s + g.ftm, 0);
+        return fta > 0 ? (ftm / fta) * 100 : 78;
+      }
+      case 'astAvg': return mean(games.map(g => g.ast));
+      case 'tovAvg': return mean(games.map(g => g.tov));
+      case 'astTovRatio': {
+        const ast = mean(games.map(g => g.ast));
+        const tov = mean(games.map(g => g.tov));
+        return tov > 0 ? ast / tov : ast;
+      }
+      case 'rebAvg': return mean(games.map(g => g.reb));
+      case 'orebAvg': return mean(games.map(g => g.oreb));
+      case 'drebAvg': return mean(games.map(g => g.dreb));
+      case 'ptsPaint': return t.advanced?.ptsPaint ?? 0;
+      case 'oppPtsPaint': return t.advanced?.oppPtsPaint ?? 0;
+      case 'pts2ndChance': return t.advanced?.pts2ndChance ?? 0;
+      case 'ptsFastBreak': return t.advanced?.ptsFastBreak ?? 0;
+      case 'ptsOffTov': return t.advanced?.ptsOffTov ?? 0;
+      case 'stlAvg': return mean(games.map(g => g.stl));
+      case 'blkAvg': return mean(games.map(g => g.blk));
+      case 'contestedShots': return t.advanced?.contestedShots ?? 0;
+      case 'deflections': return t.advanced?.deflections ?? 0;
+      case 'boxOuts': return t.advanced?.boxOuts ?? 0;
+      case 'pctPts3p': {
+        const pts = getTeamVal(t, 'avgPointsFor');
+        const fg3m = getTeamVal(t, 'fg3mAvg');
+        return pts > 0 ? ((fg3m * 3) / pts) * 100 : 33;
+      }
+      case 'pctPtsPaint': {
+        const pts = getTeamVal(t, 'avgPointsFor');
+        const paint = getTeamVal(t, 'ptsPaint');
+        return pts > 0 ? (paint / pts) * 100 : 42;
+      }
+      default: return 0;
+    }
+  };
+
   const tDiff = tPool.map((t) => t.differential);
-  const tOff = tPool.map(
-    (t) => t.advanced?.offRtg ?? mean(t.games.map((g) => g.offRtg))
-  );
-  const tDef = tPool.map(
-    (t) => t.advanced?.defRtg ?? mean(t.games.map((g) => g.defRtg))
-  );
-  const tNet = tPool.map(
-    (t) => t.advanced?.netRtg ?? mean(t.games.map((g) => g.netRtg))
-  );
-  const tPace = tPool.map(
-    (t) => t.advanced?.pace ?? mean(t.games.map((g) => g.pace))
-  );
-  const tEfg = tPool.map(
-    (t) => t.advanced?.efgPct ?? mean(t.games.map((g) => g.efgPct))
-  );
-  const tTs = tPool.map(
-    (t) => t.advanced?.tsPct ?? mean(t.games.map((g) => g.tsPct))
-  );
-  const tOrebPct = tPool.map(
-    (t) => t.advanced?.orebPct ?? mean(t.games.map((g) => g.orebPct))
-  );
-  const tTovPct = tPool.map(
-    (t) => t.advanced?.tovPct ?? mean(t.games.map((g) => g.tovPct))
-  );
-  const tPaint = tPool
-    .map((t) => t.advanced?.ptsPaint ?? 0)
-    .filter((v) => v > 0);
   const tDiffAbs = tDiff.map((v) => Math.abs(v)).filter((v) => v > 0);
   const diffSpread = tDiffAbs.length >= 5 ? round1(mean(tDiffAbs)) : 4.8;
+  const tNet = tPool.map((t) => getTeamVal(t, 'netRtg'));
   const tNetAbs = tNet.map((v) => Math.abs(v)).filter((v) => v > 0);
   const netSpread = tNetAbs.length >= 5 ? round1(mean(tNetAbs)) : 4.6;
+
+  const getTeamPool = (key: string) => tPool.map(t => getTeamVal(t, key)).filter(v => v !== 0 || key.includes('differential') || key.includes('netRtg'));
 
   return {
     player: {
@@ -270,28 +342,55 @@ export function computeLeagueBenchmarks(
       min: buildStat(pMin, 25.5, 6.0),
     },
     team: {
-      avgPointsFor: buildStat(tPf, 114.2, 4.2),
-      avgPointsAgainst: buildStat(tPa, 114.2, 4.2, { lowerIsBetter: true }),
+      winPct: buildStat(getTeamPool('winPct'), 50, 15, { suffix: '%' }),
+      avgPointsFor: buildStat(getTeamPool('avgPointsFor'), 114.2, 4.2),
+      avgPointsAgainst: buildStat(getTeamPool('avgPointsAgainst'), 114.2, 4.2, { lowerIsBetter: true }),
       differential: buildStat(tDiff, 0.0, 4.8, {
         isZeroSumBalance: true,
         spreadMean: diffSpread,
         suffix: ' PTS',
       }),
-      offRtg: buildStat(tOff, 114.5, 3.6),
-      defRtg: buildStat(tDef, 114.5, 3.6, { lowerIsBetter: true }),
+      offRtg: buildStat(getTeamPool('offRtg'), 114.5, 3.6),
+      defRtg: buildStat(getTeamPool('defRtg'), 114.5, 3.6, { lowerIsBetter: true }),
       netRtg: buildStat(tNet, 0.0, 4.6, {
         isZeroSumBalance: true,
         spreadMean: netSpread,
       }),
-      pace: buildStat(tPace, 99.6, 2.2),
-      efgPct: buildStat(tEfg, 54.5, 2.1, { suffix: '%' }),
-      tsPct: buildStat(tTs, 58.0, 2.0, { suffix: '%' }),
-      orebPct: buildStat(tOrebPct, 25.2, 2.4, { suffix: '%' }),
-      tovPct: buildStat(tTovPct, 13.8, 1.2, {
+      pace: buildStat(getTeamPool('pace'), 99.6, 2.2),
+      efgPct: buildStat(getTeamPool('efgPct'), 54.5, 2.1, { suffix: '%' }),
+      tsPct: buildStat(getTeamPool('tsPct'), 58.0, 2.0, { suffix: '%' }),
+      orebPct: buildStat(getTeamPool('orebPct'), 25.2, 2.4, { suffix: '%' }),
+      tovPct: buildStat(getTeamPool('tovPct'), 13.8, 1.2, {
         lowerIsBetter: true,
         suffix: '%',
       }),
-      ptsPaint: buildStat(tPaint, 48.5, 4.2),
+      fgmAvg: buildStat(getTeamPool('fgmAvg'), 42.5, 2.0),
+      fgaAvg: buildStat(getTeamPool('fgaAvg'), 89.2, 3.0),
+      fgPct: buildStat(getTeamPool('fgPct'), 47.6, 1.8, { suffix: '%' }),
+      fg3mAvg: buildStat(getTeamPool('fg3mAvg'), 12.8, 2.0),
+      fg3aAvg: buildStat(getTeamPool('fg3aAvg'), 35.4, 4.0),
+      fg3Pct: buildStat(getTeamPool('fg3Pct'), 36.2, 2.2, { suffix: '%' }),
+      ftmAvg: buildStat(getTeamPool('ftmAvg'), 17.5, 2.5),
+      ftaAvg: buildStat(getTeamPool('ftaAvg'), 22.4, 3.0),
+      ftPct: buildStat(getTeamPool('ftPct'), 78.4, 3.5, { suffix: '%' }),
+      astAvg: buildStat(getTeamPool('astAvg'), 26.8, 2.5),
+      tovAvg: buildStat(getTeamPool('tovAvg'), 14.2, 1.5, { lowerIsBetter: true }),
+      astTovRatio: buildStat(getTeamPool('astTovRatio'), 1.85, 0.3),
+      rebAvg: buildStat(getTeamPool('rebAvg'), 44.2, 3.0),
+      orebAvg: buildStat(getTeamPool('orebAvg'), 10.5, 1.8),
+      drebAvg: buildStat(getTeamPool('drebAvg'), 33.7, 2.5),
+      ptsPaint: buildStat(getTeamPool('ptsPaint'), 48.5, 4.2),
+      oppPtsPaint: buildStat(getTeamPool('oppPtsPaint'), 48.5, 4.2, { lowerIsBetter: true }),
+      pts2ndChance: buildStat(getTeamPool('pts2ndChance'), 13.5, 2.2),
+      ptsFastBreak: buildStat(getTeamPool('ptsFastBreak'), 14.2, 2.5),
+      ptsOffTov: buildStat(getTeamPool('ptsOffTov'), 16.5, 2.8),
+      stlAvg: buildStat(getTeamPool('stlAvg'), 7.5, 1.2),
+      blkAvg: buildStat(getTeamPool('blkAvg'), 5.2, 1.0),
+      contestedShots: buildStat(getTeamPool('contestedShots'), 60.5, 5.0),
+      deflections: buildStat(getTeamPool('deflections'), 14.5, 2.0),
+      boxOuts: buildStat(getTeamPool('boxOuts'), 16.2, 2.5),
+      pctPts3p: buildStat(getTeamPool('pctPts3p'), 33.5, 4.0, { suffix: '%' }),
+      pctPtsPaint: buildStat(getTeamPool('pctPtsPaint'), 42.5, 4.5, { suffix: '%' }),
     },
   };
 }

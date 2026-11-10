@@ -1,6 +1,6 @@
 {
   "name": "RadarNBA",
-  "description": "RadarNBA: Plataforma avanzada de scouting, crónicas de partidos, radar de anomalías, estadísticas oficiales boxscore y analítica NBA.",
+  "description": "Plataforma avanzada de análisis estadístico NBA con detección de anomalías, rachas, duelos 1v1 y visualización de rendimiento histórico.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

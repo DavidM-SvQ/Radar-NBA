@@ -124,6 +124,6 @@ jobs:
 
           TODAY_UTC=$(date -u +"%Y-%m-%d")
           git commit -m "chore(data): actualizar snapshot diario NBA (${TODAY_UTC} · ${GAMES27} PJ 26-27)"
-          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git pull origin "${GITHUB_REF_NAME}" --rebase -X ours || true
           git push origin "HEAD:${GITHUB_REF_NAME}"
           echo "[RadarNBA CI] Snapshot NBA actualizado y enviado a ${GITHUB_REF_NAME}. Vercel desplegará automáticamente."

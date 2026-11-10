@@ -1,0 +1,23 @@
+{
+  "appName": "RadarNBA",
+  "version": "1.0.0",
+  "description": "RadarNBA: Plataforma avanzada de scouting, crónicas de partidos, radar de anomalías, estadísticas oficiales boxscore y analítica NBA.",
+  "protectedModules": [
+    "src/App.tsx",
+    "src/components/GuidedHomeView.tsx",
+    "src/components/AnomalyRadarView.tsx",
+    "src/components/GameDayAnalyzerView.tsx",
+    "src/components/HeadToHeadBattleView.tsx",
+    "src/components/StreaksConsistencyView.tsx",
+    "src/components/FantasyEspnAssistantView.tsx",
+    "src/server/nbaDataService.ts"
+  ],
+  "requiredKeywords": [
+    "RadarNBA",
+    "CourtPulse",
+    "AnomalyRadar",
+    "GamedayAnalyzer",
+    "HeadToHeadBattle"
+  ],
+  "lockStatus": "PROTECTED_ACTIVE"
+}

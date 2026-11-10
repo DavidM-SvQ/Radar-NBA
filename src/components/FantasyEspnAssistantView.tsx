@@ -561,12 +561,8 @@ export function FantasyEspnAssistantView({
 
   const handleSelectFantasyTab = useCallback(
     (nextTab: FantasyTab) => {
-      setActiveTab((prev) => {
-        if (prev !== nextTab) {
-          onTabChange?.(nextTab);
-        }
-        return nextTab;
-      });
+      setActiveTab(nextTab);
+      onTabChange?.(nextTab);
     },
     [onTabChange]
   );
@@ -911,7 +907,9 @@ export function FantasyEspnAssistantView({
           } catch {
             // Ignore storage errors
           }
-          void persistStateToServerDisk(syncedLocal);
+          setTimeout(() => {
+            void persistStateToServerDisk(syncedLocal);
+          }, 0);
           return syncedLocal;
         }
 
@@ -1106,18 +1104,22 @@ export function FantasyEspnAssistantView({
   const getPlayerInjury = useCallback(
     (p: PlayerSummary): FantasyPlayerInjuryAlert | null => {
       const norm = normalizePlayerLookupKey(p.name);
-      if (p.id === '1631096' || norm === 'chet holmgren') {
+      if (p.id === '1631096' || norm === 'chet holmgren' || p.id === '1631097' || norm === 'jalen williams') {
         const byId = nbaContext?.injuriesByPlayerId?.[p.id];
         if (byId && byId.severity !== 'healthy') return byId;
         const byNorm = nbaContext?.injuriesByNormName?.[norm];
         if (byNorm && byNorm.severity !== 'healthy') return byNorm;
+        
+        const isChet = p.id === '1631096' || norm === 'chet holmgren';
         return {
-          playerNameNorm: 'chet holmgren',
-          displayName: 'Chet Holmgren',
+          playerNameNorm: isChet ? 'chet holmgren' : 'jalen williams',
+          displayName: isChet ? 'Chet Holmgren' : 'Jalen Williams',
           severity: 'out',
           absenceTier: 'long_term',
           statusLabelEs: 'Baja larga duración',
-          detailEs: 'Rotura de tendón rotuliano (~8-10 semanas de baja) [Regreso est: 2027-01-02]',
+          detailEs: isChet 
+            ? 'Rotura de tendón rotuliano (~8-10 semanas de baja) [Regreso est: 2027-01-02]'
+            : 'Lesión estructural confirmada (Larga duración) [Manejo médico OKC]',
         };
       }
       if (!nbaContext) return null;
@@ -1660,10 +1662,24 @@ export function FantasyEspnAssistantView({
     effectiveDropMember,
   ]);
 
-  // Next week window for schedule and matchups
-  const nextWeekWindow = useMemo(() => {
-    return effectiveWeeks.find((w) => w.id === 'next') || null;
-  }, [effectiveWeeks]);
+  // Dynamic target week window for Waiver Wire / Free Agents:
+  // - On Monday (e.g. today Nov 9): Defaults to current week (Semana del 9: Lun 9 - Dom 15 nov)
+  // - From Tuesday onwards (Martes 10 nov a Dom 15 nov): Defaults to next week (Semana del 16: Lun 16 - Dom 22 nov)
+  // - If the user selects a week in the week bar, uses that selected week
+  const targetWaiverWeekWindow = useMemo(() => {
+    if (selectedWeekId && selectedWeekId !== 'current') {
+      return effectiveWeeks.find((w) => w.id === selectedWeekId) || null;
+    }
+    const todayEastern = getEasternTodayIso();
+    const [y, m, d] = todayEastern.split('-').map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+    const isMonday = dt.getUTCDay() === 1;
+
+    if (isMonday) {
+      return effectiveWeeks.find((w) => w.id === 'current') || effectiveWeeks[0] || null;
+    }
+    return effectiveWeeks.find((w) => w.id === 'next') || effectiveWeeks.find((w) => w.id === 'current') || null;
+  }, [effectiveWeeks, selectedWeekId]);
 
   // Available Waiver / Free Agent Pool
   const availableWaiverPool = useMemo(() => {
@@ -1695,7 +1711,7 @@ export function FantasyEspnAssistantView({
 
     const withDeltas = filtered.map((item) => {
       const recent = computePlayerRecentWindowStats(item.player, leagueState.gameCorrections);
-      const nextWeekSched = nextWeekWindow?.teamSchedules?.[item.player.teamAbbr] || null;
+      const nextWeekSched = targetWaiverWeekWindow?.teamSchedules?.[item.player.teamAbbr] || null;
       const nextWeekGamesCount = nextWeekSched?.gamesCount ?? 0;
       const nextWeekGamesList = nextWeekSched?.games ?? [];
 
@@ -1784,7 +1800,7 @@ export function FantasyEspnAssistantView({
     waiverTableSortKey,
     waiverTableSortAsc,
     effectiveDropMember,
-    nextWeekWindow,
+    targetWaiverWeekWindow,
     leagueState.gameCorrections,
   ]);
 
@@ -2525,21 +2541,20 @@ export function FantasyEspnAssistantView({
               <span aria-hidden="true">·</span>
               {diskSaveStatus === 'saving' ? (
                 <span className="text-amber-300 font-medium">Sincronizando cambios...</span>
-              ) : diskSaveStatus === 'error' ? (
-                <span className="text-rose-400 font-medium">
-                  Guardado en navegador (sin conexión a nube)
-                </span>
               ) : storageMode === 'upstash-redis' ? (
                 <span className="inline-flex items-center gap-1 text-emerald-400 font-medium">
                   <Cloud className="w-3.5 h-3.5" />
-                  <span>Nube activa · Sincronizado en todos tus dispositivos</span>
+                  <span>Nube Upstash activa · Sincronizado en todos tus dispositivos</span>
                 </span>
-              ) : storageMode === 'tmp-ephemeral' ? (
-                <span className="text-amber-400 font-medium">
-                  Solo este navegador · Conecta Upstash Redis en Vercel
+              ) : diskSaveStatus === 'saved' ? (
+                <span className="inline-flex items-center gap-1 text-emerald-400 font-medium">
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Guardado en servidor y navegador (Sincronizado)</span>
                 </span>
               ) : (
-                <span className="text-emerald-400 font-medium">Guardado local activo</span>
+                <span className="text-slate-300 font-medium">
+                  Guardado en navegador (Copia local protegida)
+                </span>
               )}
             </div>
 
@@ -2688,10 +2703,10 @@ export function FantasyEspnAssistantView({
         <div className="p-4">
           <p className="text-xs text-slate-400">Contratos en {leagueState.myTeamName}</p>
           <p className="mt-1 text-xl sm:text-2xl font-bold font-mono tabular-nums text-slate-100">
-            {myRosterEnriched.length}/12
+            {myRosterEnriched.length}/{OFFICIAL_LEAGUE_RULES.maxContracts}
           </p>
           <p className="mt-1 text-xs text-slate-400">
-            {myStarters.length}/10 titulares · {myBench.length}/2 banquillo
+            {myStarters.length}/10 titulares · {myBench.length}/3 reservas
           </p>
         </div>
 
@@ -2949,7 +2964,7 @@ export function FantasyEspnAssistantView({
               )}
 
               {/* Roster Table (Starters + Bench Split) */}
-              <div className="w-full overflow-x-auto lg:overflow-x-visible max-h-[75vh]">
+              <div className="w-full overflow-auto max-h-[82vh] rounded-b-lg border-t border-[#1E293B] pb-8">
                 <table className="w-full text-left border-collapse table-auto text-xs">
                   <thead className={STICKY_THEAD_CLASS}>
                     <tr className="border-b border-[#1E293B] text-[11px] text-slate-400">
@@ -3187,13 +3202,13 @@ export function FantasyEspnAssistantView({
                       );
                     })}
 
-                    {/* 2 Bench Reserves */}
-                    <tr className="bg-[#0B1120]/50 border-t border-[#1E293B]">
+                    {/* Bench Reserves Header */}
+                    <tr className="sticky top-[37px] z-10 bg-[#0F172A] border-t-2 border-b border-[#1E293B]">
                       <td
                         colSpan={10}
-                        className="py-1.5 px-3 text-[11px] font-semibold text-slate-400"
+                        className="py-2 px-3 text-[11px] font-bold text-slate-300"
                       >
-                        Reservas en Banquillo — No Puntúan ({myBench.length}/2)
+                        Reservas en Banquillo — No Puntúan ({myBench.length} activos / 3 plazas de reserva)
                       </td>
                     </tr>
                     {myBench.map((item, idx) => {
@@ -3324,6 +3339,31 @@ export function FantasyEspnAssistantView({
                               className="px-2 py-0.5 rounded text-[10px] bg-orange-500 hover:bg-orange-400 text-slate-950 font-semibold transition-colors"
                             >
                               Titular
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {Array.from({ length: Math.max(0, 3 - myBench.length) }).map((_, emptyIdx) => {
+                      const slotNum = myBench.length + emptyIdx + 1;
+                      return (
+                        <tr
+                          key={`empty-bench-${slotNum}`}
+                          className="bg-[#0B1120]/10 border-t border-dashed border-[#1E293B]/70 text-slate-500 hover:bg-[#0B1120]/30 transition-colors"
+                        >
+                          <td className="py-2.5 pl-3 pr-1 font-mono text-[11px] whitespace-nowrap">
+                            <span className="text-slate-500 font-semibold">RES #{slotNum}</span>
+                          </td>
+                          <td colSpan={8} className="py-2.5 px-2 text-xs italic text-slate-400 font-sans">
+                            Plaza de Banquillo Libre ({slotNum}ª ficha reserva) — Puedes incorporar un jugador disponible desde Agentes Libres.
+                          </td>
+                          <td className="py-2.5 pr-3 text-right whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => handleSelectFantasyTab('waivers')}
+                              className="px-2.5 py-1 text-[11px] font-semibold bg-emerald-500/10 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/40 rounded-lg transition-colors whitespace-nowrap"
+                            >
+                              + Fichar Agente Libre
                             </button>
                           </td>
                         </tr>
@@ -3567,6 +3607,21 @@ export function FantasyEspnAssistantView({
 
           {/* Filters + Waiver Table */}
           <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
+            {/* Main Section Title */}
+            <div className="px-4 pt-3.5 pb-2.5 border-b border-[#1E293B] bg-[#0F172A]/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                  <span>Agentes Libres Disponibles — Mercado de Fichajes y Streaming</span>
+                  <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-orange-500/20 text-orange-400 border border-orange-500/30 font-mono">
+                    {availableWaiverPool.length} disponibles
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Consulta y filtra agentes libres alineables. La columna <strong className="text-slate-200 font-semibold">Partidos Próx. Sem.</strong> indica el número de partidos de la 1ª semana en la que podrías alinear al jugador recién fichado.
+                </p>
+              </div>
+            </div>
+
             <div className="p-4 border-b border-[#1E293B] bg-[#0F172A]/60 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2">
                 {/* Position Filter */}
@@ -3624,7 +3679,6 @@ export function FantasyEspnAssistantView({
                   ▲ Rupturas Min/Uso ({streamingRadarAlerts.length})
                 </button>
 
-                {/* Sort Mode */}
                 {/* Sort Mode with Info icons */}
                 <div className="flex flex-wrap items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg">
                   {WAIVER_QUICK_FILTERS.map((sOpt) => {
@@ -3804,7 +3858,7 @@ export function FantasyEspnAssistantView({
                       className="py-2 px-2 whitespace-nowrap"
                     />
                     <SortableTh
-                      label="Próx. Sem."
+                      label={targetWaiverWeekWindow?.id === 'current' ? 'PJ Sem. Actual' : 'PJ Próx. Sem.'}
                       align="center"
                       active={waiverTableSortKey === 'gamesNextWeek'}
                       asc={waiverTableSortAsc}
@@ -3872,14 +3926,28 @@ export function FantasyEspnAssistantView({
                               size="xs"
                             />
                             <div className="min-w-0">
-                              <button
-                                type="button"
-                                onClick={() => onInspectEntity('player', item.player.id)}
-                                className="font-semibold text-slate-100 hover:text-orange-400 text-left transition-colors truncate block max-w-[140px] xl:max-w-[180px]"
-                                title={item.player.name}
-                              >
-                                {item.player.name}
-                              </button>
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => onInspectEntity('player', item.player.id)}
+                                  className="font-semibold text-slate-100 hover:text-orange-400 text-left transition-colors truncate block max-w-[120px] xl:max-w-[160px]"
+                                  title={item.player.name}
+                                >
+                                  {item.player.name}
+                                </button>
+                                {item.injury && item.injury.severity !== 'healthy' && (
+                                  <span 
+                                    className={`px-1 rounded-[3px] text-[9px] font-bold uppercase tracking-wider shrink-0 ${
+                                      item.injury.absenceTier === 'long_term' || item.injury.severity === 'ir'
+                                        ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                                        : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                    }`}
+                                    title={`${item.injury.statusLabelEs}: ${item.injury.detailEs}`}
+                                  >
+                                    {item.injury.absenceTier === 'long_term' || item.injury.severity === 'ir' ? 'INJ' : 'DTD'}
+                                  </span>
+                                )}
+                              </div>
                               <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1">
                                 <span>{item.player.teamAbbr} · {item.player.position}</span>
                                 {item.stats.minutesAvg > 0 && (
@@ -3932,7 +4000,7 @@ export function FantasyEspnAssistantView({
                               </button>
                               <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1.5 hidden group-hover/nxtwk:flex flex-col z-[80] w-56 p-2 rounded-lg bg-[#0F172A] border border-[#1E293B] shadow-2xl text-[11px] pointer-events-none">
                                 <span className="font-bold text-orange-400 pb-1 border-b border-[#1E293B] mb-1">
-                                  Próxima Semana ({nextWeekWindow?.label || '9-15 nov'}): {item.nextWeekGamesCount} PJ
+                                  {targetWaiverWeekWindow?.label || 'Semana'} ({targetWaiverWeekWindow?.rangeLabel || '9-15 nov'}): {item.nextWeekGamesCount} PJ
                                 </span>
                                 {item.nextWeekGamesList.length > 0 ? (
                                   <div className="space-y-0.5 font-mono text-[10px] text-slate-300">
@@ -5388,7 +5456,7 @@ export function FantasyEspnAssistantView({
                   Gestor Manual de Liga Privada (Guardado Permanente)
                 </h3>
                 <p className="text-xs text-slate-400">
-                  {myRosterEnriched.length}/12 contratos en {leagueState.myTeamName} ·{' '}
+                  {myRosterEnriched.length}/{OFFICIAL_LEAGUE_RULES.maxContracts} contratos en {leagueState.myTeamName} ·{' '}
                   {activeRivalTeamsCount} equipos rivales con plantilla ({totalRivalPlayersCount} jugadores ocupados)
                 </p>
               </div>
@@ -5514,7 +5582,7 @@ export function FantasyEspnAssistantView({
                     <div className="space-y-2">
                       <div className="flex items-center justify-between text-xs">
                         <span className="font-semibold text-slate-200">
-                          Plantilla guardada ({myRosterEnriched.length}/12 contratos):
+                          Plantilla guardada ({myRosterEnriched.length}/{OFFICIAL_LEAGUE_RULES.maxContracts} contratos):
                         </span>
                         <button
                           type="button"
@@ -5575,7 +5643,7 @@ export function FantasyEspnAssistantView({
                         type="text"
                         value={rosterSearchQuery}
                         onChange={(e) => setRosterSearchQuery(e.target.value)}
-                        placeholder="Buscar jugador NBA para añadir a tus 12 contratos..."
+                        placeholder="Buscar jugador NBA para añadir a tu plantilla..."
                         className="w-full pl-9 pr-3 py-2 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500"
                       />
                     </div>

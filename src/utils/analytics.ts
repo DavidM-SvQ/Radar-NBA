@@ -1396,7 +1396,6 @@ export function detectActiveStreaks(
   for (const player of players) {
     const games = player.games;
     if (games.length < minStreakGames) continue;
-    const winSlice = games.slice(0, Math.min(windowSize, games.length));
 
     const games2027 =
       p27Map.get(player.id) ??
@@ -1404,6 +1403,12 @@ export function detectActiveStreaks(
     const games2026 =
       p26Map.get(player.id) ??
       games.filter((g) => g.seasonLabel === '2025-26');
+
+    // Descartar jugadores que no hayan disputado ningún partido en la temporada actual (0 PJ en 2026-27)
+    // para evitar rachas arrastradas de jugadores no activos o lesionados de larga duración
+    if (games2027.length === 0) continue;
+
+    const winSlice = games.slice(0, Math.min(windowSize, games.length));
 
     const checks: Array<{
       id: string;
@@ -1417,6 +1422,26 @@ export function detectActiveStreaks(
       extract: (g: PlayerGameLog) => number;
       sliceAvg?: (arr: PlayerGameLog[]) => number | null;
     }> = [
+      {
+        id: 'pts40',
+        groupSingle: 'pts',
+        metricLabel: 'Puntos',
+        thresholdLabel: '40+ PTS seguidos',
+        isPositive: true,
+        unit: ' PTS',
+        test: (g) => g.points >= 40,
+        extract: (g) => g.points,
+      },
+      {
+        id: 'pts35',
+        groupSingle: 'pts',
+        metricLabel: 'Puntos',
+        thresholdLabel: '35+ PTS seguidos',
+        isPositive: true,
+        unit: ' PTS',
+        test: (g) => g.points >= 35,
+        extract: (g) => g.points,
+      },
       {
         id: 'pts30',
         groupSingle: 'pts',
@@ -1448,6 +1473,16 @@ export function detectActiveStreaks(
         extract: (g) => g.points,
       },
       {
+        id: 'pts15',
+        groupSingle: 'pts',
+        metricLabel: 'Puntos',
+        thresholdLabel: '15+ PTS seguidos',
+        isPositive: true,
+        unit: ' PTS',
+        test: (g) => g.points >= 15,
+        extract: (g) => g.points,
+      },
+      {
         id: 'reb10',
         metricLabel: 'Rebotes',
         thresholdLabel: '10+ REB seguidos',
@@ -1464,6 +1499,28 @@ export function detectActiveStreaks(
         unit: ' AST',
         test: (g) => g.assists >= 8,
         extract: (g) => g.assists,
+      },
+      {
+        id: '3pm6',
+        groupSingle: '3pm',
+        metricLabel: 'Triples',
+        thresholdLabel: '6+ Triples anotados',
+        isPositive: true,
+        breakoutAxis: 'exterior',
+        unit: ' 3PM',
+        test: (g) => g.fg3m >= 6,
+        extract: (g) => g.fg3m,
+      },
+      {
+        id: '3pm5',
+        groupSingle: '3pm',
+        metricLabel: 'Triples',
+        thresholdLabel: '5+ Triples anotados',
+        isPositive: true,
+        breakoutAxis: 'exterior',
+        unit: ' 3PM',
+        test: (g) => g.fg3m >= 5,
+        extract: (g) => g.fg3m,
       },
       {
         id: '3pm4',
@@ -1488,6 +1545,107 @@ export function detectActiveStreaks(
         extract: (g) => g.fg3m,
       },
       {
+        id: '3pm2',
+        groupSingle: '3pm',
+        metricLabel: 'Triples',
+        thresholdLabel: '2+ Triples anotados',
+        isPositive: true,
+        breakoutAxis: 'exterior',
+        unit: ' 3PM',
+        test: (g) => g.fg3m >= 2,
+        extract: (g) => g.fg3m,
+      },
+      {
+        id: 'pts_reb27',
+        groupSingle: 'pts_reb',
+        metricLabel: 'PTS+REB',
+        thresholdLabel: '27+ PTS+REB seguidos',
+        isPositive: true,
+        unit: ' P+R',
+        test: (g) => g.points + g.rebounds >= 27,
+        extract: (g) => g.points + g.rebounds,
+      },
+      {
+        id: 'pts_reb25',
+        groupSingle: 'pts_reb',
+        metricLabel: 'PTS+REB',
+        thresholdLabel: '25+ PTS+REB seguidos',
+        isPositive: true,
+        unit: ' P+R',
+        test: (g) => g.points + g.rebounds >= 25,
+        extract: (g) => g.points + g.rebounds,
+      },
+      {
+        id: 'pts_reb20',
+        groupSingle: 'pts_reb',
+        metricLabel: 'PTS+REB',
+        thresholdLabel: '20+ PTS+REB seguidos',
+        isPositive: true,
+        unit: ' P+R',
+        test: (g) => g.points + g.rebounds >= 20,
+        extract: (g) => g.points + g.rebounds,
+      },
+      {
+        id: 'pts_ast24',
+        groupSingle: 'pts_ast',
+        metricLabel: 'PTS+AST',
+        thresholdLabel: '24+ PTS+AST seguidos',
+        isPositive: true,
+        unit: ' P+A',
+        test: (g) => g.points + g.assists >= 24,
+        extract: (g) => g.points + g.assists,
+      },
+      {
+        id: 'pts_ast20',
+        groupSingle: 'pts_ast',
+        metricLabel: 'PTS+AST',
+        thresholdLabel: '20+ PTS+AST seguidos',
+        isPositive: true,
+        unit: ' P+A',
+        test: (g) => g.points + g.assists >= 20,
+        extract: (g) => g.points + g.assists,
+      },
+      {
+        id: 'pts_ast15',
+        groupSingle: 'pts_ast',
+        metricLabel: 'PTS+AST',
+        thresholdLabel: '15+ PTS+AST seguidos',
+        isPositive: true,
+        unit: ' P+A',
+        test: (g) => g.points + g.assists >= 15,
+        extract: (g) => g.points + g.assists,
+      },
+      {
+        id: 'pra35',
+        groupSingle: 'pra',
+        metricLabel: 'PRA',
+        thresholdLabel: '35+ PRA seguidos',
+        isPositive: true,
+        unit: ' PRA',
+        test: (g) => g.pra >= 35,
+        extract: (g) => g.pra,
+      },
+      {
+        id: 'pra30',
+        groupSingle: 'pra',
+        metricLabel: 'PRA',
+        thresholdLabel: '30+ PRA seguidos',
+        isPositive: true,
+        unit: ' PRA',
+        test: (g) => g.pra >= 30,
+        extract: (g) => g.pra,
+      },
+      {
+        id: 'pra25',
+        groupSingle: 'pra',
+        metricLabel: 'PRA',
+        thresholdLabel: '25+ PRA seguidos',
+        isPositive: true,
+        unit: ' PRA',
+        test: (g) => g.pra >= 25,
+        extract: (g) => g.pra,
+      },
+      {
         id: 'hot_3pct',
         metricLabel: 'Acierto Triple',
         thresholdLabel: '42%+ en Triples (≥5 3PA)',
@@ -1495,20 +1653,6 @@ export function detectActiveStreaks(
         breakoutAxis: 'exterior',
         unit: '%',
         test: (g) => g.fg3a >= 5 && g.fg3Pct >= 42,
-        extract: (g) => g.fg3Pct,
-        sliceAvg: (arr) => {
-          const att = arr.reduce((s, g) => s + g.fg3a, 0);
-          return att > 0 ? round1(calcWeighted3Pct(arr)) : null;
-        },
-      },
-      {
-        id: 'cold_3pct',
-        metricLabel: 'Acierto Triple',
-        thresholdLabel: 'Sequía <25% en Triples (≥5 3PA)',
-        isPositive: false,
-        breakoutAxis: 'exterior',
-        unit: '%',
-        test: (g) => g.fg3a >= 5 && g.fg3Pct < 25,
         extract: (g) => g.fg3Pct,
         sliceAvg: (arr) => {
           const att = arr.reduce((s, g) => s + g.fg3a, 0);
@@ -1559,32 +1703,223 @@ export function detectActiveStreaks(
         test: (g) => g.gameScore >= 22,
         extract: (g) => g.gameScore,
       },
+      // =========================================================
+      // BACHES Y RACHAS NEGATIVAS DE JUGADORES (ALTA RELEVANCIA)
+      // =========================================================
       {
-        id: 'cold_ts',
-        metricLabel: 'Tiro Verdadero',
-        thresholdLabel: 'Menos de 46% TS (≥12 TCI)',
+        id: 'slump_sub10',
+        groupSingle: 'slump_pts',
+        metricLabel: 'Bache Anotador',
+        thresholdLabel: 'Desplome anotador: ≤10 PTS (≥24 MIN)',
+        isPositive: false,
+        unit: ' PTS',
+        test: (g) => g.minutes >= 24 && g.points <= 10,
+        extract: (g) => g.points,
+      },
+      {
+        id: 'slump_sub12',
+        groupSingle: 'slump_pts',
+        metricLabel: 'Bache Anotador',
+        thresholdLabel: 'Sequía en anotación: ≤12 PTS (≥26 MIN)',
+        isPositive: false,
+        unit: ' PTS',
+        test: (g) => g.minutes >= 26 && g.points <= 12,
+        extract: (g) => g.points,
+      },
+      {
+        id: 'cold_3pm_zero',
+        metricLabel: 'Sequía Exterior',
+        thresholdLabel: 'Cerrojo exterior: 0 Triples anotados (≥3 3PA)',
+        isPositive: false,
+        breakoutAxis: 'exterior',
+        unit: ' 3PM',
+        test: (g) => g.fg3a >= 3 && g.fg3m === 0,
+        extract: (g) => g.fg3m,
+      },
+      {
+        id: 'cold_3pct',
+        metricLabel: 'Acierto Triple',
+        thresholdLabel: 'Sequía <25% en Triples (≥4 3PA)',
+        isPositive: false,
+        breakoutAxis: 'exterior',
+        unit: '%',
+        test: (g) => g.fg3a >= 4 && g.fg3Pct < 25,
+        extract: (g) => g.fg3Pct,
+        sliceAvg: (arr) => {
+          const att = arr.reduce((s, g) => s + g.fg3a, 0);
+          return att > 0 ? round1(calcWeighted3Pct(arr)) : null;
+        },
+      },
+      {
+        id: 'cold_fg',
+        metricLabel: 'Tiro de Campo',
+        thresholdLabel: 'Bache en TC: <38% TC (≥8 TCI)',
         isPositive: false,
         breakoutAxis: 'efficiency',
         unit: '%',
-        test: (g) => g.fga >= 12 && g.tsPct < 46,
+        test: (g) => g.fga >= 8 && g.fgPct < 38,
+        extract: (g) => g.fgPct,
+        sliceAvg: (arr) => {
+          const fga = arr.reduce((s, g) => s + g.fga, 0);
+          const fgm = arr.reduce((s, g) => s + g.fgm, 0);
+          return fga > 0 ? round1((fgm / fga) * 100) : null;
+        },
+      },
+      {
+        id: 'cold_ts',
+        metricLabel: 'Tiro Verdadero',
+        thresholdLabel: 'Desafinado total: <46% TS (≥10 TCI)',
+        isPositive: false,
+        breakoutAxis: 'efficiency',
+        unit: '%',
+        test: (g) => g.fga >= 10 && g.tsPct < 46,
         extract: (g) => g.tsPct,
         sliceAvg: (arr) => {
           const tsa = arr.reduce((s, g) => s + g.fga + 0.44 * g.fta, 0);
           return tsa > 0 ? round1(calcWeightedTsPct(arr)) : null;
         },
       },
+      {
+        id: 'cold_ft',
+        metricLabel: 'Tiros Libres',
+        thresholdLabel: 'Bache en TL: <50% TL (≥4 TLI)',
+        isPositive: false,
+        unit: '%',
+        test: (g) => g.fta >= 4 && g.ftPct < 50,
+        extract: (g) => g.ftPct,
+        sliceAvg: (arr) => {
+          const fta = arr.reduce((s, g) => s + g.fta, 0);
+          const ftm = arr.reduce((s, g) => s + g.ftm, 0);
+          return fta > 0 ? round1((ftm / fta) * 100) : null;
+        },
+      },
+      {
+        id: 'to4',
+        groupSingle: 'to_neg',
+        metricLabel: 'Pérdidas de Balón',
+        thresholdLabel: 'Sangría grave: 4+ Pérdidas (TO)',
+        isPositive: false,
+        unit: ' TO',
+        test: (g) => g.turnovers >= 4,
+        extract: (g) => g.turnovers,
+      },
+      {
+        id: 'to3',
+        groupSingle: 'to_neg',
+        metricLabel: 'Pérdidas de Balón',
+        thresholdLabel: 'Sangría de pérdidas: 3+ Pérdidas (TO)',
+        isPositive: false,
+        unit: ' TO',
+        test: (g) => g.turnovers >= 3,
+        extract: (g) => g.turnovers,
+      },
+      {
+        id: 'foul_trouble_4',
+        groupSingle: 'fouls_neg',
+        metricLabel: 'Problemas de Faltas',
+        thresholdLabel: 'Castigo arbitral grave: 4+ Faltas (≥16 MIN)',
+        isPositive: false,
+        unit: ' Faltas',
+        test: (g) => g.minutes >= 16 && g.fouls >= 4,
+        extract: (g) => g.fouls,
+      },
+      {
+        id: 'foul_trouble_3',
+        groupSingle: 'fouls_neg',
+        metricLabel: 'Problemas de Faltas',
+        thresholdLabel: 'Castigo arbitral: 3+ Faltas (≥18 MIN)',
+        isPositive: false,
+        unit: ' Faltas',
+        test: (g) => g.minutes >= 18 && g.fouls >= 3,
+        extract: (g) => g.fouls,
+      },
+      {
+        id: 'neg_pm10',
+        groupSingle: 'pm_neg',
+        metricLabel: 'Diferencial Plus/Minus',
+        thresholdLabel: 'Hundimiento grave en pista: ± ≤ -10 (≥20 MIN)',
+        isPositive: false,
+        unit: ' ±',
+        test: (g) => g.minutes >= 20 && g.plusMinus <= -10,
+        extract: (g) => g.plusMinus,
+      },
+      {
+        id: 'neg_pm8',
+        groupSingle: 'pm_neg',
+        metricLabel: 'Diferencial Plus/Minus',
+        thresholdLabel: 'Hundimiento en pista: ± ≤ -8 (≥20 MIN)',
+        isPositive: false,
+        unit: ' ±',
+        test: (g) => g.minutes >= 20 && g.plusMinus <= -8,
+        extract: (g) => g.plusMinus,
+      },
     ];
 
-    const capturedGroups = new Set<string>();
+    // Find active streaks for each check
+    const checkResults: Array<{
+      check: (typeof checks)[number];
+      count: number;
+    }> = [];
+
     for (const c of checks) {
-      if (c.groupSingle && capturedGroups.has(c.groupSingle)) continue;
       let count = 0;
       for (let i = 0; i < games.length; i++) {
         if (c.test(games[i])) count++;
         else break;
       }
       if (count >= minStreakGames) {
-        if (c.groupSingle) capturedGroups.add(c.groupSingle);
+        checkResults.push({ check: c, count });
+      }
+    }
+
+    // Para checks del mismo grupo (ej. 3pm4 vs 3pm3 vs 3pm2),
+    // seleccionamos el que sea más "impresionante":
+    // - Preferimos el umbral más difícil si la racha es larga (≥ 80% de la racha máxima del grupo).
+    // - Si la racha fácil es muchísimo más larga (ej. Curry 39 vs 5), nos quedamos con la larga.
+    const groupBest = new Map<string, { check: (typeof checks)[number]; count: number }>();
+    const eligibleResults: Array<{ check: (typeof checks)[number]; count: number }> = [];
+
+    // Primero identificamos el máximo de cada grupo
+    const maxCounts = new Map<string, number>();
+    for (const res of checkResults) {
+      if (res.check.groupSingle) {
+        const curMax = maxCounts.get(res.check.groupSingle) || 0;
+        if (res.count > curMax) maxCounts.set(res.check.groupSingle, res.count);
+      }
+    }
+
+    for (const res of checkResults) {
+      const gKey = res.check.groupSingle;
+      if (!gKey) {
+        eligibleResults.push(res);
+        continue;
+      }
+
+      const existing = groupBest.get(gKey);
+      const groupMax = maxCounts.get(gKey) || 0;
+
+      if (!existing) {
+        groupBest.set(gKey, res);
+      } else {
+        // Lógica de desempate/elección inteligente:
+        // Si el nuevo es un umbral "más duro" (aparece antes en el array 'checks' por convención)
+        // y su racha es al menos el 75% de la máxima del grupo, lo preferimos.
+        const isHarder = checks.indexOf(res.check) < checks.indexOf(existing.check);
+        const isMuchLonger = res.count > existing.count * 1.4;
+
+        if (isMuchLonger) {
+          groupBest.set(gKey, res);
+        } else if (isHarder && res.count >= groupMax * 0.75) {
+          groupBest.set(gKey, res);
+        }
+      }
+    }
+
+    for (const best of groupBest.values()) {
+      eligibleResults.push(best);
+    }
+
+    for (const { check: c, count } of eligibleResults) {
         const evalSlice =
           c.sliceAvg ||
           ((arr: PlayerGameLog[]) =>
@@ -1625,12 +1960,24 @@ export function detectActiveStreaks(
         });
       }
     }
-  }
 
   for (const team of teams) {
     const games = team.games;
     if (games.length < minStreakGames) continue;
 
+    const tGames2027 =
+      t27Map.get(team.abbreviation) ??
+      games.filter((g) => g.seasonLabel === '2026-27');
+    const tGames2026 =
+      t26Map.get(team.abbreviation) ??
+      games.filter((g) => g.seasonLabel === '2025-26');
+
+    // Descartar equipos sin partidos en la temporada actual
+    if (tGames2027.length === 0) continue;
+
+    const winSlice = games.slice(0, Math.min(windowSize, games.length));
+
+    // 1. Racha de W / L (Victorias / Derrotas)
     const firstRes = games[0].result;
     let resCount = 0;
     for (let i = 0; i < games.length; i++) {
@@ -1639,14 +1986,6 @@ export function detectActiveStreaks(
     }
     if (resCount >= minStreakGames) {
       const slice = games.slice(0, resCount);
-      const winSlice = games.slice(0, Math.min(windowSize, games.length));
-      const tGames2027 =
-        t27Map.get(team.abbreviation) ??
-        games.filter((g) => g.seasonLabel === '2026-27');
-      const tGames2026 =
-        t26Map.get(team.abbreviation) ??
-        games.filter((g) => g.seasonLabel === '2025-26');
-
       const currentSeasonAvg =
         tGames2027.length > 0
           ? round1(mean(tGames2027.map((g) => g.netRtg)))
@@ -1682,6 +2021,508 @@ export function detectActiveStreaks(
         windowAvgRef: winRef,
         windowDeltaVsSeason: round1(winRef - seasonBase),
         unit: '',
+      });
+    }
+
+    // 2. Rachas estadísticas de equipo (Anotación, Defensa, Eficiencia, Triples, Asistencias, Rebotes, Robos, Tapones y Rachas Negativas)
+    const teamChecks: Array<{
+      id: string;
+      groupSingle?: string;
+      metricLabel: string;
+      thresholdLabel: string;
+      isPositive: boolean;
+      breakoutAxis?: TrendBreakoutAxis;
+      unit: string;
+      test: (g: TeamGameLog) => boolean;
+      extract: (g: TeamGameLog) => number;
+      sliceAvg?: (arr: TeamGameLog[]) => number | null;
+    }> = [
+      // --- Rachas Positivas ---
+      {
+        id: 't_pts125',
+        groupSingle: 't_pts',
+        metricLabel: 'Puntos de Equipo',
+        thresholdLabel: '125+ PTS anotados seguidos',
+        isPositive: true,
+        unit: ' PTS',
+        test: (g) => g.pointsFor >= 125,
+        extract: (g) => g.pointsFor,
+      },
+      {
+        id: 't_pts120',
+        groupSingle: 't_pts',
+        metricLabel: 'Puntos de Equipo',
+        thresholdLabel: '120+ PTS anotados seguidos',
+        isPositive: true,
+        unit: ' PTS',
+        test: (g) => g.pointsFor >= 120,
+        extract: (g) => g.pointsFor,
+      },
+      {
+        id: 't_pts115',
+        groupSingle: 't_pts',
+        metricLabel: 'Puntos de Equipo',
+        thresholdLabel: '115+ PTS anotados seguidos',
+        isPositive: true,
+        unit: ' PTS',
+        test: (g) => g.pointsFor >= 115,
+        extract: (g) => g.pointsFor,
+      },
+      {
+        id: 't_pts110',
+        groupSingle: 't_pts',
+        metricLabel: 'Puntos de Equipo',
+        thresholdLabel: '110+ PTS anotados seguidos',
+        isPositive: true,
+        unit: ' PTS',
+        test: (g) => g.pointsFor >= 110,
+        extract: (g) => g.pointsFor,
+      },
+      {
+        id: 't_def_lt100',
+        groupSingle: 't_def',
+        metricLabel: 'Defensa de Equipo',
+        thresholdLabel: 'Defensa candado: ≤100 PTS recibidos',
+        isPositive: true,
+        unit: ' PTS',
+        test: (g) => g.pointsAgainst <= 100,
+        extract: (g) => g.pointsAgainst,
+      },
+      {
+        id: 't_def_lt105',
+        groupSingle: 't_def',
+        metricLabel: 'Defensa de Equipo',
+        thresholdLabel: 'Defensa férrea: ≤105 PTS recibidos',
+        isPositive: true,
+        unit: ' PTS',
+        test: (g) => g.pointsAgainst <= 105,
+        extract: (g) => g.pointsAgainst,
+      },
+      {
+        id: 't_def_lt110',
+        groupSingle: 't_def',
+        metricLabel: 'Defensa de Equipo',
+        thresholdLabel: 'Solidez defensiva: ≤110 PTS recibidos',
+        isPositive: true,
+        unit: ' PTS',
+        test: (g) => g.pointsAgainst <= 110,
+        extract: (g) => g.pointsAgainst,
+      },
+      {
+        id: 't_off_rtg120',
+        groupSingle: 't_offrtg',
+        metricLabel: 'Rating Ofensivo',
+        thresholdLabel: '120+ OffRtg ofensiva aplastante',
+        isPositive: true,
+        breakoutAxis: 'efficiency',
+        unit: '',
+        test: (g) => g.offRtg >= 120,
+        extract: (g) => g.offRtg,
+      },
+      {
+        id: 't_off_rtg115',
+        groupSingle: 't_offrtg',
+        metricLabel: 'Rating Ofensivo',
+        thresholdLabel: '115+ OffRtg ofensiva arrolladora',
+        isPositive: true,
+        breakoutAxis: 'efficiency',
+        unit: '',
+        test: (g) => g.offRtg >= 115,
+        extract: (g) => g.offRtg,
+      },
+      {
+        id: 't_net_rtg10',
+        groupSingle: 't_netrtg',
+        metricLabel: 'Net Rating',
+        thresholdLabel: 'Dominio de rotación: NetRtg ≥ +10.0',
+        isPositive: true,
+        breakoutAxis: 'minutes_usage',
+        unit: '',
+        test: (g) => g.netRtg >= 10,
+        extract: (g) => g.netRtg,
+      },
+      {
+        id: 't_pace_fast',
+        groupSingle: 't_pace',
+        metricLabel: 'Ritmo de Juego',
+        thresholdLabel: 'Ritmo frenético: ≥101 pos/partido',
+        isPositive: true,
+        breakoutAxis: 'minutes_usage',
+        unit: ' pos',
+        test: (g) => g.pace >= 101,
+        extract: (g) => g.pace,
+      },
+      {
+        id: 't3_16',
+        groupSingle: 't_3pm',
+        metricLabel: 'Triples de Equipo',
+        thresholdLabel: '16+ Triples anotados seguidos',
+        isPositive: true,
+        breakoutAxis: 'exterior',
+        unit: ' 3PM',
+        test: (g) => g.fg3m >= 16,
+        extract: (g) => g.fg3m,
+      },
+      {
+        id: 't3_14',
+        groupSingle: 't_3pm',
+        metricLabel: 'Triples de Equipo',
+        thresholdLabel: '14+ Triples anotados seguidos',
+        isPositive: true,
+        breakoutAxis: 'exterior',
+        unit: ' 3PM',
+        test: (g) => g.fg3m >= 14,
+        extract: (g) => g.fg3m,
+      },
+      {
+        id: 't3_12',
+        groupSingle: 't_3pm',
+        metricLabel: 'Triples de Equipo',
+        thresholdLabel: '12+ Triples anotados seguidos',
+        isPositive: true,
+        breakoutAxis: 'exterior',
+        unit: ' 3PM',
+        test: (g) => g.fg3m >= 12,
+        extract: (g) => g.fg3m,
+      },
+      {
+        id: 'ast30',
+        groupSingle: 't_ast',
+        metricLabel: 'Asistencias de Equipo',
+        thresholdLabel: '30+ Asistencias de equipo seguidas',
+        isPositive: true,
+        unit: ' AST',
+        test: (g) => g.ast >= 30,
+        extract: (g) => g.ast,
+      },
+      {
+        id: 'ast28',
+        groupSingle: 't_ast',
+        metricLabel: 'Asistencias de Equipo',
+        thresholdLabel: '28+ Asistencias de equipo seguidas',
+        isPositive: true,
+        unit: ' AST',
+        test: (g) => g.ast >= 28,
+        extract: (g) => g.ast,
+      },
+      {
+        id: 'ast25',
+        groupSingle: 't_ast',
+        metricLabel: 'Asistencias de Equipo',
+        thresholdLabel: '25+ Asistencias de equipo seguidas',
+        isPositive: true,
+        unit: ' AST',
+        test: (g) => g.ast >= 25,
+        extract: (g) => g.ast,
+      },
+      {
+        id: 'reb48',
+        groupSingle: 't_reb',
+        metricLabel: 'Rebotes de Equipo',
+        thresholdLabel: '48+ Rebotes colectivos seguidos',
+        isPositive: true,
+        unit: ' REB',
+        test: (g) => g.reb >= 48,
+        extract: (g) => g.reb,
+      },
+      {
+        id: 'reb45',
+        groupSingle: 't_reb',
+        metricLabel: 'Rebotes de Equipo',
+        thresholdLabel: '45+ Rebotes colectivos seguidos',
+        isPositive: true,
+        unit: ' REB',
+        test: (g) => g.reb >= 45,
+        extract: (g) => g.reb,
+      },
+      {
+        id: 'fgpct50',
+        groupSingle: 't_fgpct',
+        metricLabel: 'Acierto Colectivo',
+        thresholdLabel: '≥50% Tiro de campo colectivo',
+        isPositive: true,
+        breakoutAxis: 'efficiency',
+        unit: '%',
+        test: (g) => (g.fgPct ?? (g.fga > 0 ? (g.fgm / g.fga) * 100 : 0)) >= 50,
+        extract: (g) => g.fgPct ?? (g.fga > 0 ? (g.fgm / g.fga) * 100 : 0),
+        sliceAvg: (arr) => {
+          const fga = arr.reduce((s, g) => s + g.fga, 0);
+          const fgm = arr.reduce((s, g) => s + g.fgm, 0);
+          return fga > 0 ? round1((fgm / fga) * 100) : null;
+        },
+      },
+      {
+        id: 'fg3pct40',
+        groupSingle: 't_3pct',
+        metricLabel: 'Acierto en Triples',
+        thresholdLabel: '≥40% Triples colectivos',
+        isPositive: true,
+        breakoutAxis: 'exterior',
+        unit: '%',
+        test: (g) => (g.fg3Pct ?? (g.fg3a > 0 ? (g.fg3m / g.fg3a) * 100 : 0)) >= 40,
+        extract: (g) => g.fg3Pct ?? (g.fg3a > 0 ? (g.fg3m / g.fg3a) * 100 : 0),
+        sliceAvg: (arr) => {
+          const fg3a = arr.reduce((s, g) => s + g.fg3a, 0);
+          const fg3m = arr.reduce((s, g) => s + g.fg3m, 0);
+          return fg3a > 0 ? round1((fg3m / fg3a) * 100) : null;
+        },
+      },
+      {
+        id: 'tov_lt10',
+        groupSingle: 't_tov_low',
+        metricLabel: 'Cuidado del Balón',
+        thresholdLabel: 'Cuidado élite: ≤10 Pérdidas',
+        isPositive: true,
+        unit: ' TO',
+        test: (g) => g.tov <= 10,
+        extract: (g) => g.tov,
+      },
+      {
+        id: 'stl10',
+        groupSingle: 't_stl',
+        metricLabel: 'Robos de Equipo',
+        thresholdLabel: 'Manos rápidas: 10+ Robos de equipo',
+        isPositive: true,
+        unit: ' STL',
+        test: (g) => g.stl >= 10,
+        extract: (g) => g.stl,
+      },
+      {
+        id: 'blk8',
+        groupSingle: 't_blk',
+        metricLabel: 'Tapones de Equipo',
+        thresholdLabel: 'Muro defensivo: 8+ Tapones de equipo',
+        isPositive: true,
+        unit: ' BLK',
+        test: (g) => g.blk >= 8,
+        extract: (g) => g.blk,
+      },
+
+      // --- Rachas Negativas de Equipo ---
+      {
+        id: 'pts_lt100',
+        groupSingle: 't_cold_pts',
+        metricLabel: 'Ataque Colapsado',
+        thresholdLabel: 'Colapso ofensivo: ≤100 PTS anotados',
+        isPositive: false,
+        unit: ' PTS',
+        test: (g) => g.pointsFor <= 100,
+        extract: (g) => g.pointsFor,
+      },
+      {
+        id: 'pts_lt105',
+        groupSingle: 't_cold_pts',
+        metricLabel: 'Ataque Seco',
+        thresholdLabel: 'Ataque espeso: ≤105 PTS anotados',
+        isPositive: false,
+        unit: ' PTS',
+        test: (g) => g.pointsFor <= 105,
+        extract: (g) => g.pointsFor,
+      },
+      {
+        id: 'def_gt125',
+        groupSingle: 't_bad_def',
+        metricLabel: 'Defensa Abierta',
+        thresholdLabel: 'Descalabro defensivo: 125+ PTS recibidos',
+        isPositive: false,
+        unit: ' PTS',
+        test: (g) => g.pointsAgainst >= 125,
+        extract: (g) => g.pointsAgainst,
+      },
+      {
+        id: 'def_gt120',
+        groupSingle: 't_bad_def',
+        metricLabel: 'Defensa Frágil',
+        thresholdLabel: 'Hemorragia defensiva: 120+ PTS recibidos',
+        isPositive: false,
+        unit: ' PTS',
+        test: (g) => g.pointsAgainst >= 120,
+        extract: (g) => g.pointsAgainst,
+      },
+      {
+        id: 't_net_rtg_neg8',
+        groupSingle: 't_netrtg_neg',
+        metricLabel: 'Net Rating Negativo',
+        thresholdLabel: 'Superados en rotación: NetRtg ≤ -8.0',
+        isPositive: false,
+        breakoutAxis: 'minutes_usage',
+        unit: '',
+        test: (g) => g.netRtg <= -8,
+        extract: (g) => g.netRtg,
+      },
+      {
+        id: 'tov18',
+        groupSingle: 't_tov_high',
+        metricLabel: 'Pérdidas de Equipo',
+        thresholdLabel: 'Descontrol de balón: 18+ TO de equipo',
+        isPositive: false,
+        unit: ' TO',
+        test: (g) => g.tov >= 18,
+        extract: (g) => g.tov,
+      },
+      {
+        id: 'tov16',
+        groupSingle: 't_tov_high',
+        metricLabel: 'Pérdidas de Equipo',
+        thresholdLabel: 'Pérdidas masivas: 16+ TO de equipo',
+        isPositive: false,
+        unit: ' TO',
+        test: (g) => g.tov >= 16,
+        extract: (g) => g.tov,
+      },
+      {
+        id: 'cold_fg_lt42',
+        groupSingle: 't_cold_fg',
+        metricLabel: 'Acierto en Tiro',
+        thresholdLabel: 'Pésimo tiro colectivo: <42% TC',
+        isPositive: false,
+        breakoutAxis: 'efficiency',
+        unit: '%',
+        test: (g) => (g.fgPct ?? (g.fga > 0 ? (g.fgm / g.fga) * 100 : 0)) < 42,
+        extract: (g) => g.fgPct ?? (g.fga > 0 ? (g.fgm / g.fga) * 100 : 0),
+        sliceAvg: (arr) => {
+          const fga = arr.reduce((s, g) => s + g.fga, 0);
+          const fgm = arr.reduce((s, g) => s + g.fgm, 0);
+          return fga > 0 ? round1((fgm / fga) * 100) : null;
+        },
+      },
+      {
+        id: 'cold_fg_lt44',
+        groupSingle: 't_cold_fg',
+        metricLabel: 'Acierto en Tiro',
+        thresholdLabel: 'Mal tiro colectivo: <44% TC',
+        isPositive: false,
+        breakoutAxis: 'efficiency',
+        unit: '%',
+        test: (g) => (g.fgPct ?? (g.fga > 0 ? (g.fgm / g.fga) * 100 : 0)) < 44,
+        extract: (g) => g.fgPct ?? (g.fga > 0 ? (g.fgm / g.fga) * 100 : 0),
+        sliceAvg: (arr) => {
+          const fga = arr.reduce((s, g) => s + g.fga, 0);
+          const fgm = arr.reduce((s, g) => s + g.fgm, 0);
+          return fga > 0 ? round1((fgm / fga) * 100) : null;
+        },
+      },
+      {
+        id: 'cold_3p_lt30',
+        groupSingle: 't_cold_3p',
+        metricLabel: 'Acierto en Triples',
+        thresholdLabel: 'Manta mojada: <30% Triples colectivos',
+        isPositive: false,
+        breakoutAxis: 'exterior',
+        unit: '%',
+        test: (g) => (g.fg3Pct ?? (g.fg3a > 0 ? (g.fg3m / g.fg3a) * 100 : 0)) < 30,
+        extract: (g) => g.fg3Pct ?? (g.fg3a > 0 ? (g.fg3m / g.fg3a) * 100 : 0),
+        sliceAvg: (arr) => {
+          const fg3a = arr.reduce((s, g) => s + g.fg3a, 0);
+          const fg3m = arr.reduce((s, g) => s + g.fg3m, 0);
+          return fg3a > 0 ? round1((fg3m / fg3a) * 100) : null;
+        },
+      },
+      {
+        id: 'low_ast20',
+        groupSingle: 't_low_ast',
+        metricLabel: 'Circulación de Balón',
+        thresholdLabel: 'Juego individualista: ≤20 AST de equipo',
+        isPositive: false,
+        unit: ' AST',
+        test: (g) => g.ast <= 20,
+        extract: (g) => g.ast,
+      },
+    ];
+
+    const teamCheckResults: Array<{
+      check: (typeof teamChecks)[number];
+      count: number;
+    }> = [];
+
+    for (const tc of teamChecks) {
+      let count = 0;
+      for (let i = 0; i < games.length; i++) {
+        if (tc.test(games[i])) count++;
+        else break;
+      }
+      if (count >= minStreakGames) {
+        teamCheckResults.push({ check: tc, count });
+      }
+    }
+
+    const tGroupBest = new Map<string, { check: (typeof teamChecks)[number]; count: number }>();
+    const tEligibleResults: Array<{ check: (typeof teamChecks)[number]; count: number }> = [];
+
+    const tMaxCounts = new Map<string, number>();
+    for (const res of teamCheckResults) {
+      if (res.check.groupSingle) {
+        const curMax = tMaxCounts.get(res.check.groupSingle) || 0;
+        if (res.count > curMax) tMaxCounts.set(res.check.groupSingle, res.count);
+      }
+    }
+
+    for (const res of teamCheckResults) {
+      const gKey = res.check.groupSingle;
+      if (!gKey) {
+        tEligibleResults.push(res);
+        continue;
+      }
+
+      const existing = tGroupBest.get(gKey);
+      const groupMax = tMaxCounts.get(gKey) || 0;
+
+      if (!existing) {
+        tGroupBest.set(gKey, res);
+      } else {
+        const isHarder = teamChecks.indexOf(res.check) < teamChecks.indexOf(existing.check);
+        const isMuchLonger = res.count > existing.count * 1.4;
+
+        if (isMuchLonger) {
+          tGroupBest.set(gKey, res);
+        } else if (isHarder && res.count >= groupMax * 0.75) {
+          tGroupBest.set(gKey, res);
+        }
+      }
+    }
+
+    for (const best of tGroupBest.values()) {
+      tEligibleResults.push(best);
+    }
+
+    for (const { check: tc, count } of tEligibleResults) {
+      const evalSlice =
+        tc.sliceAvg ||
+        ((arr: TeamGameLog[]) =>
+          arr.length > 0 ? round1(mean(arr.map(tc.extract))) : null);
+
+      const streakSlice = games.slice(0, count);
+      const streakVal = evalSlice(streakSlice) ?? round1(mean(streakSlice.map(tc.extract)));
+      const winRef = evalSlice(winSlice) ?? round1(mean(winSlice.map(tc.extract)));
+      const currentSeasonAvg = evalSlice(tGames2027);
+      const prevSeasonAvg = evalSlice(tGames2026);
+      const fallbackBase =
+        evalSlice(games) ?? round1(mean(games.map(tc.extract)));
+      const seasonBase = currentSeasonAvg ?? prevSeasonAvg ?? fallbackBase;
+
+      streaks.push({
+        id: `streak-t-${team.id}-${tc.id}`,
+        entityType: 'team',
+        entityId: team.id,
+        entityName: team.name,
+        subtitle: `Conf. ${team.conference} · ${team.wins}-${team.losses}`,
+        teamAbbr: team.abbreviation,
+        streakLabel: `${count} PJ consecutivos`,
+        metricLabel: tc.metricLabel,
+        thresholdLabel: tc.thresholdLabel,
+        count,
+        windowAvgDuringStreak: streakVal,
+        seasonBaseline: seasonBase,
+        currentSeasonAvg,
+        currentSeasonGames: tGames2027.length,
+        prevSeasonAvg,
+        prevSeasonGames: tGames2026.length,
+        isPositive: tc.isPositive,
+        lastGameDate: games[0]?.date || '',
+        breakoutAxis: tc.breakoutAxis,
+        windowAvgRef: winRef,
+        windowDeltaVsSeason: round1(winRef - seasonBase),
+        unit: tc.unit,
       });
     }
   }

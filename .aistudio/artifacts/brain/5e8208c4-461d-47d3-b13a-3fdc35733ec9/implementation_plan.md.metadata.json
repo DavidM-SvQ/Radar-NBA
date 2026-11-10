@@ -1,6 +1,6 @@
 {
-  "summary":  "Hoja de ruta actualizada de RadarNBA con el nuevo módulo de Rachas Multi-Estadísticas y Dobles/Triples-Dobles Consecutivos.",
-  "updatedAt":  "2026-11-07T10:33:50.209450407Z",
+  "summary":  "Refactor of the Analytical Explorer to include separate Team and Player analytics using Recharts for high interactivity. Includes advanced scatter plots with team logos, new analytical axes (Pace, Shooting Frequency, AST/TOV ratios), and a statistical Correlation Matrix to identify winning drivers.",
+  "updatedAt":  "2026-11-10T09:52:39.322914812Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
