@@ -113,7 +113,7 @@ export function MetricInfoTooltip({
           updatePosition();
           setOpen((prev) => !prev);
         }}
-        className="inline-flex items-center justify-center p-1.5 -m-1 sm:p-0.5 sm:m-0 rounded-md text-slate-400 sm:text-slate-500 hover:text-orange-400 active:text-orange-400 focus:outline-none focus-visible:text-orange-400 transition-colors shrink-0 touch-manipulation"
+        className="inline-flex items-center justify-center p-1.5 sm:p-0.5 rounded-md text-slate-400 sm:text-slate-500 hover:text-orange-400 active:text-orange-400 focus:outline-none focus-visible:text-orange-400 transition-colors shrink-0 touch-manipulation"
       >
         <Info className={iconClassName} />
       </button>

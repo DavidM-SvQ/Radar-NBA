@@ -39,7 +39,7 @@ jobs:
           cache: 'npm'
 
       - name: Instalar dependencias
-        run: npm ci
+        run: npm ci || npm install
 
       - name: Capturar huella previa del snapshot
         run: |

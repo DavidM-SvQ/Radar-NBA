@@ -1,65 +1,84 @@
-# Evolución del Explorador Analítico
+# Renovación y Rediseño Visual de las Fichas de Equipo y Jugador (EntityInspectorDrawer)
 
-Este plan detalla la reestructuración completa de la sección "Explorador Analítico" para dividir el análisis entre **Equipos** y **Jugadores**, elevando la calidad visual e interactiva mediante la integración de **Recharts**.
+Rediseño completo de la experiencia de inspección de entidades en RadarNBA. Transformará el modal de inspección actual en una suite analítica estructurada por pestañas superiores (*Resumen & KPIs*, *Gráficos & Evolución*, *Historial de Partidos* y *Plantilla / Perfil*), con tarjetas destacadas de KPIs que incluyen valores, comparativa contra el promedio de la liga y cálculo de percentiles en tiempo real.
 
-> [!IMPORTANT]
-> Se instalará la librería `recharts` para proporcionar gráficos de dispersión de alta fidelidad, tooltips interactivos y zoom, manteniendo la estética azul oscuro homogénea de RadarNBA.
+## Decisiones Confirmadas por el Usuario
 
-## Decisiones Críticas Confirmadas
+- **Estructura de Ficha por Pestañas**: Navegación superior segmentada en 4 pestañas limpias (`Resumen & KPIs`, `Gráficos & Evolución`, `Historial de Partidos`, `Plantilla / Roster`) para evitar scroll excesivo y saturación de información.
+- **Formato Visual de KPIs**: Tarjetas destacadas de alto contraste con tipografía tabular (`tabular-nums`), comparativa diferencial respecto a la media NBA y barra de percentil de la liga con codificación de color de rendimiento.
+- **Analítica Destacada de Equipos**: Integración prioritaria del bloque de **Cuatro Factores de Dean Oliver** (eFG%, TOV%, OREB%, FT/FGA) junto con eficiencia por posesión (OffRtg vs DefRtg) y perfil táctico.
 
-- **Segmentación Principal**: División binaria entre "Equipos" y "Jugadores".
-- **Motor de Gráficos**: Migración de SVG manual a **Recharts** para permitir personalización de puntos (p. ej., escudos de equipos) y mayor interactividad.
-- **Análisis de Equipos**: Foco en la eficiencia (OffRtg vs DefRtg), ritmo, volumen de tiro y calidad de creación.
-- **Matriz de Correlación**: Nueva vista para visualizar qué estadísticas tienen mayor impacto en el porcentaje de victorias (`winPct`).
+---
 
-## 1. Concepto Central y Valor
+## 1. Visión General y Concepto
 
-Transformar el explorador actual (centrado en jugadores) en un **laboratorio de scouting avanzado**. La herramienta permitirá a los usuarios no solo ver dónde se ubica cada jugador, sino entender la identidad de las franquicias mediante cuadrantes de rendimiento.
+La ficha de inspección de equipos y jugadores (`EntityInspectorDrawer`) pasará de ser una lista larga con scroll continuo a un centro analítico modular y dinámico. La vista principal destacará inmediatamente los indicadores clave (KPIs) con contexto de liga (percentiles y diferenciales respecto al promedio NBA), mientras que el resto de herramientas (evolución temporal de partidos, desglose de log completo y plantilla/perfil) quedarán organizados en pestañas independientes accesibles a un solo clic.
 
-- **Equipos**: Análisis macro de la liga, permitiendo ver qué equipos son "pace-and-space" o cuáles basan su dominio en la pintura.
-- **Jugadores**: Análisis micro para encontrar perfiles infravalorados (ej: alto uso con alta eficiencia).
+---
 
 ## 2. Experiencia de Usuario y Diseño Visual
 
-### Flujo de Navegación
-1. **Selector de Entidad**: Interruptor (Teams | Players) en la cabecera.
-2. **Selector de Ejes**: Dropdowns para elegir X, Y y Tamaño del punto (Z).
-3. **Filtros Dinámicos**: Por Conferencia, División, Edad, o Umbrales de volumen (mínimo de partidos/minutos).
+### Navegación por Pestañas Superiores
+- **Pestaña 1: Resumen & KPIs**:
+  - Encabezado con identidad visual de la entidad (Avatar/Escudo, posición/conferencia, balance y racha).
+  - Bloque superior de **KPIs Principales Destacados**:
+    - **Jugadores**: PTS, REB, AST, STL, BLK, FG%, 3P%, USG%, NetRtg, eFG%, TS%, PER/EFF.
+    - **Equipos**: OffRtg, DefRtg, NetRtg, Pace, PTS Favor/Contra, Diferencial, eFG%, TOV%, OREB%, FT Rate.
+  - Cada tarjeta de KPI incluirá:
+    1. Valor actual en la muestra seleccionada.
+    2. Comparativa vs Media NBA (diferencial numérico y flecha de tendencia).
+    3. Barra y sello de **Percentil en la Liga** (ej. *Top 5%*, *Percentil 92* con tinte semitransparente verde/rojo según la métrica).
+  - Bloque especializado de **Cuatro Factores de Dean Oliver** (para Equipos) con desglose de Eficiencia de Tiro (eFG%), Porcentaje de Pérdidas (TOV%), Rebote Ofensivo (OREB%) y Frecuencia de Tiro Libre (FT/FGA).
+- **Pestaña 2: Gráficos & Evolución**:
+  - Gráfico de línea temporal con selector de métricas.
+  - Selector de modo de trazado (*Secuencia continua* vs *2 líneas en paralelo* para comparar la temporada 2026/27 contra la 2025/26).
+  - Desglose de racha y consistencia en el rango seleccionado.
+- **Pestaña 3: Historial de Partidos**:
+  - Tabla completa e interactiva de partidos (`Game Log`) con selector dinámico de columnas, ordenación por cabecera y sombreado suave de rendimiento por celda.
+- **Pestaña 4: Plantilla / Perfil**:
+  - **Para Equipos**: Roster de la plantilla con promedios individuales, rol, edad, minutos y botón de inspección directa de cualquier jugador.
+  - **Para Jugadores**: Ficha de radiografía física/biográfica y desglose de seguimiento de carrera por temporada.
 
-### Diseño de Gráficos (Recharts)
-- **Puntos Personalizados**: 
-    - En **Equipos**, los puntos del gráfico de dispersión serán los **logos oficiales** de las franquicias.
-    - En **Jugadores**, círculos de colores según su equipo o posición.
-- **Líneas de Referencia**: Medias de la liga automáticas que dividen el gráfico en 4 cuadrantes con etiquetas dinámicas (ej: "Élite Ofensiva").
-- **Tooltips Pro**: Al pasar el ratón, se muestra un dossier rápido de la entidad (foto/logo, estadísticas clave y ranking en los ejes seleccionados).
+---
 
-## 3. Temas Analíticos Implementados
+## 3. Arquitectura Técnica y Modelo de Datos
 
-### Para Equipos (Nuevas Matrices)
-- **Eficiencia Neta**: `OffRtg` vs `DefRtg` (Identifica aspirantes al título).
-- **Identidad de Ritmo**: `Pace` vs `NetRtg` (¿Correr ayuda a ganar?).
-- **Dependencia del Triple**: `% Frecuencia de 3P` vs `3P%` (Volumen vs Acierto).
-- **Calidad de Creación**: `AST%` vs `TOV%` (Equilibrio entre pase y seguridad).
-- **Matriz de Correlación**: Un mapa de calor que muestra la correlación de Pearson entre diversas métricas y el éxito (`winPct`).
-
-## 4. Arquitectura Técnica
-
-### Componentes y Estructura
-```drawio
-┌─────────────────────────────────────────────────────────┐
-│ ScatterAnalyticsView (State: Mode, Metrics, Filters)    │
-├────────────────────────────┬────────────────────────────┤
-│   TeamAnalyticsView        │   PlayerAnalyticsView      │
-│   (Recharts + TeamLogos)   │   (Recharts + Avatars)     │
-├────────────────────────────┴────────────────────────────┤
-│   CorrelationMatrixView (Heatmap Table)                │
-└─────────────────────────────────────────────────────────┘
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                      EntityInspectorDrawer.tsx                         │
+├────────────────────────────────────────────────────────────────────────┤
+│ Header: Avatar/Logo · Nombre · Modal Display Mode (Wide/Full/Sidebar) │
+│ Tabs: [ 📊 Resumen & KPIs ] [ 📈 Gráficos ] [ 📋 Partidos ] [ 👥 Roster]│
+└──────────────────────────────────┬─────────────────────────────────────┘
+                                   │
+         ┌─────────────────────────┼─────────────────────────┐
+         ▼                         ▼                         ▼
+┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
+│ KpiOverviewTab  │       │  AnalyticsTab   │       │   GameLogTab    │
+├─────────────────┤       ├─────────────────┤       ├─────────────────┤
+│ • Featured KPIs │       │ • Timeline SVG  │       │ • Sortable Log  │
+│ • League Perc.  │       │ • Parallel 25/26│       │ • Column Select │
+│ • Dean Oliver   │       │ • Trend & Range │       │ • Tone Cells    │
+└─────────────────┘       └─────────────────┘       └─────────────────┘
 ```
 
-### Estrategia de Datos
-- **Cálculos al Vuelo**: Las métricas de equipos se derivan de los perfiles `advanced` y de los `games` históricos.
-- **Filtrado Reactivo**: El renderizado de Recharts se actualizará instantáneamente al mover los sliders de umbrales o cambiar los filtros de división.
+### Cálculo de Percentiles y Comparativa NBA
+- Se integrará una función helper `computeLeaguePercentile(metricValue, metricKey, allEntities)` que ordenará los valores de todos los jugadores/equipos para determinar el percentil exacto ($0\text{--}100\%$) y la etiqueta correspondiente (*Top 1%*, *Top 5%*, *Top 10%*, *Superiores a la Media*, *Percentil 45*, etc.).
+- Las métricas donde un número menor es mejor (ej. `DefRtg`, `TOV`, `Losses`) invertirán automáticamente el cálculo del percentil y la escala de color (verde para valores bajos, rojo para altos).
 
-### Dependencias a añadir
-- `recharts`: Visualización interactiva.
-- `framer-motion`: Animaciones fluidas al cambiar entre equipos y jugadores.
+---
+
+## 4. Plan de Implementación
+
+1. **Estructuración por Pestañas en `EntityInspectorDrawer.tsx`**:
+   - Agregar el estado `activeTab` (`'overview' | 'charts' | 'gamelog' | 'roster'`).
+   - Implementar la barra de pestañas adaptativa debajo del encabezado principal.
+2. **Diseño de Tarjetas de KPI con Percentil de Liga**:
+   - Construir el componente `KpiPercentileCard` que muestre el valor numérico destacado, el diferencial vs la media de la NBA y el indicador visual de percentil.
+3. **Módulo de Cuatro Factores de Dean Oliver**:
+   - Crear el componente visual de los 4 factores para la vista de equipos con barras comparativas vs el estándar óptimo de la liga.
+4. **Reorganización del Gráfico de Evolución y Tabla de Partidos**:
+   - Mover la gráfica SVG interactiva a la pestaña *Gráficos & Evolución*.
+   - Renderizar el *Game Log* completo en la pestaña *Historial de Partidos*.
+5. **Verificación y Compilación**:
+   - Ejecutar `compile_applet` y `lint_applet` para garantizar cero errores de TypeScript y linting.

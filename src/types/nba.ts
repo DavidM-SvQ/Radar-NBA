@@ -162,6 +162,7 @@ export interface TeamSummary {
   astPerGame?: number;
   fg3Pct?: number;
   ftPct?: number;
+  ftRate?: number;
   advanced?: TeamAdvancedProfile;
   games: TeamGameLog[];
 }

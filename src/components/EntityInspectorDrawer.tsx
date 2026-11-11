@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeftRight,
+  BarChart3,
+  Calendar,
   Check,
   ChevronDown,
   Columns3,
@@ -13,6 +15,8 @@ import {
   RotateCcw,
   Sliders,
   Star,
+  TrendingUp,
+  Users,
   X,
 } from 'lucide-react';
 import type {
@@ -375,6 +379,180 @@ function InspectorReferenceBar({
   );
 }
 
+export interface MetricPercentileInfo {
+  percentile: number;
+  label: string;
+  deltaVsNba: number;
+  nbaMean: number;
+  barColorClass: string;
+  badgeColorClass: string;
+}
+
+export function computePercentileAndDelta(
+  val: number,
+  allVals: number[],
+  nbaMean: number,
+  lowerIsBetter = false
+): MetricPercentileInfo {
+  const validVals = (allVals || []).filter((v) => Number.isFinite(v));
+  if (validVals.length === 0 || !Number.isFinite(val)) {
+    return {
+      percentile: 50,
+      label: 'Promedio',
+      deltaVsNba: 0,
+      nbaMean,
+      barColorClass: 'bg-sky-400',
+      badgeColorClass: 'text-slate-300 bg-slate-800/80 border-slate-700',
+    };
+  }
+
+  const deltaVsNba = val - nbaMean;
+  const sorted = [...validVals].sort((a, b) => a - b);
+  const count = sorted.length;
+  let lowerCount = 0;
+  for (let i = 0; i < count; i++) {
+    if (sorted[i] < val) lowerCount++;
+  }
+  let pct = Math.round((lowerCount / Math.max(1, count)) * 100);
+  pct = Math.max(1, Math.min(99, pct));
+
+  if (lowerIsBetter) {
+    pct = 100 - pct;
+  }
+
+  let label = `P${pct}`;
+  let barColorClass = 'bg-sky-400';
+  let badgeColorClass = 'text-sky-300 bg-sky-950/60 border-sky-500/30';
+
+  if (pct >= 95) {
+    label = 'Élite (Top 5%)';
+    barColorClass = 'bg-emerald-400';
+    badgeColorClass = 'text-emerald-300 bg-emerald-950/80 border-emerald-500/40';
+  } else if (pct >= 80) {
+    label = `Top ${100 - pct}%`;
+    barColorClass = 'bg-emerald-500';
+    badgeColorClass = 'text-emerald-400 bg-emerald-950/50 border-emerald-500/30';
+  } else if (pct >= 60) {
+    label = `P${pct} (Sobre media)`;
+    barColorClass = 'bg-sky-400';
+    badgeColorClass = 'text-sky-300 bg-sky-950/60 border-sky-500/30';
+  } else if (pct >= 40) {
+    label = `P${pct} (Media)`;
+    barColorClass = 'bg-amber-400';
+    badgeColorClass = 'text-amber-300 bg-amber-950/50 border-amber-500/30';
+  } else if (pct >= 20) {
+    label = `P${pct} (Bajo media)`;
+    barColorClass = 'bg-orange-400';
+    badgeColorClass = 'text-orange-300 bg-orange-950/50 border-orange-500/30';
+  } else {
+    label = `Inf ${pct}%`;
+    barColorClass = 'bg-rose-500';
+    badgeColorClass = 'text-rose-300 bg-rose-950/60 border-rose-500/40';
+  }
+
+  return {
+    percentile: pct,
+    label,
+    deltaVsNba,
+    nbaMean,
+    barColorClass,
+    badgeColorClass,
+  };
+}
+
+interface KpiPercentileCardProps {
+  label: string;
+  value: string;
+  numericVal: number;
+  allLeagueVals: number[];
+  nbaMean: number;
+  helpKey?: string;
+  decimals?: number;
+  suffix?: string;
+  signed?: boolean;
+  lowerIsBetter?: boolean;
+}
+
+function KpiPercentileCard({
+  label,
+  value,
+  numericVal,
+  allLeagueVals,
+  nbaMean,
+  helpKey,
+  decimals = 1,
+  suffix = '',
+  signed = false,
+  lowerIsBetter = false,
+}: KpiPercentileCardProps) {
+  const info = computePercentileAndDelta(
+    numericVal,
+    allLeagueVals,
+    nbaMean,
+    lowerIsBetter
+  );
+
+  const deltaFormatted = formatMetricNumber(
+    info.deltaVsNba,
+    decimals,
+    suffix,
+    true
+  );
+
+  return (
+    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3.5 flex flex-col justify-between space-y-2.5 transition-all hover:border-[#334155] shadow-sm">
+      <div className="flex items-center justify-between gap-1.5 text-xs">
+        <span className="font-medium text-slate-300 truncate inline-flex items-center gap-1">
+          <span>{label}</span>
+          {helpKey && (
+            <MetricInfoTooltip helpKey={helpKey} iconClassName="w-3.5 h-3.5" align="left" />
+          )}
+        </span>
+        <span
+          className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-semibold border shrink-0 ${info.badgeColorClass}`}
+        >
+          {info.label}
+        </span>
+      </div>
+
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-slate-100">
+          {value}
+        </span>
+        <div className="text-right font-mono text-xs tabular-nums">
+          <span
+            className={
+              Math.abs(info.deltaVsNba) < 0.05
+                ? 'text-slate-400'
+                : (info.deltaVsNba > 0 && !lowerIsBetter) ||
+                  (info.deltaVsNba < 0 && lowerIsBetter)
+                ? 'text-emerald-400 font-semibold'
+                : 'text-rose-400 font-semibold'
+            }
+          >
+            {deltaFormatted}
+          </span>
+          <span className="text-[10px] text-slate-400 block">vs Media NBA</span>
+        </div>
+      </div>
+
+      <div className="w-full space-y-1">
+        <div className="relative h-1.5 bg-[#0B1120] rounded-full overflow-hidden border border-[#1E293B]">
+          <div
+            className={`h-full rounded-full transition-all duration-300 ${info.barColorClass}`}
+            style={{ width: `${info.percentile}%` }}
+          />
+        </div>
+        <div className="flex justify-between text-[9.5px] text-slate-400 font-mono">
+          <span>P0</span>
+          <span>Media NBA: {nbaMean.toFixed(decimals)}{suffix}</span>
+          <span>P100</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function EntityInspectorDrawer({
   entityType,
   entityId,
@@ -393,6 +571,15 @@ export function EntityInspectorDrawer({
   // Modal layout mode: wide popup (default), fullscreen, or side panel
   const [displayMode, setDisplayMode] =
     useState<'wide' | 'fullscreen' | 'sidebar'>('wide');
+
+  // Top Tab Navigation state
+  const [activeInspectorTab, setActiveInspectorTab] = useState<
+    'overview' | 'charts' | 'gamelog' | 'roster'
+  >('overview');
+
+  useEffect(() => {
+    setActiveInspectorTab('overview');
+  }, [entityType, entityId]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -449,7 +636,6 @@ export function EntityInspectorDrawer({
     experienceMode === 'simple' ? 'differential' : 'netRtg'
   );
   const [teamLogMode, setTeamLogMode] = useState<'basic' | 'advanced'>('basic');
-  const [teamTab, setTeamTab] = useState<'games' | 'roster'>('games');
   const [roster, setRoster] = useState<RosterPlayerItem[]>([]);
   const [loadingRoster, setLoadingRoster] = useState(false);
   const [loadingPlayerId, setLoadingPlayerId] = useState<string | null>(null);
@@ -529,7 +715,6 @@ export function EntityInspectorDrawer({
   useEffect(() => {
     setHoveredChartIdx(null);
     setShowAllLogRows(false);
-    setTeamTab('games');
     setRoster([]);
 
     if (entityType !== 'player' || !entityId) {
@@ -560,7 +745,7 @@ export function EntityInspectorDrawer({
   }, [entityType, entityId]);
 
   useEffect(() => {
-    if (entityType !== 'team' || !team || teamTab !== 'roster') return;
+    if (entityType !== 'team' || !team || activeInspectorTab !== 'roster') return;
     let active = true;
     setLoadingRoster(true);
     fetch(`/api/nba/team/${team.id}/roster`)
@@ -577,7 +762,7 @@ export function EntityInspectorDrawer({
     return () => {
       active = false;
     };
-  }, [entityType, team, teamTab]);
+  }, [entityType, team, activeInspectorTab]);
 
   const player: PlayerSummary | undefined = useMemo(() => {
     if (entityType !== 'player' || !entityId) return undefined;
@@ -591,6 +776,42 @@ export function EntityInspectorDrawer({
     () => buildExtendedPlayerBenchmarks(players),
     [players]
   );
+
+  const leaguePlayerStats = useMemo(() => {
+    if (!players || players.length === 0) return {};
+    return {
+      pts: players.map((p) => p.ptsAvg || 0),
+      reb: players.map((p) => p.rebAvg || 0),
+      ast: players.map((p) => p.astAvg || 0),
+      stl: players.map((p) => p.stlAvg || 0),
+      blk: players.map((p) => p.blkAvg || 0),
+      fg3m: players.map((p) => mean(p.games.map((g) => g.fg3m))),
+      fgPct: players.map((p) => p.fgPct || 0),
+      fg3Pct: players.map((p) => p.fg3Pct || 0),
+      usgEst: players.map((p) => p.usgAvg || 0),
+      tsPct: players.map((p) => p.tsPct || 0),
+      efgPct: players.map((p) => p.efgPct || 0),
+      netRtg: players.map((p) => p.advanced?.netRtg || 0),
+    };
+  }, [players]);
+
+  const leagueTeamStats = useMemo(() => {
+    if (!teams || teams.length === 0) return {};
+    return {
+      offRtg: teams.map((t) => t.offRtg || 0),
+      defRtg: teams.map((t) => t.defRtg || 0),
+      netRtg: teams.map((t) => t.netRtg || 0),
+      pace: teams.map((t) => t.pace || 0),
+      pointsFor: teams.map((t) => t.avgPointsFor || 0),
+      pointsAgainst: teams.map((t) => t.avgPointsAgainst || 0),
+      differential: teams.map((t) => t.differential || 0),
+      winPct: teams.map((t) => t.winPct || 0),
+      efgPct: teams.map((t) => t.efgPct || 53.5),
+      tovPct: teams.map((t) => t.tovPct || 13.5),
+      orebPct: teams.map((t) => t.orebPct || 27.0),
+      ftRate: teams.map((t) => t.ftRate || 0.21),
+    };
+  }, [teams]);
 
   const isOpen = Boolean(entityType && entityId && (player || team));
 
@@ -951,6 +1172,48 @@ export function EntityInspectorDrawer({
     };
   })();
 
+  const sampleMeans = useMemo(() => {
+    if (!player || sampleGames.length === 0) return {} as Record<string, number>;
+    const totalFga = sampleGames.reduce((s, g) => s + (g.fga || 0), 0);
+    const totalFgm = sampleGames.reduce((s, g) => s + (g.fgm || 0), 0);
+    const totalFg3a = sampleGames.reduce((s, g) => s + (g.fg3a || 0), 0);
+    const totalFg3m = sampleGames.reduce((s, g) => s + (g.fg3m || 0), 0);
+    const totalFta = sampleGames.reduce((s, g) => s + (g.fta || 0), 0);
+    const totalPts = sampleGames.reduce((s, g) => s + (g.points || 0), 0);
+
+    return {
+      points: mean(sampleGames.map((g) => g.points)),
+      rebounds: mean(sampleGames.map((g) => g.rebounds)),
+      assists: mean(sampleGames.map((g) => g.assists)),
+      steals: mean(sampleGames.map((g) => g.steals)),
+      blocks: mean(sampleGames.map((g) => g.blocks)),
+      fg3m: mean(sampleGames.map((g) => g.fg3m)),
+      fgPct: totalFga > 0 ? (totalFgm / totalFga) * 100 : 0,
+      fg3Pct: totalFg3a > 0 ? (totalFg3m / totalFg3a) * 100 : 0,
+      usgEst: mean(sampleGames.map((g) => g.usgEst)),
+      tsPct: totalFga + 0.44 * totalFta > 0 ? (totalPts / (2 * (totalFga + 0.44 * totalFta))) * 100 : 0,
+      efgPct: mean(sampleGames.map((g) => g.efgPct)),
+    };
+  }, [player, sampleGames]);
+
+  const leaguePlayerMeans = useMemo(() => {
+    const stats = leaguePlayerStats;
+    return {
+      pts: mean(stats.pts || []),
+      reb: mean(stats.reb || []),
+      ast: mean(stats.ast || []),
+      stl: mean(stats.stl || []),
+      blk: mean(stats.blk || []),
+      fg3m: mean(stats.fg3m || []),
+      fgPct: mean(stats.fgPct || []),
+      fg3Pct: mean(stats.fg3Pct || []),
+      usgEst: mean(stats.usgEst || []),
+      tsPct: mean((stats.tsPct || []).filter((v): v is number => v !== undefined)),
+      efgPct: mean((stats.efgPct || []).filter((v): v is number => v !== undefined)),
+      netRtg: mean((stats.netRtg || []).filter((v): v is number => v !== undefined)),
+    };
+  }, [leaguePlayerStats]);
+
   const filteredChartSelectorMetrics = useMemo(() => {
     if (chartMetricCategory === 'all') return PLAYER_PER_GAME_METRICS;
     if (chartMetricCategory === 'advanced') {
@@ -1265,9 +1528,9 @@ export function EntityInspectorDrawer({
 
   // SVG Geometry for Trend Chart (Timeline & Parallel Season Modes)
   const svgW = 620;
-  const svgH = 168;
-  const padX = 24;
-  const padY = 24;
+  const svgH = 175;
+  const padX = 45;
+  const padY = 28;
   const vals = chartData.values;
   const minVal = vals.length ? Math.min(...vals, chartData.base) : 0;
   const maxVal = vals.length ? Math.max(...vals, chartData.base) : 10;
@@ -1475,13 +1738,22 @@ export function EntityInspectorDrawer({
 
   return (
     <div className={wrapperClasses}>
-      <div className="fixed inset-0" onClick={onClose} aria-hidden="true" />
+      <div className="fixed inset-0 z-0" onClick={onClose} aria-hidden="true" />
       <aside className={containerClasses}>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Cerrar inspector"
+          title="Cerrar ventana"
+          className="fixed top-2.5 sm:top-5 right-2.5 sm:right-8 z-[70] min-w-[44px] min-h-[44px] sm:min-w-[36px] sm:min-h-[36px] p-2 flex items-center justify-center rounded-xl bg-slate-900/60 sm:bg-transparent backdrop-blur-md sm:backdrop-blur-none border border-slate-700/50 sm:border-transparent text-slate-400 hover:text-white hover:bg-slate-800/80 active:scale-95 transition-all shadow-lg sm:shadow-none"
+        >
+          <X className="w-5 h-5 sm:w-5 sm:h-5" />
+        </button>
         {/* Sticky Header */}
         <div className="sticky top-0 z-20 bg-[#0F172A]/95 backdrop-blur-md border-b border-[#1E293B] px-4 sm:px-6 pt-2.5 sm:pt-4 pb-3.5 sm:pb-4 space-y-2.5 sm:space-y-0">
           <div className="w-10 h-1 bg-slate-700 rounded-full mx-auto mb-2 sm:hidden" />
 
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               {player ? (
                 <PlayerAvatar
@@ -1592,16 +1864,9 @@ export function EntityInspectorDrawer({
                 <span>Comparar tramos</span>
               </button>
 
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label="Cerrar inspector"
-                className="min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 -mr-1.5 sm:mr-0 p-2 sm:p-1.5 flex items-center justify-center rounded-lg text-slate-400 hover:text-white active:bg-[#131C2E] transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
             </div>
           </div>
+
 
           {/* Mobile Action Row (< sm) */}
           <div className="grid grid-cols-2 gap-1.5 sm:hidden pt-1">
@@ -1634,6 +1899,64 @@ export function EntityInspectorDrawer({
               <span>Tramos</span>
             </button>
           </div>
+
+          {/* TOP TAB NAVIGATION BAR */}
+          <div className="flex items-center gap-1 bg-[#0B1120] px-4 sm:px-6 pt-1 overflow-x-auto scrollbar-none border-t border-[#1E293B]">
+            <button
+              type="button"
+              onClick={() => setActiveInspectorTab('overview')}
+              className={`px-3.5 py-2 text-xs font-medium border-b-2 transition-all flex items-center gap-2 whitespace-nowrap shrink-0 ${
+                activeInspectorTab === 'overview'
+                  ? 'border-orange-500 text-orange-400 font-bold'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span>Resumen & KPIs</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveInspectorTab('charts')}
+              className={`px-3.5 py-2 text-xs font-medium border-b-2 transition-all flex items-center gap-2 whitespace-nowrap shrink-0 ${
+                activeInspectorTab === 'charts'
+                  ? 'border-orange-500 text-orange-400 font-bold'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <TrendingUp className="w-3.5 h-3.5" />
+              <span>Gráficos & Evolución</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveInspectorTab('gamelog')}
+              className={`px-3.5 py-2 text-xs font-medium border-b-2 transition-all flex items-center gap-2 whitespace-nowrap shrink-0 ${
+                activeInspectorTab === 'gamelog'
+                  ? 'border-orange-500 text-orange-400 font-bold'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>
+                Historial Partidos ({player ? sampleGames.length : team?.games.length || 0})
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveInspectorTab('roster')}
+              className={`px-3.5 py-2 text-xs font-medium border-b-2 transition-all flex items-center gap-2 whitespace-nowrap shrink-0 ${
+                activeInspectorTab === 'roster'
+                  ? 'border-orange-500 text-orange-400 font-bold'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span>{player ? 'Perfil & Trayectoria' : 'Plantilla / Roster'}</span>
+            </button>
+          </div>
+
         </div>
 
         {/* Body */}
@@ -1643,6 +1966,9 @@ export function EntityInspectorDrawer({
           {/* ================================================================ */}
           {player && (
             <>
+              {/* TAB 2: GRÁFICOS & EVOLUCIÓN (Jugador) */}
+              {activeInspectorTab === 'charts' && (
+                <section className="space-y-4">
               {/* SECTION 1 (FIRST): Evolución temporal interactiva (Secuencia continua o 2 líneas paralelas) */}
               <section className="space-y-3">
                 <div className="flex flex-wrap items-start justify-between gap-2.5">
@@ -1941,6 +2267,26 @@ export function EntityInspectorDrawer({
                         className="w-full h-44 overflow-visible select-none"
                         onMouseLeave={() => setHoveredChartIdx(null)}
                       >
+                        {/* Axis Labels */}
+                        <text
+                          transform={`rotate(-90, 15, ${svgH / 2})`}
+                          x={15}
+                          y={svgH / 2}
+                          textAnchor="middle"
+                          className="fill-slate-500 text-[10px] font-bold uppercase tracking-wider"
+                        >
+                          {activePlayerChartMetric.shortLabel}
+                        </text>
+
+                        <text
+                          x={svgW / 2}
+                          y={svgH - 4}
+                          textAnchor="middle"
+                          className="fill-slate-500 text-[10px] font-semibold"
+                        >
+                          Secuencia temporal de partidos (Muestra: {sampleSelection.titleShort})
+                        </text>
+
                         {/* Dotted Reference Line */}
                         <line
                           x1={padX}
@@ -2111,6 +2457,26 @@ export function EntityInspectorDrawer({
                       className="w-full h-44 overflow-visible select-none"
                       onMouseLeave={() => setHoveredChartIdx(null)}
                     >
+                      {/* Axis Labels */}
+                      <text
+                        transform={`rotate(-90, 15, ${svgH / 2})`}
+                        x={15}
+                        y={svgH / 2}
+                        textAnchor="middle"
+                        className="fill-slate-500 text-[10px] font-bold uppercase tracking-wider"
+                      >
+                        {activePlayerChartMetric.shortLabel}
+                      </text>
+
+                      <text
+                        x={svgW / 2}
+                        y={svgH - 4}
+                        textAnchor="middle"
+                        className="fill-slate-500 text-[10px] font-semibold"
+                      >
+                        Comparativa por Tramo de Partidos (26/27 vs 25/26)
+                      </text>
+
                       {/* Dual Season Dashed Mean Lines */}
                       {parallelChartData.mean26 !== null && (
                         <line
@@ -2342,11 +2708,16 @@ export function EntityInspectorDrawer({
                         );
                       })}
                     </div>
+                    </div>
                   </div>
-                </div>
+                </section>
               </section>
+            )}
 
-              {/* MASTER FILTER BAR: Configurable Sample Slider + Predefined Ranges */}
+              {/* TAB 1: RESUMEN & KPIS (Jugador) */}
+              {activeInspectorTab === 'overview' && (
+                <>
+                  {/* MASTER FILTER BAR: Configurable Sample Slider + Predefined Ranges */}
               <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3.5 sm:p-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
@@ -2465,6 +2836,141 @@ export function EntityInspectorDrawer({
                       </button>
                     );
                   })}
+                </div>
+              </section>
+
+              {/* DESTACADOS KPIS CON PERCENTILES EN LA LIGA & COMPARATIVE NBA */}
+              <section className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                      <span>KPIs Principales & Percentiles de la Liga</span>
+                      <MetricInfoTooltip helpKey="player_kpi_overview" align="left" />
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Promedios en la muestra ({sampleSelection.titleShort}) con posición relativa respecto a toda la NBA
+                    </p>
+                  </div>
+                  <span className="text-xs font-mono text-sky-400 font-semibold px-2.5 py-1 bg-sky-500/10 border border-sky-500/30 rounded-lg">
+                    Línea Central = Media NBA
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                  <KpiPercentileCard
+                    label="Puntos (PTS)"
+                    value={(sampleMeans.points || 0).toFixed(1)}
+                    numericVal={sampleMeans.points || 0}
+                    allLeagueVals={leaguePlayerStats.pts || []}
+                    nbaMean={leaguePlayerMeans.pts || 12.8}
+                    helpKey="pts"
+                    decimals={1}
+                  />
+                  <KpiPercentileCard
+                    label="Rebotes (REB)"
+                    value={(sampleMeans.rebounds || 0).toFixed(1)}
+                    numericVal={sampleMeans.rebounds || 0}
+                    allLeagueVals={leaguePlayerStats.reb || []}
+                    nbaMean={leaguePlayerMeans.reb || 4.8}
+                    helpKey="reb"
+                    decimals={1}
+                  />
+                  <KpiPercentileCard
+                    label="Asistencias (AST)"
+                    value={(sampleMeans.assists || 0).toFixed(1)}
+                    numericVal={sampleMeans.assists || 0}
+                    allLeagueVals={leaguePlayerStats.ast || []}
+                    nbaMean={leaguePlayerMeans.ast || 2.8}
+                    helpKey="ast"
+                    decimals={1}
+                  />
+                  <KpiPercentileCard
+                    label="Robos (STL)"
+                    value={(sampleMeans.steals || 0).toFixed(1)}
+                    numericVal={sampleMeans.steals || 0}
+                    allLeagueVals={leaguePlayerStats.stl || []}
+                    nbaMean={leaguePlayerMeans.stl || 0.8}
+                    helpKey="stl"
+                    decimals={1}
+                  />
+                  <KpiPercentileCard
+                    label="Tapones (BLK)"
+                    value={(sampleMeans.blocks || 0).toFixed(1)}
+                    numericVal={sampleMeans.blocks || 0}
+                    allLeagueVals={leaguePlayerStats.blk || []}
+                    nbaMean={leaguePlayerMeans.blk || 0.5}
+                    helpKey="blk"
+                    decimals={1}
+                  />
+                  <KpiPercentileCard
+                    label="Triples (3PM)"
+                    value={(sampleMeans.fg3m || 0).toFixed(1)}
+                    numericVal={sampleMeans.fg3m || 0}
+                    allLeagueVals={leaguePlayerStats.fg3m || []}
+                    nbaMean={leaguePlayerMeans.fg3m || 1.4}
+                    helpKey="fg3m"
+                    decimals={1}
+                  />
+                  <KpiPercentileCard
+                    label="% Tiro (%FG)"
+                    value={`${(sampleMeans.fgPct || 0).toFixed(1)}%`}
+                    numericVal={sampleMeans.fgPct || 0}
+                    allLeagueVals={(leaguePlayerStats.fgPct || []).filter((v): v is number => v !== undefined)}
+                    nbaMean={leaguePlayerMeans.fgPct || 46.5}
+                    helpKey="fgPct"
+                    decimals={1}
+                    suffix="%"
+                  />
+                  <KpiPercentileCard
+                    label="% Triples (%3P)"
+                    value={`${(sampleMeans.fg3Pct || 0).toFixed(1)}%`}
+                    numericVal={sampleMeans.fg3Pct || 0}
+                    allLeagueVals={(leaguePlayerStats.fg3Pct || []).filter((v): v is number => v !== undefined)}
+                    nbaMean={leaguePlayerMeans.fg3Pct || 35.2}
+                    helpKey="fg3Pct"
+                    decimals={1}
+                    suffix="%"
+                  />
+                  <KpiPercentileCard
+                    label="Uso Estimado (USG%)"
+                    value={`${(sampleMeans.usgEst || 0).toFixed(1)}%`}
+                    numericVal={sampleMeans.usgEst || 0}
+                    allLeagueVals={(leaguePlayerStats.usgEst || []).filter((v): v is number => v !== undefined)}
+                    nbaMean={leaguePlayerMeans.usgEst || 19.5}
+                    helpKey="usgEst"
+                    decimals={1}
+                    suffix="%"
+                  />
+                  <KpiPercentileCard
+                    label="True Shooting (TS%)"
+                    value={`${(sampleMeans.tsPct || 0).toFixed(1)}%`}
+                    numericVal={sampleMeans.tsPct || 0}
+                    allLeagueVals={(leaguePlayerStats.tsPct || []).filter((v): v is number => v !== undefined)}
+                    nbaMean={leaguePlayerMeans.tsPct || 56.5}
+                    helpKey="tsPct"
+                    decimals={1}
+                    suffix="%"
+                  />
+                  <KpiPercentileCard
+                    label="Eficiencia Tiro (eFG%)"
+                    value={`${(sampleMeans.efgPct || 0).toFixed(1)}%`}
+                    numericVal={sampleMeans.efgPct || 0}
+                    allLeagueVals={(leaguePlayerStats.efgPct || []).filter((v): v is number => v !== undefined)}
+                    nbaMean={leaguePlayerMeans.efgPct || 52.0}
+                    helpKey="efgPct"
+                    decimals={1}
+                    suffix="%"
+                  />
+                  <KpiPercentileCard
+                    label="Net Rating (NetRtg)"
+                    value={formatMetricNumber(sampleMeans.netRtg || 0, 1, '', true)}
+                    numericVal={sampleMeans.netRtg || 0}
+                    allLeagueVals={(leaguePlayerStats.netRtg || []).filter((v): v is number => v !== undefined)}
+                    nbaMean={leaguePlayerMeans.netRtg || 0.0}
+                    helpKey="netRtg"
+                    decimals={1}
+                    signed
+                  />
                 </div>
               </section>
 
@@ -3105,6 +3611,12 @@ export function EntityInspectorDrawer({
                   </div>
                 </section>
               )}
+                </>
+              )}
+
+              {/* TAB 3: HISTORIAL DE PARTIDOS (Jugador) */}
+              {activeInspectorTab === 'gamelog' && (
+                <section className="space-y-4">
 
               {/* SECTION 5: Registro partido a partido (8 basic defaults + selector up to max 10 cols) */}
               <section className="space-y-3">
@@ -3418,331 +3930,601 @@ export function EntityInspectorDrawer({
                   </div>
                 )}
               </section>
+            </section>
+          )}
+
+              {/* TAB 4: PERFIL & TRAYECTORIA (Jugador) */}
+              {activeInspectorTab === 'roster' && (
+                <section className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Bio Card */}
+                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-2xl p-5 space-y-4 shadow-sm">
+                      <h3 className="text-sm font-bold text-slate-100 border-b border-[#1E293B] pb-2 flex items-center gap-2">
+                        <Users className="w-4 h-4 text-orange-400" />
+                        <span>Información Biográfica</span>
+                      </h3>
+                      <div className="grid grid-cols-2 gap-y-4 gap-x-2 text-xs">
+                        <div><p className="text-slate-500 font-medium mb-1">Nombre completo</p><p className="text-slate-100 font-bold text-sm">{player.name}</p></div>
+                        <div><p className="text-slate-500 font-medium mb-1">Equipo actual</p><p className="text-slate-100 font-bold text-sm flex items-center gap-1.5"><TeamLogo abbr={player.teamAbbr} size="xs" /> {player.teamName}</p></div>
+                        <div><p className="text-slate-500 font-medium mb-1">Posición</p><p className="text-slate-100 font-bold text-sm">{player.position}</p></div>
+                        <div><p className="text-slate-500 font-medium mb-1">Dorsal</p><p className="text-slate-100 font-bold text-sm">#{player.jersey || '—'}</p></div>
+                        <div><p className="text-slate-500 font-medium mb-1">Altura</p><p className="text-slate-100 font-bold text-sm">{player.height || '—'}</p></div>
+                        <div><p className="text-slate-500 font-medium mb-1">País</p><p className="text-slate-100 font-bold text-sm">{player.country || '—'}</p></div>
+                      </div>
+                    </div>
+
+                    {/* Quick Stats Card */}
+                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-2xl p-5 space-y-4 shadow-sm">
+                      <h3 className="text-sm font-bold text-slate-100 border-b border-[#1E293B] pb-2 flex items-center gap-2">
+                        <TrendingUp className="w-4 h-4 text-orange-400" />
+                        <span>Resumen Temporada 26/27</span>
+                      </h3>
+                      <div className="grid grid-cols-3 gap-3">
+                         <div className="text-center p-2 rounded-xl bg-[#0B1120] border border-[#1E293B]">
+                           <span className="block text-[10px] text-slate-500 font-bold uppercase mb-1">Partidos</span>
+                           <span className="text-lg font-bold text-orange-400 font-mono tabular-nums">{count2027}</span>
+                         </div>
+                         <div className="text-center p-2 rounded-xl bg-[#0B1120] border border-[#1E293B]">
+                           <span className="block text-[10px] text-slate-500 font-bold uppercase mb-1">Minutos</span>
+                           <span className="text-lg font-bold text-slate-100 font-mono tabular-nums">{(player.minutesAvg || 0).toFixed(1)}</span>
+                         </div>
+                         <div className="text-center p-2 rounded-xl bg-[#0B1120] border border-[#1E293B]">
+                           <span className="block text-[10px] text-slate-500 font-bold uppercase mb-1">Puntos</span>
+                           <span className="text-lg font-bold text-slate-100 font-mono tabular-nums">{(player.ptsAvg || 0).toFixed(1)}</span>
+                         </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Watchlist Status */}
+                  <div className="bg-[#131C2E] border border-[#1E293B] rounded-2xl p-5 space-y-4 shadow-sm">
+                    <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                      <Star className={`w-4 h-4 ${isWatched ? 'text-orange-400 fill-orange-400' : 'text-slate-400'}`} />
+                      <span>Estado en Seguimiento</span>
+                    </h3>
+                    <div className="flex items-center justify-between gap-4 p-4 bg-[#0B1120] rounded-xl border border-[#1E293B]">
+                       <div className="flex items-center gap-3">
+                         <div className={`p-2 rounded-full ${isWatched ? 'bg-orange-500/20 text-orange-400' : 'bg-slate-800 text-slate-500'}`}>
+                           <Star className={`w-5 h-5 ${isWatched ? 'fill-orange-400' : ''}`} />
+                         </div>
+                         <div>
+                           <p className="text-sm font-bold text-slate-100">{isWatched ? 'Jugador en Favoritos' : 'No estás siguiendo a este jugador'}</p>
+                           <p className="text-xs text-slate-400">{isWatched ? 'Este jugador aparecerá destacado en tus paneles personalizados.' : 'Síguelo para recibir alertas de consistencia y rachas.'}</p>
+                         </div>
+                       </div>
+                       <button
+                         type="button"
+                         onClick={() => onToggleWatchlist(wKey)}
+                         className={`px-4 py-2 text-xs font-bold rounded-lg transition-all border ${isWatched ? 'bg-orange-500 text-slate-950 border-orange-400' : 'bg-transparent border-slate-700 text-slate-300 hover:text-white hover:border-slate-500'}`}
+                       >
+                         {isWatched ? 'Dejar de seguir' : 'Seguir ahora'}
+                       </button>
+                    </div>
+                  </div>
+                </section>
+              )}
             </>
           )}
 
           {/* ================================================================ */}
-          {/* TEAM INSPECTOR VIEW (Preserved)                                  */}
+          {/* TEAM INSPECTOR VIEW                                              */}
           {/* ================================================================ */}
           {team && (
             <>
-              <section className="space-y-2.5">
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold text-slate-100">
-                    Nivel comparado frente a la Media de la NBA
-                  </h3>
-                  <span className="text-[11px] text-slate-400">
-                    Marca blanca central = promedio NBA
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y sm:divide-y-0 sm:divide-x divide-[#1E293B]">
-                  {teamNbaGaugeItems.slice(0, 2).map((item, idx) => (
-                    <div key={idx} className="p-3.5 space-y-1.5">
-                      <div className="flex items-center justify-between text-xs gap-2">
-                        <span className="inline-flex items-center gap-1 text-slate-300 font-medium">
-                          <span>{item.title}</span>
-                          <MetricInfoTooltip
-                            helpKey={item.helpKey}
-                            align="left"
-                            iconClassName="w-3 h-3"
-                          />
-                        </span>
-                        <span className="font-mono tabular-nums font-semibold text-slate-100">
-                          {item.valueLabel}
-                        </span>
+              {/* TAB 1: RESUMEN & KPIS */}
+              {activeInspectorTab === 'overview' && (
+                <>
+                  {/* FEATURED TEAM KPIS GRID WITH LEAGUE PERCENTILES */}
+                  <section className="space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                          <span>KPIs Colectivos & Percentiles de la NBA</span>
+                          <MetricInfoTooltip helpKey="team_kpi_overview" align="left" />
+                        </h3>
+                        <p className="text-xs text-slate-400">
+                          Estadísticas colectivas comparadas contra las 30 franquicias de la liga
+                        </p>
                       </div>
-                      <NbaComparisonBar
-                        value={item.value}
-                        benchmark={item.benchmark}
+                      <span className="text-xs font-mono text-orange-400 font-semibold px-2.5 py-1 bg-orange-500/10 border border-orange-500/30 rounded-lg">
+                        Balance {team.wins}-{team.losses} (Win% {(team.winPct * 100).toFixed(1)}%)
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                      <KpiPercentileCard
+                        label="Ataque (OffRtg)"
+                        value={(team.offRtg || 0).toFixed(1)}
+                        numericVal={team.offRtg || 0}
+                        allLeagueVals={(leagueTeamStats.offRtg || []).filter((v): v is number => v !== undefined)}
+                        nbaMean={114.5}
+                        helpKey="offRtg"
+                        decimals={1}
+                      />
+                      <KpiPercentileCard
+                        label="Defensa (DefRtg)"
+                        value={(team.defRtg || 0).toFixed(1)}
+                        numericVal={team.defRtg || 0}
+                        allLeagueVals={(leagueTeamStats.defRtg || []).filter((v): v is number => v !== undefined)}
+                        nbaMean={114.5}
+                        helpKey="defRtg"
+                        decimals={1}
+                        lowerIsBetter
+                      />
+                      <KpiPercentileCard
+                        label="Net Rating (NetRtg)"
+                        value={formatMetricNumber(team.netRtg || 0, 1, '', true)}
+                        numericVal={team.netRtg || 0}
+                        allLeagueVals={(leagueTeamStats.netRtg || []).filter((v): v is number => v !== undefined)}
+                        nbaMean={0.0}
+                        helpKey="netRtg"
+                        decimals={1}
+                        signed
+                      />
+                      <KpiPercentileCard
+                        label="Ritmo (Pace)"
+                        value={(team.pace || 0).toFixed(1)}
+                        numericVal={team.pace || 0}
+                        allLeagueVals={(leagueTeamStats.pace || []).filter((v): v is number => v !== undefined)}
+                        nbaMean={98.5}
+                        helpKey="pace"
+                        decimals={1}
+                      />
+                      <KpiPercentileCard
+                        label="Puntos Favor"
+                        value={team.avgPointsFor.toFixed(1)}
+                        numericVal={team.avgPointsFor}
+                        allLeagueVals={(leagueTeamStats.pointsFor || []).filter((v): v is number => v !== undefined)}
+                        nbaMean={114.2}
+                        helpKey="avgPointsFor"
+                        decimals={1}
+                      />
+                      <KpiPercentileCard
+                        label="Puntos Contra"
+                        value={team.avgPointsAgainst.toFixed(1)}
+                        numericVal={team.avgPointsAgainst}
+                        allLeagueVals={(leagueTeamStats.pointsAgainst || []).filter((v): v is number => v !== undefined)}
+                        nbaMean={114.2}
+                        helpKey="pointsAgainst"
+                        decimals={1}
+                        lowerIsBetter
+                      />
+                      <KpiPercentileCard
+                        label="Diferencial"
+                        value={formatMetricNumber(team.differential, 1, '', true)}
+                        numericVal={team.differential}
+                        allLeagueVals={(leagueTeamStats.differential || []).filter((v): v is number => v !== undefined)}
+                        nbaMean={0.0}
+                        helpKey="differential"
+                        decimals={1}
+                        signed
+                      />
+                      <KpiPercentileCard
+                        label="% Victorias (Win%)"
+                        value={`${(team.winPct * 100).toFixed(1)}%`}
+                        numericVal={team.winPct * 100}
+                        allLeagueVals={(leagueTeamStats.winPct || []).map((w) => w * 100)}
+                        nbaMean={50.0}
+                        helpKey="winPct"
+                        decimals={1}
+                        suffix="%"
                       />
                     </div>
-                  ))}
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y sm:divide-y-0 sm:divide-x divide-[#1E293B]">
-                  {teamNbaGaugeItems.slice(2, 4).map((item, idx) => (
-                    <div key={idx} className="p-3.5 space-y-1.5">
-                      <div className="flex items-center justify-between text-xs gap-2">
-                        <span className="inline-flex items-center gap-1 text-slate-300 font-medium">
-                          <span>{item.title}</span>
-                          <MetricInfoTooltip
-                            helpKey={item.helpKey}
-                            align="left"
-                            iconClassName="w-3 h-3"
-                          />
-                        </span>
-                        <span className="font-mono tabular-nums font-semibold text-slate-100">
-                          {item.valueLabel}
-                        </span>
+                  </section>
+
+                  {/* DEAN OLIVER 4 FACTORS & POSSESSION EFFICIENCY BLOCK */}
+                  <section className="bg-[#131C2E] border border-[#1E293B] rounded-2xl p-4 sm:p-5 space-y-4 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1E293B] pb-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                          <span>Cuatro Factores de Dean Oliver</span>
+                          <MetricInfoTooltip helpKey="four_factors" align="left" />
+                        </h3>
+                        <p className="text-xs text-slate-400">
+                          Los 4 pilares estadísticos que determinan el éxito colectivo en la NBA
+                        </p>
                       </div>
-                      <NbaComparisonBar
-                        value={item.value}
-                        benchmark={item.benchmark}
+                      <span className="text-xs font-mono text-orange-400 font-semibold px-2.5 py-1 bg-orange-500/10 border border-orange-500/30 rounded-lg">
+                        Modelo Dean Oliver
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                      <KpiPercentileCard
+                        label="1. Eficiencia Tiro (eFG%)"
+                        value={`${(team.efgPct || 0).toFixed(1)}%`}
+                        numericVal={team.efgPct || 0}
+                        allLeagueVals={(leagueTeamStats.efgPct || []).filter((v): v is number => v !== undefined)}
+                        nbaMean={53.5}
+                        helpKey="efgPct"
+                        decimals={1}
+                        suffix="%"
+                      />
+
+                      <KpiPercentileCard
+                        label="2. Pérdidas (TOV%)"
+                        value={`${(team.tovPct || 13.5).toFixed(1)}%`}
+                        numericVal={team.tovPct || 13.5}
+                        allLeagueVals={(leagueTeamStats.tovPct || []).filter((v): v is number => v !== undefined)}
+                        nbaMean={13.5}
+                        helpKey="tovPct"
+                        decimals={1}
+                        suffix="%"
+                        lowerIsBetter
+                      />
+
+                      <KpiPercentileCard
+                        label="3. Reb. Ofensivo (OREB%)"
+                        value={`${(team.orebPct || 27.0).toFixed(1)}%`}
+                        numericVal={team.orebPct || 27.0}
+                        allLeagueVals={(leagueTeamStats.orebPct || []).filter((v): v is number => v !== undefined)}
+                        nbaMean={27.0}
+                        helpKey="orebPct"
+                        decimals={1}
+                        suffix="%"
+                      />
+
+                      <KpiPercentileCard
+                        label="4. Tiros Libres (FT Rate)"
+                        value={(team.ftRate || 0.21).toFixed(2)}
+                        numericVal={team.ftRate || 0.21}
+                        allLeagueVals={(leagueTeamStats.ftRate || []).filter((v): v is number => v !== undefined)}
+                        nbaMean={0.21}
+                        helpKey="ftRate"
+                        decimals={2}
                       />
                     </div>
-                  ))}
-                </div>
-              </section>
 
-              <section className="space-y-2.5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold text-slate-100">
-                    {experienceMode === 'simple'
-                      ? 'Resumen de su rendimiento colectivo'
-                      : 'Radiografía Avanzada, Cuatro Factores, Pintura y Hustle (NBA.com)'}
-                  </h3>
-                  {experienceMode === 'simple' && (
-                    <button
-                      type="button"
-                      onClick={onSwitchToAdvanced}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-[#131C2E] hover:bg-[#182338] border border-[#1E293B] rounded-md text-orange-400 transition-colors whitespace-nowrap shrink-0"
-                    >
-                      <Sliders className="w-3 h-3" />
-                      <span>Ver 12 métricas avanzadas NBA.com</span>
-                    </button>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y divide-x divide-[#1E293B]">
-                  {teamProfileCells.map((cell, idx) => (
-                    <div key={idx} className="p-3">
-                      <div className="flex items-center justify-between gap-1 text-[11px] text-slate-400">
-                        <span className="truncate">{cell.label}</span>
-                        <MetricInfoTooltip
-                          helpKey={cell.helpKey}
-                          iconClassName="w-3 h-3"
-                        />
+                    <div className="bg-[#0B1120] border border-[#1E293B] rounded-xl p-3.5 space-y-2.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-300 font-semibold flex items-center gap-1.5">
+                          <span>Eficiencia por 100 Posesiones</span>
+                          <MetricInfoTooltip helpKey="netRtg" align="left" />
+                        </span>
+                        <span className="font-mono text-xs tabular-nums">
+                          NetRtg:{' '}
+                          <strong className={(team.netRtg || 0) >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                            {formatSigned(team.netRtg || 0, 1)} pts/100pos
+                          </strong>
+                        </span>
                       </div>
-                      <p className="mt-0.5 text-sm font-semibold font-mono tabular-nums text-slate-100 truncate">
-                        {cell.val}
-                      </p>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
+                        <div className="bg-[#131C2E] p-3 rounded-lg border border-[#1E293B] flex justify-between items-center">
+                          <div>
+                            <span className="text-sky-300 font-sans text-xs font-medium block">Eficiencia Ofensiva (OffRtg)</span>
+                            <span className="text-[10px] text-slate-400 font-sans">Pts anotados por 100 pos</span>
+                          </div>
+                          <span className="text-lg font-bold text-slate-100">{(team.offRtg || 0).toFixed(1)}</span>
+                        </div>
+
+                        <div className="bg-[#131C2E] p-3 rounded-lg border border-[#1E293B] flex justify-between items-center">
+                          <div>
+                            <span className="text-rose-300 font-sans text-xs font-medium block">Eficiencia Defensiva (DefRtg)</span>
+                            <span className="text-[10px] text-slate-400 font-sans">Pts recibidos por 100 pos (Menor = Mejor)</span>
+                          </div>
+                          <span className="text-lg font-bold text-slate-100">{(team.defRtg || 0).toFixed(1)}</span>
+                        </div>
+                      </div>
                     </div>
-                  ))}
-                </div>
-              </section>
+                  </section>
 
-              <section className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h3 className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-100">
-                      <span>Evolución en sus últimos {vals.length} partidos</span>
-                      <MetricInfoTooltip helpKey={tMetric} align="left" />
-                    </h3>
-                    <p className="text-xs text-slate-400">
-                      Línea punteada: su media habitual ({chartData.base.toFixed(1)})
-                      {' · '}
-                      <span className="text-sky-300">25/26</span>
-                      {' | '}
-                      <span className="text-orange-300">26/27</span>
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg">
-                    {(
-                      [
-                        { id: 'netRtg', label: 'NetRtg' },
-                        { id: 'offRtg', label: 'OffRtg' },
-                        { id: 'defRtg', label: 'DefRtg' },
-                        { id: 'pace', label: 'Pace' },
-                        { id: 'differential', label: 'DIF' },
-                      ] as const
-                    ).map((m) => (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => setTMetric(m.id)}
-                        className={`px-2 py-1 text-xs font-mono rounded transition-colors whitespace-nowrap shrink-0 ${
-                          tMetric === m.id
-                            ? 'bg-orange-500 text-slate-950 font-semibold'
-                            : 'text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        {m.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3">
-                  {vals.length > 1 ? (
-                    <svg
-                      viewBox={`0 0 ${svgW} ${svgH}`}
-                      className="w-full h-36 overflow-visible"
-                    >
-                      <line
-                        x1={padX}
-                        y1={baseLineY}
-                        x2={svgW - padX}
-                        y2={baseLineY}
-                        stroke="#64748B"
-                        strokeDasharray="4 4"
-                        strokeWidth="1"
-                      />
-                      {seasonTransitions.map((tr, tIdx) => (
-                        <g key={`t-tr-${tIdx}`}>
-                          <line
-                            x1={tr.x}
-                            y1={8}
-                            x2={tr.x}
-                            y2={svgH - 8}
-                            stroke="#64748B"
-                            strokeDasharray="3 3"
-                            strokeWidth="1.2"
+                  <section className="space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-sm font-semibold text-slate-100">
+                        Nivel comparado frente a la Media de la NBA
+                      </h3>
+                      <span className="text-[11px] text-slate-400">
+                        Marca blanca central = promedio NBA
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y sm:divide-y-0 sm:divide-x divide-[#1E293B]">
+                      {teamNbaGaugeItems.slice(0, 2).map((item, idx) => (
+                        <div key={idx} className="p-3.5 space-y-1.5">
+                          <div className="flex items-center justify-between text-xs gap-2">
+                            <span className="inline-flex items-center gap-1 text-slate-300 font-medium">
+                              <span>{item.title}</span>
+                              <MetricInfoTooltip
+                                helpKey={item.helpKey}
+                                align="left"
+                                iconClassName="w-3 h-3"
+                              />
+                            </span>
+                            <span className="font-mono tabular-nums font-semibold text-slate-100">
+                              {item.valueLabel}
+                            </span>
+                          </div>
+                          <NbaComparisonBar
+                            value={item.value}
+                            benchmark={item.benchmark}
                           />
-                          <text
-                            x={tr.x - 5}
-                            y={13}
-                            textAnchor="end"
-                            fill={tr.leftCurrent ? '#FB923C' : '#38BDF8'}
-                            className="text-[9.5px] font-mono font-semibold"
-                          >
-                            {tr.leftLabel}
-                          </text>
-                          <text
-                            x={tr.x + 5}
-                            y={13}
-                            textAnchor="start"
-                            fill={tr.rightCurrent ? '#FB923C' : '#38BDF8'}
-                            className="text-[9.5px] font-mono font-semibold"
-                          >
-                            {tr.rightLabel}
-                          </text>
-                        </g>
+                        </div>
                       ))}
-                      {seasonSegments.map((seg, sIdx) =>
-                        seg.count > 1 ? (
-                          <polyline
-                            key={`t-seg-${sIdx}`}
-                            fill="none"
-                            stroke={seg.isCurrentSeason ? '#F97316' : '#38BDF8'}
-                            strokeWidth="2.1"
-                            points={seg.pointsAttr}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y sm:divide-y-0 sm:divide-x divide-[#1E293B]">
+                      {teamNbaGaugeItems.slice(2, 4).map((item, idx) => (
+                        <div key={idx} className="p-3.5 space-y-1.5">
+                          <div className="flex items-center justify-between text-xs gap-2">
+                            <span className="inline-flex items-center gap-1 text-slate-300 font-medium">
+                              <span>{item.title}</span>
+                              <MetricInfoTooltip
+                                helpKey={item.helpKey}
+                                align="left"
+                                iconClassName="w-3 h-3"
+                              />
+                            </span>
+                            <span className="font-mono tabular-nums font-semibold text-slate-100">
+                              {item.valueLabel}
+                            </span>
+                          </div>
+                          <NbaComparisonBar
+                            value={item.value}
+                            benchmark={item.benchmark}
                           />
-                        ) : null
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-sm font-semibold text-slate-100">
+                        {experienceMode === 'simple'
+                          ? 'Resumen de su rendimiento colectivo'
+                          : 'Radiografía Avanzada, Pintura y Hustle (NBA.com)'}
+                      </h3>
+                      {experienceMode === 'simple' && (
+                        <button
+                          type="button"
+                          onClick={onSwitchToAdvanced}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-[#131C2E] hover:bg-[#182338] border border-[#1E293B] rounded-md text-orange-400 transition-colors whitespace-nowrap shrink-0"
+                        >
+                          <Sliders className="w-3 h-3" />
+                          <span>Ver 12 métricas avanzadas NBA.com</span>
+                        </button>
                       )}
-                      {vals.map((v, i) => {
-                        const isCurrSeason = Boolean(
-                          chartData.pointsMeta[i]?.isCurrentSeason
-                        );
-                        return (
-                          <g key={i}>
-                            <circle
-                              cx={toX(i)}
-                              cy={toY(v)}
-                              r={isCurrSeason ? 4.2 : 3.2}
-                              fill={isCurrSeason ? '#F97316' : '#082F49'}
-                              stroke={isCurrSeason ? '#FDBA74' : '#38BDF8'}
-                              strokeWidth="1.5"
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y divide-x divide-[#1E293B]">
+                      {teamProfileCells.map((cell, idx) => (
+                        <div key={idx} className="p-3">
+                          <div className="flex items-center justify-between gap-1 text-[11px] text-slate-400">
+                            <span className="truncate">{cell.label}</span>
+                            <MetricInfoTooltip
+                              helpKey={cell.helpKey}
+                              iconClassName="w-3 h-3"
                             />
-                          </g>
-                        );
-                      })}
-                    </svg>
-                  ) : (
-                    <p className="text-xs text-slate-400 py-8 text-center">
-                      Muestra insuficiente para trazar serie temporal.
-                    </p>
-                  )}
-                </div>
-              </section>
-
-              <section className="space-y-2.5">
-                <h3 className="text-sm font-semibold text-slate-100">
-                  Datos a tener en cuenta y contexto analítico
-                </h3>
-                <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y divide-[#1E293B]">
-                  {takeaways.map((note, idx) => (
-                    <div
-                      key={idx}
-                      className="px-4 py-3 text-xs text-slate-200 leading-relaxed"
-                    >
-                      {note}
+                          </div>
+                          <p className="mt-0.5 text-sm font-semibold font-mono tabular-nums text-slate-100 truncate">
+                            {cell.val}
+                          </p>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </section>
+                  </section>
+                </>
+              )}
 
-              <section className="space-y-2.5">
-                <h3 className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-100">
-                  <span>Desglose por contexto (Localía y Descanso)</span>
-                  <MetricInfoTooltip helpKey="splitContext" align="left" />
-                </h3>
-                <div className="grid grid-cols-2 sm:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y sm:divide-y-0 sm:divide-x divide-[#1E293B]">
-                  {teamSplits.map((sp, idx) => (
-                    <div key={idx} className="p-3">
-                      <div className="flex items-center justify-between gap-1 text-[11px] text-slate-400">
-                        <span className="truncate">{sp.label}</span>
-                        <MetricInfoTooltip
-                          helpKey="splitContext"
-                          iconClassName="w-3 h-3"
-                        />
+              {/* TAB 2: GRÁFICOS & EVOLUCIÓN */}
+              {activeInspectorTab === 'charts' && (
+                <>
+                  <section className="space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-100">
+                          <span>Evolución en sus últimos {vals.length} partidos</span>
+                          <MetricInfoTooltip helpKey={tMetric} align="left" />
+                        </h3>
+                        <p className="text-xs text-slate-400">
+                          Línea punteada: su media habitual ({chartData.base.toFixed(1)})
+                          {' · '}
+                          <span className="text-sky-300">25/26</span>
+                          {' | '}
+                          <span className="text-orange-300">26/27</span>
+                        </p>
                       </div>
-                      <p className="mt-1 text-xs font-semibold font-mono tabular-nums text-slate-100">
-                        {sp.value}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </section>
 
-              <section className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold text-slate-100">
-                    Registro del equipo y plantilla oficial
-                  </h3>
-
-                  <div className="flex items-center gap-2">
-                    {teamTab === 'games' && (
                       <div className="flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg">
                         {(
                           [
-                            { id: 'basic', label: 'Básicas' },
-                            { id: 'advanced', label: 'Avanzadas' },
+                            { id: 'netRtg', label: 'NetRtg' },
+                            { id: 'offRtg', label: 'OffRtg' },
+                            { id: 'defRtg', label: 'DefRtg' },
+                            { id: 'pace', label: 'Pace' },
+                            { id: 'differential', label: 'DIF' },
                           ] as const
-                        ).map((lm) => (
+                        ).map((m) => (
                           <button
-                            key={lm.id}
+                            key={m.id}
                             type="button"
-                            onClick={() => setTeamLogMode(lm.id)}
-                            className={`px-2.5 py-1 text-xs font-medium rounded ${
-                              teamLogMode === lm.id
-                                ? 'bg-[#1E293B] text-orange-400 font-semibold'
+                            onClick={() => setTMetric(m.id)}
+                            className={`px-2 py-1 text-xs font-mono rounded transition-colors whitespace-nowrap shrink-0 ${
+                              tMetric === m.id
+                                ? 'bg-orange-500 text-slate-950 font-semibold'
                                 : 'text-slate-400 hover:text-white'
                             }`}
                           >
-                            {lm.label}
+                            {m.label}
                           </button>
                         ))}
                       </div>
-                    )}
+                    </div>
+
+                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3">
+                      {vals.length > 1 ? (
+                        <svg
+                          viewBox={`0 0 ${svgW} ${svgH}`}
+                          className="w-full h-44 overflow-visible select-none"
+                        >
+                          {/* Axis Labels */}
+                          <text
+                            transform={`rotate(-90, 15, ${svgH / 2})`}
+                            x={15}
+                            y={svgH / 2}
+                            textAnchor="middle"
+                            className="fill-slate-500 text-[10px] font-bold uppercase tracking-wider"
+                          >
+                            {tMetric === 'differential' ? 'DIF' : tMetric.toUpperCase()}
+                          </text>
+
+                          <text
+                            x={svgW / 2}
+                            y={svgH - 4}
+                            textAnchor="middle"
+                            className="fill-slate-500 text-[10px] font-semibold"
+                          >
+                            Historial reciente de partidos
+                          </text>
+
+                          <line
+                            x1={padX}
+                            y1={baseLineY}
+                            x2={svgW - padX}
+                            y2={baseLineY}
+                            stroke="#64748B"
+                            strokeDasharray="4 4"
+                            strokeWidth="1"
+                          />
+                          {seasonTransitions.map((tr, tIdx) => (
+                            <g key={`t-tr-${tIdx}`}>
+                              <line
+                                x1={tr.x}
+                                y1={8}
+                                x2={tr.x}
+                                y2={svgH - 8}
+                                stroke="#64748B"
+                                strokeDasharray="3 3"
+                                strokeWidth="1.2"
+                              />
+                              <text
+                                x={tr.x - 5}
+                                y={13}
+                                textAnchor="end"
+                                fill={tr.leftCurrent ? '#FB923C' : '#38BDF8'}
+                                className="text-[9.5px] font-mono font-semibold"
+                              >
+                                {tr.leftLabel}
+                              </text>
+                              <text
+                                x={tr.x + 5}
+                                y={13}
+                                textAnchor="start"
+                                fill={tr.rightCurrent ? '#FB923C' : '#38BDF8'}
+                                className="text-[9.5px] font-mono font-semibold"
+                              >
+                                {tr.rightLabel}
+                              </text>
+                            </g>
+                          ))}
+                          {seasonSegments.map((seg, sIdx) =>
+                            seg.count > 1 ? (
+                              <polyline
+                                key={`t-seg-${sIdx}`}
+                                fill="none"
+                                stroke={seg.isCurrentSeason ? '#F97316' : '#38BDF8'}
+                                strokeWidth="2.1"
+                                points={seg.pointsAttr}
+                              />
+                            ) : null
+                          )}
+                          {vals.map((v, i) => {
+                            const isCurrSeason = Boolean(
+                              chartData.pointsMeta[i]?.isCurrentSeason
+                            );
+                            return (
+                              <g key={i}>
+                                <circle
+                                  cx={toX(i)}
+                                  cy={toY(v)}
+                                  r={isCurrSeason ? 4.2 : 3.2}
+                                  fill={isCurrSeason ? '#F97316' : '#082F49'}
+                                  stroke={isCurrSeason ? '#FDBA74' : '#38BDF8'}
+                                  strokeWidth="1.5"
+                                />
+                              </g>
+                            );
+                          })}
+                        </svg>
+                      ) : (
+                        <p className="text-xs text-slate-400 py-8 text-center">
+                          Muestra insuficiente para trazar serie temporal.
+                        </p>
+                      )}
+                    </div>
+                  </section>
+
+                  <section className="space-y-2.5">
+                    <h3 className="text-sm font-semibold text-slate-100">
+                      Datos a tener en cuenta y contexto analítico
+                    </h3>
+                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y divide-[#1E293B]">
+                      {takeaways.map((note, idx) => (
+                        <div
+                          key={idx}
+                          className="px-4 py-3 text-xs text-slate-200 leading-relaxed"
+                        >
+                          {note}
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="space-y-2.5">
+                    <h3 className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-100">
+                      <span>Desglose por contexto (Localía y Descanso)</span>
+                      <MetricInfoTooltip helpKey="splitContext" align="left" />
+                    </h3>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y sm:divide-y-0 sm:divide-x divide-[#1E293B]">
+                      {teamSplits.map((sp, idx) => (
+                        <div key={idx} className="p-3">
+                          <div className="flex items-center justify-between gap-1 text-[11px] text-slate-400">
+                            <span className="truncate">{sp.label}</span>
+                            <MetricInfoTooltip
+                              helpKey="splitContext"
+                              iconClassName="w-3 h-3"
+                            />
+                          </div>
+                          <p className="mt-1 text-xs font-semibold font-mono tabular-nums text-slate-100">
+                            {sp.value}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                </>
+              )}
+
+              {/* TAB 3: HISTORIAL DE PARTIDOS (Equipo) */}
+              {activeInspectorTab === 'gamelog' && (
+                <section className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold text-slate-100">
+                      Historial completo de partidos
+                    </h3>
 
                     <div className="flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg">
-                      <button
-                        type="button"
-                        onClick={() => setTeamTab('games')}
-                        className={`px-2.5 py-1 text-xs font-medium rounded ${
-                          teamTab === 'games'
-                            ? 'bg-orange-500 text-slate-950 font-semibold'
-                            : 'text-slate-300 hover:text-white'
-                        }`}
-                      >
-                        Partidos ({team.games.length})
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setTeamTab('roster')}
-                        className={`px-2.5 py-1 text-xs font-medium rounded ${
-                          teamTab === 'roster'
-                            ? 'bg-orange-500 text-slate-950 font-semibold'
-                            : 'text-slate-300 hover:text-white'
-                        }`}
-                      >
-                        Plantilla activa
-                      </button>
+                      {(
+                        [
+                          { id: 'basic', label: 'Básicas' },
+                          { id: 'advanced', label: 'Avanzadas' },
+                        ] as const
+                      ).map((lm) => (
+                        <button
+                          key={lm.id}
+                          type="button"
+                          onClick={() => setTeamLogMode(lm.id)}
+                          className={`px-2.5 py-1 text-xs font-medium rounded ${
+                            teamLogMode === lm.id
+                              ? 'bg-[#1E293B] text-orange-400 font-semibold'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {lm.label}
+                        </button>
+                      ))}
                     </div>
                   </div>
-                </div>
 
-                {teamTab === 'games' ? (
                   <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-auto max-h-[56vh]">
                     <table className="w-full text-left border-collapse text-xs">
                       <thead className={STICKY_THEAD_CLASS}>
@@ -3950,15 +4732,23 @@ export function EntityInspectorDrawer({
                       </tbody>
                     </table>
                   </div>
-                ) : (
+                </section>
+              )}
+
+              {/* TAB 4: PLANTILLA (Equipo) */}
+              {activeInspectorTab === 'roster' && (
+                <section className="space-y-3">
+                  <h3 className="text-sm font-semibold text-slate-100">
+                    Plantilla oficial NBA.com de {team.name}
+                  </h3>
                   <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
                     {loadingRoster ? (
                       <div className="p-6 text-center text-xs text-slate-400">
-                        Cargando plantilla oficial NBA.com de {team.name}...
+                        Cargando plantilla...
                       </div>
                     ) : roster.length === 0 ? (
                       <div className="p-6 text-center text-xs text-slate-400">
-                        No se pudo cargar la plantilla en este momento.
+                        No se pudo cargar la plantilla.
                       </div>
                     ) : (
                       <div className="divide-y divide-[#1E293B]">
@@ -4012,8 +4802,8 @@ export function EntityInspectorDrawer({
                       </div>
                     )}
                   </div>
-                )}
-              </section>
+                </section>
+              )}
             </>
           )}
         </div>
