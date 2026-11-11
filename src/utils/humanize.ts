@@ -2186,22 +2186,22 @@ export const COLUMN_HELP: Record<string, ColumnHelpEntry> = {
       'Combina siempre dos dimensiones complementarias del partido · Pulsa la tarjeta para abrir el informe completo.',
   },
   gamedayExplosions: {
-    title: 'Noches de Explosión frente a su Media (▲)',
+    title: 'Noches de Explosión vs Media 2026-27 (▲)',
     simpleDesc:
-      'Jugadores que firmaron una actuación muy superior a su promedio habitual, indicando si se debió a mayor rol en pista o a una muñeca ardiendo.',
+      'Jugadores con actuación extraordinaria frente a su media de la temporada 2026-27. Clasifica la causa mediante 8 etiquetas especializadas: Explosión de puntería (TS%), Explosión desde el triple (3PM), Dominio en el rebote (REB), Recital en la dirección (AST), Muralla defensiva e impacto en stocks (STL+BLK), Expansión de minutos y rol, Reaparición / Debut y Despliegue estadístico sobresaliente. Todas documentadas y calibrables en Glosario y Admin.',
     calculation:
-      'Filtra jugadores con ≥4 PJ previos, ≥16 MIN en la noche y Z-Score puntual ≥ +1.35σ (o +10 PTS sobre su media). Clasifica el motor entre "Salto de rol" (+5.5 MIN o +5% USG) y "Puntería al rojo vivo" (+12% TS sobre su media).',
+      'Filtra jugadores con ≥4 PJ previos en 2026-27, ≥16 MIN en pista y Z-Score puntual ≥ +1.8σ (o +10 PTS sobre su media). Asigna la etiqueta y métrica detonante en función de qué faceta registró la mayor anomalía estadística.',
     benchmarkText:
-      'Las explosiones respaldadas por más minutos y tiros (USG%) suelen mantenerse en jornadas siguientes.',
+      'Las explosiones impulsadas por minutos y rol suelen sostenerse mejor; las de puntería extrema (TS%) tienden a normalizarse en los siguientes partidos.',
   },
   gamedaySlumps: {
-    title: 'Noches Aciagas / Batacazos frente a su Media (▼)',
+    title: 'Batacazos de Titulares vs Media 2026-27 (▼)',
     simpleDesc:
-      'Titulares y referentes ofensivos habituales que sufrieron un cortocircuito estadístico en puntos, porcentajes o pérdidas.',
+      'Titulares habituales (media ≥24 MIN y ≥14 PTS, ≥8 REB o ≥5.5 AST en 2026-27) que sufrieron un frenazo estadístico severo en la noche. Clasifica el origen entre 8 etiquetas especializadas: "Atasco en el tiro", "Pólvora mojada desde el triple", "Sangría de pérdidas", "Lastrado por faltas", "Apagón en la dirección", "Superado en el cristal", "Minutos recortados en rotación" y "Frenado por la defensa". Consulta el Glosario y Guía para los criterios completos.',
     calculation:
-      'Evalúa exclusivamente jugadores consolidados (media ≥22 MIN y ≥12 PTS con ≥5 PJ base) que jugaron al menos 16 minutos esa noche (excluyendo lesiones tempranas) y registraron Z ≤ −1.25σ.',
+      'Evalúa titulares que jugaron ≥16 minutos en la noche (descartando lesiones prematuras) con caídas marcadas en anotación (ptsDelta ≤ −7.5), eficiencia (TS% < 42%), pérdidas masivas (≥5 TOV), faltas (≥5) o cortes drásticos en creación o rebote.',
     benchmarkText:
-      'Si el jugador mantuvo sus minutos y tiros habituales pero tuvo <42% TS, suele rebotar al alza en el siguiente partido.',
+      'Si el batacazo se debió a "Atasco en el tiro" o "Pólvora mojada", suele experimentar una regresión positiva inmediata en el siguiente encuentro. Si fue por "Minutos recortados" o "Frenado por la defensa", conviene vigilar la rotación del técnico.',
   },
   gamedayRoleShift: {
     title: 'Radar de Minutos Inusuales y Cambios de Rol',

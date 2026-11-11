@@ -4,8 +4,12 @@ import {
   BookOpen,
   Calculator,
   Database,
+  Flame,
   Lightbulb,
   Search,
+  Sparkles,
+  TrendingDown,
+  TrendingUp,
 } from 'lucide-react';
 import type { ActiveSection } from '../types/nba';
 import { normalizeSearchText } from '../utils/analytics';
@@ -25,7 +29,8 @@ type GlossaryFilter =
   | 'sections'
   | 'sources'
   | 'metrics'
-  | 'interpretation';
+  | 'interpretation'
+  | 'tags';
 
 type MetricCategoryFilter =
   | 'Todas'
@@ -457,6 +462,309 @@ const METRICS_DICTIONARY: MetricDefinition[] = [
     formula: 'Posición relativa (Z-Score frente a la liga) sobre la muestra activa cargada',
     benchmark: 'Élite NBA (~top 10%) · Destacado · En media NBA · Bajo media',
   },
+
+  // Etiquetas del Analizador de Jornadas (03A y 03B)
+  {
+    code: 'Explosión: Puntería (TS%)',
+    name: 'Noche de Acierto Extraordinario en el Lanzamiento',
+    category: 'Motor de Anomalías',
+    description:
+      'El jugador firma una noche de efectividad quirúrgica superando en +10 puntos porcentuales o más su True Shooting % habitual con un minutaje similar en pista (diferencia <4 MIN).',
+    formula: 'tsDiff = TS%(Noche) − TS%(Media 2026-27) ≥ +10.0 pp · minDiff < 4.0 MIN',
+    benchmark: 'Producción impulsada por puntería pura (TC, triples y TL) sin necesidad de recibir más minutos.',
+  },
+  {
+    code: 'Explosión: Triples (3PM)',
+    name: 'Exhibición Triplista desde el Perímetro',
+    category: 'Motor de Anomalías',
+    description:
+      'Anota 4 o más triples en la noche, superando con holgura (al menos +3 triples extra) su promedio habitual en la temporada regular 2026-27.',
+    formula: 'fg3m ≥ 4 · (fg3m − fg3mAvg) ≥ +3.0 · Z-Score Triples ≥ +1.8σ',
+    benchmark: 'Muñeca ardiendo desde el perímetro que desequilibra las defensas rivales.',
+  },
+  {
+    code: 'Explosión: Dominio en el Rebote',
+    name: 'Salto Atípico en Capturas Totales',
+    category: 'Motor de Anomalías',
+    description:
+      'Control abrumador de los tableros con al menos 10 rebotes y una desviación destacada (+4 o más) sobre su media habitual de la temporada 2026-27.',
+    formula: 'rebounds ≥ 10 · (rebounds − rebAvg) ≥ +4.0 · Z-Score Rebotes ≥ +1.9σ',
+    benchmark: 'Imposición física o emparejamientos tácticos muy favorables en la pintura.',
+  },
+  {
+    code: 'Explosión: Recital en la Dirección',
+    name: 'Distribución y Generación de Élite',
+    category: 'Motor de Anomalías',
+    description:
+      'Reparte 8 o más asistencias superando en al menos 4 pases de canasta su promedio de la temporada 2026-27 con Z-Score ≥ 1.9σ.',
+    formula: 'assists ≥ 8 · (assists − astAvg) ≥ +4.0 · Z-Score Asistencias ≥ +1.9σ',
+    benchmark: 'Asume la batuta del equipo con visión de pase muy por encima de su estándar habitual.',
+  },
+  {
+    code: 'Explosión: Expansión de Minutos y Rol',
+    name: 'Salto Estadístico por Mayor Rotación',
+    category: 'Motor de Anomalías',
+    description:
+      'La explosión numérica en puntos y valoración viene respaldada directamente por un incremento de +5 o más minutos respecto a su media.',
+    formula: 'minDelta = MIN(Noche) − MIN(Media 2026-27) ≥ +5.0 MIN con Z-Score global ≥ +1.8σ',
+    benchmark: 'Señal de consolidación estructural: suele sostenerse mejor en el tiempo si el entrenador mantiene los minutos.',
+  },
+  {
+    code: 'Explosión: Reaparición / Debut',
+    name: 'Debut en Temporada o Regreso tras Lesión',
+    category: 'Motor de Anomalías',
+    description:
+      'Disputa su primer partido oficial en la temporada regular 2026-27 o regresa de baja médica prolongada con impacto numérico instantáneo.',
+    formula: 'priorGames.length === 0 en la temporada 2026-27 con alta producción anotadora y valoración',
+    benchmark: 'Estreno directo con protagonismo destacado en la rotación.',
+  },
+  {
+    code: 'Explosión: Despliegue Sobresaliente',
+    name: 'Exhibición Anotadora o Valoración Integral Disparada',
+    category: 'Motor de Anomalías',
+    description:
+      'Salto anotador masivo (+8 o más puntos sobre su promedio de temporada) o impacto Game Score global extraordinario.',
+    formula: 'ptsDelta ≥ +8.0 con Z(PTS) ≥ +1.8σ o Z(GameScore) ≥ +1.8σ',
+    benchmark: 'Noche de plenitud ofensiva o impacto global en todas las facetas del juego.',
+  },
+  {
+    code: 'Explosión: Muralla Defensiva en Stocks',
+    name: 'Festival Defensivo en Robos y Tapones',
+    category: 'Motor de Anomalías',
+    description:
+      'Exhibición defensiva de élite sumando 5 o más stocks (robos + tapones) o superando en +2.5 stocks su promedio habitual de temporada con Z-Score defensivo destacado.',
+    formula: 'stocks ≥ 5 o ((stocks − stocksAvg) ≥ +2.5 con Z(stocks) ≥ +1.6σ)',
+    benchmark: 'Impacto defensivo mayúsculo: alteró tiros del rival, cortó líneas de pase y protegió la pintura.',
+  },
+  {
+    code: 'Batacazo: Lastrado por Faltas',
+    name: 'Problemas de Faltas y Corte de Minutaje',
+    category: 'Motor de Anomalías',
+    description:
+      'Titular habitual que comete 5 o más faltas (o 4 faltas tempranas que fuerzan al entrenador a sentarlo perdiendo ≥6 minutos sobre su media), impidiéndole desarrollar su juego ofensivo.',
+    formula: 'minAvg ≥ 25 · ptsAvg ≥ 15 · (fouls ≥ 5 o (fouls ≥ 4 · minDelta ≤ −6.0))',
+    benchmark: 'Causa táctica externa; su rol permanece intacto para la siguiente cita sin riesgo de pérdida de estatus.',
+  },
+  {
+    code: 'Batacazo: Sangría de Pérdidas',
+    name: 'Colapso en el Manejo de Posesiones',
+    category: 'Motor de Anomalías',
+    description:
+      'Generador o referente ofensivo que pierde 5 o más balones sumando al menos +2.5 pérdidas por encima de su promedio habitual, lastrando el ritmo de su equipo.',
+    formula: 'minAvg ≥ 25 · ptsAvg ≥ 15 · tov ≥ 5 · (tov − tovAvg) ≥ +2.5',
+    benchmark: 'Refleja asfixia ante trampas defensivas (traps/2v1) o desconexión en la toma de decisiones con el balón.',
+  },
+  {
+    code: 'Batacazo: Pólvora Mojada (3PM)',
+    name: 'Apagón Exterior en Triplistas Habituales',
+    category: 'Motor de Anomalías',
+    description:
+      'Especialista exterior (media ≥2.0 triples por noche) que lanza 5 o más intentos pero mete como máximo 1 triple, perdiendo ≥2.0 triples respecto a su media.',
+    formula: 'minAvg ≥ 25 · ptsAvg ≥ 15 · fg3mAvg ≥ 2.0 · fg3a ≥ 5 · fg3m ≤ 1 · (fg3m − fg3mAvg) ≤ −2.0',
+    benchmark: 'Varianza pura del tiro exterior. Si los tiros son librados, el volumen de lanzamiento anticipa un rebote anotador inmediato.',
+  },
+  {
+    code: 'Batacazo: Atasco en el Tiro',
+    name: 'Desplome de Puntería en Titulares Habituales',
+    category: 'Motor de Anomalías',
+    description:
+      'Titular consolidado (media ≥25 MIN y ≥15 PTS) que juega al menos 16 MIN y sufre un cortocircuito grave de acierto (TS% < 42% o caída ≥12 pp), quedándose al menos 5 puntos por debajo de su media.',
+    formula: 'minAvg ≥ 25 · ptsAvg ≥ 15 · ptsDelta ≤ −5.0 · (tsPct < 42.0% o tsDiff ≤ −12.0 pp)',
+    benchmark: 'Mantuvo sus tiros y presencia pero no embocó. Suele ser transitorio y rebotar al alza en el siguiente partido.',
+  },
+  {
+    code: 'Batacazo: Apagón en la Dirección (AST)',
+    name: 'Bloqueo Creativo en Bases y Facilitadores Élite',
+    category: 'Motor de Anomalías',
+    description:
+      'Generador primario consolidado (media ≥6.0 AST) que reparte 3 o menos asistencias sufriendo una caída de al menos 3.5 pases de canasta respecto a su media.',
+    formula: 'minAvg ≥ 25 · astAvg ≥ 6.0 · assists ≤ 3 · (assists − astAvg) ≤ −3.5',
+    benchmark: 'Indica ayudas del rival para cortar líneas de pase o desacierto de sus receptores en tiros liberados.',
+  },
+  {
+    code: 'Batacazo: Superado en el Cristal (REB)',
+    name: 'Déficit Reboteador en Pívots y Titulares Interiores',
+    category: 'Motor de Anomalías',
+    description:
+      'Interior de referencia (media ≥8.5 REB) capturado en solo 4 o menos rebotes con un déficit de 4.5 o más capturas bajo los aros.',
+    formula: 'minAvg ≥ 25 · rebAvg ≥ 8.5 · rebounds ≤ 4 · (rebounds − rebAvg) ≤ −4.5',
+    benchmark: 'Provocado por emparejamientos que lo sacan de la zona (pívots tiradores rivales) o desajustes físicos en el rebote defensivo.',
+  },
+  {
+    code: 'Batacazo: Minutos Recortados',
+    name: 'Reducción Inusual de Minutaje en Rotación',
+    category: 'Motor de Anomalías',
+    description:
+      'Titular que pierde 8 o más minutos respecto a su estándar habitual de temporada debido a decisiones técnicas del entrenador, emparejamientos pequeños o paliza en el marcador (garbage time).',
+    formula: 'minAvg ≥ 25 · ptsAvg ≥ 15 · (minutos − minAvg) ≤ −8.0 MIN',
+    benchmark: 'Alerta técnica: conviene verificar si se debió a molestias leves, descarte por quinteto bajo o descanso en tramos finales.',
+  },
+  {
+    code: 'Batacazo: Frenado por la Defensa',
+    name: 'Colapso de Producción por Ajuste Defensivo Rival',
+    category: 'Motor de Anomalías',
+    description:
+      'Titular habitual cuya anotación cae al menos 7.5 puntos por debajo de su media debido a menor volumen de tiros, ayudas intensas o defensa en 2v1, sin deberse en exclusiva a faltas o porcentajes.',
+    formula: 'minAvg ≥ 25 · ptsAvg ≥ 15 · ptsDelta ≤ −7.5 PTS',
+    benchmark: 'El planteamiento defensivo rival logró aislarle del balón, negarle recepciones o forzarle a ceder la responsabilidad.',
+  },
+];
+
+export interface GamedayTagDoc {
+  section: '03A. Explosiones (▲)' | '03B. Batacazos (▼)';
+  tag: string;
+  metricLabel: string;
+  badgeType: 'emerald' | 'rose';
+  triggerCondition: string;
+  meaning: string;
+  nextGameContext: string;
+}
+
+export const GAMEDAY_TAGS_DOCS: GamedayTagDoc[] = [
+  {
+    section: '03A. Explosiones (▲)',
+    tag: 'Explosión de puntería',
+    metricLabel: 'Puntería (TS%)',
+    badgeType: 'emerald',
+    triggerCondition: 'tsDiff = TS%(Noche) − TS%(Media 2026-27) ≥ +10.0 pp con minDiff < 4.0 MIN',
+    meaning: 'Noche de acierto quirúrgico extraordinario en tiros de campo, triples y tiros libres (como el 78.7% TS de Paul George). La producción se disparó por efectividad, no por jugar más tiempo.',
+    nextGameContext: 'Alerta de regresión: ningún jugador sostiene +75% TS continuado; tenderá a normalizarse a su media habitual.',
+  },
+  {
+    section: '03A. Explosiones (▲)',
+    tag: 'Explosión desde el triple',
+    metricLabel: 'Triples (3PM)',
+    badgeType: 'emerald',
+    triggerCondition: 'fg3m ≥ 4 · (fg3m − fg3mAvg) ≥ +3.0 · Z-Score Triples ≥ +1.8σ',
+    meaning: 'Anotó al menos 4 triples superando en +3 o más su promedio habitual de la temporada con un Z-Score perimetral muy alto.',
+    nextGameContext: 'Racha caliente exterior que desequilibra las ayudas defensivas del rival.',
+  },
+  {
+    section: '03A. Explosiones (▲)',
+    tag: 'Dominio en el rebote',
+    metricLabel: 'Rebotes (REB)',
+    badgeType: 'emerald',
+    triggerCondition: 'rebounds ≥ 10 · (rebounds − rebAvg) ≥ +4.0 · Z-Score Rebotes ≥ +1.9σ',
+    meaning: 'Control absoluto de los tableros con 10 o más capturas y un salto muy notable sobre su estándar de la temporada 2026-27.',
+    nextGameContext: 'Indica ventaja física o emparejamientos tácticos muy favorables en la pintura.',
+  },
+  {
+    section: '03A. Explosiones (▲)',
+    tag: 'Recital en la dirección',
+    metricLabel: 'Asistencias (AST)',
+    badgeType: 'emerald',
+    triggerCondition: 'assists ≥ 8 · (assists − astAvg) ≥ +4.0 · Z-Score Asistencias ≥ +1.9σ',
+    meaning: 'Repartió 8 o más asistencias superando en +4 o más su media de temporada, asumiendo la batuta del equipo con visión de pase élite.',
+    nextGameContext: 'Suele reflejar ausencia de otro base titular o ajustes del entrenador para poner el balón en sus manos.',
+  },
+  {
+    section: '03A. Explosiones (▲)',
+    tag: 'Expansión de minutos y rol',
+    metricLabel: 'Minutos y Uso (MIN/USG)',
+    badgeType: 'emerald',
+    triggerCondition: 'minDelta = MIN(Noche) − MIN(Media 2026-27) ≥ +5.0 MIN con Z global ≥ +1.8σ',
+    meaning: 'La explosión estadística viene precedida directamente de un aumento notable en la rotación (más de 5 minutos extra en pista).',
+    nextGameContext: 'Señal de máxima solidez estructural: si el entrenador le mantiene los minutos, el salto numérico se mantendrá.',
+  },
+  {
+    section: '03A. Explosiones (▲)',
+    tag: 'Reaparición / Debut de temporada',
+    metricLabel: 'Minutos y Puntos en Estreno',
+    badgeType: 'emerald',
+    triggerCondition: 'priorGames.length === 0 en la temporada 2026-27',
+    meaning: 'Disputa su primer partido oficial en el curso 2026-27 o regresa de baja médica prolongada con impacto numérico instantáneo.',
+    nextGameContext: 'Entra directamente en el radar de seguimiento al demostrar estar sano y productivo.',
+  },
+  {
+    section: '03A. Explosiones (▲)',
+    tag: 'Despliegue estadístico sobresaliente',
+    metricLabel: 'Puntos (PTS) y Game Score',
+    badgeType: 'emerald',
+    triggerCondition: 'ptsDelta ≥ +8.0 con Z(PTS) ≥ +1.8σ o Z(GameScore) ≥ +1.8σ',
+    meaning: 'Salto masivo en anotación pura o valoración integral de partido frente a su promedio habitual de la temporada 2026-27.',
+    nextGameContext: 'Noche de plenitud ofensiva donde asumió el peso de líder indiscutible en la pista.',
+  },
+  {
+    section: '03A. Explosiones (▲)',
+    tag: "Muralla defensiva e impacto en 'stocks'",
+    metricLabel: 'Robos + Tapones (Stocks)',
+    badgeType: 'emerald',
+    triggerCondition: 'stocks ≥ 5 o (stocks − stocksAvg) ≥ +2.5 con Z(stocks) ≥ +1.6σ',
+    meaning: 'Exhibición defensiva sumando 5 o más stocks (robos más tapones) o superando en +2.5 su estándar habitual de temporada con Z-Score élite.',
+    nextGameContext: 'Impacto defensivo mayúsculo: intimidación en la pintura y castigo a campo abierto forzando pérdidas al rival.',
+  },
+  {
+    section: '03B. Batacazos (▼)',
+    tag: 'Lastrado por faltas',
+    metricLabel: 'Faltas / Minutos',
+    badgeType: 'rose',
+    triggerCondition: 'fouls ≥ 5 o (fouls ≥ 4 con caída de minutaje minDelta ≤ −6.0 MIN)',
+    meaning: 'Titular consolidado frenado por acumulación temprana de faltas personales que le forzaron a sentarse en el banquillo, rompiendo su ritmo y minutaje.',
+    nextGameContext: 'Impacto transitorio: no hay degradación de rol ni lesión; jugará sus minutos estándar en la siguiente cita con alta probabilidad de normalizar sus cifras.',
+  },
+  {
+    section: '03B. Batacazos (▼)',
+    tag: 'Sangría de pérdidas',
+    metricLabel: 'Pérdidas de Balón (TOV)',
+    badgeType: 'rose',
+    triggerCondition: 'turnovers ≥ 5 con (turnovers − tovAvg) ≥ +2.5 TOV sobre su media 2026-27',
+    meaning: 'Noche errática con balón provocada por agresividad del rival en líneas de pase o mala toma de decisiones en transición, restando posesiones a su equipo.',
+    nextGameContext: 'Señal de cautela: los rivales repetirán el scouting presionándole si el equipo no incorpora un manejador secundario para aliviar la carga.',
+  },
+  {
+    section: '03B. Batacazos (▼)',
+    tag: 'Pólvora mojada desde el triple',
+    metricLabel: 'Triples (3PM)',
+    badgeType: 'rose',
+    triggerCondition: 'fg3mAvg ≥ 2.0 · fg3a ≥ 5 · fg3m ≤ 1 con caída de triples (fg3m − fg3mAvg) ≤ −2.0',
+    meaning: 'Triplista contrastado que buscó sus tiros habituales (al menos 5 intentos) pero apenas pudo embocar 0 o 1 triple en toda la jornada.',
+    nextGameContext: 'Oportunidad de rebote anotador inmediato: el volumen de tiro sigue garantizado y la puntería perimetral tenderá a regresar a su porcentaje de temporada.',
+  },
+  {
+    section: '03B. Batacazos (▼)',
+    tag: 'Atasco en el tiro',
+    metricLabel: 'Puntería Caída (TS%)',
+    badgeType: 'rose',
+    triggerCondition: 'ptsDelta ≤ −5.0 · (tsPct < 42.0% o tsDiff = TS% − TS%avg ≤ −12.0 pp)',
+    meaning: 'Titular consolidado que juega al menos 16 minutos y sufre un cortocircuito grave de acierto, anotando 5 o más puntos por debajo de su media.',
+    nextGameContext: 'Oportunidad de rebote estadístico: mantuvo sus tiros y volumen habitual, por lo que suele recuperarse con normalidad en el siguiente encuentro.',
+  },
+  {
+    section: '03B. Batacazos (▼)',
+    tag: 'Apagón en la dirección',
+    metricLabel: 'Asistencias (AST)',
+    badgeType: 'rose',
+    triggerCondition: 'astAvg ≥ 6.0 · assists ≤ 3 con caída de asistencias (assists − astAvg) ≤ −3.5',
+    meaning: 'Base o director de juego consolidado desconectado de la circulación ofensiva, repartiendo 3 o menos pases de canasta.',
+    nextGameContext: 'Revisar si el rival sobrecargó ayudas cerrando líneas de pase o si sus compañeros tuvieron una noche nefasta de acierto en tiros asistidos.',
+  },
+  {
+    section: '03B. Batacazos (▼)',
+    tag: 'Superado en el cristal',
+    metricLabel: 'Rebotes (REB)',
+    badgeType: 'rose',
+    triggerCondition: 'rebAvg ≥ 8.5 · rebounds ≤ 4 con caída de rebotes (rebounds − rebAvg) ≤ −4.5',
+    meaning: 'Pívot o interior de referencia superado en el rebote, perdiendo la batalla aérea con apenas 4 o menos capturas.',
+    nextGameContext: 'Evaluar si el choque lo alejó de la pintura (pívot rival tirador abierto) o si hubo inferioridad atlética en los tableros.',
+  },
+  {
+    section: '03B. Batacazos (▼)',
+    tag: 'Minutos recortados en rotación',
+    metricLabel: 'Minutos en Pista (MIN)',
+    badgeType: 'rose',
+    triggerCondition: 'minDelta = MIN(Noche) − MIN(Media 2026-27) ≤ −8.0 MIN con ptsDelta ≤ −5.0',
+    meaning: 'El titular habitual vio recortado drásticamente su tiempo sobre el parqué por decisión técnica, descarte táctico o rotación corta en marcador decidido.',
+    nextGameContext: 'Atención a la rueda de prensa del entrenador: discernir entre rotación por emparejamientos puntuales o pérdida estructural de minutos en favor de un suplente.',
+  },
+  {
+    section: '03B. Batacazos (▼)',
+    tag: 'Frenado por la defensa',
+    metricLabel: 'Puntos Reducidos (PTS)',
+    badgeType: 'rose',
+    triggerCondition: 'ptsDelta ≤ −7.5 PTS respecto a su media 2026-27 por volumen recortado o defensa en ayudas',
+    meaning: 'Titular habitual cuya producción cae 7.5+ puntos respecto a su media debido a menor volumen de tiros, ayudas intensas o defensa en 2v1 rival.',
+    nextGameContext: 'El planteamiento defensivo rival logró aislarle del balón o sacarle de sus zonas predilectas de ejecución.',
+  },
 ];
 
 const PRACTICAL_RULES: PracticalRule[] = [
@@ -589,6 +897,15 @@ export function GlossaryView({ onNavigateSection }: GlossaryViewProps) {
     );
   }, [q]);
 
+  const filteredTags = useMemo(() => {
+    if (!q) return GAMEDAY_TAGS_DOCS;
+    return GAMEDAY_TAGS_DOCS.filter((t) =>
+      normalizeSearchText(
+        `${t.section} ${t.tag} ${t.metricLabel} ${t.triggerCondition} ${t.meaning} ${t.nextGameContext}`
+      ).includes(q)
+    );
+  }, [q]);
+
   return (
     <div className="space-y-5 sm:space-y-6">
       {/* Row 1: Homogeneous 4-Column Summary Strip */}
@@ -640,6 +957,7 @@ export function GlossaryView({ onNavigateSection }: GlossaryViewProps) {
               { id: 'sections', label: 'Apartados' },
               { id: 'sources', label: 'Fuentes de datos' },
               { id: 'metrics', label: 'Diccionario y fórmulas' },
+              { id: 'tags', label: 'Etiquetas Jornada (03A/03B)' },
               { id: 'interpretation', label: 'Cómo leer alertas' },
             ] as const
           ).map((tab) => (
@@ -1070,10 +1388,102 @@ export function GlossaryView({ onNavigateSection }: GlossaryViewProps) {
         </section>
       )}
 
+      {/* BLOCK 5: Catálogo de Etiquetas del Analizador de Jornadas (03A y 03B) */}
+      {(filter === 'all' || filter === 'interpretation' || filter === 'tags') && filteredTags.length > 0 && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
+              <h2 className="text-sm font-semibold text-slate-100 truncate">
+                05. Catálogo Oficial de Etiquetas: Noches de Explosión (03A) y Batacazos de Titulares (03B)
+              </h2>
+            </div>
+            <span className="text-xs font-mono tabular-nums text-slate-400 shrink-0">
+              {filteredTags.length} etiquetas documentadas
+            </span>
+          </div>
+
+          {/* Desktop Table (md+) */}
+          <div className="hidden md:block bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-auto max-h-[70vh]">
+            <table className="w-full text-left border-collapse">
+              <thead className={STICKY_THEAD_CLASS}>
+                <tr className="text-xs text-slate-400">
+                  <th className="py-3 pl-4 pr-3 text-left font-semibold">Apartado y Etiqueta</th>
+                  <th className="py-3 px-3 text-left font-semibold">Métrica Detonante</th>
+                  <th className="py-3 px-3 text-left font-semibold">Criterio de Activación (vs Media 2026-27)</th>
+                  <th className="py-3 px-3 text-left font-semibold">Significado Baloncestístico</th>
+                  <th className="py-3 pl-3 pr-4 text-left font-semibold">Lectura para el Siguiente Partido</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#1E293B] text-xs">
+                {filteredTags.map((t, idx) => (
+                  <tr key={idx} className="hover:bg-[#182338] transition-colors">
+                    <td className="py-3.5 pl-4 pr-3 align-top whitespace-nowrap">
+                      <div className="text-[11px] font-mono text-slate-400 mb-1">{t.section}</div>
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${
+                          t.badgeType === 'emerald'
+                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                            : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                        }`}
+                      >
+                        {t.tag}
+                      </span>
+                    </td>
+                    <td className="py-3.5 px-3 align-top font-semibold text-slate-100 whitespace-nowrap">
+                      {t.metricLabel}
+                    </td>
+                    <td className="py-3.5 px-3 align-top font-mono text-slate-300">
+                      {t.triggerCondition}
+                    </td>
+                    <td className="py-3.5 px-3 align-top text-slate-300 leading-relaxed max-w-xs">
+                      {t.meaning}
+                    </td>
+                    <td className="py-3.5 pl-3 pr-4 align-top text-slate-400 leading-relaxed max-w-xs">
+                      {t.nextGameContext}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Mobile cards (<md) */}
+          <div className="md:hidden bg-[#131C2E] border border-[#1E293B] rounded-xl overflow-hidden divide-y divide-[#1E293B]">
+            {filteredTags.map((t, idx) => (
+              <div key={idx} className="p-4 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${
+                      t.badgeType === 'emerald'
+                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                        : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                    }`}
+                  >
+                    {t.tag}
+                  </span>
+                  <span className="text-[11px] text-slate-400 font-mono">{t.section}</span>
+                </div>
+                <div className="text-xs text-slate-200">
+                  <span className="text-slate-400">Detonante: </span>
+                  <span className="font-semibold text-slate-100">{t.metricLabel}</span>
+                </div>
+                <div className="text-[11px] font-mono text-slate-300 bg-slate-900/60 p-2 rounded border border-slate-800">
+                  {t.triggerCondition}
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">{t.meaning}</p>
+                <p className="text-[11px] text-slate-400 leading-relaxed italic">{t.nextGameContext}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {filteredSections.length === 0 &&
         filteredSources.length === 0 &&
         filteredMetrics.length === 0 &&
-        filteredRules.length === 0 && (
+        filteredRules.length === 0 &&
+        filteredTags.length === 0 && (
           <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg py-12 px-6 text-center">
             <p className="text-sm font-medium text-slate-200">
               No se encontraron términos en el glosario para "{query}".

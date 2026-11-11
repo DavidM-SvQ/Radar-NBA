@@ -3,11 +3,11 @@ import "dotenv/config";
 import express from "express";
 import helmet from "helmet";
 import zlib from "zlib";
-import { getBootstrapPayload, getBootstrapWireBuffers, getFantasyEspnSyncPayload, getGameDayPayload, getMilestonesPayload, getPlayerInspectorDossier, getSeasonAwardsPayload, getScoreboardDeltaPayload, getSinglePlayerSummary, getTeamRoster, scoutingEngine, searchLeaguePlayers } from "./nbaDataService.ts";
+import { DEFAULT_GAMEDAY_THRESHOLDS, getBootstrapPayload, getBootstrapWireBuffers, getFantasyEspnSyncPayload, getGameDayPayload, getGamedayThresholdsConfig, getMilestonesPayload, getPlayerInspectorDossier, getSeasonAwardsPayload, getScoreboardDeltaPayload, getSinglePlayerSummary, getTeamRoster, resetGamedayThresholdsConfigDefaults, scoutingEngine, searchLeaguePlayers, updateGamedayThresholdsConfig } from "./nbaDataService.ts";
 import { readNbaSnapshotFromDisk } from "./nbaSnapshotStore.ts";
 import { getFantasyStorageBackendInfo, readManualFantasyState, writeManualFantasyState } from "./fantasyEspnService.ts";
 import { DEFAULT_ADMIN_SECURITY_VALUES, adminBruteForceLimiter, adminEndpointFloodLimiter, buildAdminSessionCookieHeader, buildClearAdminSessionCookieHeader, extractAdminTokenFromRequest, getAdminAuthReadiness, getAdminSecurityConfig, getRateLimitBackendInfo, issueAdminSessionToken, nbaApiRateLimiter, nbaHeavyRefreshLimiter, recordAdminLoginFailure, requireAdminAuth, requireAdminCsrfProtection, resetAdminBruteForceForRequest, resetAdminSecurityConfigToDefaults, resetAllRateLimitCounters, saveAdminSecurityConfig, verifyAdminPasscodeConstantTime, verifyAdminSessionToken } from "./securityMiddleware.ts";
-import { ADMIN_SECURITY_BOUNDS, adminLoginBodySchema, adminSecurityConfigBodySchema, awardsQuerySchema, bootstrapQuerySchema, emptyQuerySchema, gameEventParamsSchema, gamedayQuerySchema, getValidated, manualFantasyStateBodySchema, playerParamsSchema, playerSummaryQuerySchema, refreshOnlyQuerySchema, searchQuerySchema, teamParamsSchema, validateRequest } from "./validationSchemas.ts";
+import { ADMIN_SECURITY_BOUNDS, adminLoginBodySchema, adminSecurityConfigBodySchema, awardsQuerySchema, bootstrapQuerySchema, emptyQuerySchema, gameEventParamsSchema, gamedayQuerySchema, gamedayThresholdsBodySchema, getValidated, manualFantasyStateBodySchema, playerParamsSchema, playerSummaryQuerySchema, refreshOnlyQuerySchema, searchQuerySchema, teamParamsSchema, validateRequest } from "./validationSchemas.ts";
 import { getAllCircuitMetrics, resetCircuit } from "./circuitBreaker.ts";
 import { expressTelemetryMiddleware, getTelemetrySummary } from "./telemetryLogger.ts";
 import { getEasternTodayIso } from "../utils/staticSchedule.ts";
@@ -78,7 +78,7 @@ app.post("/api/admin/login", requireAdminCsrfProtection, adminBruteForceLimiter,
     const { token, expiresAt } = issueAdminSessionToken();
     const maxAgeSec = Math.max(60, Math.floor((expiresAt - Date.now()) / 1e3));
     res.setHeader("Set-Cookie", buildAdminSessionCookieHeader(token, maxAgeSec, req));
-    res.json({ ok: true, expiresAt });
+    res.json({ ok: true, token, expiresAt });
   } catch (err) {
     console.error("Error in /api/admin/login:", err);
     res.status(500).json({ ok: false, error: "Error al verificar credenciales." });
@@ -157,6 +157,31 @@ app.post("/api/admin/circuit-breaker/reset", requireAdminCsrfProtection, require
 app.get("/api/admin/telemetry", requireAdminAuth, validateRequest({ query: emptyQuerySchema }), (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.json({ ok: true, telemetry: getTelemetrySummary(getAllCircuitMetrics()) });
+});
+app.get("/api/admin/gameday-thresholds", requireAdminAuth, validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true, config: getGamedayThresholdsConfig(), defaults: DEFAULT_GAMEDAY_THRESHOLDS });
+});
+app.put("/api/admin/gameday-thresholds", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema, body: gamedayThresholdsBodySchema }), async (req, res) => {
+  try {
+    const { body } = getValidated(req);
+    const updated = updateGamedayThresholdsConfig(body);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, config: updated, defaults: DEFAULT_GAMEDAY_THRESHOLDS });
+  } catch (err) {
+    console.error("Error in PUT /api/admin/gameday-thresholds:", err);
+    res.status(500).json({ ok: false, error: "No se pudieron guardar los criterios de jornada." });
+  }
+});
+app.post("/api/admin/gameday-thresholds/reset-defaults", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema }), async (_req, res) => {
+  try {
+    const restored = resetGamedayThresholdsConfigDefaults();
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, config: restored, defaults: DEFAULT_GAMEDAY_THRESHOLDS });
+  } catch (err) {
+    console.error("Error in POST /api/admin/gameday-thresholds/reset-defaults:", err);
+    res.status(500).json({ ok: false, error: "No se pudieron restablecer los criterios recomendados." });
+  }
 });
 app.get("/api/nba/bootstrap", validateRequest({ query: bootstrapQuerySchema }), async (req, res) => {
   try {
@@ -321,7 +346,11 @@ app.get("/api/nba/scoreboard", validateRequest({ query: gamedayQuerySchema }), a
       return;
     }
     res.setHeader("ETag", delta.hash);
-    sendPreserializedJsonBuffers(req, res, delta.buffers, "public, max-age=5, s-maxage=10, stale-while-revalidate=30");
+    if (delta.buffers) {
+      sendPreserializedJsonBuffers(req, res, delta.buffers, "public, max-age=5, s-maxage=10, stale-while-revalidate=30");
+    } else {
+      res.json(delta);
+    }
   } catch (err) {
     console.error("Error in /api/nba/scoreboard:", err);
     res.status(500).json({ error: err?.message || "Error al obtener marcador delta." });

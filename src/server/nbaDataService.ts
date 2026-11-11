@@ -1,6 +1,8 @@
 // @ts-nocheck
 const __name = (fn, _name) => fn;
 import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 import { buildExtendedPlayerBenchmarks, seasonCycleDay } from "../utils/playerInspectorAnalytics.ts";
 import { NBA_TEAMS_MAP } from "../utils/teamLogos.ts";
 import { createScoutingEngine } from "./scoutingEngine.ts";
@@ -11,6 +13,97 @@ import { applyCdnDeltaGamesTo2027, hydrateSeasonDatasetFromSnapshot, readNbaSnap
 import { buildSeasonAwardsPayload, enrichBiosWithEspnRosters } from "./seasonAwardsService.ts";
 import { executeWithCircuitBreaker, identifyProviderFromUrl } from "./circuitBreaker.ts";
 import { STATIC_SCHEDULE_2027 } from "../utils/staticSchedule.ts";
+
+const GAMEDAY_THRESHOLDS_FILE = path.resolve(process.cwd(), "data", "gameday-thresholds-config.json");
+
+export const DEFAULT_GAMEDAY_THRESHOLDS = {
+  // 03A. Noches de Explosión
+  explosionShootingTsDiff: 10.0,
+  explosion3pMinMade: 4,
+  explosion3pDelta: 3.0,
+  explosionRebMinTotal: 10,
+  explosionRebDelta: 4.0,
+  explosionAstMinTotal: 8,
+  explosionAstDelta: 4.0,
+  explosionStocksMinTotal: 5,
+  explosionStocksDelta: 2.5,
+  explosionMinutesDelta: 5.0,
+  explosionScoringPtsDelta: 8.0,
+  explosionZScoreThreshold: 1.8,
+
+  // 03B. Batacazos de Titulares
+  starterMinMinutesAvg: 24.0,
+  starterMinPointsAvg: 14.0,
+  slumpScoringDropPts: 7.5,
+  slumpShootingMaxTsPct: 42.0,
+  slumpShootingTsDrop: 12.0,
+  slumpFoulsTroubleCount: 5,
+  slumpFoulsMinutesCut: 6.0,
+  slumpTurnoversCount: 5,
+  slumpTurnoversDelta: 2.5,
+  slump3pSpecialistAvg: 2.0,
+  slump3pDropDelta: 2.0,
+  slumpAstFacilitatorAvg: 6.0,
+  slumpAstDropDelta: 3.5,
+  slumpRebInteriorAvg: 8.5,
+  slumpRebDropDelta: 4.5,
+  slumpMinutesCutDelta: 8.0,
+};
+
+let activeGamedayThresholds = { ...DEFAULT_GAMEDAY_THRESHOLDS, updatedAt: 0 };
+
+function initGamedayThresholdsFromDisk() {
+  try {
+    if (fs.existsSync(GAMEDAY_THRESHOLDS_FILE)) {
+      const raw = fs.readFileSync(GAMEDAY_THRESHOLDS_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.explosionShootingTsDiff === "number") {
+        activeGamedayThresholds = { ...DEFAULT_GAMEDAY_THRESHOLDS, ...parsed };
+      }
+    }
+  } catch {
+    // Ignore disk read errors
+  }
+}
+initGamedayThresholdsFromDisk();
+
+function getGamedayThresholdsConfig() {
+  return { ...activeGamedayThresholds };
+}
+
+function updateGamedayThresholdsConfig(values) {
+  const updated = {
+    ...activeGamedayThresholds,
+    ...values,
+    updatedAt: Date.now(),
+  };
+  activeGamedayThresholds = updated;
+  try {
+    const dir = path.dirname(GAMEDAY_THRESHOLDS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(GAMEDAY_THRESHOLDS_FILE, JSON.stringify(updated, null, 2), "utf-8");
+  } catch {
+    // Ignore disk write errors in read-only runtimes
+  }
+  return { ...activeGamedayThresholds };
+}
+
+function resetGamedayThresholdsConfigDefaults() {
+  const reset = {
+    ...DEFAULT_GAMEDAY_THRESHOLDS,
+    updatedAt: Date.now(),
+  };
+  activeGamedayThresholds = reset;
+  try {
+    if (fs.existsSync(GAMEDAY_THRESHOLDS_FILE)) {
+      fs.unlinkSync(GAMEDAY_THRESHOLDS_FILE);
+    }
+  } catch {
+    // Ignore unlink errors
+  }
+  return { ...activeGamedayThresholds };
+}
+
 function isSnapshotOnlyRuntime() {
   return Boolean(process.env.VERCEL) || process.env.NBA_SNAPSHOT_ONLY === "1";
 }
@@ -1093,36 +1186,97 @@ async function getGameDayPayload(requestedDate, forceRefresh = false) {
       const z3PM = round1((g.fg3m - fg3mAvg) / fg3mSd);
       const gmScSd = Math.max(2.5, stdDevNums(baselinePool.map((x) => x.gameScore)));
       const zGmSc = round1((g.gameScore - gmScAvg) / gmScSd);
+      const tovAvg = round1(meanNums(baselinePool.map((x) => x.turnovers || 0)));
+      const foulsAvg = round1(meanNums(baselinePool.map((x) => x.fouls || 0)));
+      const nightStocks = Number(g.stocks ?? ((g.steals || 0) + (g.blocks || 0))) || 0;
+      const stocksAvg = round1(meanNums(baselinePool.map((x) => Number(x.stocks ?? ((x.steals || 0) + (x.blocks || 0))) || 0)));
+      const stocksSd = Math.max(1.0, stdDevNums(baselinePool.map((x) => Number(x.stocks ?? ((x.steals || 0) + (x.blocks || 0))) || 0)));
+      const zStocks = round1((nightStocks - stocksAvg) / stocksSd);
 
-      const maxZ = Math.max(zPts, zGmSc, zReb, zAst, z3PM);
+      const maxZ = Math.max(zPts, zGmSc, zReb, zAst, z3PM, zStocks);
       const minDiff = round1(g.minutes - minAvg);
       const tsDiff = round1(g.tsPct - tsAvg);
 
-      const isPtsExplosion = zPts >= 1.35 && ptsDelta >= 6.5;
-      const isGmScExplosion = zGmSc >= 1.4 && (g.gameScore - gmScAvg) >= 6.0;
-      const isRebExplosion = zReb >= 1.8 && (g.rebounds - rebAvg) >= 5.5 && g.rebounds >= 10;
-      const isAstExplosion = zAst >= 1.8 && (g.assists - astAvg) >= 4.5 && g.assists >= 8;
-      const is3pExplosion = z3PM >= 1.8 && (g.fg3m - fg3mAvg) >= 3.0 && g.fg3m >= 4;
+      const cfg = activeGamedayThresholds;
 
-      if (isPtsExplosion || isGmScExplosion || isRebExplosion || isAstExplosion || is3pExplosion) {
+      const isPtsExplosion = zPts >= (cfg.explosionZScoreThreshold - 0.45) && ptsDelta >= (cfg.explosionScoringPtsDelta - 1.5);
+      const isGmScExplosion = zGmSc >= (cfg.explosionZScoreThreshold - 0.4) && (g.gameScore - gmScAvg) >= 6.0;
+      const isRebExplosion = zReb >= cfg.explosionZScoreThreshold && (g.rebounds - rebAvg) >= cfg.explosionRebDelta && g.rebounds >= cfg.explosionRebMinTotal;
+      const isAstExplosion = zAst >= cfg.explosionZScoreThreshold && (g.assists - astAvg) >= cfg.explosionAstDelta && g.assists >= cfg.explosionAstMinTotal;
+      const is3pExplosion = z3PM >= cfg.explosionZScoreThreshold && (g.fg3m - fg3mAvg) >= cfg.explosion3pDelta && g.fg3m >= cfg.explosion3pMinMade;
+      const isStocksExplosion = (nightStocks >= cfg.explosionStocksMinTotal && (nightStocks - stocksAvg) >= cfg.explosionStocksDelta) || (nightStocks >= (cfg.explosionStocksMinTotal + 1) && zStocks >= 1.6);
+
+      if (isPtsExplosion || isGmScExplosion || isRebExplosion || isAstExplosion || is3pExplosion || isStocksExplosion) {
         let driverTag = "Despliegue estadístico sobresaliente";
-        let driverDetailSimple = `Anotó ${g.points} PTS (${ptsDelta >= 0 ? "+" : ""}${ptsDelta.toFixed(1)} vs media de ${ptsAvg.toFixed(1)}) con ${g.fgm}/${g.fga} TC.`;
+        let triggerMetricKey = "points";
+        let triggerMetricLabel = "Puntos";
+        let triggerNightDisplay = `${g.points} PTS`;
+        let triggerBaselineDisplay = `${ptsAvg.toFixed(1)} PTS`;
+        let triggerDeltaDisplay = `+${ptsDelta.toFixed(1)}`;
+        let triggerDeltaNumeric = ptsDelta;
+        let driverDetailSimple = `Anotó ${g.points} PTS (+${ptsDelta.toFixed(1)} vs media de ${ptsAvg.toFixed(1)} en 2026-27) con ${g.fgm}/${g.fga} TC.`;
+
         if (priorGames.length === 0) {
           driverTag = "Reaparición / Debut de temporada";
-          driverDetailSimple = `Debutó en la temporada sumando ${g.points} PTS (${ptsDelta >= 0 ? "+" : ""}${ptsDelta.toFixed(1)} vs su media anterior de ${ptsAvg.toFixed(1)}) en ${g.minutes.toFixed(0)} MIN.`;
-        } else if (is3pExplosion && g.fg3m >= 4) {
+          driverDetailSimple = `Debutó en la temporada sumando ${g.points} PTS (+${ptsDelta.toFixed(1)} vs su media anterior de ${ptsAvg.toFixed(1)} en 2026-27) en ${g.minutes.toFixed(0)} MIN.`;
+        } else if (is3pExplosion && g.fg3m >= cfg.explosion3pMinMade) {
           driverTag = "Explosión desde el triple";
-          driverDetailSimple = `Anotó ${g.fg3m} triples (${g.fg3m}/${g.fg3a}) sumando ${g.points} PTS (${ptsDelta >= 0 ? "+" : ""}${ptsDelta.toFixed(1)} vs media).`;
+          triggerMetricKey = "fg3m";
+          triggerMetricLabel = "Triples (3PM)";
+          triggerNightDisplay = `${g.fg3m} Triples (${g.fg3m}/${g.fg3a})`;
+          triggerBaselineDisplay = `${fg3mAvg.toFixed(1)} 3PM`;
+          const diff3p = round1(g.fg3m - fg3mAvg);
+          triggerDeltaDisplay = `+${diff3p.toFixed(1)}`;
+          triggerDeltaNumeric = diff3p;
+          driverDetailSimple = `Anotó ${g.fg3m} triples (${g.fg3m}/${g.fg3a}) sumando ${g.points} PTS (+${diff3p.toFixed(1)} triples respecto a su media de ${fg3mAvg.toFixed(1)} en 2026-27).`;
+        } else if (tsDiff >= cfg.explosionShootingTsDiff && minDiff < 4) {
+          driverTag = "Explosión de puntería";
+          triggerMetricKey = "tsPct";
+          triggerMetricLabel = "Puntería (TS%)";
+          triggerNightDisplay = `${g.tsPct.toFixed(1)}% TS`;
+          triggerBaselineDisplay = `${tsAvg.toFixed(1)}%`;
+          triggerDeltaDisplay = `+${tsDiff.toFixed(1)} pp`;
+          triggerDeltaNumeric = tsDiff;
+          driverDetailSimple = `Anotó ${g.points} PTS con una puntería sobresaliente del ${g.tsPct.toFixed(1)}% TS (+${tsDiff.toFixed(1)} pp respecto a su media de ${tsAvg.toFixed(1)}% en 2026-27, con ${g.fgm}/${g.fga} TC).`;
         } else if (isRebExplosion) {
           driverTag = "Dominio en el rebote";
-          driverDetailSimple = `Capturó ${g.rebounds} REB (+${(g.rebounds - rebAvg).toFixed(1)} vs media) y anotó ${g.points} PTS.`;
+          triggerMetricKey = "rebounds";
+          triggerMetricLabel = "Rebotes";
+          triggerNightDisplay = `${g.rebounds} REB`;
+          triggerBaselineDisplay = `${rebAvg.toFixed(1)} REB`;
+          const diffReb = round1(g.rebounds - rebAvg);
+          triggerDeltaDisplay = `+${diffReb.toFixed(1)}`;
+          triggerDeltaNumeric = diffReb;
+          driverDetailSimple = `Capturó ${g.rebounds} REB (+${diffReb.toFixed(1)} respecto a su media de ${rebAvg.toFixed(1)} en 2026-27) y sumó ${g.points} PTS.`;
         } else if (isAstExplosion) {
           driverTag = "Recital en la dirección";
-          driverDetailSimple = `Repartió ${g.assists} AST (+${(g.assists - astAvg).toFixed(1)} vs media) con ${g.points} PTS.`;
-        } else if (tsDiff >= 10 && minDiff < 4) {
-          driverTag = "Explosión de puntería";
-        } else if (minDiff >= 5) {
+          triggerMetricKey = "assists";
+          triggerMetricLabel = "Asistencias";
+          triggerNightDisplay = `${g.assists} AST`;
+          triggerBaselineDisplay = `${astAvg.toFixed(1)} AST`;
+          const diffAst = round1(g.assists - astAvg);
+          triggerDeltaDisplay = `+${diffAst.toFixed(1)}`;
+          triggerDeltaNumeric = diffAst;
+          driverDetailSimple = `Repartió ${g.assists} AST (+${diffAst.toFixed(1)} respecto a su media de ${astAvg.toFixed(1)} en 2026-27) y anotó ${g.points} PTS.`;
+        } else if (isStocksExplosion) {
+          driverTag = "Muralla defensiva e impacto en 'stocks'";
+          triggerMetricKey = "stocks";
+          triggerMetricLabel = "Robos + Tapones (Stocks)";
+          triggerNightDisplay = `${nightStocks} STOCKS (${g.steals || 0} STL / ${g.blocks || 0} BLK)`;
+          triggerBaselineDisplay = `${stocksAvg.toFixed(1)} Stocks`;
+          const diffStocks = round1(nightStocks - stocksAvg);
+          triggerDeltaDisplay = `+${diffStocks.toFixed(1)}`;
+          triggerDeltaNumeric = diffStocks;
+          driverDetailSimple = `Despliegue defensivo de impacto con ${nightStocks} stocks (${g.steals || 0} robos y ${g.blocks || 0} tapones, +${diffStocks.toFixed(1)} vs media de ${stocksAvg.toFixed(1)} en 2026-27), aportando además ${g.points} PTS.`;
+        } else if (minDiff >= cfg.explosionMinutesDelta) {
           driverTag = "Expansión de minutos y rol";
+          triggerMetricKey = "minutes";
+          triggerMetricLabel = "Minutos en Pista";
+          triggerNightDisplay = `${g.minutes.toFixed(0)} MIN`;
+          triggerBaselineDisplay = `${minAvg.toFixed(0)} MIN`;
+          triggerDeltaDisplay = `+${minDiff.toFixed(0)} MIN`;
+          triggerDeltaNumeric = minDiff;
+          driverDetailSimple = `Disfrutó de una ampliación notable de minutos con ${g.minutes.toFixed(0)} MIN (+${minDiff.toFixed(0)}m vs media de ${minAvg.toFixed(0)}m en 2026-27) y sumó ${g.points} PTS.`;
         }
 
         explosions.push({
@@ -1141,13 +1295,16 @@ async function getGameDayPayload(requestedDate, forceRefresh = false) {
           ptsAvg,
           ptsDelta,
           rebounds: g.rebounds,
+          rebAvg,
           assists: g.assists,
-          stocks: g.stocks,
+          astAvg,
+          stocks: nightStocks,
           turnovers: g.turnovers,
           fgm: g.fgm,
           fga: g.fga,
           fg3m: g.fg3m,
           fg3a: g.fg3a,
+          fg3mAvg,
           tsPct: g.tsPct,
           tsAvg,
           usgEst: g.usgEst,
@@ -1156,12 +1313,152 @@ async function getGameDayPayload(requestedDate, forceRefresh = false) {
           gmScAvg,
           singleNightZ: maxZ,
           driverTag,
+          triggerMetricKey,
+          triggerMetricLabel,
+          triggerNightDisplay,
+          triggerBaselineDisplay,
+          triggerDeltaDisplay,
+          triggerDeltaNumeric,
+          triggerIsPositive: true,
+          triggerSeasonScope: "2026-27",
           driverDetailSimple,
-          driverDetailAdvanced: `Z +${maxZ.toFixed(1)}σ · TS% ${g.tsPct.toFixed(1)}% (base ${tsAvg.toFixed(1)}%) · USG ${g.usgEst.toFixed(1)}% · GmSc ${g.gameScore.toFixed(1)}.`
+          driverDetailAdvanced: `Z +${maxZ.toFixed(1)}σ · TS% ${g.tsPct.toFixed(1)}% (base 2026-27: ${tsAvg.toFixed(1)}%) · USG ${g.usgEst.toFixed(1)}% · GmSc ${g.gameScore.toFixed(1)}.`
         });
       }
-      if (minAvg >= 25 && ptsAvg >= 15 && ptsDelta <= -8 && g.minutes >= 16) {
-        slumps.push({ playerId: p.id, playerName: p.name, teamAbbr: nightTeamAbbr, position: p.position, opponentAbbr: g.opponentAbbr, isHome: g.isHome, result: g.result, scoreDisplay: g.scoreDisplay, kind: "slump", minutes: g.minutes, minutesAvg: minAvg, points: g.points, ptsAvg, ptsDelta, rebounds: g.rebounds, assists: g.assists, stocks: g.stocks, turnovers: g.turnovers, fgm: g.fgm, fga: g.fga, fg3m: g.fg3m, fg3a: g.fg3a, tsPct: g.tsPct, tsAvg, usgEst: g.usgEst, usgAvg, gameScore: g.gameScore, gmScAvg, singleNightZ: zPts, driverTag: g.tsPct < 42 ? "Atasco en el tiro" : "Frenado por la defensa", driverDetailSimple: `Se quedó en ${g.points} PTS (${ptsDelta.toFixed(1)} respecto a su media de ${ptsAvg.toFixed(1)}) con ${g.fgm}/${g.fga} en tiros.`, driverDetailAdvanced: `Z ${zPts.toFixed(1)}σ · TS% ${g.tsPct.toFixed(1)}% vs ${tsAvg.toFixed(1)}% habitual · USG ${g.usgEst.toFixed(1)}%.` });
+      const isEstablishedStarter = minAvg >= cfg.starterMinMinutesAvg && (ptsAvg >= cfg.starterMinPointsAvg || rebAvg >= 8.0 || astAvg >= 5.5) && g.minutes >= 16;
+      if (isEstablishedStarter) {
+        const isFoulTrouble = (g.fouls >= cfg.slumpFoulsTroubleCount || (g.fouls >= 4 && minDiff <= -cfg.slumpFoulsMinutesCut)) && (ptsDelta <= -5 || g.gameScore <= 8);
+        const isTurnoverDisaster = g.turnovers >= cfg.slumpTurnoversCount && (g.turnovers - tovAvg) >= cfg.slumpTurnoversDelta && (ptsDelta <= -4 || g.gameScore <= 8);
+        const is3pDisaster = fg3mAvg >= cfg.slump3pSpecialistAvg && g.fg3a >= 5 && g.fg3m <= 1 && (g.fg3m - fg3mAvg) <= -cfg.slump3pDropDelta && ptsDelta <= -4;
+        const isShootingSlump = (g.tsPct < cfg.slumpShootingMaxTsPct || tsDiff <= -cfg.slumpShootingTsDrop) && ptsDelta <= -5;
+        const isAstBlackout = astAvg >= cfg.slumpAstFacilitatorAvg && (g.assists - astAvg) <= -cfg.slumpAstDropDelta && g.assists <= 3 && ptsDelta <= -4;
+        const isRebBlackout = rebAvg >= cfg.slumpRebInteriorAvg && (g.rebounds - rebAvg) <= -cfg.slumpRebDropDelta && g.rebounds <= 4 && ptsDelta <= -4;
+        const isMinutesCut = minDiff <= -cfg.slumpMinutesCutDelta && ptsDelta <= -6;
+        const isScoringDrop = ptsDelta <= -cfg.slumpScoringDropPts;
+
+        if (isFoulTrouble || isTurnoverDisaster || is3pDisaster || isShootingSlump || isAstBlackout || isRebBlackout || isMinutesCut || isScoringDrop) {
+          let driverTag = "Frenado por la defensa";
+          let triggerMetricKey = "points";
+          let triggerMetricLabel = "Puntos";
+          let triggerNightDisplay = `${g.points} PTS`;
+          let triggerBaselineDisplay = `${ptsAvg.toFixed(1)} PTS`;
+          let triggerDeltaDisplay = `${ptsDelta.toFixed(1)}`;
+          let triggerDeltaNumeric = ptsDelta;
+          let driverDetailSimple = `Se quedó en ${g.points} PTS (${ptsDelta.toFixed(1)} respecto a su media de ${ptsAvg.toFixed(1)} en 2026-27) con ${g.fgm}/${g.fga} en tiros.`;
+
+          if (isFoulTrouble) {
+            driverTag = "Lastrado por faltas";
+            triggerMetricKey = "fouls";
+            triggerMetricLabel = "Faltas / Minutos";
+            triggerNightDisplay = `${g.fouls} Faltas (${g.minutes.toFixed(0)}m)`;
+            triggerBaselineDisplay = `${foulsAvg.toFixed(1)} Faltas (${minAvg.toFixed(0)}m)`;
+            const diffFouls = round1(g.fouls - foulsAvg);
+            triggerDeltaDisplay = `+${diffFouls.toFixed(1)} faltas (${minDiff.toFixed(0)}m)`;
+            triggerDeltaNumeric = diffFouls;
+            driverDetailSimple = `Problemas de faltas (${g.fouls} personales) limitaron su minutaje a ${g.minutes.toFixed(0)} MIN (${minDiff.toFixed(0)}m vs media de ${minAvg.toFixed(0)}m), quedándose en ${g.points} PTS.`;
+          } else if (isTurnoverDisaster) {
+            driverTag = "Sangría de pérdidas";
+            triggerMetricKey = "turnovers";
+            triggerMetricLabel = "Pérdidas de Balón";
+            triggerNightDisplay = `${g.turnovers} Pérdidas`;
+            triggerBaselineDisplay = `${tovAvg.toFixed(1)} TOV`;
+            const diffTov = round1(g.turnovers - tovAvg);
+            triggerDeltaDisplay = `+${diffTov.toFixed(1)} TOV`;
+            triggerDeltaNumeric = diffTov;
+            driverDetailSimple = `Cometió ${g.turnovers} pérdidas (+${diffTov.toFixed(1)} vs media de ${tovAvg.toFixed(1)} en 2026-27), lastrando el ritmo de su equipo y quedándose en ${g.points} PTS.`;
+          } else if (is3pDisaster) {
+            driverTag = "Pólvora mojada desde el triple";
+            triggerMetricKey = "fg3m";
+            triggerMetricLabel = "Triples (3PM)";
+            triggerNightDisplay = `${g.fg3m}/${g.fg3a} Triples`;
+            triggerBaselineDisplay = `${fg3mAvg.toFixed(1)} 3PM`;
+            const diff3p = round1(g.fg3m - fg3mAvg);
+            triggerDeltaDisplay = `${diff3p.toFixed(1)} 3PM`;
+            triggerDeltaNumeric = diff3p;
+            driverDetailSimple = `Noche aciaga desde el perímetro con solo ${g.fg3m}/${g.fg3a} en triples (${diff3p.toFixed(1)} vs media de ${fg3mAvg.toFixed(1)} en 2026-27), sumando solo ${g.points} PTS.`;
+          } else if (isShootingSlump) {
+            driverTag = "Atasco en el tiro";
+            triggerMetricKey = "tsPct";
+            triggerMetricLabel = "Puntería (TS%)";
+            triggerNightDisplay = `${g.tsPct.toFixed(1)}% TS`;
+            triggerBaselineDisplay = `${tsAvg.toFixed(1)}%`;
+            triggerDeltaDisplay = `${tsDiff.toFixed(1)} pp`;
+            triggerDeltaNumeric = tsDiff;
+            driverDetailSimple = `Se quedó en ${g.points} PTS (${ptsDelta.toFixed(1)} vs media de ${ptsAvg.toFixed(1)} en 2026-27) con solo ${g.tsPct.toFixed(1)}% TS (${tsDiff.toFixed(1)} pp vs media habitual de ${tsAvg.toFixed(1)}%, ${g.fgm}/${g.fga} TC).`;
+          } else if (isAstBlackout) {
+            driverTag = "Apagón en la dirección";
+            triggerMetricKey = "assists";
+            triggerMetricLabel = "Asistencias";
+            triggerNightDisplay = `${g.assists} AST`;
+            triggerBaselineDisplay = `${astAvg.toFixed(1)} AST`;
+            const diffAst = round1(g.assists - astAvg);
+            triggerDeltaDisplay = `${diffAst.toFixed(1)} AST`;
+            triggerDeltaNumeric = diffAst;
+            driverDetailSimple = `Repartió solo ${g.assists} asistencias (${diffAst.toFixed(1)} vs su media de ${astAvg.toFixed(1)} en 2026-27) y sumó ${g.points} PTS.`;
+          } else if (isRebBlackout) {
+            driverTag = "Superado en el cristal";
+            triggerMetricKey = "rebounds";
+            triggerMetricLabel = "Rebotes";
+            triggerNightDisplay = `${g.rebounds} REB`;
+            triggerBaselineDisplay = `${rebAvg.toFixed(1)} REB`;
+            const diffReb = round1(g.rebounds - rebAvg);
+            triggerDeltaDisplay = `${diffReb.toFixed(1)} REB`;
+            triggerDeltaNumeric = diffReb;
+            driverDetailSimple = `Capturó solo ${g.rebounds} rebotes (${diffReb.toFixed(1)} vs su media de ${rebAvg.toFixed(1)} en 2026-27) y sumó ${g.points} PTS.`;
+          } else if (isMinutesCut) {
+            driverTag = "Minutos recortados en rotación";
+            triggerMetricKey = "minutes";
+            triggerMetricLabel = "Minutos en Pista";
+            triggerNightDisplay = `${g.minutes.toFixed(0)} MIN`;
+            triggerBaselineDisplay = `${minAvg.toFixed(0)} MIN`;
+            triggerDeltaDisplay = `${minDiff.toFixed(0)} MIN`;
+            triggerDeltaNumeric = minDiff;
+            driverDetailSimple = `Su presencia cayó a ${g.minutes.toFixed(0)} minutos (${minDiff.toFixed(0)}m vs media de ${minAvg.toFixed(0)}m), anotando solo ${g.points} PTS.`;
+          }
+
+          slumps.push({
+            playerId: p.id,
+            playerName: p.name,
+            teamAbbr: nightTeamAbbr,
+            position: p.position,
+            opponentAbbr: g.opponentAbbr,
+            isHome: g.isHome,
+            result: g.result,
+            scoreDisplay: g.scoreDisplay,
+            kind: "slump",
+            minutes: g.minutes,
+            minutesAvg: minAvg,
+            points: g.points,
+            ptsAvg,
+            ptsDelta,
+            rebounds: g.rebounds,
+            assists: g.assists,
+            stocks: g.stocks,
+            turnovers: g.turnovers,
+            fgm: g.fgm,
+            fga: g.fga,
+            fg3m: g.fg3m,
+            fg3a: g.fg3a,
+            tsPct: g.tsPct,
+            tsAvg,
+            usgEst: g.usgEst,
+            usgAvg,
+            gameScore: g.gameScore,
+            gmScAvg,
+            singleNightZ: zPts,
+            driverTag,
+            triggerMetricKey,
+            triggerMetricLabel,
+            triggerNightDisplay,
+            triggerBaselineDisplay,
+            triggerDeltaDisplay,
+            triggerDeltaNumeric,
+            triggerIsPositive: false,
+            triggerSeasonScope: "2026-27",
+            driverDetailSimple,
+            driverDetailAdvanced: `Z ${zPts.toFixed(1)}σ · TS% ${g.tsPct.toFixed(1)}% vs ${tsAvg.toFixed(1)}% en 2026-27 · USG ${g.usgEst.toFixed(1)}%.`
+          });
+        }
       }
       const minDelta = round1(g.minutes - minAvg);
       const usgDelta = round1(g.usgEst - usgAvg);
@@ -1627,6 +1924,9 @@ export {
   getFantasyEspnSyncPayload,
   getFullLeagueMemory,
   getGameDayPayload,
+  getGamedayThresholdsConfig,
+  updateGamedayThresholdsConfig,
+  resetGamedayThresholdsConfigDefaults,
   getMilestonesPayload,
   getPlayerBiosMap,
   getPlayerInspectorDossier,

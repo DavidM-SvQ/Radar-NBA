@@ -1095,7 +1095,7 @@ export function GameDayAnalyzerView({
           }`}
         >
           <div className="flex items-center justify-between gap-1 text-[11px] sm:text-xs text-slate-400">
-            <span className="truncate">Mayor explosión vs media</span>
+            <span className="truncate">Mayor explosión vs media 2026-27</span>
             <MetricInfoTooltip helpKey="gamedaySingleZ" />
           </div>
           <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
@@ -1114,10 +1114,15 @@ export function GameDayAnalyzerView({
               </p>
               <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-emerald-400 truncate">
                 {data.topExplosion
-                  ? `▲ ${data.topExplosion.points} PTS (${formatSigned(
-                      data.topExplosion.ptsDelta,
-                      1
-                    )} vs ${data.topExplosion.ptsAvg.toFixed(1)})`
+                  ? `▲ ${data.topExplosion.triggerNightDisplay || `${data.topExplosion.points} PTS`} (${
+                      data.topExplosion.triggerDeltaDisplay
+                        ? (data.topExplosion.triggerDeltaNumeric >= 0 ? '+' : '') +
+                          data.topExplosion.triggerDeltaDisplay
+                        : formatSigned(data.topExplosion.ptsDelta, 1)
+                    } vs media 26-27: ${
+                      data.topExplosion.triggerBaselineDisplay ||
+                      data.topExplosion.ptsAvg.toFixed(1)
+                    })`
                   : 'Sin explosiones atípicas'}
               </p>
             </div>
@@ -2040,7 +2045,7 @@ export function GameDayAnalyzerView({
                 <div className="flex items-center gap-2 min-w-0">
                   <TrendingUp className="w-4 h-4 text-emerald-400 shrink-0" />
                   <h3 className="text-sm font-semibold text-slate-100 truncate">
-                    03A. Noches de Explosión frente a su Media (▲)
+                    03A. Noches de Explosión vs Media 2026-27 (▲)
                   </h3>
                   <MetricInfoTooltip helpKey="gamedayExplosions" align="left" />
                 </div>
@@ -2049,7 +2054,7 @@ export function GameDayAnalyzerView({
                 </span>
               </div>
 
-              <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden flex-1 divide-y divide-[#1E293B]">
+              <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-y-auto max-h-[850px] flex-1 divide-y divide-[#1E293B]">
                 {data.explosions.length === 0 ? (
                   <div className="p-8 text-center text-xs text-slate-400">
                     Ningún jugador superó el umbral de explosión atípica en esta jornada.
@@ -2061,9 +2066,9 @@ export function GameDayAnalyzerView({
                       <div
                         key={item.playerId}
                         onClick={() => onInspectEntity('player', item.playerId)}
-                        className="p-3.5 sm:px-4 sm:py-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-1.5"
+                        className="p-3.5 sm:px-4 sm:py-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-2.5"
                       >
-                        <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center justify-between gap-3">
                           <div className="flex items-center gap-2.5 min-w-0">
                             <PlayerAvatar
                               playerId={item.playerId}
@@ -2095,11 +2100,14 @@ export function GameDayAnalyzerView({
                                   />
                                 </button>
                               </div>
-                              <div className="text-xs text-slate-400">
-                                {item.teamAbbr} · {item.position} ·{' '}
-                                {item.isHome ? 'vs' : '@'} {item.opponentAbbr} (
-                                {item.result}) ·{' '}
-                                <span className="text-emerald-400 font-medium">
+                              <div className="mt-0.5 text-xs text-slate-400 flex items-center gap-1.5 flex-wrap">
+                                <span>
+                                  {item.teamAbbr} · {item.position} ·{' '}
+                                  {item.isHome ? 'vs' : '@'} {item.opponentAbbr} (
+                                  {item.result})
+                                </span>
+                                <span className="text-slate-600 hidden sm:inline" aria-hidden="true">·</span>
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                                   {item.driverTag}
                                 </span>
                               </div>
@@ -2107,21 +2115,34 @@ export function GameDayAnalyzerView({
                           </div>
 
                           <div className="text-right font-mono tabular-nums shrink-0">
-                            <div className="text-sm font-bold text-slate-100 whitespace-nowrap">
-                              {item.points}P · {item.rebounds}R · {item.assists}A
+                            <div className="text-sm sm:text-base font-bold text-emerald-400 whitespace-nowrap">
+                              {item.triggerNightDisplay || `${item.points} PTS`}
                             </div>
-                            <div className="text-xs font-semibold text-emerald-400 whitespace-nowrap">
-                              ▲ {formatSigned(item.ptsDelta, 1)} PTS (media{' '}
-                              {item.ptsAvg.toFixed(1)})
+                            <div className="text-[11px] sm:text-xs font-semibold text-emerald-300/90 whitespace-nowrap">
+                              ▲ {item.triggerDeltaDisplay?.startsWith('+') ? item.triggerDeltaDisplay : `+${item.triggerDeltaDisplay || formatSigned(item.ptsDelta, 1)}`} vs media ({item.triggerBaselineDisplay || item.ptsAvg.toFixed(1)})
                             </div>
                           </div>
                         </div>
 
-                        <p className="text-xs text-slate-300 leading-relaxed">
-                          {experienceMode === 'simple'
-                            ? item.driverDetailSimple
-                            : item.driverDetailAdvanced}
-                        </p>
+                        {/* Fila compacta de estadísticas de partido */}
+                        <div className="flex items-center justify-between text-xs text-slate-300 bg-slate-900/60 px-2.5 py-1.5 rounded-lg border border-slate-800 font-mono tabular-nums">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="text-slate-400 text-[11px] font-sans">Aportación:</span>
+                            <span className="font-semibold text-slate-100 whitespace-nowrap">
+                              {item.points} PTS · {item.rebounds} REB · {item.assists} AST
+                            </span>
+                            {item.fgm !== undefined && item.fga !== undefined && (
+                              <span className="text-slate-400 text-[11px] whitespace-nowrap hidden sm:inline">
+                                ({item.fgm}/{item.fga} TC)
+                              </span>
+                            )}
+                          </div>
+                          {item.gameScore !== undefined && (
+                            <div className="text-[11px] text-slate-400 shrink-0 font-sans">
+                              Impacto: <span className="font-semibold font-mono text-slate-200">{item.gameScore.toFixed(1)} GmSc</span>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     );
                   })
@@ -2139,7 +2160,7 @@ export function GameDayAnalyzerView({
                 <div className="flex items-center gap-2 min-w-0">
                   <TrendingDown className="w-4 h-4 text-rose-400 shrink-0" />
                   <h3 className="text-sm font-semibold text-slate-100 truncate">
-                    03B. Batacazos de Titulares frente a su Media (▼)
+                    03B. Batacazos de Titulares vs Media 2026-27 (▼)
                   </h3>
                   <MetricInfoTooltip helpKey="gamedaySlumps" align="left" />
                 </div>
@@ -2148,7 +2169,7 @@ export function GameDayAnalyzerView({
                 </span>
               </div>
 
-              <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden flex-1 divide-y divide-[#1E293B]">
+              <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-y-auto max-h-[850px] flex-1 divide-y divide-[#1E293B]">
                 {data.slumps.length === 0 ? (
                   <div className="p-8 text-center text-xs text-slate-400">
                     Los titulares principales cumplieron con su suelo estadístico en esta fecha.
@@ -2160,9 +2181,9 @@ export function GameDayAnalyzerView({
                       <div
                         key={item.playerId}
                         onClick={() => onInspectEntity('player', item.playerId)}
-                        className="p-3.5 sm:px-4 sm:py-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-1.5"
+                        className="p-3.5 sm:px-4 sm:py-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-2.5"
                       >
-                        <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center justify-between gap-3">
                           <div className="flex items-center gap-2.5 min-w-0">
                             <PlayerAvatar
                               playerId={item.playerId}
@@ -2194,11 +2215,14 @@ export function GameDayAnalyzerView({
                                   />
                                 </button>
                               </div>
-                              <div className="text-xs text-slate-400">
-                                {item.teamAbbr} · {item.position} ·{' '}
-                                {item.isHome ? 'vs' : '@'} {item.opponentAbbr} (
-                                {item.result}) ·{' '}
-                                <span className="text-rose-400 font-medium">
+                              <div className="mt-0.5 text-xs text-slate-400 flex items-center gap-1.5 flex-wrap">
+                                <span>
+                                  {item.teamAbbr} · {item.position} ·{' '}
+                                  {item.isHome ? 'vs' : '@'} {item.opponentAbbr} (
+                                  {item.result})
+                                </span>
+                                <span className="text-slate-600 hidden sm:inline" aria-hidden="true">·</span>
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20">
                                   {item.driverTag}
                                 </span>
                               </div>
@@ -2206,21 +2230,34 @@ export function GameDayAnalyzerView({
                           </div>
 
                           <div className="text-right font-mono tabular-nums shrink-0">
-                            <div className="text-sm font-bold text-slate-100 whitespace-nowrap">
-                              {item.points}P · {item.rebounds}R · {item.assists}A
+                            <div className="text-sm sm:text-base font-bold text-rose-400 whitespace-nowrap">
+                              {item.triggerNightDisplay || `${item.points} PTS`}
                             </div>
-                            <div className="text-xs font-semibold text-rose-400 whitespace-nowrap">
-                              ▼ {formatSigned(item.ptsDelta, 1)} PTS (media{' '}
-                              {item.ptsAvg.toFixed(1)})
+                            <div className="text-[11px] sm:text-xs font-semibold text-rose-300/90 whitespace-nowrap">
+                              ▼ {item.triggerDeltaDisplay?.startsWith('-') ? item.triggerDeltaDisplay : `-${item.triggerDeltaDisplay || formatSigned(item.ptsDelta, 1)}`} vs media ({item.triggerBaselineDisplay || item.ptsAvg.toFixed(1)})
                             </div>
                           </div>
                         </div>
 
-                        <p className="text-xs text-slate-300 leading-relaxed">
-                          {experienceMode === 'simple'
-                            ? item.driverDetailSimple
-                            : item.driverDetailAdvanced}
-                        </p>
+                        {/* Fila compacta de estadísticas de partido */}
+                        <div className="flex items-center justify-between text-xs text-slate-300 bg-slate-900/60 px-2.5 py-1.5 rounded-lg border border-slate-800 font-mono tabular-nums">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="text-slate-400 text-[11px] font-sans">Aportación:</span>
+                            <span className="font-semibold text-slate-100 whitespace-nowrap">
+                              {item.points} PTS · {item.rebounds} REB · {item.assists} AST
+                            </span>
+                            {item.fgm !== undefined && item.fga !== undefined && (
+                              <span className="text-slate-400 text-[11px] whitespace-nowrap hidden sm:inline">
+                                ({item.fgm}/{item.fga} TC)
+                              </span>
+                            )}
+                          </div>
+                          {item.gameScore !== undefined && (
+                            <div className="text-[11px] text-slate-400 shrink-0 font-sans">
+                              Impacto: <span className="font-semibold font-mono text-slate-200">{item.gameScore.toFixed(1)} GmSc</span>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     );
                   })
@@ -2249,7 +2286,7 @@ export function GameDayAnalyzerView({
               </span>
             </div>
 
-            <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden flex-1">
+            <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden flex-1 flex flex-col">
               {data.roleShifts.length === 0 ? (
                 <div className="p-8 text-center text-xs text-slate-400">
                   Sin saltos bruscos de minutos (+6.5 MIN) ni uso ofensivo (+6% USG) en esta jornada.
@@ -2257,7 +2294,7 @@ export function GameDayAnalyzerView({
               ) : (
                 <>
                   {/* Mobile list */}
-                  <div className="sm:hidden divide-y divide-[#1E293B]">
+                  <div className="sm:hidden divide-y divide-[#1E293B] max-h-[720px] overflow-y-auto">
                     {data.roleShifts.map((r) => (
                       <div
                         key={r.playerId}
@@ -2303,8 +2340,14 @@ export function GameDayAnalyzerView({
                   </div>
 
                   {/* Desktop compact table */}
-                  <div className="hidden sm:block overflow-auto max-h-[56vh]">
-                    <table className="w-full text-left border-collapse">
+                  <div className="hidden sm:block overflow-auto max-h-[570px] flex-1">
+                    <table className="w-full table-fixed text-left border-collapse">
+                      <colgroup>
+                        <col className="w-[33%]" />
+                        <col className="w-[23%]" />
+                        <col className="w-[22%]" />
+                        <col className="w-[22%]" />
+                      </colgroup>
                       <thead className={STICKY_THEAD_CLASS}>
                         <tr className="text-xs text-slate-400">
                           <SortableTh
@@ -2313,7 +2356,7 @@ export function GameDayAnalyzerView({
                             asc={roleSortAsc}
                             onSort={() => toggleRoleSort('name')}
                             align="left"
-                            className="py-2.5 pl-4 pr-3"
+                            className="py-2 pl-3 pr-1.5 text-xs"
                           />
                           <SortableTh
                             label="Minutos vs Media"
@@ -2322,7 +2365,7 @@ export function GameDayAnalyzerView({
                             asc={roleSortAsc}
                             onSort={() => toggleRoleSort('minutesDelta')}
                             align="right"
-                            className="py-2.5 px-3"
+                            className="py-2 px-1.5 text-xs text-right"
                           />
                           <SortableTh
                             label={
@@ -2337,7 +2380,7 @@ export function GameDayAnalyzerView({
                             asc={roleSortAsc}
                             onSort={() => toggleRoleSort('usage')}
                             align="right"
-                            className="py-2.5 px-3"
+                            className="py-2 px-1.5 text-xs text-right"
                           />
                           <SortableTh
                             label="Línea"
@@ -2345,7 +2388,7 @@ export function GameDayAnalyzerView({
                             asc={roleSortAsc}
                             onSort={() => toggleRoleSort('gameScore')}
                             align="right"
-                            className="py-2.5 pl-3 pr-4"
+                            className="py-2 pl-1.5 pr-3 text-xs text-right"
                           />
                         </tr>
                       </thead>
@@ -2374,8 +2417,8 @@ export function GameDayAnalyzerView({
                             onClick={() => onInspectEntity('player', r.playerId)}
                             className="hover:bg-[#182338] cursor-pointer transition-colors"
                           >
-                            <td className="py-3 pl-4 pr-3">
-                              <div className="flex items-center gap-2.5">
+                            <td className="py-2.5 pl-3 pr-1.5 min-w-0">
+                              <div className="flex items-center gap-2 min-w-0">
                                 <PlayerAvatar
                                   playerId={r.playerId}
                                   name={r.playerName}
@@ -2383,52 +2426,54 @@ export function GameDayAnalyzerView({
                                   showTeamBadge
                                   size="sm"
                                 />
-                                <div>
-                                  <div className="font-medium text-slate-100 whitespace-nowrap">
+                                <div className="min-w-0 flex-1">
+                                  <div
+                                    className="font-medium text-xs sm:text-sm text-slate-100 truncate"
+                                    title={r.playerName}
+                                  >
                                     {r.playerName}
                                   </div>
-                                  <div className="text-xs text-slate-400 whitespace-nowrap">
-                                    {r.teamAbbr} · {r.isHome ? 'vs' : '@'}{' '}
+                                  <div className="text-[11px] text-slate-400 truncate">
+                                    {r.teamAbbr} {r.isHome ? 'vs' : '@'}{' '}
                                     {r.opponentAbbr} ({r.result})
                                   </div>
                                 </div>
                               </div>
                             </td>
-                            <td className="py-3 px-3 text-right font-mono tabular-nums whitespace-nowrap">
-                              <div className="font-semibold text-emerald-400">
-                                {r.minutes.toFixed(0)}m (▲{' '}
-                                {formatSigned(r.minutesDelta, 1)})
+                            <td className="py-2.5 px-1.5 text-right font-mono tabular-nums">
+                              <div className="font-semibold text-xs sm:text-sm text-emerald-400 whitespace-nowrap">
+                                {r.minutes.toFixed(0)}m (▲{formatSigned(r.minutesDelta, 0)})
                               </div>
-                              <div className="text-xs text-slate-400">
-                                Media {r.minutesAvg.toFixed(1)}m
+                              <div className="text-[11px] text-slate-400 whitespace-nowrap">
+                                Med {r.minutesAvg.toFixed(1)}m
                               </div>
                             </td>
-                            <td className="py-3 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                            <td className="py-2.5 px-1.5 text-right font-mono tabular-nums">
                               {experienceMode === 'advanced' ? (
                                 <>
-                                  <div className="font-semibold text-slate-100">
+                                  <div className="font-semibold text-xs sm:text-sm text-slate-100 whitespace-nowrap">
                                     {r.usgEst.toFixed(1)}%
                                   </div>
-                                  <div className="text-xs text-orange-300">
-                                    {formatSigned(r.usgDelta, 1)}% vs base
+                                  <div className="text-[11px] text-orange-300 whitespace-nowrap">
+                                    {formatSigned(r.usgDelta, 1)}% base
                                   </div>
                                 </>
                               ) : (
                                 <>
-                                  <div className="font-semibold text-slate-100">
-                                    {r.fga} tiros
+                                  <div className="font-semibold text-xs sm:text-sm text-slate-100 whitespace-nowrap">
+                                    {r.fga} TC
                                   </div>
-                                  <div className="text-xs text-slate-400">
-                                    Media {r.fgaAvg.toFixed(1)}
+                                  <div className="text-[11px] text-slate-400 whitespace-nowrap">
+                                    Med {r.fgaAvg.toFixed(1)}
                                   </div>
                                 </>
                               )}
                             </td>
-                            <td className="py-3 pl-3 pr-4 text-right font-mono tabular-nums whitespace-nowrap">
-                              <div className="font-semibold text-slate-100">
+                            <td className="py-2.5 pl-1.5 pr-3 text-right font-mono tabular-nums">
+                              <div className="font-semibold text-xs sm:text-sm text-slate-100 whitespace-nowrap">
                                 {r.points}P · {r.rebounds}R · {r.assists}A
                               </div>
-                              <div className="text-xs text-slate-400">
+                              <div className="text-[11px] text-slate-400 whitespace-nowrap">
                                 GmSc {r.gameScore.toFixed(1)}
                               </div>
                             </td>
@@ -2480,7 +2525,7 @@ export function GameDayAnalyzerView({
               </div>
             </div>
 
-            <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden flex-1 divide-y divide-[#1E293B]">
+            <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-y-auto max-h-[580px] flex-1 divide-y divide-[#1E293B]">
               {filteredStreaks.length === 0 ? (
                 <div className="p-8 text-center text-xs text-slate-400">
                   Sin rachas de 4+ partidos seguidos alteradas con este filtro en la jornada seleccionada.

@@ -97,13 +97,13 @@ __name(isHttpsOrProductionRequest, "isHttpsOrProductionRequest");
 function buildAdminSessionCookieHeader(token, maxAgeSec, req) {
   const safeMaxAge = Math.max(60, Math.floor(maxAgeSec));
   const secureAttr = isHttpsOrProductionRequest(req) ? "; Secure" : "";
-  return `${ADMIN_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=${safeMaxAge}; HttpOnly; SameSite=Strict${secureAttr}`;
+  return `${ADMIN_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=${safeMaxAge}; HttpOnly; SameSite=Lax${secureAttr}`;
 }
 __name(buildAdminSessionCookieHeader, "buildAdminSessionCookieHeader");
 
 function buildClearAdminSessionCookieHeader(req) {
   const secureAttr = isHttpsOrProductionRequest(req) ? "; Secure" : "";
-  return `${ADMIN_COOKIE_NAME}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Strict${secureAttr}`;
+  return `${ADMIN_COOKIE_NAME}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Lax${secureAttr}`;
 }
 __name(buildClearAdminSessionCookieHeader, "buildClearAdminSessionCookieHeader");
 
@@ -725,7 +725,11 @@ function parseCookieValue(cookieHeader, name) {
 __name(parseCookieValue, "parseCookieValue");
 
 function extractAdminTokenFromRequest(req) {
-  // Exclusive HttpOnly cookie session extraction (no JS-accessible Bearer/custom headers)
+  const authHdr = req.headers.authorization;
+  if (typeof authHdr === "string" && authHdr.trim().toLowerCase().startsWith("bearer ")) {
+    const token = authHdr.trim().slice(7).trim();
+    if (token) return token;
+  }
   return parseCookieValue(req.headers.cookie, ADMIN_COOKIE_NAME);
 }
 __name(extractAdminTokenFromRequest, "extractAdminTokenFromRequest");

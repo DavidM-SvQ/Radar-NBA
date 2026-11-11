@@ -28,6 +28,7 @@ import {
   Search,
   Shield,
   SlidersHorizontal,
+  Sparkles,
   Star,
   Swords,
   Trophy,
@@ -164,6 +165,11 @@ const FantasyEspnAssistantView = lazyWithPreload(() =>
 const AdminSecurityConfigPanel = lazyWithPreload(() =>
   import('./components/AdminSecurityConfigPanel').then((m) => ({
     default: m.AdminSecurityConfigPanel,
+  }))
+);
+const AdminGamedayThresholdsPanel = lazyWithPreload(() =>
+  import('./components/AdminGamedayThresholdsPanel').then((m) => ({
+    default: m.AdminGamedayThresholdsPanel,
   }))
 );
 const EntityInspectorDrawer = lazyWithPreload(() =>
@@ -316,6 +322,7 @@ const STORAGE_EXP_MODE_KEY = 'courtpulse_nba_exp_mode_v1';
 
 const DEFAULT_THRESHOLDS: ThresholdSettings = {
   windowSize: 5,
+  defaultPlayerMatchWindow: 18,
   minZScore: 1.2,
   minPctDelta: 16,
   minMinutes: 22,
@@ -329,6 +336,12 @@ function loadSavedThresholds(): ThresholdSettings {
     const parsed = JSON.parse(raw) as Partial<ThresholdSettings>;
     return {
       windowSize: DEFAULT_THRESHOLDS.windowSize,
+      defaultPlayerMatchWindow:
+        typeof parsed.defaultPlayerMatchWindow === 'number' &&
+        parsed.defaultPlayerMatchWindow >= 1 &&
+        parsed.defaultPlayerMatchWindow <= 82
+          ? parsed.defaultPlayerMatchWindow
+          : DEFAULT_THRESHOLDS.defaultPlayerMatchWindow,
       minZScore:
         typeof parsed.minZScore === 'number'
           ? parsed.minZScore
@@ -398,7 +411,7 @@ function loadSavedSeasonMode(): SeasonMode {
     if (!raw) return '2027';
     const parts = raw.split(/[,+]/).map((s) => s.trim()).filter(Boolean);
     const valid = parts.every((p) => p === '2027' || p === '2026' || p === '2025' || p === '2024');
-    if (valid && parts.length > 0) return raw;
+    if (valid && parts.length > 0) return raw as SeasonMode;
     return '2027';
   } catch {
     return '2027';
@@ -496,7 +509,7 @@ export default function App() {
     () => initialRoute.section === 'fantasy_espn'
   );
   const skipNextAdminSessionCheckRef = useRef<boolean>(false);
-  const [adminZoneSection, setAdminZoneSection] = useState<'fantasy' | 'web_config'>(
+  const [adminZoneSection, setAdminZoneSection] = useState<'fantasy' | 'thresholds' | 'web_config'>(
     'fantasy'
   );
   const [passcodeAttempt, setPasscodeAttempt] = useState('');
@@ -2459,6 +2472,18 @@ export default function App() {
                         </button>
                         <button
                           type="button"
+                          onClick={() => setAdminZoneSection('thresholds')}
+                          className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-2 whitespace-nowrap ${
+                            adminZoneSection === 'thresholds'
+                              ? 'bg-orange-500 text-slate-950 shadow-sm'
+                              : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
+                          }`}
+                        >
+                          <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                          <span>Criterios de Jornada (03A/03B)</span>
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => setAdminZoneSection('web_config')}
                           className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-2 whitespace-nowrap ${
                             adminZoneSection === 'web_config'
@@ -2496,9 +2521,17 @@ export default function App() {
                         initialTab={fantasyTab}
                         onTabChange={handleFantasyTabChange}
                       />
+                    ) : adminZoneSection === 'thresholds' ? (
+                      <AdminGamedayThresholdsPanel
+                        onLockSession={handleLockAdminSession}
+                      />
                     ) : (
                       <AdminSecurityConfigPanel
                         onLockSession={handleLockAdminSession}
+                        seasonMode={seasonMode}
+                        onSeasonModeChange={setSeasonMode}
+                        settings={settings}
+                        onSettingsChange={setSettings}
                       />
                     )}
                   </Suspense>
@@ -2808,6 +2841,7 @@ export default function App() {
             benchmarks={benchmarks}
             onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
             windowSize={settings.windowSize}
+            defaultPlayerMatchWindow={settings.defaultPlayerMatchWindow}
             watchlistIds={watchlistIds}
             onToggleWatchlist={handleToggleWatchlist}
             onClose={handleCloseInspector}

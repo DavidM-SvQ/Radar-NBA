@@ -2,22 +2,30 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
+  CalendarDays,
   Check,
   ChevronDown,
   Lock,
+  Minus,
+  Plus,
   Radio,
   RefreshCw,
   RotateCcw,
   Save,
   Server,
   ShieldCheck,
+  Sliders,
   SlidersHorizontal,
+  Sparkles,
   Terminal,
   Zap,
 } from 'lucide-react';
 import type {
   AdminSecurityConfig,
   AdminSecurityConfigValues,
+  SeasonMode,
+  ThresholdSettings,
+  WindowSize,
 } from '../types/nba';
 import {
   CLIENT_DEFAULT_SECURITY_VALUES,
@@ -35,6 +43,10 @@ import {
 
 interface AdminSecurityConfigPanelProps {
   onLockSession: () => void;
+  seasonMode?: SeasonMode;
+  onSeasonModeChange?: (mode: SeasonMode) => void;
+  settings?: ThresholdSettings;
+  onSettingsChange?: (updater: (prev: ThresholdSettings) => ThresholdSettings) => void;
 }
 
 type DraftValues = Record<keyof AdminSecurityConfigValues, string>;
@@ -85,6 +97,10 @@ function formatUpdatedTimestamp(ts: number): string {
 
 export function AdminSecurityConfigPanel({
   onLockSession,
+  seasonMode,
+  onSeasonModeChange,
+  settings,
+  onSettingsChange,
 }: AdminSecurityConfigPanelProps) {
   const [expanded, setExpanded] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(true);
@@ -415,6 +431,221 @@ export function AdminSecurityConfigPanel({
             </div>
           ) : (
             <>
+              {/* Row 00: Web Config - Default Season, Sensitivity & Deltas */}
+              <div className="p-4 sm:p-5 space-y-4 bg-[#0B1120]/40">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1E293B] pb-3">
+                  <div className="flex items-center gap-2">
+                    <CalendarDays className="w-4 h-4 text-orange-400 shrink-0" />
+                    <h3 className="text-xs sm:text-sm font-bold text-slate-100 uppercase tracking-wider">
+                      00. Configuración de la Web: Muestra de Años, Sensibilidad y Deltas
+                    </h3>
+                  </div>
+                  <span className="text-[11px] font-mono text-orange-400 font-medium">
+                    Sincronizado en tiempo real
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {/* Default Season Selector */}
+                  <div className="space-y-2 bg-[#0B1120] border border-[#1E293B] rounded-lg p-3.5">
+                    <label className="block text-xs font-semibold text-slate-200">
+                      Muestra Temporal de Temporadas por Defecto
+                    </label>
+                    <p className="text-[11px] text-slate-400">
+                      Selecciona la temporada que se cargará por defecto al acceder a las secciones principales de la app.
+                    </p>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                      {[
+                        { id: '2027', label: '2026-27 (Actual)' },
+                        { id: '2026', label: '2025-26' },
+                        { id: '2025', label: '2024-25' },
+                        { id: '2024', label: '2023-24' },
+                      ].map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => onSeasonModeChange?.(opt.id as SeasonMode)}
+                          className={`min-h-[36px] px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all border text-center ${
+                            seasonMode === opt.id
+                              ? 'bg-orange-500 text-slate-950 border-orange-400 shadow-md font-bold'
+                              : 'bg-[#131C2E] hover:bg-[#182338] text-slate-300 border-[#1E293B]'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Thresholds & Sensitivity Controls */}
+                  {settings && onSettingsChange ? (
+                    <div className="space-y-3 bg-[#0B1120] border border-[#1E293B] rounded-lg p-3.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold text-slate-200">
+                          Sensibilidad y Deltas de Detección
+                        </label>
+                        <span className="text-[10px] font-mono text-slate-400">
+                          Ventana: {settings.windowSize} PJ
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
+                        {/* Player Match Sample Window Slider Setting */}
+                        <div className="space-y-1 col-span-2 sm:col-span-1">
+                          <span className="block text-[11px] text-slate-400">
+                            Muestra Ficha Jugador
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onSettingsChange((prev) => ({
+                                  ...prev,
+                                  defaultPlayerMatchWindow: Math.max(
+                                    3,
+                                    (prev.defaultPlayerMatchWindow || 18) - 1
+                                  ),
+                                }))
+                              }
+                              className="w-7 h-7 rounded bg-[#131C2E] text-slate-300 hover:text-white border border-[#1E293B] flex items-center justify-center text-xs font-bold"
+                            >
+                              -
+                            </button>
+                            <span className="flex-1 text-center font-mono text-xs font-bold text-orange-400">
+                              {settings.defaultPlayerMatchWindow || 18} PJ
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onSettingsChange((prev) => ({
+                                  ...prev,
+                                  defaultPlayerMatchWindow: Math.min(
+                                    82,
+                                    (prev.defaultPlayerMatchWindow || 18) + 1
+                                  ),
+                                }))
+                              }
+                              className="w-7 h-7 rounded bg-[#131C2E] text-slate-300 hover:text-white border border-[#1E293B] flex items-center justify-center text-xs font-bold"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Z-Score */}
+                        <div className="space-y-1">
+                          <span className="block text-[11px] text-slate-400">
+                            Sensibilidad Z-Score
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onSettingsChange((prev) => ({
+                                  ...prev,
+                                  minZScore: Math.max(0.5, Math.round((prev.minZScore - 0.1) * 10) / 10),
+                                }))
+                              }
+                              className="w-7 h-7 rounded bg-[#131C2E] text-slate-300 hover:text-white border border-[#1E293B] flex items-center justify-center text-xs font-bold"
+                            >
+                              -
+                            </button>
+                            <span className="flex-1 text-center font-mono text-xs font-bold text-orange-400">
+                              {settings.minZScore} σ
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onSettingsChange((prev) => ({
+                                  ...prev,
+                                  minZScore: Math.min(3.0, Math.round((prev.minZScore + 0.1) * 10) / 10),
+                                }))
+                              }
+                              className="w-7 h-7 rounded bg-[#131C2E] text-slate-300 hover:text-white border border-[#1E293B] flex items-center justify-center text-xs font-bold"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Delta % */}
+                        <div className="space-y-1">
+                          <span className="block text-[11px] text-slate-400">
+                            Delta Mínimo %
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onSettingsChange((prev) => ({
+                                  ...prev,
+                                  minPctDelta: Math.max(5, prev.minPctDelta - 1),
+                                }))
+                              }
+                              className="w-7 h-7 rounded bg-[#131C2E] text-slate-300 hover:text-white border border-[#1E293B] flex items-center justify-center text-xs font-bold"
+                            >
+                              -
+                            </button>
+                            <span className="flex-1 text-center font-mono text-xs font-bold text-orange-400">
+                              {settings.minPctDelta}%
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onSettingsChange((prev) => ({
+                                  ...prev,
+                                  minPctDelta: Math.min(50, prev.minPctDelta + 1),
+                                }))
+                              }
+                              className="w-7 h-7 rounded bg-[#131C2E] text-slate-300 hover:text-white border border-[#1E293B] flex items-center justify-center text-xs font-bold"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Min Minutes */}
+                        <div className="space-y-1">
+                          <span className="block text-[11px] text-slate-400">
+                            Minutos Mínimos
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onSettingsChange((prev) => ({
+                                  ...prev,
+                                  minMinutes: Math.max(5, prev.minMinutes - 1),
+                                }))
+                              }
+                              className="w-7 h-7 rounded bg-[#131C2E] text-slate-300 hover:text-white border border-[#1E293B] flex items-center justify-center text-xs font-bold"
+                            >
+                              -
+                            </button>
+                            <span className="flex-1 text-center font-mono text-xs font-bold text-orange-400">
+                              {settings.minMinutes} m
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onSettingsChange((prev) => ({
+                                  ...prev,
+                                  minMinutes: Math.min(35, prev.minMinutes + 1),
+                                }))
+                              }
+                              className="w-7 h-7 rounded bg-[#131C2E] text-slate-300 hover:text-white border border-[#1E293B] flex items-center justify-center text-xs font-bold"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
               {/* Row 1 & 2: NBA API General + Heavy Refresh */}
               <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-[#1E293B]">
                 <div className="p-4 sm:p-5 space-y-3">

@@ -35,6 +35,7 @@ export type WindowSize = 3 | 5 | 10;
 
 export interface ThresholdSettings {
   windowSize: WindowSize;
+  defaultPlayerMatchWindow?: number;
   minZScore: number;
   minPctDelta: number;
   minMinutes: number;
@@ -54,6 +55,44 @@ export interface AdminSecurityConfigValues {
 }
 
 export interface AdminSecurityConfig extends AdminSecurityConfigValues {
+  updatedAt: number;
+}
+
+export interface GamedayThresholdsConfigValues {
+  // 03A. Noches de Explosión
+  explosionShootingTsDiff: number;
+  explosion3pMinMade: number;
+  explosion3pDelta: number;
+  explosionRebMinTotal: number;
+  explosionRebDelta: number;
+  explosionAstMinTotal: number;
+  explosionAstDelta: number;
+  explosionStocksMinTotal: number;
+  explosionStocksDelta: number;
+  explosionMinutesDelta: number;
+  explosionScoringPtsDelta: number;
+  explosionZScoreThreshold: number;
+
+  // 03B. Batacazos de Titulares
+  starterMinMinutesAvg: number;
+  starterMinPointsAvg: number;
+  slumpScoringDropPts: number;
+  slumpShootingMaxTsPct: number;
+  slumpShootingTsDrop: number;
+  slumpFoulsTroubleCount: number;
+  slumpFoulsMinutesCut: number;
+  slumpTurnoversCount: number;
+  slumpTurnoversDelta: number;
+  slump3pSpecialistAvg: number;
+  slump3pDropDelta: number;
+  slumpAstFacilitatorAvg: number;
+  slumpAstDropDelta: number;
+  slumpRebInteriorAvg: number;
+  slumpRebDropDelta: number;
+  slumpMinutesCutDelta: number;
+}
+
+export interface GamedayThresholdsConfig extends GamedayThresholdsConfigValues {
   updatedAt: number;
 }
 

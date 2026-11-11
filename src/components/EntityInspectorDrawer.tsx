@@ -188,6 +188,7 @@ interface EntityInspectorDrawerProps {
   benchmarks: LeagueBenchmarks;
   onSwitchToAdvanced: () => void;
   windowSize: WindowSize;
+  defaultPlayerMatchWindow?: number;
   watchlistIds: Set<string>;
   onToggleWatchlist: (entityKey: string) => void;
   onClose: () => void;
@@ -562,6 +563,7 @@ export function EntityInspectorDrawer({
   benchmarks,
   onSwitchToAdvanced,
   windowSize,
+  defaultPlayerMatchWindow = 18,
   watchlistIds,
   onToggleWatchlist,
   onClose,
@@ -592,7 +594,13 @@ export function EntityInspectorDrawer({
   // Player Inspector configurable state
   const [samplePreset, setSamplePreset] =
     useState<PlayerSamplePreset>('slider');
-  const [sliderCount, setSliderCount] = useState<number>(18);
+  const [sliderCount, setSliderCount] = useState<number>(defaultPlayerMatchWindow);
+
+  useEffect(() => {
+    if (typeof defaultPlayerMatchWindow === 'number' && defaultPlayerMatchWindow > 0) {
+      setSliderCount(defaultPlayerMatchWindow);
+    }
+  }, [defaultPlayerMatchWindow, entityId]);
 
   const [kpiRefMode, setKpiRefMode] = useState<InspectorReferenceMode>('nba');
   const [advRefMode, setAdvRefMode] = useState<InspectorReferenceMode>('nba');

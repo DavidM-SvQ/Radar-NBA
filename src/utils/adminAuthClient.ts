@@ -1,6 +1,8 @@
 import type {
   AdminSecurityConfig,
   AdminSecurityConfigValues,
+  GamedayThresholdsConfig,
+  GamedayThresholdsConfigValues,
 } from '../types/nba';
 
 const LEGACY_TOKEN_V2_STORAGE_KEY = 'radarnba_admin_token_v2';
@@ -100,15 +102,51 @@ export function purgeLegacyAdminBrowserStorage(): void {
   }
 }
 
-purgeLegacyAdminBrowserStorage();
+const ADMIN_SESSION_TOKEN_KEY = 'radarnba_admin_session_token_v3';
+
+let memoryAdminToken: string | null = null;
+
+export function setAdminSessionToken(token: string | null): void {
+  memoryAdminToken = token;
+  if (typeof window === 'undefined') return;
+  try {
+    if (token) {
+      sessionStorage.setItem(ADMIN_SESSION_TOKEN_KEY, token);
+    } else {
+      sessionStorage.removeItem(ADMIN_SESSION_TOKEN_KEY);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function getAdminSessionToken(): string | null {
+  if (memoryAdminToken) return memoryAdminToken;
+  if (typeof window === 'undefined') return null;
+  try {
+    const stored = sessionStorage.getItem(ADMIN_SESSION_TOKEN_KEY);
+    if (stored) {
+      memoryAdminToken = stored;
+      return stored;
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return null;
+}
 
 export function buildAdminAuthHeaders(
   extraHeaders?: Record<string, string>
 ): Record<string, string> {
-  return {
+  const token = getAdminSessionToken();
+  const headers: Record<string, string> = {
     [ADMIN_CSRF_HEADER_NAME]: ADMIN_CSRF_HEADER_VALUE,
     ...(extraHeaders || {}),
   };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
 }
 
 function readLocalSecurityBackup(): AdminSecurityConfig | null {
@@ -201,10 +239,15 @@ export async function loginAdminWithPasscode(
     }
 
     if (!res.ok || !data.ok) {
+      setAdminSessionToken(null);
       return {
         ok: false,
         error: data.error || 'Clave incorrecta. Inténtalo de nuevo.',
       };
+    }
+
+    if ((data as any).token) {
+      setAdminSessionToken((data as any).token);
     }
 
     return {
@@ -239,6 +282,7 @@ export async function verifyStoredAdminSession(): Promise<boolean> {
 }
 
 export async function logoutAdminSession(): Promise<void> {
+  setAdminSessionToken(null);
   purgeLegacyAdminBrowserStorage();
   try {
     await fetch('/api/admin/logout', {
@@ -515,3 +559,445 @@ export async function fetchAdminTelemetry(): Promise<{
     return { ok: false, error: 'Error de red al consultar la telemetría.' };
   }
 }
+
+const GAMEDAY_THRESHOLDS_BACKUP_KEY = 'radarnba_gameday_thresholds_v1';
+
+export const DEFAULT_GAMEDAY_THRESHOLDS_VALUES: GamedayThresholdsConfigValues = {
+  // 03A. Noches de Explosión
+  explosionShootingTsDiff: 10.0,
+  explosion3pMinMade: 4,
+  explosion3pDelta: 3.0,
+  explosionRebMinTotal: 10,
+  explosionRebDelta: 4.0,
+  explosionAstMinTotal: 8,
+  explosionAstDelta: 4.0,
+  explosionStocksMinTotal: 5,
+  explosionStocksDelta: 2.5,
+  explosionMinutesDelta: 5.0,
+  explosionScoringPtsDelta: 8.0,
+  explosionZScoreThreshold: 1.8,
+
+  // 03B. Batacazos de Titulares
+  starterMinMinutesAvg: 24.0,
+  starterMinPointsAvg: 14.0,
+  slumpScoringDropPts: 7.5,
+  slumpShootingMaxTsPct: 42.0,
+  slumpShootingTsDrop: 12.0,
+  slumpFoulsTroubleCount: 5,
+  slumpFoulsMinutesCut: 6.0,
+  slumpTurnoversCount: 5,
+  slumpTurnoversDelta: 2.5,
+  slump3pSpecialistAvg: 2.0,
+  slump3pDropDelta: 2.0,
+  slumpAstFacilitatorAvg: 6.0,
+  slumpAstDropDelta: 3.5,
+  slumpRebInteriorAvg: 8.5,
+  slumpRebDropDelta: 4.5,
+  slumpMinutesCutDelta: 8.0,
+};
+
+export const GAMEDAY_THRESHOLDS_BOUNDS: Record<
+  keyof GamedayThresholdsConfigValues,
+  { min: number; max: number; step: number; label: string; group: '03A' | '03B'; unit: string; description: string }
+> = {
+  // 03A Explosiones
+  explosionShootingTsDiff: {
+    min: 4.0,
+    max: 25.0,
+    step: 0.5,
+    label: 'Salto Mínimo en Puntería (TS%)',
+    group: '03A',
+    unit: 'pp',
+    description: 'Puntos porcentuales de mejora en True Shooting respecto a la media de la temporada 2026-27.',
+  },
+  explosion3pMinMade: {
+    min: 2,
+    max: 10,
+    step: 1,
+    label: 'Mínimo Triples Convertidos',
+    group: '03A',
+    unit: '3PM',
+    description: 'Cantidad mínima de triples anotados en el partido para calificar explosión exterior.',
+  },
+  explosion3pDelta: {
+    min: 1.0,
+    max: 6.0,
+    step: 0.5,
+    label: 'Salto sobre Media de Triples',
+    group: '03A',
+    unit: '3PM',
+    description: 'Diferencia mínima de triples anotados sobre el promedio de temporada.',
+  },
+  explosionRebMinTotal: {
+    min: 6,
+    max: 18,
+    step: 1,
+    label: 'Mínimo Rebotes Capturados',
+    group: '03A',
+    unit: 'REB',
+    description: 'Suelo de rebotes totales en la noche para la etiqueta de Dominio en el Rebote.',
+  },
+  explosionRebDelta: {
+    min: 2.0,
+    max: 8.0,
+    step: 0.5,
+    label: 'Salto sobre Media de Rebotes',
+    group: '03A',
+    unit: 'REB',
+    description: 'Incremento neto de rebotes frente al estándar del jugador en la temporada.',
+  },
+  explosionAstMinTotal: {
+    min: 5,
+    max: 16,
+    step: 1,
+    label: 'Mínimo Asistencias Repartidas',
+    group: '03A',
+    unit: 'AST',
+    description: 'Suelo de pases de canasta para activar la etiqueta Recital en la Dirección.',
+  },
+  explosionAstDelta: {
+    min: 2.0,
+    max: 8.0,
+    step: 0.5,
+    label: 'Salto sobre Media de Asistencias',
+    group: '03A',
+    unit: 'AST',
+    description: 'Diferencia positiva de asistencias sobre el promedio del jugador.',
+  },
+  explosionStocksMinTotal: {
+    min: 3,
+    max: 8,
+    step: 1,
+    label: 'Mínimo Stocks Totales (Robos+Tapones)',
+    group: '03A',
+    unit: 'Stocks',
+    description: 'Suelo de robos + tapones en el partido para Muralla Defensiva en Stocks.',
+  },
+  explosionStocksDelta: {
+    min: 1.5,
+    max: 5.0,
+    step: 0.5,
+    label: 'Salto sobre Media de Stocks',
+    group: '03A',
+    unit: 'Stocks',
+    description: 'Superávit de stocks en la noche respecto a su media habitual.',
+  },
+  explosionMinutesDelta: {
+    min: 2.0,
+    max: 12.0,
+    step: 0.5,
+    label: 'Salto de Minutos en Pista (Expansión)',
+    group: '03A',
+    unit: 'MIN',
+    description: 'Minutos adicionales jugados respecto a la media para calificar Expansión de Rol.',
+  },
+  explosionScoringPtsDelta: {
+    min: 4.0,
+    max: 16.0,
+    step: 0.5,
+    label: 'Salto Anotador Despliegue (PTS)',
+    group: '03A',
+    unit: 'PTS',
+    description: 'Puntos por encima de su media para Despliegue Estadístico Sobresaliente.',
+  },
+  explosionZScoreThreshold: {
+    min: 1.2,
+    max: 2.6,
+    step: 0.1,
+    label: 'Umbral Estadístico Z-Score (σ)',
+    group: '03A',
+    unit: 'σ',
+    description: 'Desviaciones estándar respecto a la distribución habitual del jugador.',
+  },
+
+  // 03B Batacazos
+  starterMinMinutesAvg: {
+    min: 18.0,
+    max: 32.0,
+    step: 0.5,
+    label: 'Filtro: Minutos Medios de Titular',
+    group: '03B',
+    unit: 'MIN',
+    description: 'Minutaje promedio requerido para ser considerado titular consolidado.',
+  },
+  starterMinPointsAvg: {
+    min: 8.0,
+    max: 22.0,
+    step: 0.5,
+    label: 'Filtro: Puntos Medios de Referente',
+    group: '03B',
+    unit: 'PTS',
+    description: 'Promedio anotador habitual exigido para evaluar batacazos ofensivos.',
+  },
+  slumpScoringDropPts: {
+    min: 4.0,
+    max: 14.0,
+    step: 0.5,
+    label: 'Caída de Puntos para Frenado Defensivo',
+    group: '03B',
+    unit: 'PTS',
+    description: 'Déficit de anotación frente a su promedio habitual para marcar batacazo por puntos.',
+  },
+  slumpShootingMaxTsPct: {
+    min: 35.0,
+    max: 50.0,
+    step: 0.5,
+    label: 'Techo de TS% para Atasco en el Tiro',
+    group: '03B',
+    unit: '% TS',
+    description: 'Porcentaje True Shooting máximo en la noche para diagnosticar atasco de efectividad.',
+  },
+  slumpShootingTsDrop: {
+    min: 6.0,
+    max: 20.0,
+    step: 0.5,
+    label: 'Caída Porcentual de TS% vs Media',
+    group: '03B',
+    unit: 'pp',
+    description: 'Desplome mínimo en puntos porcentuales respecto a su TS% habitual.',
+  },
+  slumpFoulsTroubleCount: {
+    min: 4,
+    max: 6,
+    step: 1,
+    label: 'Faltas para Lastrado por Faltas',
+    group: '03B',
+    unit: 'Faltas',
+    description: 'Infracciones personales acumuladas que limitan el minutaje del titular.',
+  },
+  slumpFoulsMinutesCut: {
+    min: 3.0,
+    max: 10.0,
+    step: 0.5,
+    label: 'Corte de Minutos por 4 Faltas',
+    group: '03B',
+    unit: 'MIN',
+    description: 'Minutos perdidos frente a su media si comete 4 faltas tempranas.',
+  },
+  slumpTurnoversCount: {
+    min: 3,
+    max: 8,
+    step: 1,
+    label: 'Pérdidas para Sangría de Balón',
+    group: '03B',
+    unit: 'TOV',
+    description: 'Cantidad mínima de pérdidas cometidas en la noche.',
+  },
+  slumpTurnoversDelta: {
+    min: 1.0,
+    max: 5.0,
+    step: 0.5,
+    label: 'Salto sobre Media de Pérdidas',
+    group: '03B',
+    unit: 'TOV',
+    description: 'Pérdidas cometidas por encima de su estándar habitual.',
+  },
+  slump3pSpecialistAvg: {
+    min: 1.2,
+    max: 3.5,
+    step: 0.1,
+    label: 'Triples Medios de Especialista',
+    group: '03B',
+    unit: '3PM',
+    description: 'Promedio de triples exigido para considerar al jugador triplista habitual.',
+  },
+  slump3pDropDelta: {
+    min: 1.0,
+    max: 4.0,
+    step: 0.5,
+    label: 'Caída de Triples Anotados',
+    group: '03B',
+    unit: '3PM',
+    description: 'Déficit de triples en la noche (con $\\le 1$ anotado en $\\ge 5$ intentos).',
+  },
+  slumpAstFacilitatorAvg: {
+    min: 4.0,
+    max: 9.0,
+    step: 0.5,
+    label: 'Asistencias Medias de Generador',
+    group: '03B',
+    unit: 'AST',
+    description: 'Promedio habitual exigido para evaluar Apagón en la Dirección.',
+  },
+  slumpAstDropDelta: {
+    min: 2.0,
+    max: 6.0,
+    step: 0.5,
+    label: 'Caída de Asistencias Repartidas',
+    group: '03B',
+    unit: 'AST',
+    description: 'Déficit de pases de canasta frente a su promedio habitual.',
+  },
+  slumpRebInteriorAvg: {
+    min: 6.0,
+    max: 12.0,
+    step: 0.5,
+    label: 'Rebotes Medios de Interior / Pívot',
+    group: '03B',
+    unit: 'REB',
+    description: 'Promedio de rebotes exigido para evaluar Superado en el Cristal.',
+  },
+  slumpRebDropDelta: {
+    min: 2.5,
+    max: 7.0,
+    step: 0.5,
+    label: 'Caída de Rebotes Capturados',
+    group: '03B',
+    unit: 'REB',
+    description: 'Déficit de rebotes en la noche frente a su estándar habitual.',
+  },
+  slumpMinutesCutDelta: {
+    min: 4.0,
+    max: 14.0,
+    step: 0.5,
+    label: 'Recorte de Minutos en Rotación',
+    group: '03B',
+    unit: 'MIN',
+    description: 'Minutos perdidos en pista por decisión técnica o descarte táctico.',
+  },
+};
+
+export interface AdminGamedayThresholdsResponse {
+  ok: boolean;
+  config?: GamedayThresholdsConfig;
+  defaults?: GamedayThresholdsConfigValues;
+  error?: string;
+  unauthorized?: boolean;
+}
+
+function readLocalThresholdsBackup(): GamedayThresholdsConfig | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(GAMEDAY_THRESHOLDS_BACKUP_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.explosionShootingTsDiff === 'number') {
+      return parsed as GamedayThresholdsConfig;
+    }
+  } catch {
+    // Ignore parse error
+  }
+  return null;
+}
+
+function writeLocalThresholdsBackup(cfg: GamedayThresholdsConfig): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(GAMEDAY_THRESHOLDS_BACKUP_KEY, JSON.stringify(cfg));
+  } catch {
+    // Ignore storage error
+  }
+}
+
+export async function fetchAdminGamedayThresholds(): Promise<AdminGamedayThresholdsResponse> {
+  try {
+    const res = await fetch('/api/admin/gameday-thresholds', {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: buildAdminAuthHeaders(),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.config) {
+      writeLocalThresholdsBackup(data.config);
+      return {
+        ok: true,
+        config: data.config,
+        defaults: data.defaults || DEFAULT_GAMEDAY_THRESHOLDS_VALUES,
+      };
+    }
+  } catch {
+    // Network fallback
+  }
+
+  const local = readLocalThresholdsBackup();
+  if (local) {
+    return {
+      ok: true,
+      config: local,
+      defaults: DEFAULT_GAMEDAY_THRESHOLDS_VALUES,
+    };
+  }
+
+  return {
+    ok: true,
+    config: { ...DEFAULT_GAMEDAY_THRESHOLDS_VALUES, updatedAt: 0 },
+    defaults: DEFAULT_GAMEDAY_THRESHOLDS_VALUES,
+  };
+}
+
+export async function updateAdminGamedayThresholds(
+  values: GamedayThresholdsConfigValues
+): Promise<AdminGamedayThresholdsResponse> {
+  try {
+    const res = await fetch('/api/admin/gameday-thresholds', {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(values),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.config) {
+      writeLocalThresholdsBackup(data.config);
+      return {
+        ok: true,
+        config: data.config,
+        defaults: data.defaults || DEFAULT_GAMEDAY_THRESHOLDS_VALUES,
+      };
+    }
+    return {
+      ok: false,
+      error: data.error || 'No se pudieron guardar los criterios de jornada.',
+    };
+  } catch {
+    const fallbackConfig: GamedayThresholdsConfig = { ...values, updatedAt: Date.now() };
+    writeLocalThresholdsBackup(fallbackConfig);
+    return {
+      ok: true,
+      config: fallbackConfig,
+      defaults: DEFAULT_GAMEDAY_THRESHOLDS_VALUES,
+    };
+  }
+}
+
+export async function resetAdminGamedayThresholdsDefaults(): Promise<AdminGamedayThresholdsResponse> {
+  try {
+    const res = await fetch('/api/admin/gameday-thresholds/reset-defaults', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders(),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.config) {
+      writeLocalThresholdsBackup(data.config);
+      return {
+        ok: true,
+        config: data.config,
+        defaults: DEFAULT_GAMEDAY_THRESHOLDS_VALUES,
+      };
+    }
+  } catch {
+    // Network fallback
+  }
+
+  const resetConfig: GamedayThresholdsConfig = {
+    ...DEFAULT_GAMEDAY_THRESHOLDS_VALUES,
+    updatedAt: Date.now(),
+  };
+  writeLocalThresholdsBackup(resetConfig);
+  return {
+    ok: true,
+    config: resetConfig,
+    defaults: DEFAULT_GAMEDAY_THRESHOLDS_VALUES,
+  };
+}
+
