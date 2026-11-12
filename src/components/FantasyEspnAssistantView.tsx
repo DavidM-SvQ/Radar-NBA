@@ -6072,7 +6072,18 @@ export function FantasyEspnAssistantView({
                     </div>
 
                     {cloudSyncFeedback && (
-                      <p className="text-xs text-emerald-400 font-medium">{cloudSyncFeedback}</p>
+                      <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg space-y-1">
+                        <p className="text-xs text-emerald-300 font-medium">{cloudSyncFeedback}</p>
+                        {leagueState.updatedAt > 0 && (
+                          <p className="text-[11px] font-mono text-emerald-400/80">
+                            Última actualización de plantillas:{' '}
+                            {new Date(leagueState.updatedAt).toLocaleString('es-ES', {
+                              dateStyle: 'medium',
+                              timeStyle: 'medium',
+                            })}
+                          </p>
+                        )}
+                      </div>
                     )}
                   </div>
 
