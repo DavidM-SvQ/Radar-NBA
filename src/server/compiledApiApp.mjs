@@ -2619,22 +2619,60 @@ function createScoutingEngine(deps) {
         const espnSummary = await deps.cachedFetchJson(`https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${eventId}`, ttl, {}, 7500, forceRefresh);
         const espnPlays = Array.isArray(espnSummary?.plays) ? espnSummary.plays : [];
         if (espnPlays.length > 0) {
-          actions = espnPlays.map((p) => ({
-            period: Number(p?.period?.number) || 1,
-            clock: p?.clock?.displayValue || "00:00",
-            teamTricode: normalizeEspnTeamAbbr(p?.team?.abbreviation || ""),
-            playerNameI: p?.athlete?.displayName || String(p?.text || "").split(" ")[0] || "",
-            description: String(p?.text || "").trim(),
-            scoreHome: String(p?.homeScore ?? 0),
-            scoreAway: String(p?.awayScore ?? 0),
-            actionType: p?.type?.text?.toLowerCase() || (p?.scoringPlay ? "made" : "play"),
-            pointsTotal: p?.scoringPlay ? p?.scoreValue || 2 : 0
-          }));
+          actions = espnPlays.map((p) => {
+            const rawTextLow = String(p?.text || "").toLowerCase();
+            const isMiss = rawTextLow.includes("misses") || rawTextLow.includes("falla");
+            const isScoring = Boolean(p?.scoringPlay);
+            return {
+              period: Number(p?.period?.number) || 1,
+              clock: p?.clock?.displayValue || "00:00",
+              teamTricode: normalizeEspnTeamAbbr(p?.team?.abbreviation || ""),
+              playerNameI: p?.athlete?.displayName || String(p?.text || "").split(" ")[0] || "",
+              description: String(p?.text || "").trim(),
+              scoreHome: String(p?.homeScore ?? 0),
+              scoreAway: String(p?.awayScore ?? 0),
+              actionType: p?.type?.text?.toLowerCase() || (isScoring ? "made" : "play"),
+              pointsTotal: isScoring ? p?.scoreValue || 2 : 0,
+              subType: p?.type?.text || "",
+              shotResult: isScoring ? "made" : isMiss ? "missed" : ""
+            };
+          });
         }
       } catch {
       }
     }
     if (actions.length === 0) return emptyRes;
+    const clockToSec = (clockStr) => {
+      const parts = String(clockStr || "00:00").split(":");
+      const m = Number(parts[0]) || 0;
+      const s = Number(parts[1]) || 0;
+      return m * 60 + s;
+    };
+    const timeoutEvents = [];
+    for (const a of actions) {
+      const actType = String(a?.actionType || "").toLowerCase();
+      const subType = String(a?.subType || "").toLowerCase();
+      const desc = String(a?.description || "").toLowerCase();
+      const isTimeout = actType.includes("timeout") || subType.includes("timeout") || desc.includes("timeout") || desc.includes("tiempo muerto");
+      if (!isTimeout) continue;
+      const pNum = Number(a?.period) || 1;
+      const periodLabel = pNum <= 4 ? `${pNum}Q` : pNum === 5 ? "PR" : `PR${pNum - 4}`;
+      const clock = parsePbpClockRemaining(a?.clock) || String(a?.clock || "00:00");
+      const clockSec = clockToSec(clock);
+      let teamAbbr = String(a?.teamTricode || "").toUpperCase();
+      if (!teamAbbr || teamAbbr !== awayAbbr && teamAbbr !== homeAbbr) {
+        if (desc.includes(awayAbbr.toLowerCase())) teamAbbr = awayAbbr;
+        else if (desc.includes(homeAbbr.toLowerCase())) teamAbbr = homeAbbr;
+      }
+      timeoutEvents.push({
+        period: pNum,
+        periodLabel,
+        clock,
+        clockSec,
+        teamAbbr,
+        description: String(a?.description || "").trim()
+      });
+    }
     const scoringEvents = [];
     let currentAway = 0;
     let currentHome = 0;
@@ -2676,7 +2714,7 @@ function createScoutingEngine(deps) {
       }
     }
     if (scoringEvents.length === 0) return emptyRes;
-    let bestRun = { scoringTeamAbbr: "", defendingTeamAbbr: "", runPoints: 0, opponentPoints: 0, periodLabel: "", startClock: "", endClock: "", summary: "" };
+    let bestRun = { scoringTeamAbbr: "", defendingTeamAbbr: "", runPoints: 0, opponentPoints: 0, periodLabel: "", startClock: "", endClock: "", summary: "", timeoutCalled: null };
     for (const team of [awayAbbr, homeAbbr]) {
       const oppTeam = team === awayAbbr ? homeAbbr : awayAbbr;
       let runPts = 0;
@@ -2698,7 +2736,8 @@ function createScoutingEngine(deps) {
               periodLabel: startEv.periodLabel,
               startClock: startEv.clock,
               endClock: endEv.clock,
-              summary: `Parcial de ${runPts}-${oppPts} para ${team} en el ${startEv.periodLabel} (reloj ${startEv.clock} a ${endEv.clock})`
+              summary: `Parcial de ${runPts}-${oppPts} para ${team} en el ${startEv.periodLabel} (reloj ${startEv.clock} a ${endEv.clock})`,
+              timeoutCalled: null
             };
           }
           oppPts += ev.points;
@@ -2717,8 +2756,24 @@ function createScoutingEngine(deps) {
           periodLabel: startEv.periodLabel,
           startClock: startEv.clock,
           endClock: endEv.clock,
-          summary: `Parcial de ${runPts}-${oppPts} para ${team} en el ${startEv.periodLabel} (reloj ${startEv.clock} a ${endEv.clock})`
+          summary: `Parcial de ${runPts}-${oppPts} para ${team} en el ${startEv.periodLabel} (reloj ${startEv.clock} a ${endEv.clock})`,
+          timeoutCalled: null
         };
+      }
+    }
+    if (bestRun.runPoints >= 7) {
+      const runStartSec = clockToSec(bestRun.startClock);
+      const runEndSec = clockToSec(bestRun.endClock);
+      const provokedTimeout = timeoutEvents.find(
+        (t) => t.periodLabel === bestRun.periodLabel && (t.teamAbbr === bestRun.defendingTeamAbbr || !t.teamAbbr && t.clockSec <= runStartSec && t.clockSec >= runEndSec - 35) && t.clockSec <= runStartSec && t.clockSec >= runEndSec - 40
+      );
+      if (provokedTimeout) {
+        bestRun.timeoutCalled = {
+          teamAbbr: bestRun.defendingTeamAbbr,
+          periodLabel: provokedTimeout.periodLabel,
+          clock: provokedTimeout.clock
+        };
+        bestRun.summary = `Parcial de ${bestRun.runPoints}-${bestRun.opponentPoints} para ${bestRun.scoringTeamAbbr} en el ${bestRun.periodLabel} (reloj ${bestRun.startClock} a ${bestRun.endClock}) que oblig\xF3 a parar el partido con tiempo muerto de ${bestRun.defendingTeamAbbr} (reloj ${provokedTimeout.clock})`;
       }
     }
     let lastLeadChange = null;
@@ -2756,8 +2811,7 @@ function createScoutingEngine(deps) {
     const clutchPlays = [];
     for (const ev of scoringEvents) {
       if (ev.period >= 4) {
-        const [mStr, sStr] = (ev.clock || "00:00").split(":");
-        const secsRemaining = (Number(mStr) || 0) * 60 + (Number(sStr) || 0);
+        const secsRemaining = clockToSec(ev.clock);
         const margin = Math.abs(ev.awayScore - ev.homeScore);
         if (secsRemaining <= 300 && margin <= 5) {
           clutchPlays.push({
@@ -2767,7 +2821,7 @@ function createScoutingEngine(deps) {
             description: ev.description,
             scoreMargin: margin
           });
-          if (clutchPlays.length >= 5) break;
+          if (clutchPlays.length >= 6) break;
         }
       }
     }
@@ -2841,19 +2895,136 @@ function createScoutingEngine(deps) {
         });
       }
     }
+    let isClutchGame = false;
+    for (const ev of scoringEvents) {
+      if (ev.period >= 4) {
+        const sec = clockToSec(ev.clock);
+        const margin = Math.abs(ev.awayScore - ev.homeScore);
+        if (sec <= 120 && margin <= 5) {
+          isClutchGame = true;
+          break;
+        }
+      }
+    }
+    if (!isClutchGame && scoringEvents.length > 0) {
+      const lastEv = scoringEvents[scoringEvents.length - 1];
+      if (Math.abs(lastEv.awayScore - lastEv.homeScore) <= 5) {
+        isClutchGame = true;
+      }
+    }
+    let clutchExecution = null;
+    if (isClutchGame) {
+      const clutchStats = {
+        [awayAbbr]: { teamAbbr: awayAbbr, fgm: 0, fga: 0, fg3m: 0, fg3a: 0, ftm: 0, fta: 0, points: 0, turnovers: 0, playerShots: /* @__PURE__ */ new Map() },
+        [homeAbbr]: { teamAbbr: homeAbbr, fgm: 0, fga: 0, fg3m: 0, fg3a: 0, ftm: 0, fta: 0, points: 0, turnovers: 0, playerShots: /* @__PURE__ */ new Map() }
+      };
+      for (const a of actions) {
+        const pNum = Number(a?.period) || 1;
+        if (pNum < 4) continue;
+        const clock = parsePbpClockRemaining(a?.clock) || String(a?.clock || "00:00");
+        const sec = clockToSec(clock);
+        if (sec > 120) continue;
+        const actType = String(a?.actionType || "").toLowerCase();
+        const subType = String(a?.subType || "").toLowerCase();
+        const shotResult = String(a?.shotResult || "").toLowerCase();
+        const desc = String(a?.description || "").trim();
+        const descLow = desc.toLowerCase();
+        let teamAbbr = String(a?.teamTricode || "").toUpperCase();
+        if (!teamAbbr || teamAbbr !== awayAbbr && teamAbbr !== homeAbbr) {
+          if (descLow.includes(awayAbbr.toLowerCase())) teamAbbr = awayAbbr;
+          else if (descLow.includes(homeAbbr.toLowerCase())) teamAbbr = homeAbbr;
+        }
+        if (teamAbbr !== awayAbbr && teamAbbr !== homeAbbr) continue;
+        const teamObj = clutchStats[teamAbbr];
+        const rawPlayer = String(a?.playerNameI || a?.playerName || "").trim();
+        const pName = rawPlayer || (desc.split(" ")[0] || "Equipo");
+        const pEntry = teamObj.playerShots.get(pName) || { name: pName, fgm: 0, fga: 0, fg3m: 0, fg3a: 0, ftm: 0, fta: 0, points: 0, turnovers: 0 };
+        const is3P = actType === "3pt" || subType.includes("3pt") || descLow.includes("3pt") || descLow.includes("triple") || descLow.includes("3-pt");
+        const isFT = actType.includes("freethrow") || descLow.includes("free throw") || descLow.includes("tiro libre");
+        const isTurnover = actType.includes("turnover") || descLow.includes("turnover") || descLow.includes("p\xE9rdida") || descLow.includes("bad pass") || descLow.includes("lost ball") || descLow.includes("traveling") || descLow.includes("offensive foul");
+        const isMade = shotResult === "made" || descLow.includes("makes") || actType === "made" || Number(a?.pointsTotal) > 0;
+        const isMissed = shotResult === "missed" || descLow.includes("misses") || descLow.includes("falla");
+        if (isTurnover) {
+          teamObj.turnovers++;
+          pEntry.turnovers++;
+        } else if (isFT) {
+          teamObj.fta++;
+          pEntry.fta++;
+          if (isMade) {
+            teamObj.ftm++;
+            teamObj.points += 1;
+            pEntry.ftm++;
+            pEntry.points += 1;
+          }
+        } else if (isMade || isMissed || actType === "2pt" || actType === "3pt" || actType === "shot") {
+          teamObj.fga++;
+          pEntry.fga++;
+          if (is3P) {
+            teamObj.fg3a++;
+            pEntry.fg3a++;
+          }
+          if (isMade) {
+            const pts = is3P ? 3 : 2;
+            teamObj.fgm++;
+            teamObj.points += pts;
+            pEntry.fgm++;
+            pEntry.points += pts;
+            if (is3P) {
+              teamObj.fg3m++;
+              pEntry.fg3m++;
+            }
+          }
+        }
+        teamObj.playerShots.set(pName, pEntry);
+      }
+      const totalClutchFga = clutchStats[awayAbbr].fga + clutchStats[homeAbbr].fga;
+      const totalClutchTov = clutchStats[awayAbbr].turnovers + clutchStats[homeAbbr].turnovers;
+      if (totalClutchFga > 0 || totalClutchTov > 0) {
+        const winnerStats = clutchStats[winnerAbbr] || { fgm: 0, fga: 0, fg3m: 0, fg3a: 0, points: 0, turnovers: 0, playerShots: /* @__PURE__ */ new Map() };
+        const loserStats = clutchStats[loserAbbr] || { fgm: 0, fga: 0, fg3m: 0, fg3a: 0, points: 0, turnovers: 0, playerShots: /* @__PURE__ */ new Map() };
+        const winnerPlayers = Array.from(winnerStats.playerShots.values()).filter((p) => p.fga > 0 || p.points > 0 || p.turnovers > 0).sort((a, b) => b.points * 2 + b.fgm - (a.points * 2 + a.fgm));
+        const loserPlayers = Array.from(loserStats.playerShots.values()).filter((p) => p.fga > 0 || p.points > 0 || p.turnovers > 0).sort((a, b) => b.points * 2 + b.fgm + b.turnovers - (a.points * 2 + a.fgm + a.turnovers));
+        const winnerDetail = winnerPlayers.slice(0, 2).map(
+          (p) => `${p.name} (${p.fgm}/${p.fga} TC${p.fg3m > 0 ? `, ${p.fg3m} T3` : ""}${p.points > 0 ? `, ${p.points} pts` : ""})`
+        ).join(" y ");
+        const loserDetail = loserPlayers.slice(0, 2).map(
+          (p) => `${p.name} (${p.fgm}/${p.fga} TC${p.turnovers > 0 ? `, ${p.turnovers} PER` : ""}${p.points > 0 ? `, ${p.points} pts` : ""})`
+        ).join(" y ");
+        const finalTimeout = timeoutEvents.find((t) => t.period >= 4 && t.clockSec <= 35);
+        const winnerLine = `${winnerAbbr} ejecut\xF3 con ${winnerStats.fgm}/${winnerStats.fga} en tiros de campo (${winnerStats.points} pts${winnerStats.fg3m > 0 ? `, ${winnerStats.fg3m} triple(s)` : ""}) y ${winnerStats.turnovers === 0 ? "cero p\xE9rdidas" : `${winnerStats.turnovers} p\xE9rdida(s)`}${winnerDetail ? ` liderado por ${winnerDetail}` : ""}`;
+        const loserLine = `${loserAbbr} firm\xF3 ${loserStats.fgm}/${loserStats.fga} TC (${loserStats.points} pts) y ${loserStats.turnovers > 0 ? `${loserStats.turnovers} p\xE9rdida(s) cr\xEDtica(s)` : "cero p\xE9rdidas"}${loserDetail ? ` (${loserDetail})` : ""}`;
+        let summaryNarrative = `En los dos minutos finales con el partido en el alambre (margen \u22645 pts), ${winnerLine}, mientras que ${loserLine}`;
+        if (finalTimeout) {
+          summaryNarrative += `, tras un tiempo muerto solicitado por ${finalTimeout.teamAbbr} a falta de ${finalTimeout.clock} para dise\xF1ar la posesi\xF3n definitiva`;
+        }
+        clutchExecution = {
+          isClutchGame: true,
+          summaryNarrative,
+          breakdownLine: `${winnerAbbr}: ${winnerStats.fgm}/${winnerStats.fga} TC, ${winnerStats.points} PTS, ${winnerStats.turnovers} PER (${winnerDetail || "sin tiros"}) | ${loserAbbr}: ${loserStats.fgm}/${loserStats.fga} TC, ${loserStats.points} PTS, ${loserStats.turnovers} PER (${loserDetail || "sin tiros"})`,
+          winner: { teamAbbr: winnerAbbr, ...winnerStats },
+          loser: { teamAbbr: loserAbbr, ...loserStats },
+          finalTimeout: finalTimeout ? { teamAbbr: finalTimeout.teamAbbr, clock: finalTimeout.clock } : null
+        };
+      }
+    }
     const keyRun = bestRun.runPoints >= 7 ? bestRun : null;
     const lines = [];
-    if (keyRun) lines.push(`- PARCIAL M\xC1XIMO INDEXADO: ${keyRun.summary}`);
+    if (keyRun) lines.push(`- PARCIAL M\xC1XIMO INDEXADO E INTERVENCI\xD3N T\xC1CTICA: ${keyRun.summary}`);
     if (lastLeadChange) lines.push(`- PUNTO DE QUIEBRE Y VENTAJA DEFINITIVA: ${lastLeadChange.summary}`);
+    if (clutchExecution && clutchExecution.isClutchGame && clutchExecution.summaryNarrative) {
+      lines.push(`- EJECUCI\xD3N CLUTCH EN LOS 2 MINUTOS FINALES (MARGEN \u22645 PTS): ${clutchExecution.summaryNarrative}`);
+      if (clutchExecution.breakdownLine) lines.push(`  * Reparto de tiros y p\xE9rdidas: ${clutchExecution.breakdownLine}`);
+    }
     if (playerHotSpurts.length > 0) lines.push(`- R\xC1FAGAS Y TRIPLES CONSECUTIVOS DE JUGADOR: ${playerHotSpurts.map((s) => s.summary).join("; ")}`);
     if (earlyFoulTroubles.length > 0) lines.push(`- PROBLEMAS DE FALTAS TEMPRANAS EN TITULARES/ROTACI\xD3N (1Q/2Q): ${earlyFoulTroubles.map((e) => e.summary).join("; ")}`);
-    if (clutchPlays.length > 0) {
+    if (clutchPlays.length > 0 && (!clutchExecution || !clutchExecution.isClutchGame)) {
       lines.push(`- ACCIONES CLUTCH (\xDALTIMOS 5 MIN \u22645 PTS): ${clutchPlays.map((c) => `[${c.periodLabel} ${c.clock}] ${c.teamAbbr}: ${c.description} (margen ${c.scoreMargin} pts)`).join("; ")}`);
     }
     return {
       keyRun,
       breakpoint: lastLeadChange,
       clutchPlays,
+      clutchExecution,
       playerHotSpurts,
       earlyFoulTroubles,
       formattedDossierBlock: lines.join("\n")
@@ -3599,12 +3770,28 @@ function createScoutingEngine(deps) {
     if (report.pbpHighlights?.breakpoint?.summary) {
       quarterNarrative += ` ${report.pbpHighlights.breakpoint.summary}.`;
     }
+    let dynamicSpotlight = null;
+    if (report.isOvertime) {
+      dynamicSpotlight = { title: "Tiempo extra bajo m\xE1xima presi\xF3n", body: `El choque exigi\xF3 ${report.overtimeCount > 1 ? `${report.overtimeCount} pr\xF3rrogas` : "cinco minutos suplementarios"} tras agotarse el tiempo reglamentario en m\xE1xima igualdad, poniendo a prueba las piernas de los titulares y **premiando la ejecuci\xF3n en media pista** de **${winner.shortName}** frente a **${loser.shortName}**.` };
+    } else if (report.pbpHighlights?.clutchExecution?.isClutchGame && margin <= 4) {
+      dynamicSpotlight = {
+        title: "Duelo t\xE1ctico en los dos minutos finales",
+        body: `Con el electr\xF3nico comprimido en una o dos posesiones, **la lucidez en la toma de decisiones al l\xEDmite** dict\xF3 sentencia entre **${winner.shortName}** y **${loser.shortName}**. ${report.pbpHighlights.clutchExecution.summaryNarrative}.`
+      };
+    } else if (Math.abs(wt.benchPoints - lt.benchPoints) >= 16) {
+      const benchWinner = wt.benchPoints > lt.benchPoints ? winner.shortName : loser.shortName;
+      dynamicSpotlight = { title: `Desequilibrio en los tramos de segunda unidad`, body: `La brecha de banquillos (${wt.benchPoints}-${lt.benchPoints} en puntos de suplentes) **alter\xF3 los minutos de descanso titular**, dando aire constante a la rotaci\xF3n de **${benchWinner}**.` };
+    }
     let runAndClutchProse = wt.biggestLead !== null && wt.biggestRun !== null ? `**${winner.shortName}** lleg\xF3 a estirar su ventaja m\xE1xima hasta los +${wt.biggestLead} puntos gracias a una racha de ${wt.biggestRun}-0 que **desarm\xF3 el balance defensivo rival**, sabiendo administrar las posesiones finales ante **${loser.shortName}** sin conceder segundas vidas.` : `En el tramo decisivo, **la gesti\xF3n quir\xFArgica del tempo ofensivo** (${wt.offRtg.toFixed(1)} de eficiencia ofensiva frente a ${lt.offRtg.toFixed(1)}) permiti\xF3 a **${winner.shortName}** blindar el electr\xF3nico frente a **${loser.shortName}**.`;
     if (report.pbpHighlights?.keyRun?.summary) {
       runAndClutchProse += ` El flujo anotador qued\xF3 marcado por el ${report.pbpHighlights.keyRun.summary}.`;
     }
-    if (report.pbpHighlights?.clutchPlays && report.pbpHighlights.clutchPlays.length > 0) {
-      const clutchSummary = report.pbpHighlights.clutchPlays.map((c) => `[${c.periodLabel} ${c.clock}] ${c.description}`).join("; ");
+    if (dynamicSpotlight?.title?.includes("dos minutos finales")) {
+      runAndClutchProse += ` En los compases finales con el marcador en un pu\xF1o, **${winner.shortName}** impuso su temple en cada posesi\xF3n para no ceder el liderato ante el empuje de **${loser.shortName}**.`;
+    } else if (report.pbpHighlights?.clutchExecution?.isClutchGame && report.pbpHighlights.clutchExecution.summaryNarrative) {
+      runAndClutchProse += ` ${report.pbpHighlights.clutchExecution.summaryNarrative}.`;
+    } else if (report.pbpHighlights?.clutchPlays && report.pbpHighlights.clutchPlays.length > 0) {
+      const clutchSummary = report.pbpHighlights.clutchPlays.slice(0, 3).map((c) => `[${c.periodLabel} ${c.clock}] ${c.description}`).join("; ");
       runAndClutchProse += ` En los minutos calientes del clutch, destacaron estas acciones clave: ${clutchSummary}.`;
     }
     const paintAndThreeBattle = wt.ptsPaint !== null && lt.ptsPaint !== null ? `En la pizarra de espacios, **${winner.name}** **domin\xF3 la selecci\xF3n de tiro interior y exterior** con un ${wt.efgPct.toFixed(1)}% en tiro efectivo (${wt.fg3m}/${wt.fg3a} en triples) y ${wt.ptsPaint} puntos en la pintura frente a los ${lt.ptsPaint} de **${loser.shortName}**, mientras que en el rebote el pulso cerr\xF3 ${wt.reb}-${lt.reb} (${wt.oreb} capturas ofensivas del ganador por ${lt.oreb} del rival).` : `En el pulso de los Cuatro Factores, **${winner.name}** **marc\xF3 diferencias desde la eficiencia real de tiro** con un ${wt.efgPct.toFixed(1)}% de acierto efectivo (${wt.fg3m}/${wt.fg3a} desde el per\xEDmetro) frente al ${lt.efgPct.toFixed(1)}% de **${loser.name}**, acompa\xF1ando el acierto con un balance reboteador de ${wt.reb}-${lt.reb}.`;
@@ -3612,13 +3799,6 @@ function createScoutingEngine(deps) {
     const awayMedAbs = report.away.absencesAndDnp.filter(isNonTechnicalAbsence);
     const homeMedAbs = report.home.absencesAndDnp.filter(isNonTechnicalAbsence);
     const benchAndAbsences = `La rotaci\xF3n de segunda unidad aport\xF3 ${wt.benchPoints} puntos en **${winner.shortName}** por ${lt.benchPoints} del banquillo de **${loser.shortName}**${wt.ptsFastBreak !== null && lt.ptsFastBreak !== null ? `, **castigando cada p\xE9rdida a campo abierto** con un parcial de ${wt.ptsFastBreak}-${lt.ptsFastBreak} al contraataque y ${wt.ptsOffTov ?? 0} tantos tras las ${lt.tov} p\xE9rdidas rivales` : `, **penalizando los errores en el manejo** tras las ${lt.tov} p\xE9rdidas de **${loser.shortName}**`}.${awayMedAbs.length > 0 || homeMedAbs.length > 0 ? ` Las rotaciones estuvieron condicionadas por el parte oficial de bajas e incidencias: ${[...awayMedAbs.map((a) => `**${a.name}** (${report.away.abbr} \xB7 ${a.statusLabel || "Baja"}: ${a.note})`), ...homeMedAbs.map((a) => `**${a.name}** (${report.home.abbr} \xB7 ${a.statusLabel || "Baja"}: ${a.note})`)].slice(0, 4).join("; ")}.` : ""}`;
-    let dynamicSpotlight = null;
-    if (report.isOvertime) {
-      dynamicSpotlight = { title: "Tiempo extra bajo m\xE1xima presi\xF3n", body: `El choque exigi\xF3 ${report.overtimeCount > 1 ? `${report.overtimeCount} pr\xF3rrogas` : "cinco minutos suplementarios"} tras agotarse el tiempo reglamentario en m\xE1xima igualdad, poniendo a prueba las piernas de los titulares y **premiando la ejecuci\xF3n en media pista** de **${winner.shortName}** frente a **${loser.shortName}**.` };
-    } else if (Math.abs(wt.benchPoints - lt.benchPoints) >= 16) {
-      const benchWinner = wt.benchPoints > lt.benchPoints ? winner.shortName : loser.shortName;
-      dynamicSpotlight = { title: `Desequilibrio en los tramos de segunda unidad`, body: `La brecha de banquillos (${wt.benchPoints}-${lt.benchPoints} en puntos de suplentes) **alter\xF3 los minutos de descanso titular**, dando aire constante a la rotaci\xF3n de **${benchWinner}**.` };
-    }
     const xFactorSection = wStar && lStar ? `El tim\xF3n ofensivo perteneci\xF3 a **#${wStar.jersey} ${wStar.name}** (${wStar.points} puntos, ${wStar.rebounds} rebotes, ${wStar.assists} asistencias, GmSc ${wStar.gameScore.toFixed(1)}), **generando ventajas constantes sobre la primera ayuda** de **${loser.shortName}**.
 
 Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${wSecond.points} puntos, ${wSecond.rebounds} rebotes y ${wSecond.assists} asistencias, ${wSecond.plusMinus >= 0 ? `+${wSecond.plusMinus}` : wSecond.plusMinus} en pista)` : `el bloque exterior de **${winner.shortName}**`}, **dando continuidad ofensiva a cada tramo sin bal\xF3n**, mientras que en **${loser.name}** la producci\xF3n de **#${lStar.jersey} ${lStar.name}** (${lStar.points} puntos, ${lStar.rebounds} rebotes, ${lStar.assists} asistencias) sostuvo la pelea hasta el desenlace.` : `**El reparto coral en ataque est\xE1tico** de **${winner.name}** inclin\xF3 la balanza en las posesiones calientes del \xFAltimo cuarto ante **${loser.name}**.`;
@@ -3672,7 +3852,34 @@ ${benchAndAbsences}`, dynamicSpotlight, xFactorSection, spanishSection: report.s
       const verifiedGamePlayers = [...report.away.starters.map((p) => p.name), ...report.away.bench.map((p) => p.name), ...report.away.absencesAndDnp.map((p) => p.name), ...report.home.starters.map((p) => p.name), ...report.home.bench.map((p) => p.name), ...report.home.absencesAndDnp.map((p) => p.name)];
       const dossier = [`AVISO CR\xCDTICO DE MUNDO CERRADO: Fecha real del encuentro ${report.date} (Temporada ${report.seasonLabel}). Tu memoria interna de entrenamiento est\xE1 desactualizada varios a\xF1os respecto a entrenadores actuales, traspasos, contratos y palmar\xE9s. NO des NING\xDAN dato por supuesto fuera de los hechos expl\xEDcitos de este dossier.`, `PARTIDO OFICIAL NBA (${report.date} \xB7 Temporada ${report.seasonLabel}):`, `T\xCDTULO: ${report.pasoBTitle}`, `PARCIALES POR CUARTOS: ${report.periods.length > 0 ? report.periods.map((p) => `${p.label} (${report.away.abbr} ${p.awayScore} - ${p.homeScore} ${report.home.abbr})`).join(" | ") : "Sin desglose parcial"} \xB7 Tramo clave: ${report.decisivePeriodLabel}`, `FLUJO DE MARCADOR: Cambios de l\xEDder=${report.leadChanges ?? "No consta"}, Empates=${report.timesTied ?? "No consta"}, M\xE1xima ventaja ${report.away.abbr}=+${report.away.totals.biggestLead ?? 0} (mejor parcial ${report.away.totals.biggestRun ?? 0}-0), M\xE1xima ventaja ${report.home.abbr}=+${report.home.totals.biggestLead ?? 0} (mejor parcial ${report.home.totals.biggestRun ?? 0}-0).`, `RITMO DEL ENCUENTRO (PACE VS MEDIA NBA): ${report.away.totals.pace.toFixed(1)} posesiones/48m (${report.paceDiffVsLeague >= 0 ? `+${report.paceDiffVsLeague.toFixed(1)}` : report.paceDiffVsLeague.toFixed(1)} frente al promedio oficial NBA ${report.seasonLabel} de ${report.leagueAvgPace.toFixed(1)} posesiones).`, matchPress && matchPress.notes.length > 0 ? `TELETIPO DE PRENSA DE ESTE PARTIDO (${report.date}): ${matchPress.notes.join(" | ")}` : "", report.pbpHighlights?.formattedDossierBlock ? `HITOS PLAY-BY-PLAY (DATOS INDEXADOS EN VIVO EN PISTA):
 ${report.pbpHighlights.formattedDossierBlock}` : "", ``, `ESTAD\xCDSTICAS COLECTIVAS:`, `- VISITANTE ${report.away.name} (${report.away.abbr}, r\xE9cord ${report.away.recordAfter}${report.away.isBackToBack ? ", en Back-to-Back" : ""}): ${report.away.score} PTS | ${report.away.totals.fgm}/${report.away.totals.fga} TC (${report.away.totals.fgPct}%) | ${report.away.totals.fg3m}/${report.away.totals.fg3a} T3 (${report.away.totals.fg3Pct}%) | ${report.away.totals.ftm}/${report.away.totals.fta} TL | ${report.away.totals.reb} REB (${report.away.totals.oreb} OR) | ${report.away.totals.ast} AST | ${report.away.totals.stl} ROB | ${report.away.totals.blk} TAP | ${report.away.totals.tov} PER | OffRtg ${report.away.totals.offRtg} | eFG% ${report.away.totals.efgPct}% | Pintura: ${report.away.totals.ptsPaint ?? "s/d"} | Contraataque: ${report.away.totals.ptsFastBreak ?? "s/d"} | Tras p\xE9rdida: ${report.away.totals.ptsOffTov ?? "s/d"} | 2\xAA jugada: ${report.away.totals.ptsSecondChance ?? "s/d"} | Banquillo: ${report.away.totals.benchPoints} PTS.`, `- LOCAL ${report.home.name} (${report.home.abbr}, r\xE9cord ${report.home.recordAfter}${report.home.isBackToBack ? ", en Back-to-Back" : ""}): ${report.home.score} PTS | ${report.home.totals.fgm}/${report.home.totals.fga} TC (${report.home.totals.fgPct}%) | ${report.home.totals.fg3m}/${report.home.totals.fg3a} T3 (${report.home.totals.fg3Pct}%) | ${report.home.totals.ftm}/${report.home.totals.fta} TL | ${report.home.totals.reb} REB (${report.home.totals.oreb} OR) | ${report.home.totals.ast} AST | ${report.home.totals.stl} ROB | ${report.home.totals.blk} TAP | ${report.home.totals.tov} PER | OffRtg ${report.home.totals.offRtg} | eFG% ${report.home.totals.efgPct}% | Pintura: ${report.home.totals.ptsPaint ?? "s/d"} | Contraataque: ${report.home.totals.ptsFastBreak ?? "s/d"} | Tras p\xE9rdida: ${report.home.totals.ptsOffTov ?? "s/d"} | 2\xAA jugada: ${report.home.totals.ptsSecondChance ?? "s/d"} | Banquillo: ${report.home.totals.benchPoints} PTS.`, ``, `PLANTILLA ${report.away.abbr} EN PISTA:`, ...[...report.away.starters, ...report.away.bench].map(formatPlayerDossier), `BAJAS M\xC9DICAS / LESIONADOS E INCIDENCIAS EN PISTA ${report.away.abbr}: ${report.away.absencesAndDnp.filter((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague").length > 0 ? report.away.absencesAndDnp.filter((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague").map((a) => `#${a.jersey} ${a.name} [${a.statusLabel || "Lesionado"} \u2014 ${a.note}]`).join("; ") : "Ninguna baja m\xE9dica ni incidencia registrada"}`, `SIN MINUTOS POR DECISI\xD3N T\xC9CNICA / G-LEAGUE ${report.away.abbr}: ${report.away.absencesAndDnp.filter((a) => a.statusType === "coach_decision" || a.statusType === "gleague").length > 0 ? report.away.absencesAndDnp.filter((a) => a.statusType === "coach_decision" || a.statusType === "gleague").map((a) => `#${a.jersey} ${a.name} [${a.statusLabel || "Decisi\xF3n t\xE9cnica"} \u2014 ${a.note}]`).join("; ") : "Ninguno"}`, ``, `PLANTILLA ${report.home.abbr} EN PISTA:`, ...[...report.home.starters, ...report.home.bench].map(formatPlayerDossier), `BAJAS M\xC9DICAS / LESIONADOS E INCIDENCIAS EN PISTA ${report.home.abbr}: ${report.home.absencesAndDnp.filter((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague").length > 0 ? report.home.absencesAndDnp.filter((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague").map((a) => `#${a.jersey} ${a.name} [${a.statusLabel || "Lesionado"} \u2014 ${a.note}]`).join("; ") : "Ninguna baja m\xE9dica ni incidencia registrada"}`, `SIN MINUTOS POR DECISI\xD3N T\xC9CNICA / G-LEAGUE ${report.home.abbr}: ${report.home.absencesAndDnp.filter((a) => a.statusType === "coach_decision" || a.statusType === "gleague").length > 0 ? report.home.absencesAndDnp.filter((a) => a.statusType === "coach_decision" || a.statusType === "gleague").map((a) => `#${a.jersey} ${a.name} [${a.statusLabel || "Decisi\xF3n t\xE9cnica"} \u2014 ${a.note}]`).join("; ") : "Ninguno"}`, ``, `DETECTOR OFICIAL DE JUGADORES ESPA\xD1OLES: ${report.spanishPlayersReport.summaryLine}`, `DOBLES-DOBLES Y TRIPLES-DOBLES VERIFICADOS: ${report.milestonesList.length > 0 ? report.milestonesList.map((m) => `${m.type}: ${m.detail}`).join(" | ") : "Ninguno en este encuentro"}`, `PODIO CALCULADO: ${report.away.abbr} (${report.away.podium.map((p) => `${"\u2B50".repeat(p.stars)} #${p.jersey} ${p.name}`).join(" | ")}) // ${report.home.abbr} (${report.home.podium.map((p) => `${"\u2B50".repeat(p.stars)} #${p.jersey} ${p.name}`).join(" | ")})`].filter(Boolean).join("\n");
-      const systemInstruction = ["Eres un periodista s\xE9nior de prensa deportiva espa\xF1ola y scout t\xE1ctico profesional de la NBA (estilo The Athletic, Gigantes del Basket y NBAManiacs).", "REGLAS INQUEBRANTABLES DE RIGOR Y MUNDO CERRADO (CERO DATOS POR SUPUESTOS):", '1. RIGOR EMP\xCDRICO ABSOLUTO: Usa EXCLUSIVAMENTE las cifras estad\xEDsticas exactas, el pabell\xF3n oficial indicado en T\xCDTULO y la informaci\xF3n expl\xEDcita del dossier adjunto. Jam\xE1s inventes puntos, rebotes, parciales, jugadas concretas segundo a segundo (ej. "triple desde la esquina a falta de 2 segundos") ni dorsales que no figuren en el acta.', '2. PROHIBICI\xD3N TOTAL DE DAR DATOS POR SUPUESTOS O USAR MEMORIA PREENTRENADA: Tu conocimiento interno previo est\xE1 desactualizado respecto a la temporada actual. Tienes TERMINANTEMENTE PROHIBIDO dar por supuesto o mencionar: (a) nombres propios o apodos de entrenadores, asistentes o directivos (ej. Tom Thibodeau dej\xF3 los NY Knicks hace a\xF1os; NUNCA cites nombres de entrenadores, usa SIEMPRE "el cuerpo t\xE9cnico de [Equipo]", "la direcci\xF3n t\xE9cnica de [Equipo]" o "la pizarra de [Equipo]"); (b) antig\xFCedad, edad, rondas de Draft, condici\xF3n de rookie, contratos, exequipos o traspasos de jugadores; (c) premios pasados, anillos, "vigente campe\xF3n" o series de temporadas anteriores; (d) puestos exactos en la tabla clasificatoria (ej. "3\xBA del Este") o pr\xF3ximos rivales del calendario; (e) diagn\xF3sticos m\xE9dicos o plazos de recuperaci\xF3n m\xE1s all\xE1 de la nota literal del dossier.', '3. PULCRITUD EN BAJAS (LESI\xD3N VS DECISI\xD3N T\xC9CNICA) Y RITMO: Al mencionar ausencias o jugadores sin minutos en PIZARRA_Y_ROTACION o ESPANOLES, s\xE9 escrupulosamente pulcro distinguiendo entre quienes causaron baja por lesi\xF3n / parte m\xE9dico (bloque BAJAS M\xC9DICAS / LESIONADOS) y quienes no participaron por decisi\xF3n t\xE9cnica o asignaci\xF3n a G-League (bloque SIN MINUTOS POR DECISI\xD3N T\xC9CNICA). Jam\xE1s llames "lesionado" a un descarte por decisi\xF3n t\xE9cnica ni viceversa. Integra tambi\xE9n el Pace frente a la media oficial NBA y, si hubo expulsados por 6 faltas, cita cuarto y reloj exactos.', "4. REDACCI\xD3N 100% NATURAL Y HUMANA: Escribe en espa\xF1ol de Espa\xF1a fluido, con vocabulario t\xE1ctico aut\xE9ntico (espaciado, pintura, bloqueo directo, ajuste tras descanso, transici\xF3n defensiva, segunda unidad, rebote ofensivo, clutch).", '5. CERO CLICH\xC9S NI RELLENO: Prohibido usar "En conclusi\xF3n", "Cabe destacar", "Sin lugar a dudas", "Sin duda" o metatexto. Redacta p\xE1rrafos cohesivos, sin listas de vi\xF1etas ni tablas Markdown.', '6. JERARQU\xCDA VISUAL Y \xC9NFASIS EN NEGRITA (**...**): En todos los p\xE1rrafos del cuerpo (ENTRADILLA, GUION_Y_QUIEBRE, PIZARRA_Y_ROTACION, cuerpo de FOCO_ESPECIAL, FACTOR_X_Y_LIDERES, ESPANOLES y VEREDICTO_E_HITOS), utiliza negrita Markdown (**texto**) EXCLUSIVAMENTE para estos tres elementos: (a) nombres de jugadores (incluyendo su dorsal cuando lo cites, ej. **#15 Nikola Joki\u0107**), (b) nombres o apodos oficiales de equipos/franquicias (ej. **Boston Celtics**, **Knicks**), y (c) UNA sola idea t\xE1ctica clave por p\xE1rrafo (una frase corta de 4 a 10 palabras que resuma la clave del juego, ej. **colapsando la pintura tras cada bloqueo directo**). PROHIBIDO poner en negrita cifras o estad\xEDsticas sueltas (como "49 puntos", "12 rebotes" o "58.4%"): int\xE9gralas en texto normal sin formato especial. PROHIBIDO usar ** en TITULAR_PRENSA ni en el t\xEDtulo corto previo a || en FOCO_ESPECIAL.', "7. ESTRUCTURA EXACTA DE SALIDA CON ESTAS 8 ETIQUETAS EN MAY\xDASCULAS:", "===TITULAR_PRENSA===", "(Titular period\xEDstico vibrante y directo de 1 l\xEDnea sobre el partido, sin almohadillas # ni asteriscos **).", "===ENTRADILLA===", "(Entradilla destacada de 2 l\xEDneas sintetizando la tesis t\xE1ctica y el protagonista del encuentro, aplicando la regla de negritas).", "===GUION_Y_QUIEBRE===", "(2 p\xE1rrafos fluidos: evoluci\xF3n del partido por cuartos, ritmo comparado con la media NBA, alternancias, rachas anotadoras y el momento exacto donde se rompi\xF3 o decidi\xF3 el choque).", "===PIZARRA_Y_ROTACION===", "(2 p\xE1rrafos de scouting profundo: ajustes t\xE1cticos colectivos, batallas en pintura/triple/rebote, impacto real diferenciando con pulcritud bajas por lesi\xF3n frente a ausencias por decisi\xF3n t\xE9cnica o expulsiones por faltas con su cuarto/reloj, rendimiento de la segunda unidad y puntos tras p\xE9rdida/contraataque).", "===FOCO_ESPECIAL===", '(Si el partido tuvo un \xE1ngulo singular \u2014pr\xF3rroga, remontada grande, exhibici\xF3n hist\xF3rica, cortocircuito en el clutch, cl\xEDnica defensiva\u2014, escribe en una l\xEDnea el t\xEDtulo corto sin ** seguido de || y 1 p\xE1rrafo anal\xEDtico con la regla de negritas: ej. "Supervivencia en la pr\xF3rroga || Texto...". Si fue un guion convencional sin \xE1ngulo extra, escribe \xFAnicamente: NINGUNO).', "===FACTOR_X_Y_LIDERES===", "(2 p\xE1rrafos analizando el duelo de estrellas y qui\xE9n emergi\xF3 como Factor X inesperado para inclinar la balanza, citando siempre dorsales # y cifras reales).", "===ESPANOLES===", "(Si hay espa\xF1oles en el detector oficial, analiza en 1 p\xE1rrafo su impacto o situaci\xF3n en convocatoria; si NO los hay, escribe UNA SOLA FRASE breve, limpia y directa confirm\xE1ndolo).", "===VEREDICTO_E_HITOS===", "(2 p\xE1rrafos integrando con total naturalidad los dobles-dobles o triples-dobles verificados y cerrando con el veredicto strictly t\xE1ctico del scout sobre qu\xE9 deja este choque a ambos equipos)."].join("\n");
+      const systemInstruction = [
+        "Eres un periodista s\xE9nior de prensa deportiva espa\xF1ola y scout t\xE1ctico profesional de la NBA (estilo The Athletic, Gigantes del Basket y NBAManiacs).",
+        "REGLAS INQUEBRANTABLES DE RIGOR Y MUNDO CERRADO (CERO DATOS POR SUPUESTOS):",
+        '1. RIGOR EMP\xCDRICO ABSOLUTO: Usa EXCLUSIVAMENTE las cifras estad\xEDsticas exactas, el pabell\xF3n oficial indicado en T\xCDTULO y la informaci\xF3n expl\xEDcita del dossier adjunto. Jam\xE1s inventes puntos, rebotes, parciales, jugadas concretas segundo a segundo (ej. "triple desde la esquina a falta de 2 segundos") ni dorsales que no figuren en el acta.',
+        '2. PROHIBICI\xD3N TOTAL DE DAR DATOS POR SUPUESTOS O USAR MEMORIA PREENTRENADA: Tu conocimiento interno previo est\xE1 desactualizado respecto a la temporada actual. Tienes TERMINANTEMENTE PROHIBIDO dar por supuesto o mencionar: (a) nombres propios o apodos de entrenadores, asistentes o directivos (ej. Tom Thibodeau dej\xF3 los NY Knicks hace a\xF1os; NUNCA cites nombres de entrenadores, usa SIEMPRE "el cuerpo t\xE9cnico de [Equipo]", "la direcci\xF3n t\xE9cnica de [Equipo]" o "la pizarra de [Equipo]"); (b) antig\xFCedad, edad, rondas de Draft, condici\xF3n de rookie, contratos, exequipos o traspasos de jugadores; (c) premios pasados, anillos, "vigente campe\xF3n" o series de temporadas anteriores; (d) puestos exactos en la tabla clasificatoria (ej. "3\xBA del Este") o pr\xF3ximos rivales del calendario; (e) diagn\xF3sticos m\xE9dicos o plazos de recuperaci\xF3n m\xE1s all\xE1 de la nota literal del dossier.',
+        '3. PULCRITUD EN BAJAS (LESI\xD3N VS DECISI\xD3N T\xC9CNICA) Y RITMO: Al mencionar ausencias o jugadores sin minutos en PIZARRA_Y_ROTACION o ESPANOLES, s\xE9 escrupulosamente pulcro distinguiendo entre quienes causaron baja por lesi\xF3n / parte m\xE9dico (bloque BAJAS M\xC9DICAS / LESIONADOS) y quienes no participaron por decisi\xF3n t\xE9cnica o asignaci\xF3n a G-League (bloque SIN MINUTOS POR DECISI\xD3N T\xC9CNICA). Jam\xE1s llames "lesionado" a un descarte por decisi\xF3n t\xE9cnica ni viceversa. Integra tambi\xE9n el Pace frente a la media oficial NBA y, si hubo expulsados por 6 faltas, cita cuarto y reloj exactos.',
+        "4. REDACCI\xD3N 100% NATURAL Y HUMANA: Escribe en espa\xF1ol de Espa\xF1a fluido, con vocabulario t\xE1ctico aut\xE9ntico (espaciado, pintura, bloqueo directo, ajuste tras descanso, transici\xF3n defensiva, segunda unidad, rebote ofensivo, clutch).",
+        '5. CERO CLICH\xC9S NI RELLENO: Prohibido usar "En conclusi\xF3n", "Cabe destacar", "Sin lugar a dudas", "Sin duda" o metatexto. Redacta p\xE1rrafos cohesivos, sin listas de vi\xF1etas ni tablas Markdown.',
+        '6. JERARQU\xCDA VISUAL Y \xC9NFASIS EN NEGRITA (**...**): En todos los p\xE1rrafos del cuerpo (ENTRADILLA, GUION_Y_QUIEBRE, PIZARRA_Y_ROTACION, cuerpo de FOCO_ESPECIAL, FACTOR_X_Y_LIDERES, ESPANOLES y VEREDICTO_E_HITOS), utiliza negrita Markdown (**texto**) EXCLUSIVAMENTE para estos tres elementos: (a) nombres de jugadores (incluyendo su dorsal cuando lo cites, ej. **#15 Nikola Joki\u0107**), (b) nombres o apodos oficiales de equipos/franquicias (ej. **Boston Celtics**, **Knicks**), y (c) UNA sola idea t\xE1ctica clave por p\xE1rrafo (una frase corta de 4 a 10 palabras que resuma la clave del juego, ej. **colapsando la pintura tras cada bloqueo directo**). PROHIBIDO poner en negrita cifras o estad\xEDsticas sueltas (como "49 puntos", "12 rebotes" o "58.4%"): int\xE9gralas en texto normal sin formato especial. PROHIBIDO usar ** en TITULAR_PRENSA ni en el t\xEDtulo corto previo a || en FOCO_ESPECIAL.',
+        "7. ESTRUCTURA EXACTA DE SALIDA CON ESTAS 8 ETIQUETAS EN MAY\xDASCULAS:",
+        "===TITULAR_PRENSA===",
+        "(Titular period\xEDstico vibrante y directo de 1 l\xEDnea sobre el partido, sin almohadillas # ni asteriscos **).",
+        "===ENTRADILLA===",
+        "(Entradilla destacada de 2 l\xEDneas sintetizando la tesis t\xE1ctica y el protagonista del encuentro, aplicando la regla de negritas).",
+        "===GUION_Y_QUIEBRE===",
+        "(2 p\xE1rrafos fluidos: evoluci\xF3n del partido por cuartos, ritmo comparado con la media NBA, alternancias, rachas anotadoras y el momento exacto donde se rompi\xF3 o decidi\xF3 el choque).",
+        "===PIZARRA_Y_ROTACION===",
+        "(2 p\xE1rrafos de scouting profundo: ajustes t\xE1cticos colectivos, batallas en pintura/triple/rebote, impacto real diferenciando con pulcritud bajas por lesi\xF3n frente a ausencias por decisi\xF3n t\xE9cnica o expulsiones por faltas con su cuarto/reloj, rendimiento de la segunda unidad y puntos tras p\xE9rdida/contraataque).",
+        "===FOCO_ESPECIAL===",
+        '(Si el partido tuvo un \xE1ngulo singular \u2014pr\xF3rroga, remontada grande, exhibici\xF3n hist\xF3rica, cortocircuito en el clutch, cl\xEDnica defensiva\u2014, escribe en una l\xEDnea el t\xEDtulo corto sin ** seguido de || y 1 p\xE1rrafo anal\xEDtico con la regla de negritas: ej. "Supervivencia en la pr\xF3rroga || Texto...". Si fue un guion convencional sin \xE1ngulo extra, escribe \xFAnicamente: NINGUNO).',
+        "===FACTOR_X_Y_LIDERES===",
+        "(2 p\xE1rrafos analizando el duelo de estrellas y qui\xE9n emergi\xF3 como Factor X inesperado para inclinar la balanza, citando siempre dorsales # y cifras reales).",
+        "===ESPANOLES===",
+        "(Si hay espa\xF1oles en el detector oficial, analiza en 1 p\xE1rrafo su impacto o situaci\xF3n en convocatoria; si NO los hay, escribe UNA SOLA FRASE breve, limpia y directa confirm\xE1ndolo).",
+        "===VEREDICTO_E_HITOS===",
+        "(2 p\xE1rrafos integrando con total naturalidad los dobles-dobles o triples-dobles verificados y cerrando con el veredicto strictly t\xE1ctico del scout sobre qu\xE9 deja este choque a ambos equipos).",
+        '8. INTEGRACI\xD3N FLUIDA DEL PLAY-BY-PLAY (SIN REPETICIONES NI LISTAS ARTIFICIALES): (a) TIEMPOS MUERTOS TRAS PARCIAL: Si el dossier detalla un parcial demoledor que forz\xF3 un tiempo muerto t\xE9cnico (ej. "parcial de 11-0 que oblig\xF3 a parar el partido con tiempo muerto"), int\xE9gralo con soltura en GUION_Y_QUIEBRE sin inventar nombres propios de entrenadores (usa siempre "el cuerpo t\xE9cnico de [Equipo rival]" o "la direcci\xF3n t\xE9cnica de [Equipo rival]"). (b) REPARTO DE TIROS Y P\xC9RDIDAS EN CLUTCH: Si el dossier incluye el bloque de ejecuci\xF3n clutch (\xFAltimos 2 minutos con margen \u22645 pts), sintetiza con solvencia t\xE1ctica c\xF3mo se repartieron los tiros decisivos, qui\xE9n asumi\xF3 la responsabilidad y qu\xE9 p\xE9rdidas de bal\xF3n castigaron al derrotado en GUION_Y_QUIEBRE o FOCO_ESPECIAL, sin enumerar vi\xF1etas mec\xE1nicas. (c) CERO REPETICI\xD3N ENTRE SECCIONES: Distribuye la informaci\xF3n arm\xF3nicamente para no repetir el mismo hecho o cifra exacta en GUION_Y_QUIEBRE y de nuevo en PIZARRA_Y_ROTACION o FOCO_ESPECIAL.'
+      ].join("\n");
       try {
         const cascadeBudgetMs = isServerless ? 28e3 : 28e3;
         const geminiCall = generateWithGeminiCascade({
@@ -8138,7 +8345,21 @@ var gamedayThresholdsBodySchema = z.strictObject({
   slumpMinutesCutDelta: z.coerce.number().min(2).max(25)
 });
 var safeRivalKeySchema = z.string().trim().min(1).max(40).regex(/^[a-zA-Z0-9_-]+$/, "Clave de equipo rival no v\xE1lida.").refine((k) => !FORBIDDEN_PROTOTYPE_KEYS.has(k.toLowerCase()), "Clave reservada.");
-var manualFantasyStateBodySchema = z.strictObject({ updatedAt: z.number().finite().nonnegative().optional(), myTeamName: z.string().max(80, "El nombre del equipo no puede superar 80 caracteres.").transform(stripControlChars).optional(), roster: z.array(z.strictObject({ playerId: safeEntityIdSchema, slot: z.enum(["starter", "bench", "ir"]) })).max(25, "La plantilla no puede superar 25 jugadores."), takenRivalIds: z.array(safeEntityIdSchema).max(600, "Demasiados jugadores rivales marcados."), rivalRosters: z.record(safeRivalKeySchema, z.array(safeEntityIdSchema).max(30)), rivalTeamNames: z.record(safeRivalKeySchema, z.string().max(80).transform(stripControlChars)) });
+var safeGameCorrectionKeySchema = z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_:-]+$/, "Clave de correcci\xF3n no v\xE1lida.").refine((k) => !FORBIDDEN_PROTOTYPE_KEYS.has(k.toLowerCase()), "Clave reservada.");
+var gameCorrectionItemSchema = z.object({
+  fptsDelta: z.number().finite(),
+  reason: z.string().max(200).optional().default(""),
+  updatedAt: z.number().finite().nonnegative().optional()
+});
+var manualFantasyStateBodySchema = z.object({
+  updatedAt: z.number().finite().nonnegative().optional(),
+  myTeamName: z.string().max(80, "El nombre del equipo no puede superar 80 caracteres.").transform(stripControlChars).optional(),
+  roster: z.array(z.object({ playerId: safeEntityIdSchema, slot: z.enum(["starter", "bench", "ir"]) })).max(25, "La plantilla no puede superar 25 jugadores."),
+  takenRivalIds: z.array(safeEntityIdSchema).max(600, "Demasiados jugadores rivales marcados."),
+  rivalRosters: z.record(safeRivalKeySchema, z.array(safeEntityIdSchema).max(30)),
+  rivalTeamNames: z.record(safeRivalKeySchema, z.string().max(80).transform(stripControlChars)),
+  gameCorrections: z.record(safeGameCorrectionKeySchema, gameCorrectionItemSchema).optional()
+}).passthrough();
 function getValidated(req) {
   const bag = req.__validated;
   if (bag) {

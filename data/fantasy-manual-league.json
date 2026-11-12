@@ -1,0 +1,20 @@
+{
+  "updatedAt": 1794474930396,
+  "myTeamName": "Mi Equipo Fantasy",
+  "roster": [
+    {
+      "playerId": "1628369",
+      "slot": "starter"
+    }
+  ],
+  "takenRivalIds": [],
+  "rivalRosters": {},
+  "rivalTeamNames": {},
+  "gameCorrections": {
+    "1642349:0022600007": {
+      "fptsDelta": 2.5,
+      "reason": "test",
+      "updatedAt": 1700000000000
+    }
+  }
+}

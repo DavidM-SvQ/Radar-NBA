@@ -62,8 +62,22 @@ const gamedayThresholdsBodySchema = z.strictObject({
   slumpRebDropDelta: z.coerce.number().min(1).max(12),
   slumpMinutesCutDelta: z.coerce.number().min(2).max(25),
 });
-const safeRivalKeySchema = z.string().trim().min(1).max(40).regex(/^[a-zA-Z0-9_-]+$/, "Clave de equipo rival no v\xE1lida.").refine((k) => !FORBIDDEN_PROTOTYPE_KEYS.has(k.toLowerCase()), "Clave reservada.");
-const manualFantasyStateBodySchema = z.strictObject({ updatedAt: z.number().finite().nonnegative().optional(), myTeamName: z.string().max(80, "El nombre del equipo no puede superar 80 caracteres.").transform(stripControlChars).optional(), roster: z.array(z.strictObject({ playerId: safeEntityIdSchema, slot: z.enum(["starter", "bench", "ir"]) })).max(25, "La plantilla no puede superar 25 jugadores."), takenRivalIds: z.array(safeEntityIdSchema).max(600, "Demasiados jugadores rivales marcados."), rivalRosters: z.record(safeRivalKeySchema, z.array(safeEntityIdSchema).max(30)), rivalTeamNames: z.record(safeRivalKeySchema, z.string().max(80).transform(stripControlChars)) });
+const safeRivalKeySchema = z.string().trim().min(1).max(40).regex(/^[a-zA-Z0-9_-]+$/, "Clave de equipo rival no válida.").refine((k) => !FORBIDDEN_PROTOTYPE_KEYS.has(k.toLowerCase()), "Clave reservada.");
+const safeGameCorrectionKeySchema = z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_:-]+$/, "Clave de corrección no válida.").refine((k) => !FORBIDDEN_PROTOTYPE_KEYS.has(k.toLowerCase()), "Clave reservada.");
+const gameCorrectionItemSchema = z.object({
+  fptsDelta: z.number().finite(),
+  reason: z.string().max(200).optional().default(""),
+  updatedAt: z.number().finite().nonnegative().optional(),
+});
+const manualFantasyStateBodySchema = z.object({
+  updatedAt: z.number().finite().nonnegative().optional(),
+  myTeamName: z.string().max(80, "El nombre del equipo no puede superar 80 caracteres.").transform(stripControlChars).optional(),
+  roster: z.array(z.object({ playerId: safeEntityIdSchema, slot: z.enum(["starter", "bench", "ir"]) })).max(25, "La plantilla no puede superar 25 jugadores."),
+  takenRivalIds: z.array(safeEntityIdSchema).max(600, "Demasiados jugadores rivales marcados."),
+  rivalRosters: z.record(safeRivalKeySchema, z.array(safeEntityIdSchema).max(30)),
+  rivalTeamNames: z.record(safeRivalKeySchema, z.string().max(80).transform(stripControlChars)),
+  gameCorrections: z.record(safeGameCorrectionKeySchema, gameCorrectionItemSchema).optional(),
+}).passthrough();
 function getValidated(req) {
   const bag = req.__validated;
   if (bag) {

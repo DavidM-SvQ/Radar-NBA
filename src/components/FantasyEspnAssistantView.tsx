@@ -215,14 +215,21 @@ function normalizeRosterSlots(contracts: FantasyRosterContract[]): FantasyRoster
   for (const c of contracts) {
     if (c.playerId && !seen.has(c.playerId) && unique.length < OFFICIAL_LEAGUE_RULES.maxContracts) {
       seen.add(c.playerId);
-      unique.push({ playerId: c.playerId, slot: c.slot === 'bench' ? 'bench' : 'starter' });
+      const cleanSlot = c.slot === 'bench' ? 'bench' : c.slot === 'ir' ? 'ir' : 'starter';
+      unique.push({ playerId: c.playerId, slot: cleanSlot });
     }
   }
   let starterCount = 0;
   return unique.map((c) => {
-    if (c.slot === 'starter' && starterCount < OFFICIAL_LEAGUE_RULES.activeStarters) {
-      starterCount += 1;
-      return { playerId: c.playerId, slot: 'starter' };
+    if (c.slot === 'starter') {
+      if (starterCount < OFFICIAL_LEAGUE_RULES.activeStarters) {
+        starterCount += 1;
+        return { playerId: c.playerId, slot: 'starter' };
+      }
+      return { playerId: c.playerId, slot: 'bench' };
+    }
+    if (c.slot === 'ir') {
+      return { playerId: c.playerId, slot: 'ir' };
     }
     return { playerId: c.playerId, slot: 'bench' };
   });
@@ -877,26 +884,36 @@ export function FantasyEspnAssistantView({
         const localHas = hasAnyUserLeagueData(currentLocal);
         const serverHas = hasAnyUserLeagueData(serverState);
 
-        if (
-          serverState &&
-          ((!localHas && serverHas) || serverState.updatedAt > currentLocal.updatedAt)
-        ) {
-          const hydrated: FantasyManualLeagueState = {
-            ...serverState,
-            roster: normalizeRosterSlots(serverState.roster || []),
-          };
-          try {
-            localStorage.setItem(STORAGE_FANTASY_PERMANENT_KEY, JSON.stringify(hydrated));
-          } catch {
-            // Ignore storage errors
+        // 1. If server has data:
+        if (serverState && serverHas) {
+          // If server is newer than or equal to local state, or local has no data, adopt server as source of truth
+          if (!localHas || (serverState.updatedAt || 0) >= (currentLocal.updatedAt || 0)) {
+            const hydrated: FantasyManualLeagueState = {
+              ...serverState,
+              roster: normalizeRosterSlots(serverState.roster || []),
+            };
+            try {
+              localStorage.setItem(STORAGE_FANTASY_PERMANENT_KEY, JSON.stringify(hydrated));
+            } catch {
+              // Ignore storage errors
+            }
+            return hydrated;
           }
-          return hydrated;
+
+          // If local has more recent changes made on this device that haven't reached the server, keep local and re-persist
+          if (localHas && (currentLocal.updatedAt || 0) > (serverState.updatedAt || 0)) {
+            setTimeout(() => {
+              void persistStateToServerDisk(currentLocal);
+            }, 0);
+            return currentLocal;
+          }
         }
 
+        // 2. Only if the server has NO saved data yet, but local device has data, upload local data to server once
         if (
           allowInitialLocalUpload &&
           localHas &&
-          (!serverState || !serverHas || currentLocal.updatedAt > serverState.updatedAt)
+          (!serverState || !serverHas)
         ) {
           const syncedLocal: FantasyManualLeagueState = {
             ...currentLocal,
@@ -953,16 +970,16 @@ export function FantasyEspnAssistantView({
             } catch {
               // Ignore storage errors
             }
-            setCloudSyncFeedback('Datos descargados y sincronizados desde la nube.');
+            setCloudSyncFeedback('Datos descargados y sincronizados desde el servidor.');
           } else {
-            setCloudSyncFeedback('La nube aún no tiene equipos guardados. Pulsa "Subir este navegador a la nube".');
+            setCloudSyncFeedback('El servidor aún no tiene equipos guardados.');
           }
           return;
         }
         reconcileIncomingServerState(data.state, false);
       } catch {
         if (manualTrigger) {
-          setCloudSyncFeedback('Error de red al consultar la nube.');
+          setCloudSyncFeedback('Error de red al consultar el servidor.');
         }
       }
     },
@@ -1039,15 +1056,25 @@ export function FantasyEspnAssistantView({
     const checkCloudOnFocus = () => {
       if (document.visibilityState === 'hidden') return;
       const now = Date.now();
-      if (now - lastVisibilityCheckRef.current < 10_000) return;
+      if (now - lastVisibilityCheckRef.current < 2_000) return;
       lastVisibilityCheckRef.current = now;
       void pullLatestManualStateFromServer(false);
     };
+
     window.addEventListener('focus', checkCloudOnFocus);
     document.addEventListener('visibilitychange', checkCloudOnFocus);
+
+    // Auto polling every 15s to keep mobile/desktop synchronized in real-time
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void pullLatestManualStateFromServer(false);
+      }
+    }, 15_000);
+
     return () => {
       window.removeEventListener('focus', checkCloudOnFocus);
       document.removeEventListener('visibilitychange', checkCloudOnFocus);
+      clearInterval(interval);
     };
   }, [pullLatestManualStateFromServer]);
 
@@ -1211,11 +1238,21 @@ export function FantasyEspnAssistantView({
   }, [leagueState.roster, enrichedById]);
 
   const optimalStarterIds = useMemo(() => {
-    const sorted = [...myRosterEnriched].sort(
-      (a, b) =>
-        b.weekly.lockAdjustedFpts - a.weekly.lockAdjustedFpts ||
-        b.weekly.rawFormulaFpts - a.weekly.rawFormulaFpts
-    );
+    const sorted = [...myRosterEnriched].sort((a, b) => {
+      if (Math.abs(b.weekly.lockAdjustedFpts - a.weekly.lockAdjustedFpts) >= 0.05) {
+        return b.weekly.lockAdjustedFpts - a.weekly.lockAdjustedFpts;
+      }
+      if (Math.abs(b.weekly.rawFormulaFpts - a.weekly.rawFormulaFpts) >= 0.05) {
+        return b.weekly.rawFormulaFpts - a.weekly.rawFormulaFpts;
+      }
+      if (Math.abs(b.stats.weightedFptsPerGame - a.stats.weightedFptsPerGame) >= 0.05) {
+        return b.stats.weightedFptsPerGame - a.stats.weightedFptsPerGame;
+      }
+      if (Math.abs(b.stats.seasonAvgFpts - a.stats.seasonAvgFpts) >= 0.05) {
+        return b.stats.seasonAvgFpts - a.stats.seasonAvgFpts;
+      }
+      return b.stats.seasonTotalFpts - a.stats.seasonTotalFpts;
+    });
     return new Set(
       sorted
         .slice(0, OFFICIAL_LEAGUE_RULES.activeStarters)
@@ -1949,15 +1986,56 @@ export function FantasyEspnAssistantView({
   };
 
   const handleAutoOptimizeStarters = () => {
-    commitLeagueState((prev) => ({
-      ...prev,
-      roster: prev.roster.map((c) => ({
-        playerId: c.playerId,
-        slot: optimalStarterIds.has(c.playerId) ? 'starter' : 'bench',
-      })),
-    }));
+    commitLeagueState((prev) => {
+      const sortedEnriched = [...myRosterEnriched].sort((a, b) => {
+        if (Math.abs(b.weekly.lockAdjustedFpts - a.weekly.lockAdjustedFpts) >= 0.05) {
+          return b.weekly.lockAdjustedFpts - a.weekly.lockAdjustedFpts;
+        }
+        if (Math.abs(b.weekly.rawFormulaFpts - a.weekly.rawFormulaFpts) >= 0.05) {
+          return b.weekly.rawFormulaFpts - a.weekly.rawFormulaFpts;
+        }
+        if (Math.abs(b.stats.weightedFptsPerGame - a.stats.weightedFptsPerGame) >= 0.05) {
+          return b.stats.weightedFptsPerGame - a.stats.weightedFptsPerGame;
+        }
+        if (Math.abs(b.stats.seasonAvgFpts - a.stats.seasonAvgFpts) >= 0.05) {
+          return b.stats.seasonAvgFpts - a.stats.seasonAvgFpts;
+        }
+        return b.stats.seasonTotalFpts - a.stats.seasonTotalFpts;
+      });
+
+      const bestStarterIds = new Set(
+        sortedEnriched
+          .slice(0, OFFICIAL_LEAGUE_RULES.activeStarters)
+          .map((x) => x.player.id)
+      );
+
+      const rankedStarters: FantasyRosterContract[] = [];
+      const rankedBench: FantasyRosterContract[] = [];
+
+      for (const item of sortedEnriched) {
+        if (bestStarterIds.has(item.player.id)) {
+          rankedStarters.push({ playerId: item.player.id, slot: 'starter' });
+        } else {
+          const origContract = prev.roster.find((c) => c.playerId === item.player.id);
+          const keepIr = origContract?.slot === 'ir' && item.weekly.absenceTier === 'long_term';
+          rankedBench.push({ playerId: item.player.id, slot: keepIr ? 'ir' : 'bench' });
+        }
+      }
+
+      const handledIds = new Set([...rankedStarters, ...rankedBench].map((c) => c.playerId));
+      for (const c of prev.roster) {
+        if (!handledIds.has(c.playerId)) {
+          rankedBench.push({ playerId: c.playerId, slot: 'bench' });
+        }
+      }
+
+      return {
+        ...prev,
+        roster: [...rankedStarters, ...rankedBench],
+      };
+    });
     setActionBannerMsg(
-      'Alineación optimizada y guardada: los 10 jugadores con mayor volumen saludable esperado ocupan los puestos titulares del lunes.'
+      'Alineación optimizada y guardada: los 10 mejores jugadores ocupan los puestos titulares en riguroso orden de proyección y rendimiento.'
     );
   };
 
