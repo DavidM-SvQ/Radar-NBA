@@ -850,6 +850,7 @@ export interface GameInactiveOrDnpItem {
   reason: string;
   foulOutPeriod?: string;
   foulOutClock?: string;
+  minutesPlayed?: number;
   [key: string]: any;
 }
 

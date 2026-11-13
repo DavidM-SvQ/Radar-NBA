@@ -362,8 +362,8 @@ function getAbsenceStatusMeta(item: GameInactiveOrDnpItem): {
   if (st === 'foul_out') {
     return {
       label: item.statusLabel || 'Expulsado (6 faltas)',
-      textClass: 'text-rose-400',
-      cardClass: 'bg-rose-950/20 border-rose-500/35 text-slate-100',
+      textClass: 'text-orange-400',
+      cardClass: 'bg-orange-950/20 border-orange-500/35 text-slate-100',
       isTechnical: false,
     };
   }
@@ -442,6 +442,22 @@ function sanitizeClientAbsenceNoteEs(raw: string, statusType?: string): string {
 }
 
 function formatAbsenceDetailNote(item: GameInactiveOrDnpItem): string {
+  if (item.statusType === 'foul_out') {
+    const cleaned = sanitizeClientAbsenceNoteEs(item.note || '', item.statusType);
+    const statsMatch = cleaned.match(/(\d+\s*PTS\s*·\s*\d+\s*REB.*)$/i);
+    const statsTail = statsMatch ? ` · ${statsMatch[1]}` : '';
+    const minPart =
+      item.minutesPlayed !== undefined && item.minutesPlayed !== null
+        ? `${item.minutesPlayed}'`
+        : '';
+    if (item.foulOutPeriod && item.foulOutClock) {
+      return `${minPart ? `${minPart} · ` : ''}En el ${item.foulOutPeriod} faltando ${item.foulOutClock}${statsTail}`;
+    }
+    if (minPart) {
+      return `${minPart}${statsTail}`;
+    }
+    return cleaned;
+  }
   return sanitizeClientAbsenceNoteEs(item.note || '', item.statusType);
 }
 
@@ -468,8 +484,8 @@ export function GameScoutingReportModal({
   const [activeTab, setActiveTab] = useState<ModalTabId>('scouting');
   const [boxTeamFilter, setBoxTeamFilter] = useState<'both' | 'away' | 'home'>('both');
   const [absenceFilter, setAbsenceFilter] = useState<
-    'all' | 'medical_setback' | 'technical'
-  >('medical_setback');
+    'all' | 'injury' | 'in_game' | 'technical'
+  >('all');
   const [leaderFilter, setLeaderFilter] = useState<
     'all' | 'away' | 'home' | 'elite'
   >('all');
@@ -686,7 +702,7 @@ export function GameScoutingReportModal({
     }
     setActiveTab('scouting');
     setBoxTeamFilter('both');
-    setAbsenceFilter('medical_setback');
+    setAbsenceFilter('all');
     setLeaderFilter('all');
     setQuarterSortKey(null);
     setTeamStatsSorts({});
@@ -768,18 +784,18 @@ export function GameScoutingReportModal({
 
   const absenceSummary = useMemo(() => {
     let injuredOrMedicalCount = 0;
-    let inGameCount = 0;
+    let foulOutCount = 0;
+    let inGameSetbackCount = 0;
     let technicalCount = 0;
     let restOrOtherCount = 0;
 
     for (const { item } of allIncidencesAndAbsences) {
       if (item.statusType === 'coach_decision' || item.statusType === 'gleague') {
         technicalCount++;
-      } else if (
-        item.statusType === 'foul_out' ||
-        item.statusType === 'in_game_setback'
-      ) {
-        inGameCount++;
+      } else if (item.statusType === 'foul_out') {
+        foulOutCount++;
+      } else if (item.statusType === 'in_game_setback') {
+        inGameSetbackCount++;
       } else if (item.statusType === 'injury' || !item.statusType) {
         injuredOrMedicalCount++;
       } else {
@@ -787,23 +803,41 @@ export function GameScoutingReportModal({
       }
     }
 
-    const medicalAndSetbackTotal =
-      injuredOrMedicalCount + inGameCount + restOrOtherCount;
+    const inGameCount = foulOutCount + inGameSetbackCount;
+    const medicalOnlyTotal = injuredOrMedicalCount + restOrOtherCount;
 
     const filtered = allIncidencesAndAbsences.filter(({ item }) => {
-      const isTech =
-        item.statusType === 'coach_decision' || item.statusType === 'gleague';
-      if (absenceFilter === 'medical_setback') return !isTech;
-      if (absenceFilter === 'technical') return isTech;
+      if (absenceFilter === 'injury') {
+        return (
+          item.statusType === 'injury' ||
+          item.statusType === 'rest' ||
+          item.statusType === 'suspension_personal' ||
+          !item.statusType
+        );
+      }
+      if (absenceFilter === 'in_game') {
+        return (
+          item.statusType === 'foul_out' ||
+          item.statusType === 'in_game_setback'
+        );
+      }
+      if (absenceFilter === 'technical') {
+        return (
+          item.statusType === 'coach_decision' ||
+          item.statusType === 'gleague'
+        );
+      }
       return true;
     });
 
     return {
       injuredOrMedicalCount,
+      foulOutCount,
+      inGameSetbackCount,
       inGameCount,
       technicalCount,
       restOrOtherCount,
-      medicalAndSetbackTotal,
+      medicalOnlyTotal,
       filtered,
     };
   }, [allIncidencesAndAbsences, absenceFilter]);
@@ -1617,11 +1651,19 @@ export function GameScoutingReportModal({
           </table>
         </div>
 
-        {/* Inactive / Rotation Absences / DNP Footer split cleanly between Medical/In-Game and Technical Decisions */}
+        {/* Inactive / Rotation Absences / DNP Footer split cleanly between In-Game Incidents, Medical Absences, and Technical Decisions */}
         {side.absencesAndDnp.length > 0 && (() => {
-          const medAndInGame = side.absencesAndDnp.filter(
+          const inGameIncidents = side.absencesAndDnp.filter(
             (item) =>
-              item.statusType !== 'coach_decision' && item.statusType !== 'gleague'
+              item.statusType === 'foul_out' ||
+              item.statusType === 'in_game_setback'
+          );
+          const medicalAbsences = side.absencesAndDnp.filter(
+            (item) =>
+              item.statusType !== 'coach_decision' &&
+              item.statusType !== 'gleague' &&
+              item.statusType !== 'foul_out' &&
+              item.statusType !== 'in_game_setback'
           );
           const techDnp = side.absencesAndDnp.filter(
             (item) =>
@@ -1629,13 +1671,29 @@ export function GameScoutingReportModal({
           );
           return (
             <div className="px-4 py-3 border-t border-[#1E293B] bg-[#0B1120]/45 text-xs text-slate-400 space-y-1.5">
-              {medAndInGame.length > 0 && (
+              {inGameIncidents.length > 0 && (
                 <div>
-                  <span className="font-semibold text-rose-300">
-                    Bajas médicas e incidencias ({side.abbr}):{' '}
+                  <span className="font-semibold text-orange-400">
+                    Incidencias en pista ({side.abbr}):{' '}
                   </span>
                   <span className="text-slate-300">
-                    {medAndInGame
+                    {inGameIncidents
+                      .map((item) => {
+                        const meta = getAbsenceStatusMeta(item);
+                        const cleanN = formatAbsenceDetailNote(item);
+                        return `#${item.jersey} ${item.name} — ${meta.label}${cleanN ? ` (${cleanN})` : ''}`;
+                      })
+                      .join(' · ')}
+                  </span>
+                </div>
+              )}
+              {medicalAbsences.length > 0 && (
+                <div>
+                  <span className="font-semibold text-rose-300">
+                    Bajas médicas ({side.abbr}):{' '}
+                  </span>
+                  <span className="text-slate-300">
+                    {medicalAbsences
                       .map((item) => {
                         const meta = getAbsenceStatusMeta(item);
                         const cleanN = formatAbsenceDetailNote(item);
@@ -2631,13 +2689,30 @@ export function GameScoutingReportModal({
                                         : 'lesionados'}
                                     </span>
                                   )}
-                                  {absenceSummary.inGameCount > 0 && (
+                                  {absenceSummary.foulOutCount > 0 && (
                                     <>
                                       {absenceSummary.injuredOrMedicalCount > 0 && (
                                         <span aria-hidden="true">·</span>
                                       )}
+                                      <span className="text-orange-400 font-medium">
+                                        {absenceSummary.foulOutCount}{' '}
+                                        {absenceSummary.foulOutCount === 1
+                                          ? 'expulsado'
+                                          : 'expulsados'}
+                                      </span>
+                                    </>
+                                  )}
+                                  {absenceSummary.inGameSetbackCount > 0 && (
+                                    <>
+                                      {(absenceSummary.injuredOrMedicalCount > 0 ||
+                                        absenceSummary.foulOutCount > 0) && (
+                                        <span aria-hidden="true">·</span>
+                                      )}
                                       <span className="text-amber-300 font-medium">
-                                        {absenceSummary.inGameCount} en pista
+                                        {absenceSummary.inGameSetbackCount}{' '}
+                                        {absenceSummary.inGameSetbackCount === 1
+                                          ? 'percance en pista'
+                                          : 'percances en pista'}
                                       </span>
                                     </>
                                   )}
@@ -2669,20 +2744,29 @@ export function GameScoutingReportModal({
                             </div>
 
                             {allIncidencesAndAbsences.length > 0 && (
-                              <div className="flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg">
+                              <div className="flex flex-wrap items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg">
                                 {(
                                   [
                                     {
-                                      id: 'medical_setback',
-                                      label: `Lesión (${absenceSummary.medicalAndSetbackTotal})`,
+                                      id: 'all',
+                                      label: `Todas (${allIncidencesAndAbsences.length})`,
+                                    },
+                                    {
+                                      id: 'injury',
+                                      label: `Lesión (${absenceSummary.medicalOnlyTotal})`,
+                                    },
+                                    {
+                                      id: 'in_game',
+                                      label: `${
+                                        absenceSummary.inGameSetbackCount === 0 &&
+                                        absenceSummary.foulOutCount > 0
+                                          ? 'Expulsados'
+                                          : 'En pista'
+                                      } (${absenceSummary.inGameCount})`,
                                     },
                                     {
                                       id: 'technical',
                                       label: `Dec. técnica (${absenceSummary.technicalCount})`,
-                                    },
-                                    {
-                                      id: 'all',
-                                      label: `Todas (${allIncidencesAndAbsences.length})`,
                                     },
                                   ] as const
                                 ).map((tab) => (
@@ -2709,20 +2793,21 @@ export function GameScoutingReportModal({
                             ) : absenceSummary.filtered.length === 0 ? (
                               <div className="space-y-1.5 text-xs text-slate-400">
                                 <p className="italic">
-                                  {absenceFilter === 'medical_setback'
-                                    ? 'Sin bajas por lesión ni incidencias físicas en pista en este encuentro.'
-                                    : 'Sin jugadores en esta categoría para este partido.'}
+                                  {absenceFilter === 'injury'
+                                    ? 'Sin bajas médicas ni descansos registrados en este encuentro.'
+                                    : absenceFilter === 'in_game'
+                                      ? 'Sin expulsados por faltas ni percances físicos en pista en este encuentro.'
+                                      : 'Sin jugadores en esta categoría para este partido.'}
                                 </p>
-                                {absenceFilter === 'medical_setback' &&
-                                  absenceSummary.technicalCount > 0 && (
-                                    <button
-                                      type="button"
-                                      onClick={() => setAbsenceFilter('all')}
-                                      className="text-[11px] font-medium text-orange-400 hover:text-orange-300 underline underline-offset-2 transition-colors"
-                                    >
-                                      Ver descartes por decisión técnica ({absenceSummary.technicalCount})
-                                    </button>
-                                  )}
+                                {absenceFilter !== 'all' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setAbsenceFilter('all')}
+                                    className="text-[11px] font-medium text-orange-400 hover:text-orange-300 underline underline-offset-2 transition-colors"
+                                  >
+                                    Ver todas las incidencias ({allIncidencesAndAbsences.length})
+                                  </button>
+                                )}
                               </div>
                             ) : (
                               <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">

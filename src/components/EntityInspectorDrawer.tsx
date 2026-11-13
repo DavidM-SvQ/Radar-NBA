@@ -593,7 +593,7 @@ export function EntityInspectorDrawer({
 
   // Player Inspector configurable state
   const [samplePreset, setSamplePreset] =
-    useState<PlayerSamplePreset>('slider');
+    useState<PlayerSamplePreset>('season_2027');
   const [sliderCount, setSliderCount] = useState<number>(defaultPlayerMatchWindow);
 
   useEffect(() => {
@@ -787,13 +787,19 @@ export function EntityInspectorDrawer({
 
   const leaguePlayerStats = useMemo(() => {
     if (!players || players.length === 0) return {};
+    const getCur = (p: any, getter: (g: any) => number) => {
+      const s27 = (p.games || []).filter((g: any) => g.seasonLabel === '2026-27');
+      if (s27.length === 0) return getter(p);
+      const vals = s27.map(getter).filter((v: number) => Number.isFinite(v));
+      return vals.length > 0 ? vals.reduce((a: number, b: number) => a + b, 0) / vals.length : getter(p);
+    };
     return {
-      pts: players.map((p) => p.ptsAvg || 0),
-      reb: players.map((p) => p.rebAvg || 0),
-      ast: players.map((p) => p.astAvg || 0),
-      stl: players.map((p) => p.stlAvg || 0),
-      blk: players.map((p) => p.blkAvg || 0),
-      fg3m: players.map((p) => mean(p.games.map((g) => g.fg3m))),
+      pts: players.map((p) => getCur(p, (g) => g.points)),
+      reb: players.map((p) => getCur(p, (g) => g.rebounds)),
+      ast: players.map((p) => getCur(p, (g) => g.assists)),
+      stl: players.map((p) => getCur(p, (g) => g.steals)),
+      blk: players.map((p) => getCur(p, (g) => g.blocks)),
+      fg3m: players.map((p) => getCur(p, (g) => g.fg3m)),
       fgPct: players.map((p) => p.fgPct || 0),
       fg3Pct: players.map((p) => p.fg3Pct || 0),
       usgEst: players.map((p) => p.usgAvg || 0),
@@ -1977,6 +1983,117 @@ export function EntityInspectorDrawer({
               {/* TAB 2: GRÁFICOS & EVOLUCIÓN (Jugador) */}
               {activeInspectorTab === 'charts' && (
                 <section className="space-y-4">
+                  {/* Sample range slider & presets for charts */}
+                  <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3.5 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-slate-200">
+                        Muestra de partidos y rango temporal (Gráficos)
+                      </span>
+                      <span className="text-xs font-mono text-orange-400 font-medium">
+                        {sampleSelection.titleShort}
+                      </span>
+                    </div>
+                    {/* Slider Control for exact game count */}
+                    <div className="flex items-center gap-3 pt-0.5">
+                      <span className="text-xs text-slate-400 whitespace-nowrap shrink-0">
+                        Nº partidos:
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="Restar un partido a la muestra"
+                        disabled={totalAvailableGames <= 1}
+                        onClick={() => {
+                          setSamplePreset('slider');
+                          setSliderCount(Math.max(1, effectiveSliderCount - 1));
+                        }}
+                        className="p-1.5 rounded-md bg-[#0B1120] border border-[#1E293B] text-slate-300 hover:text-white disabled:opacity-40 transition-colors shrink-0"
+                      >
+                        <Minus className="w-3.5 h-3.5" />
+                      </button>
+                      <input
+                        type="range"
+                        aria-label="Elegir número de partidos en la muestra"
+                        min={1}
+                        max={Math.max(1, totalAvailableGames)}
+                        value={
+                          samplePreset === 'slider'
+                            ? effectiveSliderCount
+                            : Math.max(1, sampleGames.length || 1)
+                        }
+                        onChange={(e) => {
+                          const next = parseInt(e.target.value, 10);
+                          if (!Number.isNaN(next)) {
+                            setSamplePreset('slider');
+                            setSliderCount(next);
+                            setHoveredChartIdx(null);
+                          }
+                        }}
+                        className="w-full h-1.5 bg-[#0B1120] rounded-lg accent-orange-500 cursor-pointer"
+                      />
+                      <button
+                        type="button"
+                        aria-label="Sumar un partido a la muestra"
+                        disabled={totalAvailableGames <= 1}
+                        onClick={() => {
+                          setSamplePreset('slider');
+                          setSliderCount(
+                            Math.min(totalAvailableGames, effectiveSliderCount + 1)
+                          );
+                        }}
+                        className="p-1.5 rounded-md bg-[#0B1120] border border-[#1E293B] text-slate-300 hover:text-white disabled:opacity-40 transition-colors shrink-0"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </button>
+                      <span className="font-mono tabular-nums text-xs font-semibold text-slate-100 min-w-[64px] text-right whitespace-nowrap shrink-0">
+                        {samplePreset === 'slider'
+                          ? `${effectiveSliderCount} / ${totalAvailableGames}`
+                          : `${sampleGames.length} PJ`}
+                      </span>
+                    </div>
+                    {/* Predefined Range Presets */}
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-[#1E293B]">
+                      {(
+                        [
+                          {
+                            id: 'slider',
+                            label: `Últimos ${effectiveSliderCount} PJ (Slider)`,
+                          },
+                          {
+                            id: 'season_2026',
+                            label: `Temporada 2025/26 (${count2026})`,
+                          },
+                          {
+                            id: 'season_2027',
+                            label: `Temporada 2026/27 (${count2027})`,
+                          },
+                          {
+                            id: 'continuous_both',
+                            label: 'Temporada 2025/26 completa + 2026/27',
+                          },
+                          {
+                            id: 'same_date_compare',
+                            label: 'Misma fecha temporada 2025/26 y 2026/27',
+                          },
+                        ] as const
+                      ).map((preset) => {
+                        const active = samplePreset === preset.id;
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() => handleSelectSamplePreset(preset.id)}
+                            className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                              active
+                                ? 'bg-orange-500 text-slate-950 border-orange-500 font-semibold'
+                                : 'bg-[#0B1120] border-[#1E293B] text-slate-300 hover:text-white hover:border-slate-600'
+                            }`}
+                          >
+                            {preset.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
               {/* SECTION 1 (FIRST): Evolución temporal interactiva (Secuencia continua o 2 líneas paralelas) */}
               <section className="space-y-3">
                 <div className="flex flex-wrap items-start justify-between gap-2.5">
@@ -2847,140 +2964,7 @@ export function EntityInspectorDrawer({
                 </div>
               </section>
 
-              {/* DESTACADOS KPIS CON PERCENTILES EN LA LIGA & COMPARATIVE NBA */}
-              <section className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-                      <span>KPIs Principales & Percentiles de la Liga</span>
-                      <MetricInfoTooltip helpKey="player_kpi_overview" align="left" />
-                    </h3>
-                    <p className="text-xs text-slate-400">
-                      Promedios en la muestra ({sampleSelection.titleShort}) con posición relativa respecto a toda la NBA
-                    </p>
-                  </div>
-                  <span className="text-xs font-mono text-sky-400 font-semibold px-2.5 py-1 bg-sky-500/10 border border-sky-500/30 rounded-lg">
-                    Línea Central = Media NBA
-                  </span>
-                </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-                  <KpiPercentileCard
-                    label="Puntos (PTS)"
-                    value={(sampleMeans.points || 0).toFixed(1)}
-                    numericVal={sampleMeans.points || 0}
-                    allLeagueVals={leaguePlayerStats.pts || []}
-                    nbaMean={leaguePlayerMeans.pts || 12.8}
-                    helpKey="pts"
-                    decimals={1}
-                  />
-                  <KpiPercentileCard
-                    label="Rebotes (REB)"
-                    value={(sampleMeans.rebounds || 0).toFixed(1)}
-                    numericVal={sampleMeans.rebounds || 0}
-                    allLeagueVals={leaguePlayerStats.reb || []}
-                    nbaMean={leaguePlayerMeans.reb || 4.8}
-                    helpKey="reb"
-                    decimals={1}
-                  />
-                  <KpiPercentileCard
-                    label="Asistencias (AST)"
-                    value={(sampleMeans.assists || 0).toFixed(1)}
-                    numericVal={sampleMeans.assists || 0}
-                    allLeagueVals={leaguePlayerStats.ast || []}
-                    nbaMean={leaguePlayerMeans.ast || 2.8}
-                    helpKey="ast"
-                    decimals={1}
-                  />
-                  <KpiPercentileCard
-                    label="Robos (STL)"
-                    value={(sampleMeans.steals || 0).toFixed(1)}
-                    numericVal={sampleMeans.steals || 0}
-                    allLeagueVals={leaguePlayerStats.stl || []}
-                    nbaMean={leaguePlayerMeans.stl || 0.8}
-                    helpKey="stl"
-                    decimals={1}
-                  />
-                  <KpiPercentileCard
-                    label="Tapones (BLK)"
-                    value={(sampleMeans.blocks || 0).toFixed(1)}
-                    numericVal={sampleMeans.blocks || 0}
-                    allLeagueVals={leaguePlayerStats.blk || []}
-                    nbaMean={leaguePlayerMeans.blk || 0.5}
-                    helpKey="blk"
-                    decimals={1}
-                  />
-                  <KpiPercentileCard
-                    label="Triples (3PM)"
-                    value={(sampleMeans.fg3m || 0).toFixed(1)}
-                    numericVal={sampleMeans.fg3m || 0}
-                    allLeagueVals={leaguePlayerStats.fg3m || []}
-                    nbaMean={leaguePlayerMeans.fg3m || 1.4}
-                    helpKey="fg3m"
-                    decimals={1}
-                  />
-                  <KpiPercentileCard
-                    label="% Tiro (%FG)"
-                    value={`${(sampleMeans.fgPct || 0).toFixed(1)}%`}
-                    numericVal={sampleMeans.fgPct || 0}
-                    allLeagueVals={(leaguePlayerStats.fgPct || []).filter((v): v is number => v !== undefined)}
-                    nbaMean={leaguePlayerMeans.fgPct || 46.5}
-                    helpKey="fgPct"
-                    decimals={1}
-                    suffix="%"
-                  />
-                  <KpiPercentileCard
-                    label="% Triples (%3P)"
-                    value={`${(sampleMeans.fg3Pct || 0).toFixed(1)}%`}
-                    numericVal={sampleMeans.fg3Pct || 0}
-                    allLeagueVals={(leaguePlayerStats.fg3Pct || []).filter((v): v is number => v !== undefined)}
-                    nbaMean={leaguePlayerMeans.fg3Pct || 35.2}
-                    helpKey="fg3Pct"
-                    decimals={1}
-                    suffix="%"
-                  />
-                  <KpiPercentileCard
-                    label="Uso Estimado (USG%)"
-                    value={`${(sampleMeans.usgEst || 0).toFixed(1)}%`}
-                    numericVal={sampleMeans.usgEst || 0}
-                    allLeagueVals={(leaguePlayerStats.usgEst || []).filter((v): v is number => v !== undefined)}
-                    nbaMean={leaguePlayerMeans.usgEst || 19.5}
-                    helpKey="usgEst"
-                    decimals={1}
-                    suffix="%"
-                  />
-                  <KpiPercentileCard
-                    label="True Shooting (TS%)"
-                    value={`${(sampleMeans.tsPct || 0).toFixed(1)}%`}
-                    numericVal={sampleMeans.tsPct || 0}
-                    allLeagueVals={(leaguePlayerStats.tsPct || []).filter((v): v is number => v !== undefined)}
-                    nbaMean={leaguePlayerMeans.tsPct || 56.5}
-                    helpKey="tsPct"
-                    decimals={1}
-                    suffix="%"
-                  />
-                  <KpiPercentileCard
-                    label="Eficiencia Tiro (eFG%)"
-                    value={`${(sampleMeans.efgPct || 0).toFixed(1)}%`}
-                    numericVal={sampleMeans.efgPct || 0}
-                    allLeagueVals={(leaguePlayerStats.efgPct || []).filter((v): v is number => v !== undefined)}
-                    nbaMean={leaguePlayerMeans.efgPct || 52.0}
-                    helpKey="efgPct"
-                    decimals={1}
-                    suffix="%"
-                  />
-                  <KpiPercentileCard
-                    label="Net Rating (NetRtg)"
-                    value={formatMetricNumber(sampleMeans.netRtg || 0, 1, '', true)}
-                    numericVal={sampleMeans.netRtg || 0}
-                    allLeagueVals={(leaguePlayerStats.netRtg || []).filter((v): v is number => v !== undefined)}
-                    nbaMean={leaguePlayerMeans.netRtg || 0.0}
-                    helpKey="netRtg"
-                    decimals={1}
-                    signed
-                  />
-                </div>
-              </section>
 
               {/* SECTION 1: Nivel comparado (All Basic KPIs + Addable KPIs Selector) */}
               <section className="space-y-3">
@@ -3118,7 +3102,7 @@ export function EntityInspectorDrawer({
                     deslizador.
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y sm:divide-y divide-[#1E293B]">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y sm:divide-y divide-[#1E293B]">
                     {activeKpiDefs.map((metric) => {
                       const val = metric.sliceValue(sampleGames);
                       const formattedVal = formatMetricNumber(
@@ -3203,366 +3187,7 @@ export function EntityInspectorDrawer({
                 )}
               </section>
 
-              {/* SECTION 2: Radiografía Avanzada (15 Core KPIs + Añadir KPIs selector) */}
-              <section className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-100">
-                      Radiografía avanzada
-                    </h3>
-                    <p className="text-[11px] text-slate-400">
-                      Muestra evaluada: {sampleSelection.titleShort} · Marca
-                      blanca central ={' '}
-                      {advRefMode === 'nba'
-                        ? 'promedio rotación NBA'
-                        : ownBaselineSelection.shortLabel}
-                    </p>
-                  </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    <ReferenceSelectorBar
-                      mode={advRefMode}
-                      onChangeMode={setAdvRefMode}
-                      ownMode={ownBaselineMode}
-                      onChangeOwnMode={setOwnBaselineMode}
-                      ownCustomK={ownCustomK}
-                      maxGames={totalAvailableGames}
-                      onChangeOwnCustomK={setOwnCustomK}
-                      ownShortLabel={ownBaselineSelection.shortLabel}
-                    />
-
-                    <button
-                      type="button"
-                      onClick={() => setShowAdvKpiSelector((prev) => !prev)}
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
-                        showAdvKpiSelector || extraAdvKpiKeys.length > 0
-                          ? 'bg-orange-500/15 border-orange-500/40 text-orange-300'
-                          : 'bg-[#131C2E] border-[#1E293B] text-slate-200 hover:text-white'
-                      }`}
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>
-                        Añadir KPIs
-                        {extraAdvKpiKeys.length > 0
-                          ? ` (+${extraAdvKpiKeys.length})`
-                          : ''}
-                      </span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Addable Advanced KPI Selector Tray */}
-                {showAdvKpiSelector && (
-                  <div className="bg-[#131C2E] border border-[#283548] rounded-lg p-3.5 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-slate-200">
-                        Selecciona indicadores avanzados adicionales para añadir
-                        al bloque (las 15 principales se muestran siempre):
-                      </span>
-                      {extraAdvKpiKeys.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setExtraAdvKpiKeys([])}
-                          className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-orange-300 transition-colors whitespace-nowrap shrink-0"
-                        >
-                          <RotateCcw className="w-3 h-3" />
-                          <span>Quitar añadidos</span>
-                        </button>
-                      )}
-                    </div>
-
-                    {(
-                      [
-                        {
-                          group: 'ratios_36' as const,
-                          title:
-                            'Producción combinada y ritmo por 36 min (recalculados en muestra)',
-                        },
-                        {
-                          group: 'zones_reb' as const,
-                          title:
-                            'Rebote en pista y anotación por zonas (cámaras NBA.com · dato anual)',
-                        },
-                        {
-                          group: 'hustle' as const,
-                          title:
-                            'Intangibles defensivos y Hustle (cámaras NBA.com · dato anual)',
-                        },
-                      ] as const
-                    ).map((grp) => (
-                      <div key={grp.group} className="space-y-1.5">
-                        <p className="text-[11px] font-medium text-slate-400">
-                          {grp.title}
-                        </p>
-                        <div className="flex flex-wrap gap-1.5">
-                          {addableAdvKpiDefs
-                            .filter((m) => m.addableGroup === grp.group)
-                            .map((m) => {
-                              const selected = extraAdvKpiKeys.includes(m.key);
-                              return (
-                                <button
-                                  key={m.key}
-                                  type="button"
-                                  onClick={() =>
-                                    setExtraAdvKpiKeys((prev) =>
-                                      prev.includes(m.key)
-                                        ? prev.filter((k) => k !== m.key)
-                                        : [...prev, m.key]
-                                    )
-                                  }
-                                  className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border transition-colors whitespace-nowrap shrink-0 ${
-                                    selected
-                                      ? 'bg-orange-500 text-slate-950 border-orange-500 font-semibold'
-                                      : 'bg-[#0B1120] border-[#1E293B] text-slate-300 hover:text-white hover:border-slate-600'
-                                  }`}
-                                >
-                                  {selected && <Check className="w-3 h-3" />}
-                                  <span>{m.shortLabel}</span>
-                                  <span
-                                    className={
-                                      selected
-                                        ? 'text-slate-900/80'
-                                        : 'text-slate-500'
-                                    }
-                                  >
-                                    · {m.label}
-                                  </span>
-                                </button>
-                              );
-                            })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {trackingContext && (
-                  <div className="flex items-start gap-2.5 px-3.5 py-2.5 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] text-xs text-amber-200/90">
-                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                    <p className="leading-relaxed">
-                      <span className="font-semibold text-amber-300">
-                        Aviso sobre métricas de cámaras NBA.com:{' '}
-                      </span>
-                      Los indicadores etiquetados como{' '}
-                      <span className="font-semibold">Dato anual</span> solo
-                      disponen del acumulado oficial de la{' '}
-                      <span className="font-semibold">
-                        temporada {trackingContext.seasonTag}
-                      </span>{' '}
-                      y no se desglosan partido a partido al mover el deslizador.
-                    </p>
-                  </div>
-                )}
-
-                {sampleGames.length === 0 && !trackingContext?.activeAdv ? (
-                  <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-6 text-center text-xs text-slate-400">
-                    No hay datos disponibles en el filtro seleccionado (
-                    {sampleSelection.titleShort}). Prueba otro rango o ajusta el
-                    deslizador.
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 bg-[#131C2E] border border-[#1E293B] rounded-lg">
-                    {activeAdvKpiDefs.map((item) => {
-                      const isCustomExtra = !item.isDefaultCore15;
-
-                      if (item.source === 'sample_ratio' && item.perGameKey) {
-                        const metric = PLAYER_METRICS_MAP[item.perGameKey];
-                        const hasSample = sampleGames.length > 0;
-                        const val = hasSample
-                          ? metric.sliceValue(sampleGames)
-                          : 0;
-                        const formattedVal = hasSample
-                          ? formatMetricNumber(
-                              val,
-                              metric.decimals,
-                              metric.suffix,
-                              metric.signed
-                            )
-                          : '—';
-                        const nbaBench = activeScopeBenchmarks[metric.key];
-                        const hasOwnData =
-                          ownBaselineSelection.games.length > 0;
-                        const refMean =
-                          advRefMode === 'nba'
-                            ? nbaBench?.mean ?? metric.fallbackMean
-                            : hasOwnData
-                            ? metric.sliceValue(ownBaselineSelection.games)
-                            : NaN;
-                        const refSd =
-                          advRefMode === 'nba'
-                            ? nbaBench?.sd ?? metric.fallbackSd
-                            : computeOwnMetricSpread(
-                                ownBaselineSelection.games,
-                                metric
-                              );
-
-                        return (
-                          <div
-                            key={item.key}
-                            className="p-3.5 space-y-1.5 border-b sm:border-r border-[#1E293B]"
-                          >
-                            <div className="flex items-center justify-between gap-2 text-xs">
-                              <span className="inline-flex items-center gap-1 text-slate-300 font-medium min-w-0">
-                                <span className="truncate">{metric.label}</span>
-                                <MetricInfoTooltip
-                                  helpKey={metric.helpKey}
-                                  align="left"
-                                  iconClassName="w-3 h-3"
-                                />
-                              </span>
-                              <div className="inline-flex items-center gap-1.5 shrink-0">
-                                <span className="font-mono tabular-nums font-semibold text-slate-100">
-                                  {formattedVal}
-                                </span>
-                                {isCustomExtra && (
-                                  <button
-                                    type="button"
-                                    title="Quitar este KPI añadido"
-                                    onClick={() =>
-                                      setExtraAdvKpiKeys((prev) =>
-                                        prev.filter((k) => k !== item.key)
-                                      )
-                                    }
-                                    className="text-slate-500 hover:text-rose-400 transition-colors p-0.5"
-                                  >
-                                    <X className="w-3 h-3" />
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-
-                            <InspectorReferenceBar
-                              value={val}
-                              refMean={refMean}
-                              refSd={refSd}
-                              mode={advRefMode}
-                              refSourceShort={
-                                advRefMode === 'nba'
-                                  ? 'Media NBA'
-                                  : ownBaselineSelection.shortLabel
-                              }
-                              decimals={metric.decimals}
-                              suffix={metric.suffix}
-                              lowerIsBetter={metric.lowerIsBetter}
-                              signed={metric.signed}
-                              hasRefData={
-                                hasSample &&
-                                (advRefMode === 'nba' || hasOwnData)
-                              }
-                            />
-                          </div>
-                        );
-                      }
-
-                      // source === 'annual_tracking'
-                      const tm =
-                        PLAYER_ANNUAL_TRACKING_MAP[String(item.annualKey)];
-                      const activeAdv = trackingContext?.activeAdv;
-                      const rawVal = activeAdv
-                        ? Number(activeAdv[tm.key])
-                        : NaN;
-                      const hasAdvVal = Number.isFinite(rawVal);
-                      const val = hasAdvVal ? rawVal : 0;
-                      const formattedVal = hasAdvVal
-                        ? formatMetricNumber(
-                            val,
-                            tm.decimals,
-                            tm.suffix,
-                            tm.signed
-                          )
-                        : '—';
-
-                      const nbaBench = trackingContext?.benchMap[tm.key];
-                      const ownOtherVal = trackingContext?.ownRefAdv
-                        ? Number(trackingContext.ownRefAdv[tm.key])
-                        : NaN;
-                      const hasOwnAnnual = Number.isFinite(ownOtherVal);
-
-                      const refMean =
-                        advRefMode === 'nba'
-                          ? nbaBench?.mean ?? tm.fallbackMean
-                          : hasOwnAnnual
-                          ? ownOtherVal
-                          : NaN;
-                      const refSd =
-                        advRefMode === 'nba'
-                          ? nbaBench?.sd ?? tm.fallbackSd
-                          : Math.max(
-                              0.3,
-                              (nbaBench?.sd ?? tm.fallbackSd) * 0.65
-                            );
-
-                      return (
-                        <div
-                          key={item.key}
-                          className="p-3.5 space-y-1.5 border-b sm:border-r border-[#1E293B]"
-                        >
-                          <div className="flex items-center justify-between gap-2 text-xs">
-                            <span className="inline-flex items-center gap-1 text-slate-300 font-medium min-w-0">
-                              <span className="truncate">{tm.label}</span>
-                              <MetricInfoTooltip
-                                helpKey={tm.helpKey}
-                                align="left"
-                                iconClassName="w-3 h-3"
-                              />
-                            </span>
-                            <div className="inline-flex items-center gap-1.5 shrink-0">
-                              <span className="font-mono tabular-nums font-semibold text-slate-100">
-                                {formattedVal}
-                              </span>
-                              {isCustomExtra && (
-                                <button
-                                  type="button"
-                                  title="Quitar este KPI añadido"
-                                  onClick={() =>
-                                    setExtraAdvKpiKeys((prev) =>
-                                      prev.filter((k) => k !== item.key)
-                                    )
-                                  }
-                                  className="text-slate-500 hover:text-rose-400 transition-colors p-0.5"
-                                >
-                                  <X className="w-3 h-3" />
-                                </button>
-                              )}
-                            </div>
-                          </div>
-
-                          <InspectorReferenceBar
-                            value={val}
-                            refMean={refMean}
-                            refSd={refSd}
-                            mode={advRefMode}
-                            refSourceShort={
-                              advRefMode === 'nba'
-                                ? 'Media NBA'
-                                : trackingContext?.ownRefShort || 'Datos propios'
-                            }
-                            decimals={tm.decimals}
-                            suffix={tm.suffix}
-                            lowerIsBetter={tm.lowerIsBetter}
-                            signed={tm.signed}
-                            hasRefData={
-                              hasAdvVal &&
-                              (advRefMode === 'nba' || hasOwnAnnual)
-                            }
-                          />
-
-                          {trackingContext && (
-                            <div className="text-[10px] text-amber-300/80 flex items-center justify-between">
-                              <span>
-                                Dato anual · {trackingContext.shortTag}
-                              </span>
-                              {activeAdv && (
-                                <span>{activeAdv.gp} PJ acumulados</span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
 
               {/* SECTION 4: Desglose por contexto (Governed by active sample filter) */}
               <section className="space-y-2.5">
