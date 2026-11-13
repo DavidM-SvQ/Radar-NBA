@@ -534,6 +534,7 @@ export function mergeBootstrapSeasonsClient(
       jersey: p27?.jersey || p26?.jersey,
       height: p27?.height || p26?.height,
       country: p27?.country || p26?.country,
+      birthYear: p27?.birthYear ?? p26?.birthYear,
       advanced: p27?.advanced || p26?.advanced,
       games: mergedGames,
     });
@@ -795,8 +796,10 @@ export function mergeMultipleBootstrapSeasonsClient(
 
     if (mergedGames.length === 0) continue;
 
+    const withBirth = matchingPlayers.find((pl) => typeof pl.birthYear === 'number');
     mergedPlayers.push({
       ...primary,
+      birthYear: primary.birthYear ?? withBirth?.birthYear,
       games: mergedGames,
     });
   }

@@ -14,6 +14,7 @@ import type {
   PlayerGameLog,
   PlayerSummary,
   StreakEntry,
+  TeamSummary,
   TrendBreakoutAlert,
   TrendBreakoutAxis,
   WindowSize,
@@ -47,6 +48,15 @@ import { MetricInfoTooltip, SortableTh } from './MetricUiHelpers';
 import { EntityBadge, PlayerAvatar } from './NbaVisuals';
 import { ExportImageButton } from './ExportImageButton';
 import { buildTableSnapshotBlob } from '../utils/exportImageCard';
+import { UnifiedEntityFilterBar } from './UnifiedEntityFilterBar';
+import {
+  DEFAULT_UNIFIED_FILTERS,
+  buildEntityLookupContext,
+  hasActiveUnifiedFilters,
+  matchesEntityUnifiedFilters,
+  matchesPlayerUnifiedFilters,
+  type UnifiedTableFiltersState,
+} from '../utils/entityFilters';
 
 const PlayerStreakHistoryChart = lazy(() =>
   import('./PlayerStreakHistoryChart').then((m) => ({
@@ -56,6 +66,7 @@ const PlayerStreakHistoryChart = lazy(() =>
 
 interface StreaksConsistencyViewProps {
   players: PlayerSummary[];
+  teams?: TeamSummary[];
   players2027?: PlayerSummary[];
   players2026?: PlayerSummary[];
   streaks: StreakEntry[];
@@ -292,6 +303,7 @@ interface CustomEvaluatedRow {
 
 export function StreaksConsistencyView({
   players,
+  teams = [],
   players2027,
   players2026,
   streaks,
@@ -341,6 +353,9 @@ export function StreaksConsistencyView({
   >('all');
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
+  const [unifiedFilters, setUnifiedFilters] = useState<UnifiedTableFiltersState>(
+    DEFAULT_UNIFIED_FILTERS
+  );
   const [consSort, setConsSort] = useState<ConsistencySort>('consistencyScore');
   const [consAsc, setConsAsc] = useState(false);
   const [customScrollTop, setCustomScrollTop] = useState<number>(0);
@@ -466,6 +481,12 @@ export function StreaksConsistencyView({
     return map;
   }, [players2026]);
 
+  const entityLookup = useMemo(
+    () => buildEntityLookupContext(players, teams),
+    [players, teams]
+  );
+  const unifiedActive = hasActiveUnifiedFilters(unifiedFilters, 'mixed');
+
   // Real-time evaluation of consecutive games with active vs best historical span and parlay support
   const customEvaluatedRows = useMemo<CustomEvaluatedRow[]>(() => {
     if (streakEvalMode !== 'custom') return [];
@@ -481,6 +502,12 @@ export function StreaksConsistencyView({
 
       const wKey = `player:${player.id}`;
       if (onlyWatchlist && !watchlistIds.has(wKey)) continue;
+      if (
+        unifiedActive &&
+        !matchesPlayerUnifiedFilters(player, unifiedFilters, entityLookup)
+      ) {
+        continue;
+      }
       if (q) {
         const hay = normalizeSearchText(
           `${player.name} ${player.teamAbbr} ${player.teamName} ${player.position}`
@@ -620,6 +647,9 @@ export function StreaksConsistencyView({
     windowSize,
     customSort,
     customAsc,
+    unifiedActive,
+    unifiedFilters,
+    entityLookup,
   ]);
 
   const breakoutsByPlayerId = useMemo(() => {
@@ -682,6 +712,12 @@ export function StreaksConsistencyView({
             return false;
           }
         }
+        if (
+          unifiedActive &&
+          !matchesEntityUnifiedFilters(s, unifiedFilters, entityLookup)
+        ) {
+          return false;
+        }
         if (q) {
           const hay = normalizeSearchText(
             `${s.entityName} ${s.teamAbbr} ${s.thresholdLabel} ${s.metricLabel}`
@@ -736,6 +772,9 @@ export function StreaksConsistencyView({
     deferredQuery,
     autoSort,
     autoAsc,
+    unifiedActive,
+    unifiedFilters,
+    entityLookup,
   ]);
 
   const filteredConsistency = useMemo(() => {
@@ -745,6 +784,16 @@ export function StreaksConsistencyView({
       .filter((r) => {
         const wKey = `player:${r.entityId}`;
         if (onlyWatchlist && !watchlistIds.has(wKey)) return false;
+        if (
+          unifiedActive &&
+          !matchesPlayerUnifiedFilters(
+            { id: r.entityId, teamAbbr: r.teamAbbr },
+            unifiedFilters,
+            entityLookup
+          )
+        ) {
+          return false;
+        }
         if (q) {
           const brk = breakoutsByPlayerId.get(r.entityId);
           const hay = normalizeSearchText(
@@ -1900,6 +1949,37 @@ export function StreaksConsistencyView({
           </div>
           </div>
         </div>
+      )}
+
+      {subTab !== 'history' && (
+        <UnifiedEntityFilterBar
+          filters={unifiedFilters}
+          onChange={setUnifiedFilters}
+          players={players}
+          teams={teams}
+          entityScope={subTab === 'consistency' ? 'player' : 'mixed'}
+          shownCount={
+            subTab === 'consistency'
+              ? filteredConsistency.length
+              : streakEvalMode === 'custom'
+              ? customEvaluatedRows.length
+              : filteredStreaks.length
+          }
+          totalCount={
+            subTab === 'consistency'
+              ? consistencyRows.length
+              : streakEvalMode === 'custom'
+              ? players.length
+              : streaks.length
+          }
+          unitLabel={
+            subTab === 'consistency'
+              ? 'jugadores'
+              : streakEvalMode === 'custom'
+              ? 'rachas a medida'
+              : 'rachas'
+          }
+        />
       )}
 
       {/* Historial de Rachas (2-Season Progression Line Chart — lazy-loaded on demand) */}

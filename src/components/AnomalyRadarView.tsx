@@ -4,11 +4,21 @@ import type {
   AnomalyCategory,
   AnomalySignal,
   ExperienceMode,
+  PlayerSummary,
+  TeamSummary,
   TrendBreakoutAlert,
   TrendBreakoutAxis,
   WindowComparisonStrip,
   WindowSize,
 } from '../types/nba';
+import {
+  DEFAULT_UNIFIED_FILTERS,
+  buildEntityLookupContext,
+  matchesEntityUnifiedFilters,
+  matchesPlayerUnifiedFilters,
+  type UnifiedTableFiltersState,
+} from '../utils/entityFilters';
+import { UnifiedEntityFilterBar } from './UnifiedEntityFilterBar';
 import { formatSigned, normalizeSearchText } from '../utils/analytics';
 import {
   describeZScoreHuman,
@@ -33,6 +43,8 @@ import { buildTableSnapshotBlob } from '../utils/exportImageCard';
 interface AnomalyRadarViewProps {
   signals: AnomalySignal[];
   trendBreakouts: TrendBreakoutAlert[];
+  players?: PlayerSummary[];
+  teams?: TeamSummary[];
   benchmarks: LeagueBenchmarks;
   experienceMode: ExperienceMode;
   watchlistIds: Set<string>;
@@ -831,6 +843,8 @@ const BREAKOUT_AXES_META: Array<{
 export function AnomalyRadarView({
   signals,
   trendBreakouts,
+  players = [],
+  teams = [],
   benchmarks,
   experienceMode,
   watchlistIds,
@@ -862,6 +876,14 @@ export function AnomalyRadarView({
     'all' | 'netRtg' | 'offRtg' | 'defRtg' | 'pace'
   >('all');
   const [query, setQuery] = useState('');
+  const [unifiedFilters, setUnifiedFilters] = useState<UnifiedTableFiltersState>(
+    DEFAULT_UNIFIED_FILTERS
+  );
+
+  const entityLookup = useMemo(
+    () => buildEntityLookupContext(players, teams),
+    [players, teams]
+  );
 
   useEffect(() => {
     if (initialBreakoutAxis && initialBreakoutAxis !== 'all') {
@@ -897,6 +919,15 @@ export function AnomalyRadarView({
           return false;
         }
         if (onlyWithActiveStreak && !b.activeStreakLabel) return false;
+        if (
+          !matchesPlayerUnifiedFilters(
+            { id: b.playerId, teamAbbr: b.teamAbbr, position: b.position },
+            unifiedFilters,
+            entityLookup
+          )
+        ) {
+          return false;
+        }
         if (q) {
           const hay = normalizeSearchText(
             `${b.playerName} ${b.teamAbbr} ${b.axisLabel} ${b.badgeLabel} ${b.metricLabel} ${b.secondaryLabel}`
@@ -969,6 +1000,8 @@ export function AnomalyRadarView({
       watchlistIds,
       directionFilter,
       onlyWithActiveStreak,
+      unifiedFilters,
+      entityLookup,
       query,
       breakoutAxisFilter,
       breakoutSortField,
@@ -988,6 +1021,20 @@ export function AnomalyRadarView({
       const positive = isAnomalyPositive(s);
       if (directionFilter === 'positive' && !positive) continue;
       if (directionFilter === 'negative' && positive) continue;
+
+      if (
+        !matchesEntityUnifiedFilters(
+          {
+            entityType: s.entityType,
+            entityId: s.entityId,
+            teamAbbr: s.teamAbbr,
+          },
+          unifiedFilters,
+          entityLookup
+        )
+      ) {
+        continue;
+      }
 
       if (q) {
         const hay = normalizeSearchText(
@@ -1017,6 +1064,8 @@ export function AnomalyRadarView({
     onlyWatchlist,
     onlyWithActiveStreak,
     directionFilter,
+    unifiedFilters,
+    entityLookup,
     query,
     playerCategoryFilter,
     teamMetricFilter,
@@ -1299,6 +1348,17 @@ export function AnomalyRadarView({
         </div>
       </div>
 
+      <UnifiedEntityFilterBar
+        filters={unifiedFilters}
+        onChange={setUnifiedFilters}
+        players={players}
+        teams={teams}
+        entityScope="mixed"
+        shownCount={filteredBreakouts.length + playerSignals.length + teamSignals.length}
+        totalCount={trendBreakouts.length + signals.length}
+        unitLabel="alertas"
+      />
+
       {/* BLOCK 01: Visual Trend-Breakout Alerts (Exterior Shooting, Minutes/Usage, Efficiency) */}
       <section className="space-y-3">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 sm:gap-3">
@@ -1539,6 +1599,7 @@ export function AnomalyRadarView({
                   setDirectionFilter('all');
                   setOnlyWithActiveStreak(false);
                   setQuery('');
+                  setUnifiedFilters(DEFAULT_UNIFIED_FILTERS);
                   onResetThresholds();
                 }}
                 className="mt-3.5 px-3.5 py-1.5 text-xs font-semibold bg-orange-500 text-slate-950 rounded-lg hover:bg-orange-400 transition-colors whitespace-nowrap shrink-0"

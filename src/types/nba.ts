@@ -285,6 +285,7 @@ export interface PlayerSummary {
   jersey?: string;
   height?: string;
   country?: string;
+  birthYear?: number;
   fromYear?: number;
   draftYear?: number;
   experienceYears?: number;
@@ -519,6 +520,7 @@ export interface SearchPlayerResult {
   jersey?: string;
   height?: string;
   country?: string;
+  birthYear?: number;
   headshotUrl?: string;
   hasActiveLogs?: boolean;
   gamesPlayed?: number;
@@ -531,6 +533,7 @@ export interface RosterPlayerItem {
   jersey: string;
   height?: string;
   country?: string;
+  birthYear?: number;
   headshotUrl?: string;
   ptsAvg?: number;
   rebAvg?: number;

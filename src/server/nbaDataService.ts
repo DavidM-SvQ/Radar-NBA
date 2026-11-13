@@ -286,7 +286,7 @@ async function getPlayerBiosMap(forceRefresh = false, options) {
       const teamId = String(r.TEAM_ID || "").trim() || NBA_TEAMS_MAP[teamAbbr]?.id || "";
       const fromYear = Number(r.FROM_YEAR) || prev?.fromYear;
       const draftYear = Number(r.DRAFT_YEAR) || prev?.draftYear;
-      map.set(id, { id, name: name || prev?.name || id, teamId, teamAbbr: teamAbbr || "NBA", position: String(r.POSITION || prev?.position || "G-F").trim() || "G-F", jersey: String(r.JERSEY_NUMBER ?? prev?.jersey ?? "").trim(), height: String(r.HEIGHT || prev?.height || "").trim(), country: String(r.COUNTRY || prev?.country || "").trim(), ...(fromYear ? { fromYear } : {}), ...(draftYear ? { draftYear } : {}), ...(typeof prev?.experienceYears === "number" ? { experienceYears: prev.experienceYears } : {}) });
+      map.set(id, { id, name: name || prev?.name || id, teamId, teamAbbr: teamAbbr || "NBA", position: String(r.POSITION || prev?.position || "G-F").trim() || "G-F", jersey: String(r.JERSEY_NUMBER ?? prev?.jersey ?? "").trim(), height: String(r.HEIGHT || prev?.height || "").trim(), country: String(r.COUNTRY || prev?.country || "").trim(), ...(prev?.birthYear ? { birthYear: prev.birthYear } : {}), ...(fromYear ? { fromYear } : {}), ...(draftYear ? { draftYear } : {}), ...(typeof prev?.experienceYears === "number" ? { experienceYears: prev.experienceYears } : {}) });
     }
   }
   if (forceLive) {
@@ -528,7 +528,7 @@ async function buildSingleSeasonDataset(seasonCode, forceRefresh = false, option
       if (!pSummary) {
         const activeTeamAbbr = seasonCode === "2025-26" ? tAbbr || bio?.teamAbbr || "NBA" : bio?.teamAbbr && NBA_TEAMS_MAP[bio.teamAbbr] ? bio.teamAbbr : tAbbr || "NBA";
         const activeTeamMeta = NBA_TEAMS_MAP[activeTeamAbbr] || tMeta;
-        pSummary = { id: pid, name: String(row.PLAYER_NAME || bio?.name || pid).trim(), teamId: activeTeamMeta?.id || String(row.TEAM_ID || bio?.teamId || ""), teamAbbr: activeTeamAbbr, teamName: activeTeamMeta?.name || String(row.TEAM_NAME || activeTeamAbbr), position: bio?.position || "G-F", jersey: bio?.jersey || void 0, height: bio?.height || void 0, country: bio?.country || void 0, games: [] };
+        pSummary = { id: pid, name: String(row.PLAYER_NAME || bio?.name || pid).trim(), teamId: activeTeamMeta?.id || String(row.TEAM_ID || bio?.teamId || ""), teamAbbr: activeTeamAbbr, teamName: activeTeamMeta?.name || String(row.TEAM_NAME || activeTeamAbbr), position: bio?.position || "G-F", jersey: bio?.jersey || void 0, height: bio?.height || void 0, country: bio?.country || void 0, ...(bio?.birthYear ? { birthYear: bio.birthYear } : {}), games: [] };
         playersById.set(pid, pSummary);
       }
       const ctx = teamGameContextMap.get(`${gid}:${tAbbr}`);
@@ -652,7 +652,7 @@ async function getFullLeagueMemory(forceRefresh = false) {
     const primary = p27 || p26;
     const mergedGames = [...p27?.games || [], ...p26?.games || []].sort((a, b) => b.date.localeCompare(a.date));
     if (mergedGames.length === 0) continue;
-    allPlayers.push({ ...primary, jersey: p27?.jersey || p26?.jersey, height: p27?.height || p26?.height, country: p27?.country || p26?.country, advanced: p27?.advanced || p26?.advanced, games: mergedGames });
+    allPlayers.push({ ...primary, jersey: p27?.jersey || p26?.jersey, height: p27?.height || p26?.height, country: p27?.country || p26?.country, birthYear: p27?.birthYear ?? p26?.birthYear, advanced: p27?.advanced || p26?.advanced, games: mergedGames });
   }
   allPlayers.sort((a, b) => {
     const aRecent = meanNums(a.games.slice(0, 10).map((g) => g.points));
@@ -835,7 +835,7 @@ async function getSinglePlayerSummary(playerId, seasonMode = "continuous") {
   const bio = biosMap.get(playerId);
   if (!bio) return null;
   const tMeta = NBA_TEAMS_MAP[bio.teamAbbr];
-  return { id: bio.id, name: bio.name, teamId: bio.teamId || tMeta?.id || "", teamAbbr: bio.teamAbbr || "NBA", teamName: tMeta?.name || bio.teamAbbr || "NBA", position: bio.position || "G-F", jersey: bio.jersey || void 0, height: bio.height || void 0, country: bio.country || void 0, games: [] };
+  return { id: bio.id, name: bio.name, teamId: bio.teamId || tMeta?.id || "", teamAbbr: bio.teamAbbr || "NBA", teamName: tMeta?.name || bio.teamAbbr || "NBA", position: bio.position || "G-F", jersey: bio.jersey || void 0, height: bio.height || void 0, country: bio.country || void 0, ...(bio.birthYear ? { birthYear: bio.birthYear } : {}), games: [] };
 }
 let cachedInspectorBenchmarks = null;
 async function getPlayerInspectorDossier(playerId) {
@@ -848,7 +848,7 @@ async function getPlayerInspectorDossier(playerId) {
     const bio = biosMap.get(playerId);
     if (!bio) return null;
     const tMeta = NBA_TEAMS_MAP[bio.teamAbbr];
-    player = { id: bio.id, name: bio.name, teamId: bio.teamId || tMeta?.id || "", teamAbbr: bio.teamAbbr || "NBA", teamName: tMeta?.name || bio.teamAbbr || "NBA", position: bio.position || "G-F", jersey: bio.jersey || void 0, height: bio.height || void 0, country: bio.country || void 0, games: [] };
+    player = { id: bio.id, name: bio.name, teamId: bio.teamId || tMeta?.id || "", teamAbbr: bio.teamAbbr || "NBA", teamName: tMeta?.name || bio.teamAbbr || "NBA", position: bio.position || "G-F", jersey: bio.jersey || void 0, height: bio.height || void 0, country: bio.country || void 0, ...(bio.birthYear ? { birthYear: bio.birthYear } : {}), games: [] };
   }
   const now = Date.now();
   if (!cachedInspectorBenchmarks || cachedInspectorBenchmarks.expiresAt <= now) {
@@ -877,14 +877,14 @@ async function getTeamRoster(teamId) {
   for (const b of biosMap.values()) {
     if (b.teamId === teamId || targetAbbr && b.teamAbbr === targetAbbr) {
       seen.add(b.id);
-      roster.push({ id: b.id, name: b.name, position: b.position || "JUG", jersey: b.jersey || "0", height: b.height || void 0, country: b.country || void 0 });
+      roster.push({ id: b.id, name: b.name, position: b.position || "JUG", jersey: b.jersey || "0", height: b.height || void 0, country: b.country || void 0, ...(b.birthYear ? { birthYear: b.birthYear } : {}) });
     }
   }
   if (roster.length === 0 && targetAbbr) {
     for (const p of full.allPlayers) {
       if (p.teamAbbr === targetAbbr && !seen.has(p.id)) {
         seen.add(p.id);
-        roster.push({ id: p.id, name: p.name, position: p.position || "JUG", jersey: p.jersey || "0", height: p.height, country: p.country });
+        roster.push({ id: p.id, name: p.name, position: p.position || "JUG", jersey: p.jersey || "0", height: p.height, country: p.country, ...(p.birthYear ? { birthYear: p.birthYear } : {}) });
       }
     }
   }
@@ -1867,7 +1867,7 @@ const scoutingEngine = createScoutingEngine({ getFullLeagueMemory: __name(async 
 }, "getFullLeagueMemory"), getPlayerBiosMap, getGameDayPayload, cachedFetchJson });
 async function getFantasyEspnSyncPayload(forceRefresh = false) {
   const biosMap = await getPlayerBiosMap(false);
-  const lightweightPlayers = [...biosMap.values()].map((b) => ({ id: b.id, name: b.name, teamId: b.teamId, teamAbbr: b.teamAbbr, teamName: NBA_TEAMS_MAP[b.teamAbbr]?.name || b.teamAbbr, position: b.position || "G-F", jersey: b.jersey || void 0, height: b.height || void 0, country: b.country || void 0, games: [] }));
+  const lightweightPlayers = [...biosMap.values()].map((b) => ({ id: b.id, name: b.name, teamId: b.teamId, teamAbbr: b.teamAbbr, teamName: NBA_TEAMS_MAP[b.teamAbbr]?.name || b.teamAbbr, position: b.position || "G-F", jersey: b.jersey || void 0, height: b.height || void 0, country: b.country || void 0, ...(b.birthYear ? { birthYear: b.birthYear } : {}), games: [] }));
   return buildFantasyEspnSyncPayload({ allPlayers: lightweightPlayers, fetchLeagueScheduleGames: scoutingEngine.fetchLeagueScheduleGames, fetchEspnInjuriesByName: scoutingEngine.fetchEspnInjuriesByName, forceRefresh });
 }
 async function getSeasonAwardsPayload(seasonScope = "2027", forceRefresh = false) {

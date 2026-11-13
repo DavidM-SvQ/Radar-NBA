@@ -4,8 +4,10 @@ import type {
   ExperienceMode,
   MilestoneComparisonMode,
   MilestonesPayload,
+  PlayerSummary,
   SeasonLeaderHolder,
   SingleGamePerformance,
+  TeamSummary,
 } from '../types/nba';
 import { formatShortDate, formatSigned, normalizeSearchText } from '../utils/analytics';
 import { MetricInfoTooltip, SortableTh } from './MetricUiHelpers';
@@ -15,11 +17,21 @@ import {
   useTableSort,
 } from '../utils/tableSort';
 import { EntityBadge, PlayerAvatar, TeamLogo } from './NbaVisuals';
+import { UnifiedEntityFilterBar } from './UnifiedEntityFilterBar';
+import {
+  DEFAULT_UNIFIED_FILTERS,
+  buildEntityLookupContext,
+  hasActiveUnifiedFilters,
+  matchesEntityUnifiedFilters,
+  type UnifiedTableFiltersState,
+} from '../utils/entityFilters';
 
 interface SeasonMilestonesViewProps {
   data: MilestonesPayload | null;
   loading: boolean;
   errorMsg: string | null;
+  players?: PlayerSummary[];
+  teams?: TeamSummary[];
   experienceMode: ExperienceMode;
   onSwitchToAdvanced: () => void;
   onRetry: () => void;
@@ -30,6 +42,8 @@ export function SeasonMilestonesView({
   data,
   loading,
   errorMsg,
+  players = [],
+  teams = [],
   experienceMode,
   onSwitchToAdvanced,
   onRetry,
@@ -58,6 +72,9 @@ export function SeasonMilestonesView({
     'all' | 'averages' | 'totals'
   >('all');
   const [query, setQuery] = useState('');
+  const [unifiedFilters, setUnifiedFilters] = useState<UnifiedTableFiltersState>(
+    DEFAULT_UNIFIED_FILTERS
+  );
 
   const {
     sortKey: macroSortKey,
@@ -108,6 +125,11 @@ export function SeasonMilestonesView({
   const bothColsVisible = showCurSeasonCol && showPrevSeasonCol;
 
   const qNorm = normalizeSearchText(query);
+  const entityLookup = useMemo(
+    () => buildEntityLookupContext(players, teams),
+    [players, teams]
+  );
+  const unifiedActive = hasActiveUnifiedFilters(unifiedFilters, 'mixed');
 
   const filteredSingleGame = useMemo(() => {
     const records = data?.singleGameRecords ?? [];
@@ -115,9 +137,36 @@ export function SeasonMilestonesView({
       if (sgCategory !== 'all' && item.category !== sgCategory) return false;
       if (sgSubGroup !== 'all' && item.subGroup && item.subGroup !== sgSubGroup)
         return false;
-      if (!qNorm) return true;
       const refPerf =
         compMode === 'same_opening' ? item.prev2026Opening : item.prev2026Full;
+      if (unifiedActive) {
+        const curMatch = item.current2027
+          ? matchesEntityUnifiedFilters(
+              {
+                entityType: item.category,
+                id: item.current2027.entityId,
+                entityId: item.current2027.entityId,
+                teamAbbr: item.current2027.teamAbbr,
+              },
+              unifiedFilters,
+              entityLookup
+            )
+          : false;
+        const prevMatch = refPerf
+          ? matchesEntityUnifiedFilters(
+              {
+                entityType: item.category,
+                id: refPerf.entityId,
+                entityId: refPerf.entityId,
+                teamAbbr: refPerf.teamAbbr,
+              },
+              unifiedFilters,
+              entityLookup
+            )
+          : false;
+        if (!curMatch && !prevMatch) return false;
+      }
+      if (!qNorm) return true;
       const hay = normalizeSearchText(
         `${item.metricLabel} ${item.current2027?.entityName || ''} ${
           item.current2027?.teamAbbr || ''
@@ -125,7 +174,16 @@ export function SeasonMilestonesView({
       );
       return hay.includes(qNorm);
     });
-  }, [data?.singleGameRecords, sgCategory, sgSubGroup, qNorm, compMode]);
+  }, [
+    data?.singleGameRecords,
+    sgCategory,
+    sgSubGroup,
+    qNorm,
+    compMode,
+    unifiedActive,
+    unifiedFilters,
+    entityLookup,
+  ]);
 
   const baseSeasonLeaders = useMemo(() => {
     const leaders = data?.seasonLeaders ?? [];
@@ -144,9 +202,36 @@ export function SeasonMilestonesView({
   const filteredSeasonLeaders = useMemo(() => {
     return baseSeasonLeaders.filter((item) => {
       if (leaderGroup !== 'all' && item.group !== leaderGroup) return false;
-      if (!qNorm) return true;
       const refHold =
         compMode === 'same_opening' ? item.prev2026Opening : item.prev2026Full;
+      if (unifiedActive) {
+        const curMatch = item.current2027
+          ? matchesEntityUnifiedFilters(
+              {
+                entityType: item.entityType,
+                id: item.current2027.entityId,
+                entityId: item.current2027.entityId,
+                teamAbbr: item.current2027.teamAbbr,
+              },
+              unifiedFilters,
+              entityLookup
+            )
+          : false;
+        const prevMatch = refHold
+          ? matchesEntityUnifiedFilters(
+              {
+                entityType: item.entityType,
+                id: refHold.entityId,
+                entityId: refHold.entityId,
+                teamAbbr: refHold.teamAbbr,
+              },
+              unifiedFilters,
+              entityLookup
+            )
+          : false;
+        if (!curMatch && !prevMatch) return false;
+      }
+      if (!qNorm) return true;
       const hay = normalizeSearchText(
         `${item.metricLabel} ${item.current2027?.entityName || ''} ${
           item.current2027?.teamAbbr || ''
@@ -154,7 +239,15 @@ export function SeasonMilestonesView({
       );
       return hay.includes(qNorm);
     });
-  }, [baseSeasonLeaders, leaderGroup, qNorm, compMode]);
+  }, [
+    baseSeasonLeaders,
+    leaderGroup,
+    qNorm,
+    compMode,
+    unifiedActive,
+    unifiedFilters,
+    entityLookup,
+  ]);
 
   if (loading) {
     return (
@@ -734,6 +827,14 @@ export function SeasonMilestonesView({
             'Enfrentando únicamente tasas por partido y topes máximos homologables cara a cara (excluyendo totales acumulados asimétricos).'}
         </p>
       </div>
+
+      <UnifiedEntityFilterBar
+        filters={unifiedFilters}
+        onChange={setUnifiedFilters}
+        players={players}
+        teams={teams}
+        entityScope="mixed"
+      />
 
       {/* BLOCK 1: Global Macro NBA Comparison */}
       <section className="space-y-2.5 min-w-0">

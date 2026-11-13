@@ -2200,6 +2200,9 @@ function extractGroundingSources(response, seedSources = []) {
 }
 var modelCooldownMap = /* @__PURE__ */ new Map();
 var deprecatedModelsSet = /* @__PURE__ */ new Set();
+var MODEL_DISCOVERY_TTL_MS = 6 * 60 * 60 * 1e3;
+var discoveredModelsCache = { models: [], expiresAt: 0 };
+var discoveryInflight = null;
 function isQuotaExhaustedError(err) {
   const msg = String(err instanceof Error ? err.message : err || "");
   return msg.includes("429") || msg.includes("503") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("Quota exceeded") || msg.includes("high demand") || msg.includes("UNAVAILABLE") || msg.includes("overloaded");
@@ -2208,6 +2211,88 @@ function isModelDeprecatedError(err) {
   const msg = String(err instanceof Error ? err.message : err || "");
   return msg.includes("404") || msg.includes("NOT_FOUND") || msg.includes("no longer available") || msg.includes("is not found");
 }
+function isSuitableAutoTextModel(modelId, supportedActions) {
+  const low = modelId.toLowerCase();
+  if (!low.startsWith("gemini-")) return false;
+  if (Array.isArray(supportedActions) && supportedActions.length > 0) {
+    const supportsGen = supportedActions.some((a) => String(a).toLowerCase() === "generatecontent");
+    if (!supportsGen) return false;
+  }
+  if (/(?:image|nano-banana|tts|live|transcribe|translate|audio|speech|embedding|aqa|omni|robotics|computer-use|deep-research|customtools)/i.test(low)) {
+    return false;
+  }
+  if (/^gemini-(?:1\.|2\.0|pro$|pro-vision)/i.test(low)) {
+    return false;
+  }
+  if (/(?:-argon|-carbon|-ultra|-pro(?:$|-))/i.test(low)) {
+    return false;
+  }
+  return true;
+}
+function scoreDiscoveredGeminiModel(modelId) {
+  const low = modelId.toLowerCase();
+  const verMatch = /^gemini-(\d+)(?:\.(\d+))?/i.exec(low);
+  const major = verMatch ? Number(verMatch[1]) || 0 : 0;
+  const minor = verMatch && verMatch[2] ? Number(verMatch[2]) || 0 : 0;
+  let score = major * 100 + minor * 10;
+  if (low.includes("hydrogen") || low.includes("flash") && !low.includes("lite")) {
+    score += 40;
+  } else if (low.includes("lite")) {
+    score += 25;
+  } else {
+    score += 10;
+  }
+  if (low.includes("-exp")) {
+    score -= 15;
+  } else if (low.includes("-preview") || /-\d{3,4}$/.test(low)) {
+    score += 5;
+  } else {
+    score += 18;
+  }
+  return score;
+}
+async function discoverLiveGeminiTextModels(ai, forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && discoveredModelsCache.models.length > 0 && discoveredModelsCache.expiresAt > now) {
+    return discoveredModelsCache.models;
+  }
+  if (discoveryInflight) {
+    return discoveryInflight;
+  }
+  discoveryInflight = (async () => {
+    try {
+      const timeoutPromise = new Promise(
+        (_, reject) => setTimeout(() => reject(new Error("models.list timeout")), 4500)
+      );
+      const listPromise = (async () => {
+        const pager = await ai.models.list({ config: { pageSize: 100 } });
+        const collected = [];
+        for await (const m of pager) {
+          const rawName = String(m?.name || "").replace(/^models\//, "").trim();
+          if (rawName && !deprecatedModelsSet.has(rawName) && isSuitableAutoTextModel(rawName, m?.supportedActions)) {
+            collected.push(rawName);
+          }
+          if (collected.length >= 40) break;
+        }
+        return collected;
+      })();
+      const candidates = await Promise.race([listPromise, timeoutPromise]);
+      const ranked = [...new Set(candidates)].sort((a, b) => scoreDiscoveredGeminiModel(b) - scoreDiscoveredGeminiModel(a)).slice(0, 6);
+      if (ranked.length > 0) {
+        discoveredModelsCache = { models: ranked, expiresAt: Date.now() + MODEL_DISCOVERY_TTL_MS };
+        console.info(`[RadarNBA] Modelos Gemini vigentes detectados autom\xE1ticamente: ${ranked.join(", ")}`);
+      }
+      return ranked;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err || "");
+      console.info(`[RadarNBA] Auto-descubrimiento models.list omitido: ${msg.slice(0, 100)}`);
+      return discoveredModelsCache.models;
+    } finally {
+      discoveryInflight = null;
+    }
+  })();
+  return discoveryInflight;
+}
 async function generateWithGeminiCascade(params) {
   const isServerless = Boolean(params.isServerless) || Boolean(process.env.VERCEL) || Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME) || process.env.NBA_SNAPSHOT_ONLY === "1";
   const ai = getGeminiClient(isServerless ? 3e4 : 35e3);
@@ -2215,61 +2300,94 @@ async function generateWithGeminiCascade(params) {
     throw new Error("GEMINI_API_KEY unavailable");
   }
   const modelTimeout = isServerless ? 25e3 : 25e3;
-  const primaryModel = process.env.GEMINI_MODEL_PRIMARY || "gemini-3.1-flash-lite";
-  const secondaryModel = process.env.GEMINI_MODEL_SECONDARY || "gemini-3.8-flash";
-  const tertiaryModel = process.env.GEMINI_MODEL_TERTIARY || "gemini-flash-latest";
-  const rawCandidateModels = [
-    { name: primaryModel, timeoutMs: modelTimeout },
-    { name: secondaryModel, timeoutMs: modelTimeout },
-    { name: tertiaryModel, timeoutMs: modelTimeout },
-    { name: "gemini-flash-latest", timeoutMs: modelTimeout }
-  ];
-  const uniqueModels = [];
-  const seenNames = /* @__PURE__ */ new Set();
-  for (const item of rawCandidateModels) {
-    if (!seenNames.has(item.name) && !deprecatedModelsSet.has(item.name)) {
-      seenNames.add(item.name);
-      uniqueModels.push(item);
+  const seedNames = [
+    process.env.GEMINI_MODEL_PRIMARY,
+    process.env.GEMINI_MODEL_SECONDARY,
+    process.env.GEMINI_MODEL_TERTIARY,
+    ...discoveredModelsCache.expiresAt > Date.now() ? discoveredModelsCache.models : [],
+    "gemini-4-hydrogen",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash"
+  ].filter((n) => Boolean(n && n.trim()));
+  const buildOrderedQueue = (names, excludeSet) => {
+    const unique = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const rawName of names) {
+      const name = rawName.trim();
+      if (name && !seen.has(name) && !excludeSet.has(name) && !deprecatedModelsSet.has(name)) {
+        seen.add(name);
+        unique.push({ name, timeoutMs: modelTimeout });
+      }
+    }
+    const now = Date.now();
+    const active = unique.filter((m) => (modelCooldownMap.get(m.name) || 0) < now);
+    return active.length > 0 ? active : unique;
+  };
+  const triedNames = /* @__PURE__ */ new Set();
+  const attemptErrors = [];
+  let lastErr = null;
+  let sawDeprecatedError = false;
+  const tryQueue = async (queue) => {
+    for (const { name: model, timeoutMs } of queue) {
+      triedNames.add(model);
+      try {
+        const timeoutPromise = new Promise(
+          (_, reject) => setTimeout(() => reject(new Error(`Timeout ${timeoutMs}ms for ${model}`)), timeoutMs)
+        );
+        const callPromise = ai.models.generateContent({
+          model,
+          contents: params.contents,
+          config: {
+            systemInstruction: params.systemInstruction
+          }
+        });
+        const response = await Promise.race([callPromise, timeoutPromise]);
+        const text = (response?.text || "").trim();
+        if (text && text.length > 80) {
+          modelCooldownMap.delete(model);
+          return {
+            text,
+            sources: extractGroundingSources(response, params.seedSources)
+          };
+        }
+        attemptErrors.push(`${model}: empty_or_short_response`);
+      } catch (err) {
+        lastErr = err;
+        if (isModelDeprecatedError(err)) {
+          deprecatedModelsSet.add(model);
+          sawDeprecatedError = true;
+        } else if (isQuotaExhaustedError(err)) {
+          modelCooldownMap.set(model, Date.now() + 5 * 60 * 1e3);
+        }
+        const rawMsg = err instanceof Error ? err.message : String(err || "");
+        const cleanMsg = rawMsg.replace(/[\{\}\"\:]/g, " ").replace(/\s+/g, " ").slice(0, 120);
+        attemptErrors.push(`${model}: ${cleanMsg}`);
+        console.info(`[RadarNBA] Transici\xF3n de modelo ${model} -> ${cleanMsg}`);
+      }
+    }
+    return null;
+  };
+  const initialQueue = buildOrderedQueue(seedNames, triedNames);
+  const firstResult = await tryQueue(initialQueue);
+  if (firstResult) {
+    if (sawDeprecatedError || discoveredModelsCache.expiresAt <= Date.now()) {
+      void discoverLiveGeminiTextModels(ai, sawDeprecatedError);
+    }
+    return firstResult;
+  }
+  if (sawDeprecatedError || discoveredModelsCache.expiresAt <= Date.now()) {
+    const liveDiscovered = await discoverLiveGeminiTextModels(ai, true);
+    const healedQueue = buildOrderedQueue(liveDiscovered, triedNames);
+    if (healedQueue.length > 0) {
+      console.info(`[RadarNBA] Auto-curaci\xF3n Gemini: probando modelos descubiertos (${healedQueue.map((q) => q.name).join(", ")})`);
+      const healedResult = await tryQueue(healedQueue);
+      if (healedResult) {
+        return healedResult;
+      }
     }
   }
-  const now = Date.now();
-  const activeModels = uniqueModels.filter(
-    (m) => (modelCooldownMap.get(m.name) || 0) < now
-  );
-  const modelsToTry = activeModels.length > 0 ? activeModels : uniqueModels;
-  let lastErr = null;
-  for (const { name: model, timeoutMs } of modelsToTry) {
-    try {
-      const timeoutPromise = new Promise(
-        (_, reject) => setTimeout(() => reject(new Error(`Timeout ${timeoutMs}ms for ${model}`)), timeoutMs)
-      );
-      const callPromise = ai.models.generateContent({
-        model,
-        contents: params.contents,
-        config: {
-          systemInstruction: params.systemInstruction
-        }
-      });
-      const response = await Promise.race([callPromise, timeoutPromise]);
-      const text = (response?.text || "").trim();
-      if (text && text.length > 80) {
-        modelCooldownMap.delete(model);
-        return {
-          text,
-          sources: extractGroundingSources(response, params.seedSources)
-        };
-      }
-    } catch (err) {
-      lastErr = err;
-      if (isModelDeprecatedError(err)) {
-        deprecatedModelsSet.add(model);
-      } else if (isQuotaExhaustedError(err)) {
-        modelCooldownMap.set(model, Date.now() + 5 * 60 * 1e3);
-      }
-      const rawMsg = err instanceof Error ? err.message : String(err || "");
-      const cleanMsg = rawMsg.replace(/[\{\}\"\:]/g, " ").replace(/\s+/g, " ").slice(0, 100);
-      console.info(`[RadarNBA] Transici\xF3n de modelo ${model} -> ${cleanMsg}`);
-    }
+  if (attemptErrors.length > 0) {
+    throw new Error(`Cascade failed (${attemptErrors.join(" | ")})`);
   }
   throw lastErr || new Error("All Gemini cascade models failed");
 }
@@ -3919,62 +4037,137 @@ ${report.pbpHighlights.formattedDossierBlock}` : "", ``, `ESTAD\xCDSTICAS COLECT
       reportInflight.delete(cacheKey);
     }
   }
-  function buildDeterministicDailyChronicle(gd, spanishNightNotes) {
+  function buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments = /* @__PURE__ */ new Map(), tripleDoublesNight = []) {
     const mvp = gd.mvpOfTheNight;
     const stmt = gd.statementTeamWin;
     const topExp = gd.topExplosion;
     const ptsDiff = gd.pulse.avgTotalPoints - gd.pulse.leagueAvgTotalPoints;
     const brokenList = gd.streakShifts.filter((s) => s.status === "broken");
     const extendedList = gd.streakShifts.filter((s) => s.status === "extended");
-    const headline = mvp ? `${mvp.playerName} gobierna una jornada de ${gd.pulse.gamesCount} partidos con exhibici\xF3n estelar` : stmt ? `${stmt.teamName} impone su jerarqu\xEDa colectiva en una cartelera de ${gd.pulse.gamesCount} encuentros` : `Radiograf\xEDa t\xE1ctica y scouting completo de los ${gd.pulse.gamesCount} partidos de la jornada NBA`;
-    const lead = `La jornada NBA del ${gd.selectedDate} dej\xF3 ${gd.pulse.gamesCount} duelos con un promedio de ${gd.pulse.avgTotalPoints.toFixed(1)} puntos por partido (${ptsDiff >= 0 ? `+${ptsDiff.toFixed(1)}` : ptsDiff.toFixed(1)} vs media liga). **${gd.pulse.roadWinsCount} victorias visitantes y ${gd.pulse.gamesCount - gd.pulse.roadWinsCount} triunfos locales marcaron el pulso competitivo**, en una noche con ${gd.pulse.avgPace.toFixed(1)} posesiones de media y ${gd.pulse.closeGamesCount} finales apretados.`;
-    const matchSummaryNames = (gd.matchups || []).slice(0, 3).map((m) => {
-      const winner = m.away.score > m.home.score ? m.away : m.home;
-      const loser = m.away.score > m.home.score ? m.home : m.away;
-      return `**${winner.name}** ante **${loser.name}** (${m.away.score}-${m.home.score})`;
-    }).join(", ");
-    const dynamicSections = [
-      {
-        kicker: "An\xE1lisis Editorial de la Cartelera",
-        title: "Pulso Competitivo, Tendencias Colectivas y Ritmo de Juego :: Panorama General",
-        body: `La jornada NBA del ${gd.selectedDate} ofreci\xF3 una s\xEDntesis t\xE1ctica dominada por la solidez en media pista y el control de las transiciones defensivas. Con un promedio global de ${gd.pulse.avgTotalPoints.toFixed(1)} puntos combinados por encuentro y un ritmo medio de ${gd.pulse.avgPace.toFixed(1)} posesiones, la cartelera dej\xF3 ${gd.pulse.roadWinsCount} triunfos visitantes y ${gd.pulse.closeGamesCount} desenlaces resueltos en los \xFAltimos minutos. Entre los choques m\xE1s destacados figuraron las victorias de ${matchSummaryNames || "los conjuntos m\xE1s firmes en la rotaci\xF3n"}.
-
-Desde la perspectiva anal\xEDtica, las plantillas ganadoras marcaron la diferencia maximizando el rebote defensivo e imponiendo esquemas defensivos agresivos sobre la primera ayuda. El ritmo de la noche confirm\xF3 la tendencia de la liga hacia un ritmo controlado en el cinco contra cinco, donde la eficiencia en tiros de campo y la contenci\xF3n de p\xE9rdidas resultaron determinantes para asegurar ventajas.`
-      },
-      {
-        kicker: "Scouting y Protagonismos",
-        title: "Lectura de Espacios, Impacto de Rotaciones y Ejecuci\xF3n en el Clutch :: Claves de Autor",
-        body: `En el plano individual, la jornada volvi\xF3 a evidenciar c\xF3mo la generaci\xF3n de ventajas a partir del bloqueo directo inclina balanzas. ${mvp ? `Sobresali\xF3 la exhibici\xF3n de **${mvp.playerName}** (${mvp.teamAbbr}), ejerciendo de faro anotador y distribuidor con ${mvp.points} puntos, ${mvp.rebounds} rebotes y ${mvp.assists} asistencias.` : "Los principales referentes de la liga asumieron el liderazgo anotador en los tramos calientes de partido."}
-
-Las segundas unidades jugaron un papel crucial absorbiendo minutos de descanso titular sin perder efectividad. ${gd.roleShifts.length > 0 ? `Destacaron por su impacto desde el banquillo ${gd.roleShifts.slice(0, 3).map((r) => `**${r.playerName}** (${r.teamAbbr})`).join(", ")}.` : "Las rotaciones mantuvieron la disciplina defensiva protegiendo la pintura."}`
+    const formatGameScoreline = (m) => {
+      const winner = m.away.isWinner ? m.away : m.home;
+      const loser = m.away.isWinner ? m.home : m.away;
+      return `**${winner.name}** ${winner.score}-${loser.score} ante **${loser.name}**`;
+    };
+    const sortedByDrama = [...gd.matchups || []].sort((a, b) => a.margin - b.margin || b.totalPoints - a.totalPoints);
+    const headlineGame = sortedByDrama[0];
+    const hWin = headlineGame ? headlineGame.away.isWinner ? headlineGame.away : headlineGame.home : null;
+    const hLose = headlineGame ? headlineGame.away.isWinner ? headlineGame.home : headlineGame.away : null;
+    const headline = mvp ? `${mvp.playerName} lidera con ${mvp.points} puntos una jornada de ${gd.pulse.gamesCount} partidos (${gd.pulse.avgTotalPoints.toFixed(1)} pts de media)` : stmt ? `${stmt.teamName} marca el techo colectivo (${stmt.scoreDisplay}) en una jornada de ${gd.pulse.gamesCount} encuentros` : headlineGame && hWin && hLose ? `${hWin.shortName} resuelve el pulso de la noche (${hWin.score}-${hLose.score}) en ${gd.pulse.gamesCount} duelos` : `Radiograf\xEDa t\xE1ctica y scouting completo de los ${gd.pulse.gamesCount} partidos de la jornada NBA`;
+    const roadLabel = gd.pulse.roadWinsCount === 1 ? "victoria visitante" : "victorias visitantes";
+    const closeLabel = gd.pulse.closeGamesCount === 1 ? "final apretado" : "finales apretados";
+    const blowLabel = gd.pulse.blowoutsCount === 1 ? "triunfo" : "triunfos";
+    const lead = `La cartelera del ${gd.selectedDate} reuni\xF3 ${gd.pulse.gamesCount} partidos con un promedio de ${gd.pulse.avgTotalPoints.toFixed(1)} puntos combinados (${ptsDiff >= 0 ? `+${ptsDiff.toFixed(1)}` : ptsDiff.toFixed(1)} frente a los ${gd.pulse.leagueAvgTotalPoints.toFixed(1)} de media NBA) y un ritmo de ${gd.pulse.avgPace.toFixed(1)} posesiones. **${gd.pulse.roadWinsCount} ${roadLabel}, ${gd.pulse.closeGamesCount} ${closeLabel} (\u22645 pts) y ${gd.pulse.blowoutsCount} ${blowLabel} por \u226515 tantos** retrataron una noche de marcados contrastes entre exhibiciones individuales y cerrojos defensivos.`;
+    const dynamicSections = [];
+    const focusMatch = mvp && gd.matchups.find((m) => m.away.abbr === mvp.teamAbbr || m.home.abbr === mvp.teamAbbr) || sortedByDrama[0];
+    if (focusMatch) {
+      const enr = matchEnrichments.get(focusMatch.eventId);
+      const winner = focusMatch.away.isWinner ? focusMatch.away : focusMatch.home;
+      const loser = focusMatch.away.isWinner ? focusMatch.home : focusMatch.away;
+      const wLog = enr?.winnerLog;
+      const lLog = enr?.loserLog;
+      const wTop = winner.topPlayer;
+      const lTop = loser.topPlayer;
+      const pbp = enr?.pbp;
+      const p1Parts = [
+        `El foco principal de la noche se concentr\xF3 en el pulso entre **${winner.name}** y **${loser.name}** (${winner.score}-${loser.score}), resuelto a favor de **${winner.shortName}** a un ritmo de ${focusMatch.pace.toFixed(1)} posesiones.`
+      ];
+      if (wLog && lLog) {
+        p1Parts.push(
+          `**${winner.shortName}** inclin\xF3 la pizarra con un ${wLog.efgPct.toFixed(1)}% de tiro efectivo (${wLog.fgm}/${wLog.fga} TC, ${wLog.fg3m}/${wLog.fg3a} en triples y ${wLog.ftm}/${wLog.fta} en libres) frente al ${lLog.efgPct.toFixed(1)}% de **${loser.shortName}** (${lLog.fgm}/${lLog.fga} TC, ${lLog.fg3m}/${lLog.fg3a} T3), **decantando la balanza desde el cuidado del bal\xF3n (${wLog.tov} p\xE9rdidas frente a ${lLog.tov} del rival)** y un balance de ${wLog.reb}-${lLog.reb} en el rebote (${wLog.oreb} capturas ofensivas).`
+        );
       }
-    ];
+      if (pbp?.keyRun?.summary) {
+        p1Parts.push(`En la secuencia real de pista destac\xF3 el ${pbp.keyRun.summary}.`);
+      }
+      const p2Parts = [];
+      if (wTop) {
+        p2Parts.push(
+          `En el plano individual, **${wTop.playerName}** (${winner.abbr}) marc\xF3 el paso con ${wTop.points} puntos, ${wTop.rebounds} rebotes y ${wTop.assists} asistencias (${wTop.fgm}/${wTop.fga} TC, ${wTop.fg3m}/${wTop.fg3a} T3, ${wTop.tsPct.toFixed(1)}% TS en ${Math.round(wTop.minutes)} minutos, ${wTop.plusMinus >= 0 ? `+${wTop.plusMinus}` : wTop.plusMinus} en pista), superando su promedio habitual de ${wTop.ptsBaselineAvg.toFixed(1)} tantos.`
+        );
+      }
+      if (lTop) {
+        p2Parts.push(
+          `En **${loser.shortName}**, la respuesta de **${lTop.playerName}** (${lTop.points} PTS, ${lTop.rebounds} REB, ${lTop.assists} AST, ${lTop.fgm}/${lTop.fga} TC, ${lTop.tsPct.toFixed(1)}% TS) sostuvo la resistencia${pbp?.clutchExecution?.summaryNarrative ? `, pero ${pbp.clutchExecution.summaryNarrative.charAt(0).toLowerCase()}${pbp.clutchExecution.summaryNarrative.slice(1)}.` : ", insuficiente ante **la mayor profundidad y control de posesiones del vencedor**."}`
+        );
+      }
+      dynamicSections.push({
+        kicker: "Foco Principal",
+        title: `${winner.shortName} y la lectura t\xE1ctica del ${winner.score}-${loser.score}`,
+        body: `${p1Parts.join(" ")}
+
+${p2Parts.join(" ") || (focusMatch.keyTakeawaysSimple || []).join(" ")}`
+      });
+    }
+    const stmtMatch = stmt ? gd.matchups.find((m) => m.away.abbr === stmt.teamAbbr || m.home.abbr === stmt.teamAbbr) : sortedByDrama[sortedByDrama.length - 1];
+    if (stmtMatch) {
+      const enr = matchEnrichments.get(stmtMatch.eventId);
+      const winner = stmtMatch.away.isWinner ? stmtMatch.away : stmtMatch.home;
+      const loser = stmtMatch.away.isWinner ? stmtMatch.home : stmtMatch.away;
+      const wLog = enr?.winnerLog;
+      const lLog = enr?.loserLog;
+      const lSeasonAvg = enr?.loserAvgPtsFor || 0;
+      const lVsAvg = lSeasonAvg > 0 ? loser.score - lSeasonAvg : 0;
+      const c2p1 = wLog && lLog ? `M\xE1s all\xE1 de los marcadores ajustados, la otra gran lectura de la fecha la firm\xF3 **${winner.name}** al imponerse a **${loser.name}** por ${winner.score}-${loser.score} (+${stmtMatch.margin} puntos). La defensa de **${winner.shortName}** dej\xF3 a su oponente en ${loser.score} puntos${lSeasonAvg > 0 ? ` (${lVsAvg >= 0 ? `+${lVsAvg.toFixed(1)}` : lVsAvg.toFixed(1)} frente a su media de ${lSeasonAvg.toFixed(1)})` : ""} con apenas un ${lLog.fgPct.toFixed(1)}% en tiros de campo (${lLog.fgm}/${lLog.fga}) y ${lLog.fg3m}/${lLog.fg3a} en triples, **imponiendo un muro defensivo de ${wLog.stl + wLog.blk} acciones entre robos y tapones (${wLog.stl} ROB, ${wLog.blk} TAP)** y un DefRtg de ${wLog.defRtg.toFixed(1)}.` : `En el bloque de control colectivo, **${winner.name}** marc\xF3 territorio ante **${loser.name}** (${winner.score}-${loser.score}) con +${winner.netRtg.toFixed(1)} de diferencial neto y **una ejecuci\xF3n impecable en ambos tableros**.`;
+      const closeMatches = gd.matchups.filter((m) => m.margin <= 6);
+      const c2p2 = closeMatches.length > 0 ? `En contraste, los ${closeMatches.length} encuentros resueltos por 6 o menos puntos (${closeMatches.slice(0, 3).map(formatGameScoreline).join(", ")}) premiaron a quienes protegieron el bal\xF3n y cargaron el rebote ofensivo: en toda la cartelera, las escuadras ganadoras promediaron ${round1(gd.matchups.reduce((acc, m) => acc + (m.away.isWinner ? m.away.tov : m.home.tov), 0) / Math.max(1, gd.matchups.length)).toFixed(1)} p\xE9rdidas frente a ${round1(gd.matchups.reduce((acc, m) => acc + (m.away.isWinner ? m.home.tov : m.away.tov), 0) / Math.max(1, gd.matchups.length)).toFixed(1)} de los derrotados, **confirmando el peso decisivo de la econom\xEDa de posesiones**.` : `A nivel global de cartelera, el contraste entre los ${gd.pulse.blowoutsCount} triunfos holgados (\u226515 pts) y el ritmo medio de ${gd.pulse.avgPace.toFixed(1)} posesiones reflej\xF3 c\xF3mo los equipos con mejor balance entre tiro interior y acierto exterior (${gd.pulse.avgTotalPoints.toFixed(1)} pts combinados por duelo) **rompieron los partidos antes del \xFAltimo cuarto**.`;
+      dynamicSections.push({
+        kicker: "Segundo Foco",
+        title: `Cerrojo colectivo de ${winner.shortName} y econom\xEDa de posesiones`,
+        body: `${c2p1}
+
+${c2p2}`
+      });
+    }
     const pizarrasParagraphs = (gd.matchups || []).slice(0, 3).map((m) => {
-      const winner = m.away.score > m.home.score ? m.away : m.home;
-      const loser = m.away.score > m.home.score ? m.home : m.away;
-      return `En el triunfo de **${winner.name}** ante **${loser.name}** (${m.away.score}-${m.home.score}), el cuerpo t\xE9cnico de **${winner.shortName}** forz\xF3 p\xE9rdidas tras bal\xF3n suelto y domin\xF3 la transici\xF3n defensiva.`;
+      const enr = matchEnrichments.get(m.eventId);
+      const winner = m.away.isWinner ? m.away : m.home;
+      const loser = m.away.isWinner ? m.home : m.away;
+      const wLog = enr?.winnerLog;
+      const lLog = enr?.loserLog;
+      if (wLog && lLog) {
+        const w2m = Math.max(0, wLog.fgm - wLog.fg3m);
+        const w2a = Math.max(0, wLog.fga - wLog.fg3a);
+        const l2m = Math.max(0, lLog.fgm - lLog.fg3m);
+        const l2a = Math.max(0, lLog.fga - lLog.fg3a);
+        return `En el ${winner.score}-${loser.score} entre **${winner.name}** y **${loser.name}**, la pizarra de **${winner.shortName}** produjo ${wLog.offRtg.toFixed(1)} puntos por 100 posesiones (${w2m}/${w2a} en tiros de dos, ${wLog.fg3m}/${wLog.fg3a} en triples y ${wLog.ast} asistencias sobre ${wLog.fgm} canastas), mientras que **${loser.shortName}** qued\xF3 en ${lLog.offRtg.toFixed(1)} OffRtg (${l2m}/${l2a} T2, ${lLog.tov} p\xE9rdidas) bajo ${wLog.stl} robos y ${wLog.blk} tapones rivales.`;
+      }
+      return `En el triunfo de **${winner.name}** ante **${loser.name}** (${winner.score}-${loser.score}), **${winner.shortName}** registr\xF3 ${winner.efgPct.toFixed(1)}% eFG, ${winner.ast} asistencias y ${winner.tov} p\xE9rdidas frente a las ${loser.tov} del rival.`;
     });
     const pizarrasSection = pizarrasParagraphs.join("\n\n") || `El an\xE1lisis colectivo registr\xF3 un ritmo medio de ${gd.pulse.avgPace.toFixed(1)} posesiones por 48 minutos.`;
     const hitosSection = [
-      mvp ? `**Exhibici\xF3n de la Noche**: **${mvp.playerName}** (${mvp.teamAbbr}) firm\xF3 la actuaci\xF3n m\xE1s completa con ${mvp.points} puntos, ${mvp.rebounds} rebotes y ${mvp.assists} asistencias (${mvp.tsPct.toFixed(0)}% TS).` : "",
-      topExp ? `**Anomal\xEDa Anotadora**: **${topExp.playerName}** (${topExp.teamAbbr}) super\xF3 su proyecci\xF3n habitual alcanzando los ${topExp.points} puntos (+${topExp.ptsDelta.toFixed(1)} respecto a su media).` : "",
-      gd.roleShifts.length > 0 ? `**Sumas de Segunda Unidad**: Destacaron en la rotaci\xF3n ${gd.roleShifts.slice(0, 4).map((r) => `**${r.playerName}** (${r.teamAbbr}, ${r.minutes.toFixed(0)} min, ${r.points} pts)`).join(", ")}.` : "",
-      brokenList.length > 0 || extendedList.length > 0 ? `**Rachas**: ${extendedList.length > 0 ? `**${extendedList[0].playerName}** extendi\xF3 su racha a ${extendedList[0].streakCount} encuentros en ${extendedList[0].thresholdLabel}.` : ""}${brokenList.length > 0 ? ` Se cort\xF3 la racha de ${brokenList[0].streakCount} partidos de **${brokenList[0].playerName}**.` : ""}` : ""
+      mvp ? `**Exhibici\xF3n de la Noche**: **${mvp.playerName}** (${mvp.teamAbbr} ${mvp.isHome ? "vs" : "@"} ${mvp.opponentAbbr}, ${mvp.result}) lider\xF3 la jornada con ${mvp.points} puntos, ${mvp.rebounds} rebotes y ${mvp.assists} asistencias (${mvp.fgm}/${mvp.fga} TC, ${mvp.fg3m}/${mvp.fg3a} T3, ${mvp.ftm}/${mvp.fta} TL, ${mvp.tsPct.toFixed(1)}% TS, ${mvp.gameScore.toFixed(1)} GmSc en ${Math.round(mvp.minutes)} min), elev\xE1ndose +${mvp.ptsDelta.toFixed(1)} sobre su media de ${mvp.ptsBaselineAvg.toFixed(1)} PTS.` : "",
+      tripleDoublesNight.length > 0 ? `**Triples-Dobles de la Jornada**: ${tripleDoublesNight.join("; ")}.` : "",
+      topExp && (!mvp || topExp.playerId !== mvp.playerId) ? `**Explosi\xF3n Estad\xEDstica**: **${topExp.playerName}** (${topExp.teamAbbr} ${topExp.isHome ? "vs" : "@"} ${topExp.opponentAbbr}) alcanz\xF3 los ${topExp.points} puntos (+${topExp.ptsDelta.toFixed(1)} respecto a su media de ${topExp.ptsAvg.toFixed(1)}) con ${topExp.fgm}/${topExp.fga} TC, ${topExp.fg3m}/${topExp.fg3a} en triples y ${topExp.tsPct.toFixed(1)}% TS.` : "",
+      gd.slumps.length > 0 ? `**Frenazos a Referentes**: **${gd.slumps[0].playerName}** (${gd.slumps[0].teamAbbr}) qued\xF3 reducido a ${gd.slumps[0].points} puntos (${gd.slumps[0].ptsDelta.toFixed(1)} vs su media de ${gd.slumps[0].ptsAvg.toFixed(1)}) con ${gd.slumps[0].fgm}/${gd.slumps[0].fga} TC (${gd.slumps[0].tsPct.toFixed(1)}% TS) en ${Math.round(gd.slumps[0].minutes)} minutos.` : "",
+      gd.roleShifts.length > 0 ? `**Irrupciones de Minutos y Rol**: Destacaron en la rotaci\xF3n ${gd.roleShifts.slice(0, 3).map((r) => `**${r.playerName}** (${r.teamAbbr}: ${r.points} PTS, ${r.rebounds} REB, ${r.assists} AST en ${r.minutes.toFixed(0)} min, +${r.minutesDelta.toFixed(1)} vs media)`).join("; ")}.` : "",
+      brokenList.length > 0 || extendedList.length > 0 ? `**Rachas**: ${extendedList.slice(0, 2).map((ex) => `**${ex.playerName}** (${ex.teamAbbr}) prolong\xF3 a ${ex.streakCount} partidos seguidos su serie en ${ex.thresholdLabel} (${ex.nightValueDisplay} hoy)`).join("; ")}${brokenList.length > 0 ? `${extendedList.length > 0 ? ". " : ""}Se cort\xF3 la racha de ${brokenList[0].streakCount} encuentros de **${brokenList[0].playerName}** (${brokenList[0].thresholdLabel}, hoy ${brokenList[0].nightValueDisplay}).` : "."}` : ""
     ].filter(Boolean).join("\n\n");
     const espanolesSection = spanishNightNotes.length > 0 ? `Acta de jugadores espa\xF1oles: ${spanishNightNotes.join("; ")}.` : "Ning\xFAn jugador espa\xF1ol sum\xF3 minutos en pista durante los encuentros disputados en esta fecha del calendario NBA.";
     const clavesList = (gd.matchups || []).slice(0, 4).map((m, idx) => {
-      const winner = m.away.score > m.home.score ? m.away : m.home;
-      const loser = m.away.score > m.home.score ? m.home : m.away;
+      const winner = m.away.isWinner ? m.away : m.home;
+      const loser = m.away.isWinner ? m.home : m.away;
+      const enr = matchEnrichments.get(m.eventId);
+      const wLog = enr?.winnerLog;
+      const lLog = enr?.loserLog;
       const topP = winner.topPlayer;
+      const rawKey = m.keyTakeawaysAdvanced && m.keyTakeawaysAdvanced[0] || m.keyTakeawaysSimple && m.keyTakeawaysSimple[0] || "";
+      const cleanKey = rawKey.replace(/\*\*/g, "").trim();
       const titles = [
-        `Exhibici\xF3n estelar en ${winner.abbr}`,
-        `Pizarra colectiva de ${winner.name}`,
-        `Factor decisivo en ${winner.abbr} vs ${loser.abbr}`,
-        `Lectura global de la jornada`
+        `${winner.abbr} ${winner.score}-${loser.score} ${loser.abbr}: ${topP ? topP.playerName : winner.shortName}`,
+        `Pizarra de ${winner.shortName} ante ${loser.shortName}`,
+        `Pulso estad\xEDstico en ${m.away.abbr} @ ${m.home.abbr}`,
+        `Factor decisivo de ${winner.shortName} (+${m.margin} pts)`
       ];
+      let detail = cleanKey;
+      if (wLog && lLog) {
+        detail = `**${winner.name}** venci\xF3 ${winner.score}-${loser.score} a **${loser.name}** con ${wLog.efgPct.toFixed(1)}% eFG (${wLog.fgm}/${wLog.fga} TC, ${wLog.fg3m}/${wLog.fg3a} T3), ${wLog.tov} p\xE9rdidas frente a ${lLog.tov} del rival y ${wLog.reb}-${lLog.reb} en rebotes${topP ? `, guiado por **${topP.playerName}** (${topP.points} PTS, ${topP.rebounds} REB, ${topP.assists} AST, ${topP.tsPct.toFixed(1)}% TS)` : ""}.`;
+      } else if (topP) {
+        detail = `**${winner.name}** super\xF3 a **${loser.name}** (${winner.score}-${loser.score}) con **${topP.playerName}** firmando ${topP.points} PTS, ${topP.rebounds} REB y ${topP.assists} AST (${topP.fgm}/${topP.fga} TC).`;
+      }
       return {
-        title: titles[idx] || `${winner.abbr} ${m.away.score}-${m.home.score} ${loser.abbr}`,
-        detail: topP ? `**${winner.name}** se impuso a **${loser.name}** (${m.away.score}-${m.home.score}) de la mano de **${topP.playerName}** (${topP.points} PTS, ${topP.rebounds} REB, ${topP.assists} AST).` : `**${winner.name}** marc\xF3 diferencias frente a **${loser.name}** en la rotaci\xF3n de media pista.`
+        title: titles[idx] || `${winner.abbr} ${winner.score}-${loser.score} ${loser.abbr}`,
+        detail
       };
     });
     return {
@@ -3997,7 +4190,7 @@ Las segundas unidades jugaron un papel crucial absorbiendo minutos de descanso t
   }
   async function buildGameDayChroniclePayload(requestedDate, forceRefresh = false) {
     const gd = await deps.getGameDayPayload(requestedDate, forceRefresh);
-    const cacheKey = `gameday_chronicle_v8:${gd.selectedDate}`;
+    const cacheKey = `gameday_chronicle_v9:${gd.selectedDate}`;
     if (!forceRefresh) {
       const cached = reportMemoryCache.get(cacheKey);
       if (cached && cached.expiresAt > Date.now()) {
@@ -4015,9 +4208,14 @@ Las segundas unidades jugaron un papel crucial absorbiendo minutos de descanso t
       const [full, biosMap, pressCtx] = await Promise.all([deps.getFullLeagueMemory(), deps.getPlayerBiosMap(false), fetchLivePressContext(gd.selectedDate, forceRefresh)]);
       const spanishNightNotes = [];
       const tripleDoublesNight = [];
+      const doubleDoublesNight = [];
       const verifiedNightPlayerNames = [];
       const eventIdsToday = new Set(gd.matchups.map((m) => m.eventId));
       let totalDoubleDoubles = 0;
+      const teamByAbbr = /* @__PURE__ */ new Map();
+      for (const tm of full.teams) {
+        teamByAbbr.set(tm.abbreviation, tm);
+      }
       for (const p of full.allPlayers) {
         const g = p.games.find((x) => eventIdsToday.has(x.eventId) || x.date.slice(0, 10) === gd.selectedDate);
         if (!g) continue;
@@ -4025,31 +4223,169 @@ Las segundas unidades jugaron un papel crucial absorbiendo minutos de descanso t
         const bio = biosMap.get(p.id);
         const isSp = isSpanishPlayerCheck(p.name, p.country || bio?.country);
         if (isSp) {
-          spanishNightNotes.push(`#${sanitizeJersey(p.jersey, bio?.jersey)} ${p.name} (${p.teamAbbr} ${g.isHome ? "vs" : "@"} ${g.opponentAbbr}, ${g.result}): ${g.points} PTS, ${g.rebounds} REB, ${g.assists} AST en ${Math.round(g.minutes)} MIN`);
+          spanishNightNotes.push(`#${sanitizeJersey(p.jersey, bio?.jersey)} ${p.name} (${p.teamAbbr} ${g.isHome ? "vs" : "@"} ${g.opponentAbbr}, ${g.result}): ${g.points} PTS, ${g.rebounds} REB, ${g.assists} AST, ${g.fgm}/${g.fga} TC (${g.fg3m}/${g.fg3a} T3) en ${Math.round(g.minutes)} MIN`);
         }
         const tens = [g.points, g.rebounds, g.assists, g.steals, g.blocks].filter((v) => v >= 10).length;
         if (tens >= 3) {
-          tripleDoublesNight.push(`${p.name} (${p.teamAbbr}): ${g.points} PTS \xB7 ${g.rebounds} REB \xB7 ${g.assists} AST`);
+          tripleDoublesNight.push(`${p.name} (${p.teamAbbr} ${g.isHome ? "vs" : "@"} ${g.opponentAbbr}, ${g.result}): ${g.points} PTS, ${g.rebounds} REB, ${g.assists} AST (${g.fgm}/${g.fga} TC, ${g.fg3m}/${g.fg3a} T3, ${g.tsPct.toFixed(1)}% TS, ${Math.round(g.minutes)} MIN, ${g.plusMinus >= 0 ? `+${g.plusMinus}` : g.plusMinus} +/-)`);
         } else if (tens === 2) {
           totalDoubleDoubles++;
+          if (doubleDoublesNight.length < 8) {
+            doubleDoublesNight.push(`${p.name} (${p.teamAbbr} vs ${g.opponentAbbr}): ${g.points} PTS, ${g.rebounds} REB, ${g.assists} AST (${g.fgm}/${g.fga} TC)`);
+          }
+        }
+      }
+      const matchEnrichments = /* @__PURE__ */ new Map();
+      for (const m of gd.matchups) {
+        const awayTeamObj = teamByAbbr.get(m.away.abbr);
+        const homeTeamObj = teamByAbbr.get(m.home.abbr);
+        const awayLog = awayTeamObj?.games?.find((x) => x.eventId === m.eventId) || null;
+        const homeLog = homeTeamObj?.games?.find((x) => x.eventId === m.eventId) || null;
+        const winnerIsAway = m.away.isWinner;
+        matchEnrichments.set(m.eventId, {
+          awayLog,
+          homeLog,
+          winnerLog: winnerIsAway ? awayLog : homeLog,
+          loserLog: winnerIsAway ? homeLog : awayLog,
+          awayAvgPtsFor: awayTeamObj?.avgPointsFor || 0,
+          homeAvgPtsFor: homeTeamObj?.avgPointsFor || 0,
+          winnerAvgPtsFor: winnerIsAway ? awayTeamObj?.avgPointsFor || 0 : homeTeamObj?.avgPointsFor || 0,
+          loserAvgPtsFor: winnerIsAway ? homeTeamObj?.avgPointsFor || 0 : awayTeamObj?.avgPointsFor || 0,
+          pbp: null
+        });
+      }
+      const marqueeEventIds = /* @__PURE__ */ new Set();
+      const closeSorted = [...gd.matchups].filter((m) => m.margin <= 8).sort((a, b) => a.margin - b.margin);
+      for (const cm of closeSorted.slice(0, 2)) marqueeEventIds.add(cm.eventId);
+      if (gd.mvpOfTheNight) {
+        const mvpMatch = gd.matchups.find((m) => m.away.abbr === gd.mvpOfTheNight.teamAbbr || m.home.abbr === gd.mvpOfTheNight.teamAbbr);
+        if (mvpMatch) marqueeEventIds.add(mvpMatch.eventId);
+      }
+      if (gd.statementTeamWin) {
+        const stmtMatch = gd.matchups.find((m) => m.away.abbr === gd.statementTeamWin.teamAbbr || m.home.abbr === gd.statementTeamWin.teamAbbr);
+        if (stmtMatch) marqueeEventIds.add(stmtMatch.eventId);
+      }
+      if (marqueeEventIds.size < 2) {
+        for (const m of gd.matchups.slice(0, 2)) marqueeEventIds.add(m.eventId);
+      }
+      const pbpTargets = [...marqueeEventIds].slice(0, 4).map((eid) => gd.matchups.find((m) => m.eventId === eid)).filter(Boolean);
+      if (pbpTargets.length > 0) {
+        try {
+          const pbpBatch = await Promise.race([
+            Promise.all(
+              pbpTargets.map(async (m) => {
+                const winnerAbbr = m.away.isWinner ? m.away.abbr : m.home.abbr;
+                const h = await fetchPlayByPlayHighlights(m.eventId, m.away.abbr, m.home.abbr, winnerAbbr, gd.seasonLabel, forceRefresh);
+                return { eventId: m.eventId, h };
+              })
+            ),
+            new Promise((resolve) => setTimeout(() => resolve([]), 3500))
+          ]);
+          if (Array.isArray(pbpBatch)) {
+            for (const item of pbpBatch) {
+              if (item?.eventId && item?.h) {
+                const enr = matchEnrichments.get(item.eventId);
+                if (enr) enr.pbp = item.h;
+              }
+            }
+          }
+        } catch {
         }
       }
       if (!getGeminiClient() || gd.matchups.length === 0) {
-        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes);
+        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments, tripleDoublesNight);
         fallback.generationTimeMs = Date.now() - startTime;
         fallback.missingApiKey = !getGeminiClient();
         fallback.fallbackReason = !getGeminiClient() ? "missing_api_key" : "no_matchups";
         return fallback;
       }
+      const formatTopRotLine = (playersList) => {
+        return (playersList || []).slice(0, 3).map(
+          (p) => `${p.playerName} (${p.points}P/${p.rebounds}R/${p.assists}A${p.steals ? `/${p.steals}ROB` : ""}${p.blocks ? `/${p.blocks}TAP` : ""}, ${p.fgm}/${p.fga} TC, ${p.fg3m}/${p.fg3a} T3, ${p.ftm}/${p.fta} TL, ${p.tsPct.toFixed(1)}% TS, ${p.turnovers} PER, ${Math.round(p.minutes)}m, ${p.plusMinus >= 0 ? `+${p.plusMinus}` : p.plusMinus} +/-; media ${p.ptsBaselineAvg.toFixed(1)} PTS)`
+        ).join(" | ");
+      };
+      const formatDetailedTeamLine = (side, log, seasonAvgPts) => {
+        if (!log) {
+          return `${side.abbr}: ${side.score} PTS (${side.fg3m}/${side.fg3a} T3, ${side.efgPct.toFixed(1)}% eFG, ${side.reb} REB, ${side.ast} AST, ${side.tov} PER, OffRtg ${side.offRtg.toFixed(1)}, DefRtg ${side.defRtg.toFixed(1)})`;
+        }
+        const fg2m = Math.max(0, log.fgm - log.fg3m);
+        const fg2a = Math.max(0, log.fga - log.fg3a);
+        const fg2Pct = fg2a > 0 ? (fg2m / fg2a * 100).toFixed(1) : "0.0";
+        const fgPct = log.fga > 0 ? (log.fgm / log.fga * 100).toFixed(1) : "0.0";
+        const vsMedia = seasonAvgPts > 0 ? ` [vs media equipo ${seasonAvgPts.toFixed(1)}: ${side.score - seasonAvgPts >= 0 ? "+" : ""}${(side.score - seasonAvgPts).toFixed(1)}]` : "";
+        return `${side.abbr}: ${side.score} PTS${vsMedia} | ${log.fgm}/${log.fga} TC (${fgPct}%) | ${fg2m}/${fg2a} T2 (${fg2Pct}%) | ${log.fg3m}/${log.fg3a} T3 (${side.fg3Pct.toFixed(1)}%) | ${log.ftm}/${log.fta} TL | ${log.reb} REB (${log.oreb} OR) | ${log.ast} AST | ${log.stl} ROB | ${log.blk} TAP | ${log.tov} PER | eFG ${log.efgPct.toFixed(1)}% | TS ${log.tsPct.toFixed(1)}% | OffRtg ${log.offRtg.toFixed(1)} / DefRtg ${log.defRtg.toFixed(1)} / NetRtg ${log.netRtg >= 0 ? "+" : ""}${log.netRtg.toFixed(1)}`;
+      };
+      const detailedMatchupBlocks = gd.matchups.map((m) => {
+        const enr = matchEnrichments.get(m.eventId);
+        const pbpLines = [];
+        if (enr?.pbp) {
+          if (enr.pbp.keyRun?.summary) pbpLines.push(`Parcial/TM: ${enr.pbp.keyRun.summary}`);
+          if (enr.pbp.breakpoint?.summary) pbpLines.push(`Quiebre: ${enr.pbp.breakpoint.summary}`);
+          if (enr.pbp.clutchExecution?.summaryNarrative) pbpLines.push(`Clutch 2min: ${enr.pbp.clutchExecution.summaryNarrative}`);
+          if (enr.pbp.playerHotSpurts?.length) pbpLines.push(`Rachas PBP: ${enr.pbp.playerHotSpurts.map((s) => s.summary).join("; ")}`);
+          if (enr.pbp.earlyFoulTroubles?.length) pbpLines.push(`Faltas tempranas PBP: ${enr.pbp.earlyFoulTroubles.map((f) => f.summary).join("; ")}`);
+        }
+        return [
+          `PARTIDO: ${m.away.name} (${m.away.abbr} ${m.away.recordAfter || ""}${m.away.isBackToBack ? ", B2B" : ""}) ${m.away.score} - ${m.home.score} ${m.home.name} (${m.home.abbr} ${m.home.recordAfter || ""}${m.home.isBackToBack ? ", B2B" : ""}) [${m.contextTag} \xB7 Margen ${m.margin} \xB7 Pace ${m.pace.toFixed(1)}]`,
+          `  - ${formatDetailedTeamLine(m.away, enr?.awayLog, enr?.awayAvgPtsFor || 0)}`,
+          `  - ${formatDetailedTeamLine(m.home, enr?.homeLog, enr?.homeAvgPtsFor || 0)}`,
+          `  - L\xEDderes ${m.away.abbr}: ${formatTopRotLine(m.away.rotationPlayers)}`,
+          `  - L\xEDderes ${m.home.abbr}: ${formatTopRotLine(m.home.rotationPlayers)}`,
+          `  - Claves anal\xEDticas: ${m.keyTakeawaysAdvanced.map((k) => k.replace(/\*\*/g, "")).join(" / ")}`,
+          pbpLines.length > 0 ? `  - Hitos Play-by-Play en pista: ${pbpLines.join(" | ")}` : ""
+        ].filter(Boolean).join("\n");
+      });
       const daySeedSources = [{ uri: `https://www.nba.com/games?date=${gd.selectedDate}`, title: `NBA.com \u2014 Resultados y Actas Oficiales (${gd.selectedDate})` }, ...pressCtx.daySources].slice(0, 6);
-      const dayDossier = [`AVISO CR\xCDTICO DE MUNDO CERRADO: Jornada oficial NBA del ${gd.selectedDate} (Temporada ${gd.seasonLabel}). Tu memoria interna de entrenamiento est\xE1 desactualizada varios a\xF1os respecto a entrenadores actuales, traspasos, contratos y palmar\xE9s. NO des NING\xDAN dato por supuesto fuera de los hechos expl\xEDcitos de este dossier.`, `FECHA DE LA JORNADA NBA: ${gd.selectedDate} (Temporada ${gd.seasonLabel})`, `PULSO GLOBAL: ${gd.pulse.gamesCount} partidos disputados | Media puntos combinados: ${gd.pulse.avgTotalPoints.toFixed(1)} PTS (media liga: ${gd.pulse.leagueAvgTotalPoints.toFixed(1)}) | Finales apretados (<=5 pts): ${gd.pulse.closeGamesCount} | Palizas (>=15 pts): ${gd.pulse.blowoutsCount} | Victorias visitantes: ${gd.pulse.roadWinsCount}/${gd.pulse.gamesCount} | Ritmo medio (Pace): ${gd.pulse.avgPace.toFixed(1)}.`, gd.statementTeamWin ? `GOLPE EN LA MESA COLECTIVO: ${gd.statementTeamWin.teamName} (${gd.statementTeamWin.summaryAdvanced}).` : "", pressCtx.dayNotes.length > 0 ? `TELETIPOS DE PRENSA DE LOS PARTIDOS DE ESTA FECHA (${gd.selectedDate}):
-${pressCtx.dayNotes.slice(0, 12).map((n) => `  \u2022 ${n}`).join("\n")}` : "", ``, `QUINTETO IDEAL DE LA NOCHE (TOP 5 GAME SCORE):`, ...gd.idealFive.map((p, i) => `${i + 1}. ${p.playerName} (${p.teamAbbr} ${p.isHome ? "vs" : "@"} ${p.opponentAbbr}, ${p.result}): ${p.points} PTS, ${p.rebounds} REB, ${p.assists} AST, ${p.stocks} ROB+TAP, ${p.tsPct.toFixed(1)}% TS, GmSc ${p.gameScore.toFixed(1)} (su media es ${p.ptsBaselineAvg.toFixed(1)} PTS)`), ``, `TODOS LOS RESULTADOS Y CLAVES T\xC1CTICAS DE LOS ${gd.matchups.length} PARTIDOS:`, ...gd.matchups.map((m) => `- ${m.away.name} (${m.away.abbr} ${m.away.recordAfter}) ${m.away.score} - ${m.home.score} ${m.home.name} (${m.home.abbr} ${m.home.recordAfter}) [${m.contextTag}] | L\xEDderes: ${m.away.topPlayer ? `${m.away.topPlayer.playerName} (${m.away.topPlayer.points}P/${m.away.topPlayer.rebounds}R/${m.away.topPlayer.assists}A)` : ""} vs ${m.home.topPlayer ? `${m.home.topPlayer.playerName} (${m.home.topPlayer.points}P/${m.home.topPlayer.rebounds}R/${m.home.topPlayer.assists}A)` : ""} | Claves: ${m.keyTakeawaysAdvanced.map((k) => k.replace(/\*\*/g, "")).join(" / ")}`), ``, `EXPLOSIONES FRENTE A SU MEDIA: ${gd.explosions.length > 0 ? gd.explosions.slice(0, 5).map((e) => `${e.playerName} (${e.teamAbbr}): ${e.points} PTS (+${e.ptsDelta.toFixed(1)} vs media ${e.ptsAvg.toFixed(1)}, ${e.driverTag})`).join(" | ") : "Ninguna extrema"}`, `BATACAZOS DE TITULARES: ${gd.slumps.length > 0 ? gd.slumps.slice(0, 4).map((s) => `${s.playerName} (${s.teamAbbr}): ${s.points} PTS (${s.ptsDelta.toFixed(1)} vs media ${s.ptsAvg.toFixed(1)}, ${s.tsPct.toFixed(0)}% TS)`).join(" | ") : "Ninguno acusado"}`, `CAMBIOS DE ROL / PICOS DE MINUTOS: ${gd.roleShifts.length > 0 ? gd.roleShifts.slice(0, 4).map((r) => `${r.playerName} (${r.teamAbbr}): ${r.minutes.toFixed(0)} MIN (+${r.minutesDelta.toFixed(1)} vs media), ${r.usgEst.toFixed(1)}% USG, ${r.points}P/${r.rebounds}R/${r.assists}A`).join(" | ") : "Rotaciones estables"}`, `RACHAS DESTACADAS: ${gd.streakShifts.length > 0 ? gd.streakShifts.slice(0, 6).map((st) => `${st.playerName} (${st.teamAbbr}): ${st.status === "broken" ? `RACHA ROTA tras ${st.streakCount} PJ` : `PROLONGA a ${st.streakCount} PJ`} en ${st.thresholdLabel} (${st.nightValueDisplay})`).join(" | ") : "Sin rachas largas alteradas"}`, `TRIPLES-DOBLES DE LA NOCHE: ${tripleDoublesNight.length > 0 ? tripleDoublesNight.join(" | ") : "Ninguno"} (Total dobles-dobles en la jornada: ${totalDoubleDoubles}).`, `JUGADORES ESPA\xD1OLES EN LA JORNADA: ${spanishNightNotes.length > 0 ? spanishNightNotes.join(" | ") : "Ning\xFAn jugador espa\xF1ol sum\xF3 minutos en pista esta fecha."}`].filter(Boolean).join("\n");
-      const systemInstruction = ["Eres el analista jefe y cronista de scouting NBA de referencia en Espa\xF1a. Cada ma\xF1ana escribes la gran revista editorial de la jornada para que un lector exigente entienda en pocos minutos todo lo ocurrido en la liga.", "REGLAS INQUEBRANTABLES DE RIGOR Y MUNDO CERRADO (CERO DATOS POR SUPUESTOS):", "1. RIGOR EMP\xCDRICO TOTAL: Todos los marcadores, puntos, porcentajes, r\xE9cords y rachas que cites deben coincidir al 100% con el dossier adjunto. Jam\xE1s inventes resultados, cifras ni jugadas concretas no descritas.", '2. PROHIBICI\xD3N TOTAL DE DAR DATOS POR SUPUESTOS O USAR MEMORIA PREENTRENADA: Tu conocimiento interno previo est\xE1 desactualizado respecto a la temporada actual. Tienes TERMINANTEMENTE PROHIBIDO dar por supuesto o mencionar: (a) nombres propios o apodos de entrenadores, asistentes o directivos (ej. Tom Thibodeau dej\xF3 los NY Knicks hace a\xF1os; NUNCA cites nombres de entrenadores, habla SIEMPRE de "el cuerpo t\xE9cnico de [Equipo]", "la direcci\xF3n t\xE9cnica de [Equipo]" o "la pizarra de [Equipo]"); (b) antig\xFCedad, edad, rondas de Draft, condici\xF3n de rookie, contratos, exequipos o traspasos de jugadores; (c) premios pasados, anillos, "vigente campe\xF3n" o series de temporadas anteriores; (d) puestos exactos en la clasificaci\xF3n (ej. "4\xBA del Este") o pr\xF3ximos rivales del calendario; (e) causas o plazos de lesiones no escritos literalmente en el dossier.', '3. PROSA PERIOD\xCDSTICA DE AUTOR Y EXPERTO EN SCOUTING (CERO REPASO GAME-BY-GAME): Tienes terminantemente prohibido enumerar los partidos uno a uno o estructurar el texto como un repaso secuencial encuentro por encuentro ("En el partido 1...", "En el partido 2..."). Escribe un gran informe editorial period\xEDstico de autor que analice el panorama global de la jornada. Examina las grandes tendencias colectivas, el ritmo de juego (Pace), la efectividad ofensiva y la lectura t\xE1ctica de la cartelera en su conjunto, citando datos y n\xFAmeros clave solo cuando sirvan para explicar el porqu\xE9 del juego con total fluidez de revista deportiva (estilo The Athletic o Gigantes).', '4. GRAM\xC1TICA ESPA\xD1OLA IMPECABLE + JERARQU\xCDA EN NEGRITA (**...**): JAM\xC1S dupliques el art\xEDculo delante de franquicias que ya empiezan por "Los" (PROHIBIDO escribir "Los Los Angeles Lakers" or "los Los Angeles Clippers"; escribe siempre "**Los Angeles Lakers**" o "los **Lakers**"). En todos los p\xE1rrafos del cuerpo (ENTRADILLA, CAPITULOS_DINAMICOS, PIZARRAS, HITOS, ESPANOLES y la explicaci\xF3n tras :: en CLAVES), utiliza negrita Markdown (**texto**) EXCLUSIVAMENTE para: (a) nombres de jugadores (ej. **Nikola Joki\u0107**), (b) nombres o apodos oficiales de equipos (ej. **Boston Celtics**, **Lakers**), y (c) UNA sola idea t\xE1ctica clave por p\xE1rrafo (frase breve de 4 a 10 palabras que explique el porqu\xE9 del juego, ej. **colapsando la pintura para forzar p\xE9rdidas**). PROHIBIDO poner en negrita cifras aisladas y PROHIBIDO poner ** en TITULAR o antes de ::.', "5. FORMATO EXACTO CON ESTAS 7 ETIQUETAS EN MAY\xDASCULAS:", "===TITULAR===", "(Titular period\xEDstico potente de portada en 1 sola l\xEDnea, sin # ni **).", "===ENTRADILLA===", "(Entradilla editorial destacada de 2 a 3 l\xEDneas resumiendo el pulso y los grandes nombres de la noche, aplicando la regla de negritas).", "===CAPITULOS_DINAMICOS===", '(Redacta exactamente 2 grandes cap\xEDtulos tem\xE1ticos de fondo que engloben el pulso general de la noche en lugar de repasar partido a partido. Formato obligatorio por cap\xEDtulo: "T\xEDtulo atractivo del cap\xEDtulo :: P\xE1rrafo 1\\n\\nP\xE1rrafo 2". Separa ambos cap\xEDtulos con una l\xEDnea que contenga \xFAnicamente ---).', "===PIZARRAS===", "(Ep\xEDgrafe fijo Pizarras: 2 p\xE1rrafos analizando ajustes t\xE1cticos colectivos de la jornada, ritmo frente a la media de la liga, eficiencia ofensiva/defensiva y el golpe colectivo m\xE1s serio de la noche).", "===HITOS===", "(Ep\xEDgrafe fijo Hitos: 2 p\xE1rrafos entrelazando con naturalidad triples-dobles/dobles-dobles, explosiones estad\xEDsticas frente a su media, irrupciones de rol/minutos y rachas prolongadas o rotas).", "===ESPANOLES===", "(Ep\xEDgrafe fijo Espa\xF1oles: si jugaron espa\xF1oles, 1 p\xE1rrafo analizando con precisi\xF3n sus minutos, producci\xF3n e impacto real; si ninguno sum\xF3 minutos en esta fecha, 1 frase sobria, directa y natural confirm\xE1ndolo).", "===CLAVES===", '(Ep\xEDgrafe fijo Claves: exactamente 4 claves anal\xEDticas reales que expliquen POR QU\xC9 se ganaron o perdieron los partidos m\xE1s relevantes de la jornada, una por l\xEDnea con formato exacto "T\xEDtulo anal\xEDtico corto sin ** :: An\xE1lisis t\xE1ctico claro en 1-2 frases respaldado por cifras comprensibles aplicando negritas", sin numeraci\xF3n inicial. Criterio obligatorio de las 4 claves: [1] la gran exhibici\xF3n individual de la noche y c\xF3mo gener\xF3 ventaja para su equipo; [2] la pizarra colectiva o factor t\xE1ctico m\xE1s determinante de la jornada \u2014punter\xEDa y volumen en triples, cerrojo defensivo, control de p\xE9rdidas, dominio en la pintura o rebote ofensivo\u2014; [3] el cierre apretado, irrupci\xF3n de banquillo o factor X m\xE1s decisivo; [4] lectura t\xE1ctica global de la cartelera. PROHIBIDO usar ratios opacos que no expliquen el juego como "tasa de tiros libres" / FTR% o citar datos sueltos sin causa-efecto baloncest\xEDstico).'].join("\n");
+      const dayDossier = [
+        `AVISO CR\xCDTICO DE MUNDO CERRADO: Jornada oficial NBA del ${gd.selectedDate} (Temporada ${gd.seasonLabel}). Tu memoria interna de entrenamiento est\xE1 desactualizada varios a\xF1os respecto a entrenadores actuales, traspasos, contratos y palmar\xE9s. NO des NING\xDAN dato por supuesto fuera de los hechos expl\xEDcitos de este dossier.`,
+        `FECHA DE LA JORNADA NBA: ${gd.selectedDate} (Temporada ${gd.seasonLabel})`,
+        `PULSO GLOBAL: ${gd.pulse.gamesCount} partidos disputados | Media puntos combinados: ${gd.pulse.avgTotalPoints.toFixed(1)} PTS (media liga: ${gd.pulse.leagueAvgTotalPoints.toFixed(1)}) | Finales apretados (<=5 pts): ${gd.pulse.closeGamesCount} | Palizas (>=15 pts): ${gd.pulse.blowoutsCount} | Victorias visitantes: ${gd.pulse.roadWinsCount}/${gd.pulse.gamesCount} | Ritmo medio (Pace): ${gd.pulse.avgPace.toFixed(1)}.`,
+        gd.statementTeamWin ? `GOLPE EN LA MESA COLECTIVO: ${gd.statementTeamWin.teamName} (${gd.statementTeamWin.summaryAdvanced}).` : "",
+        pressCtx.dayNotes.length > 0 ? `TELETIPOS DE PRENSA DE LOS PARTIDOS DE ESTA FECHA (${gd.selectedDate}):
+${pressCtx.dayNotes.slice(0, 12).map((n) => `  \u2022 ${n}`).join("\n")}` : "",
+        ``,
+        `QUINTETO IDEAL DE LA NOCHE (TOP 5 GAME SCORE):`,
+        ...gd.idealFive.map((p, i) => `${i + 1}. ${p.playerName} (${p.teamAbbr} ${p.isHome ? "vs" : "@"} ${p.opponentAbbr}, ${p.result}): ${p.points} PTS, ${p.rebounds} REB, ${p.assists} AST, ${p.stocks} ROB+TAP, ${p.fgm}/${p.fga} TC, ${p.fg3m}/${p.fg3a} T3, ${p.ftm}/${p.fta} TL, ${p.tsPct.toFixed(1)}% TS, ${p.turnovers} PER, ${Math.round(p.minutes)} MIN, ${p.plusMinus >= 0 ? `+${p.plusMinus}` : p.plusMinus} +/-, GmSc ${p.gameScore.toFixed(1)} (su media es ${p.ptsBaselineAvg.toFixed(1)} PTS)`),
+        ``,
+        `DESGLOSE EMP\xCDRICO COMPLETO DE LOS ${gd.matchups.length} PARTIDOS:`,
+        ...detailedMatchupBlocks,
+        ``,
+        `EXPLOSIONES FRENTE A SU MEDIA: ${gd.explosions.length > 0 ? gd.explosions.slice(0, 6).map((e) => `${e.playerName} (${e.teamAbbr} ${e.isHome ? "vs" : "@"} ${e.opponentAbbr}, ${e.result}): ${e.points} PTS (+${e.ptsDelta.toFixed(1)} vs media ${e.ptsAvg.toFixed(1)}), ${e.fgm}/${e.fga} TC, ${e.fg3m}/${e.fg3a} T3, ${e.tsPct.toFixed(1)}% TS, ${e.rebounds} REB, ${e.assists} AST, ${e.stocks} STK en ${Math.round(e.minutes)} MIN [${e.driverTag}]`).join(" | ") : "Ninguna extrema"}`,
+        `BATACAZOS DE TITULARES: ${gd.slumps.length > 0 ? gd.slumps.slice(0, 5).map((s) => `${s.playerName} (${s.teamAbbr} vs ${s.opponentAbbr}, ${s.result}): ${s.points} PTS (${s.ptsDelta.toFixed(1)} vs media ${s.ptsAvg.toFixed(1)}), ${s.fgm}/${s.fga} TC, ${s.fg3m}/${s.fg3a} T3, ${s.tsPct.toFixed(1)}% TS, ${s.turnovers} PER en ${Math.round(s.minutes)} MIN [${s.driverTag}]`).join(" | ") : "Ninguno acusado"}`,
+        `CAMBIOS DE ROL / PICOS DE MINUTOS: ${gd.roleShifts.length > 0 ? gd.roleShifts.slice(0, 4).map((r) => `${r.playerName} (${r.teamAbbr} vs ${r.opponentAbbr}): ${r.minutes.toFixed(0)} MIN (+${r.minutesDelta.toFixed(1)} vs media ${r.minutesAvg.toFixed(0)}), ${r.usgEst.toFixed(1)}% USG, ${r.points}P/${r.rebounds}R/${r.assists}A con ${r.fga} TCI`).join(" | ") : "Rotaciones estables"}`,
+        `RACHAS DESTACADAS: ${gd.streakShifts.length > 0 ? gd.streakShifts.slice(0, 6).map((st) => `${st.playerName} (${st.teamAbbr} vs ${st.opponentAbbr}): ${st.status === "broken" ? `RACHA ROTA tras ${st.streakCount} PJ` : `PROLONGA a ${st.streakCount} PJ`} en ${st.thresholdLabel} (${st.nightValueDisplay} hoy, media racha ${st.avgDuringStreak})`).join(" | ") : "Sin rachas largas alteradas"}`,
+        `TRIPLES-DOBLES DE LA NOCHE: ${tripleDoublesNight.length > 0 ? tripleDoublesNight.join(" | ") : "Ninguno"} (Total dobles-dobles en la jornada: ${totalDoubleDoubles}${doubleDoublesNight.length > 0 ? `; destacados: ${doubleDoublesNight.slice(0, 4).join(" | ")}` : ""}).`,
+        `JUGADORES ESPA\xD1OLES EN LA JORNADA: ${spanishNightNotes.length > 0 ? spanishNightNotes.join(" | ") : "Ning\xFAn jugador espa\xF1ol sum\xF3 minutos en pista esta fecha."}`
+      ].filter(Boolean).join("\n");
+      const systemInstruction = [
+        "Eres el analista jefe y cronista de scouting NBA de referencia en Espa\xF1a. Cada ma\xF1ana escribes la gran revista editorial de la jornada para que un lector exigente entienda en pocos minutos qu\xE9 ocurri\xF3 exactamente y por qu\xE9 se ganaron o perdieron los partidos.",
+        "REGLAS INQUEBRANTABLES DE RIGOR, CONCRECI\xD3N Y PRUEBA NUM\xC9RICA:",
+        "1. RIGOR EMP\xCDRICO TOTAL: Todos los marcadores, puntos, series de tiro, porcentajes, p\xE9rdidas, rebotes, r\xE9cords y rachas que cites deben coincidir al 100% con el dossier adjunto. Jam\xE1s inventes resultados, cifras ni jugadas concretas no descritas.",
+        '2. PROHIBICI\xD3N DE DAR DATOS POR SUPUESTOS: Tienes TERMINANTEMENTE PROHIBIDO mencionar: (a) nombres propios o apodos de entrenadores, asistentes o directivos (usa SIEMPRE "el cuerpo t\xE9cnico de [Equipo]", "la direcci\xF3n t\xE9cnica de [Equipo]" o "la pizarra de [Equipo]"); (b) antig\xFCedad, edad, rondas de Draft, condici\xF3n de rookie, contratos, exequipos o traspasos de jugadores; (c) premios pasados, anillos o series de temporadas anteriores; (d) puestos exactos en la clasificaci\xF3n o pr\xF3ximos rivales; (e) causas m\xE9dicas no escritas literalmente en el dossier.',
+        '3. PRUEBA NUM\xC9RICA OBLIGATORIA EN CADA AFIRMACI\xD3N (CERO PROSA VAGA O GEN\xC9RICA): Queda TERMINANTEMENTE PROHIBIDO soltar afirmaciones cualitativas sin mostrar inmediatamente las cifras reales que las prueban. Por ejemplo:\n   - PROHIBIDO escribir "secando a su rival casi 20 puntos por debajo de su media" sin mostrar los n\xFAmeros \u2192 OBLIGATORIO: "dejando a **Dallas Mavericks** en 94 puntos (112-94, 19.8 por debajo de su media de 113.8) tras limitarles al 40.2% TC y 8/31 en triples".\n   - PROHIBIDO escribir "con una eficiencia asombrosa", "control de p\xE9rdidas ejemplar" o "superioridad interior abrumadora" sin cifras \u2192 OBLIGATORIO mostrar la serie exacta (ej. "11/16 TC, 4/6 en triples y 78.9% TS", "apenas 8 p\xE9rdidas frente a 17 del rival", "28/45 en tiros de dos \u201462.2%\u2014 y 46 rebotes").\n   - PROHIBIDO mencionar un partido o duelo sin incluir su marcador exacto (ej. 124-121) la primera vez que se analiza.',
+        '4. PROFUNDIDAD Y COHESI\xD3N TEM\xC1TICA (PROHIBIDAS LAS IDEAS DISPERSAS Y EL REPASO UNO A UNO): No enumeres partidos secuencialmente ("En el partido 1... en el partido 2...") ni saltes superficialmente de un tema a otro en frases sueltas. Cada secci\xF3n y cap\xEDtulo debe desarrollar 1 o 2 tesis claras con profundidad real, hilando causa-efecto t\xE1ctico respaldada por los datos exactos (incluyendo hitos Play-by-Play de parciales/tiempos muertos y ejecuci\xF3n en los \xFAltimos 2 minutos del clutch cuando consten en el dossier).',
+        '5. GRAM\xC1TICA ESPA\xD1OLA IMPECABLE + JERARQU\xCDA EN NEGRITA (**...**): JAM\xC1S dupliques el art\xEDculo delante de franquicias que ya empiezan por "Los" (PROHIBIDO escribir "Los Los Angeles Lakers" o "los Los Angeles Clippers"; escribe siempre "**Los Angeles Lakers**" o "los **Lakers**"). En todos los p\xE1rrafos del cuerpo (ENTRADILLA, CAPITULOS_DINAMICOS, PIZARRAS, HITOS, ESPANOLES y la explicaci\xF3n tras :: en CLAVES), utiliza negrita Markdown (**texto**) EXCLUSIVAMENTE para: (a) nombres de jugadores (ej. **Nikola Joki\u0107**), (b) nombres o apodos oficiales de equipos (ej. **Boston Celtics**, **Lakers**), y (c) UNA sola idea t\xE1ctica clave por p\xE1rrafo (frase breve de 4 a 10 palabras que sintetice la clave causal, ej. **castigando las 17 p\xE9rdidas rivales tras cada atrapada**). PROHIBIDO poner en negrita cifras aisladas y PROHIBIDO poner ** en TITULAR o antes de ::.',
+        "6. FORMATO EXACTO CON ESTAS 7 ETIQUETAS EN MAY\xDASCULAS:",
+        "===TITULAR===",
+        "(Titular period\xEDstico potente de portada en 1 sola l\xEDnea con foco concreto de la noche, sin # ni **).",
+        "===ENTRADILLA===",
+        "(Entradilla editorial de 2 a 3 l\xEDneas resumiendo los grandes focos con datos clave reales \u2014marcadores o cifras destacadas\u2014 aplicando la regla de negritas).",
+        "===CAPITULOS_DINAMICOS===",
+        '(Exactamente 2 cap\xEDtulos de fondo separados por una l\xEDnea con ---. Formato obligatorio: "T\xEDtulo concreto del cap\xEDtulo :: P\xE1rrafo 1\\n\\nP\xE1rrafo 2".\n- CAP\xCDTULO 1 (El gran pulso / partido eje de la noche): P\xE1rrafo 1 desarrolla el guion t\xE1ctico completo con marcador, ritmo (Pace), porcentajes de tiro, p\xE9rdidas/rebotes e hitos PBP si figuran (parciales, tiempos muertos provocados o ejecuci\xF3n en los \xFAltimos 2 minutos); P\xE1rrafo 2 profundiza en los duelos individuales que lo decidieron con sus l\xEDneas estad\xEDsticas completas.\n- CAP\xCDTULO 2 (El contraste t\xE1ctico / tendencia colectiva dominante): P\xE1rrafo 1 analiza en profundidad el patr\xF3n colectivo m\xE1s determinante de la jornada (cerrojo defensivo, dominio en tiros de 2, avalancha exterior o contraste de eficiencia) comparando con exactitud 2 o 3 equipos y sus cifras reales (`OffRtg`/`DefRtg`, `T2%`, `T3%`, `REB`, `PER`, media anotadora vs resultado); P\xE1rrafo 2 explica la causa-efecto en pista en finales cerrados o rotaciones sin dejar cabos sueltos).',
+        "===PIZARRAS===",
+        "(Ep\xEDgrafe fijo Pizarras: 2 p\xE1rrafos densos de pizarra t\xE9cnica comparando cifras colectivas reales \u2014tiros de 2 vs triples, p\xE9rdidas cometidas/provocadas, robos+tapones, rebote ofensivo, `NetRtg`/`DefRtg`/`Pace` frente al promedio NBA\u2014 explicando exactamente qu\xE9 ajustes t\xE1cticos ganaron los partidos).",
+        "===HITOS===",
+        "(Ep\xEDgrafe fijo Hitos: 2 p\xE1rrafos entrelazando triples-dobles/dobles-dobles, explosiones y batacazos frente a su media, irrupciones de minutos/rol y rachas prolongadas o rotas, mostrando SIEMPRE la hoja completa de cada protagonista: puntos, rebotes, asistencias, serie `TC`, serie `T3`, `TS%`, `MIN` y el marcador de su partido).",
+        "===ESPANOLES===",
+        "(Ep\xEDgrafe fijo Espa\xF1oles: si jugaron espa\xF1oles, 1 p\xE1rrafo analizando sus minutos, serie de tiro, producci\xF3n exacta y contexto del partido; si ninguno sum\xF3 minutos en esta fecha, 1 frase sobria, directa y natural confirm\xE1ndolo).",
+        "===CLAVES===",
+        '(Ep\xEDgrafe fijo Claves: exactamente 4 claves anal\xEDticas incisivas, una por l\xEDnea con formato exacto "T\xEDtulo anal\xEDtico corto sin ** :: Explicaci\xF3n t\xE1ctica en 2 frases respaldada por marcador exacto y 3-4 cifras concretas aplicando negritas", sin numeraci\xF3n inicial. Criterio obligatorio: [1] la gran exhibici\xF3n individual de la noche y c\xF3mo gener\xF3 ventaja para su equipo; [2] la pizarra colectiva o cerrojo t\xE1ctico m\xE1s determinante de la jornada; [3] el cierre apretado, manejo de p\xE9rdidas o factor X m\xE1s decisivo; [4] lectura t\xE1ctica transversal de la cartelera con promedios reales de la fecha. PROHIBIDO usar ratios opacos como "tasa de tiros libres" / FTR% o afirmaciones sin cifras).'
+      ].join("\n");
       try {
         const { text: rawText, sources } = await generateWithGeminiCascade({ systemInstruction, contents: dayDossier, seedSources: daySeedSources });
         const safeRawText = sanitizeUnverifiedCoachClaims(rawText, verifiedNightPlayerNames);
         const parsed = parseDelimitedSections(safeRawText, ["TITULAR", "ENTRADILLA", "CAPITULOS_DINAMICOS", "PIZARRAS", "HITOS", "ESPANOLES", "CLAVES"]);
-        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes);
+        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments, tripleDoublesNight);
         const payload = { date: gd.selectedDate, seasonLabel: gd.seasonLabel, gamesCount: gd.pulse.gamesCount, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), generationTimeMs: Date.now() - startTime, engineMode: "gemini_search", headline: parsed.TITULAR && parsed.TITULAR.length > 12 ? stripInlineWrapper(parsed.TITULAR) : fallback.headline, lead: parsed.ENTRADILLA && parsed.ENTRADILLA.length > 25 ? parsed.ENTRADILLA : fallback.lead, dynamicSections: parseDynamicChapters(parsed.CAPITULOS_DINAMICOS, fallback.dynamicSections), pizarrasSection: parsed.PIZARRAS && parsed.PIZARRAS.length > 60 ? parsed.PIZARRAS : fallback.pizarrasSection, hitosSection: parsed.HITOS && parsed.HITOS.length > 60 ? parsed.HITOS : fallback.hitosSection, espanolesSection: parsed.ESPANOLES && parsed.ESPANOLES.length > 12 ? parsed.ESPANOLES : fallback.espanolesSection, clavesList: parseClavesList(parsed.CLAVES, fallback.clavesList), spanishPlayersSummary: spanishNightNotes.length > 0 ? spanishNightNotes.join(" \xB7 ") : "Sin minutos en pista de jugadores espa\xF1oles en los encuentros disputados esta fecha.", sources };
         reportMemoryCache.set(cacheKey, { expiresAt: Date.now() + 4 * 60 * 60 * 1e3, data: payload });
         return payload;
@@ -4058,7 +4394,7 @@ ${pressCtx.dayNotes.slice(0, 12).map((n) => `  \u2022 ${n}`).join("\n")}` : "", 
         console.info(
           `[RadarNBA] Activado motor determinista de jornada para ${gd.selectedDate} (${isQuota ? "cuota_diaria_429_agotada" : err?.status || err?.code || "timeout/offline"})`
         );
-        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes);
+        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments, tripleDoublesNight);
         fallback.generationTimeMs = Date.now() - startTime;
         fallback.missingApiKey = !getGeminiClient();
         fallback.quotaExhausted = isQuota;
@@ -5378,12 +5714,14 @@ async function applyCdnDeltaGamesTo2027(dataset, biosMap, options) {
         const bio = biosMap.get(pid);
         let pSummary = dataset.playersById.get(pid);
         if (!pSummary) {
-          pSummary = { id: pid, name: fullName || bio?.name || pid, teamId: teamMeta?.id || bio?.teamId || "", teamAbbr: sideInfo.teamAbbr, teamName: teamMeta?.name || sideInfo.teamAbbr, position: pos || bio?.position || "G-F", jersey: jersey || bio?.jersey || void 0, height: bio?.height || void 0, country: bio?.country || void 0, games: [] };
+          pSummary = { id: pid, name: fullName || bio?.name || pid, teamId: teamMeta?.id || bio?.teamId || "", teamAbbr: sideInfo.teamAbbr, teamName: teamMeta?.name || sideInfo.teamAbbr, position: pos || bio?.position || "G-F", jersey: jersey || bio?.jersey || void 0, height: bio?.height || void 0, country: bio?.country || void 0, ...bio?.birthYear ? { birthYear: bio.birthYear } : {}, games: [] };
           dataset.playersById.set(pid, pSummary);
         } else {
           pSummary.teamAbbr = sideInfo.teamAbbr;
           pSummary.teamId = teamMeta?.id || pSummary.teamId;
           pSummary.teamName = teamMeta?.name || pSummary.teamName;
+          if (!pSummary.birthYear && bio?.birthYear) pSummary.birthYear = bio.birthYear;
+          if (!pSummary.country && bio?.country) pSummary.country = bio.country;
         }
         if (pSummary.games.some((g) => g.eventId === ref.gameId)) continue;
         const st = cp.statistics || {};
@@ -5609,13 +5947,19 @@ async function getEspnRosterExperienceMap(forceRefresh = false, timeoutMs = 2400
         const debutYear = Number(ath?.debutYear) || null;
         const jersey = String(ath?.jersey ?? "").trim();
         const position = String(ath?.position?.abbreviation || "").trim();
+        const dobRaw = String(ath?.dateOfBirth || "").trim();
+        const dobYearMatch = dobRaw.match(/^(\d{4})-/);
+        const birthYear = dobYearMatch ? Number(dobYearMatch[1]) : null;
+        const country = String(ath?.birthPlace?.country || "").trim();
         byNormName.set(norm, {
           displayName,
           teamAbbr: nbaAbbr,
           experienceYears,
           debutYear,
           jersey,
-          position
+          position,
+          birthYear,
+          country
         });
       }
     }
@@ -5656,6 +6000,12 @@ async function enrichBiosWithEspnRosters(biosMap, options = {}) {
       }
       if (hit.debutYear && !bio.fromYear) {
         bio.fromYear = hit.debutYear;
+      }
+      if (hit.birthYear && !bio.birthYear) {
+        bio.birthYear = hit.birthYear;
+      }
+      if (hit.country && !bio.country) {
+        bio.country = hit.country;
       }
       if (options.updateActiveTeams && hit.teamAbbr && NBA_TEAMS_MAP[hit.teamAbbr]) {
         bio.teamAbbr = hit.teamAbbr;
@@ -6713,7 +7063,7 @@ async function getPlayerBiosMap(forceRefresh = false, options) {
       const teamId = String(r.TEAM_ID || "").trim() || NBA_TEAMS_MAP[teamAbbr]?.id || "";
       const fromYear = Number(r.FROM_YEAR) || prev?.fromYear;
       const draftYear = Number(r.DRAFT_YEAR) || prev?.draftYear;
-      map.set(id, { id, name: name || prev?.name || id, teamId, teamAbbr: teamAbbr || "NBA", position: String(r.POSITION || prev?.position || "G-F").trim() || "G-F", jersey: String(r.JERSEY_NUMBER ?? prev?.jersey ?? "").trim(), height: String(r.HEIGHT || prev?.height || "").trim(), country: String(r.COUNTRY || prev?.country || "").trim(), ...fromYear ? { fromYear } : {}, ...draftYear ? { draftYear } : {}, ...typeof prev?.experienceYears === "number" ? { experienceYears: prev.experienceYears } : {} });
+      map.set(id, { id, name: name || prev?.name || id, teamId, teamAbbr: teamAbbr || "NBA", position: String(r.POSITION || prev?.position || "G-F").trim() || "G-F", jersey: String(r.JERSEY_NUMBER ?? prev?.jersey ?? "").trim(), height: String(r.HEIGHT || prev?.height || "").trim(), country: String(r.COUNTRY || prev?.country || "").trim(), ...prev?.birthYear ? { birthYear: prev.birthYear } : {}, ...fromYear ? { fromYear } : {}, ...draftYear ? { draftYear } : {}, ...typeof prev?.experienceYears === "number" ? { experienceYears: prev.experienceYears } : {} });
     }
   }
   if (forceLive) {
@@ -6955,7 +7305,7 @@ async function buildSingleSeasonDataset(seasonCode, forceRefresh = false, option
       if (!pSummary) {
         const activeTeamAbbr = seasonCode === "2025-26" ? tAbbr || bio?.teamAbbr || "NBA" : bio?.teamAbbr && NBA_TEAMS_MAP[bio.teamAbbr] ? bio.teamAbbr : tAbbr || "NBA";
         const activeTeamMeta = NBA_TEAMS_MAP[activeTeamAbbr] || tMeta;
-        pSummary = { id: pid, name: String(row.PLAYER_NAME || bio?.name || pid).trim(), teamId: activeTeamMeta?.id || String(row.TEAM_ID || bio?.teamId || ""), teamAbbr: activeTeamAbbr, teamName: activeTeamMeta?.name || String(row.TEAM_NAME || activeTeamAbbr), position: bio?.position || "G-F", jersey: bio?.jersey || void 0, height: bio?.height || void 0, country: bio?.country || void 0, games: [] };
+        pSummary = { id: pid, name: String(row.PLAYER_NAME || bio?.name || pid).trim(), teamId: activeTeamMeta?.id || String(row.TEAM_ID || bio?.teamId || ""), teamAbbr: activeTeamAbbr, teamName: activeTeamMeta?.name || String(row.TEAM_NAME || activeTeamAbbr), position: bio?.position || "G-F", jersey: bio?.jersey || void 0, height: bio?.height || void 0, country: bio?.country || void 0, ...bio?.birthYear ? { birthYear: bio.birthYear } : {}, games: [] };
         playersById.set(pid, pSummary);
       }
       const ctx = teamGameContextMap.get(`${gid}:${tAbbr}`);
@@ -7079,7 +7429,7 @@ async function getFullLeagueMemory(forceRefresh = false) {
     const primary = p27 || p26;
     const mergedGames = [...p27?.games || [], ...p26?.games || []].sort((a, b) => b.date.localeCompare(a.date));
     if (mergedGames.length === 0) continue;
-    allPlayers.push({ ...primary, jersey: p27?.jersey || p26?.jersey, height: p27?.height || p26?.height, country: p27?.country || p26?.country, advanced: p27?.advanced || p26?.advanced, games: mergedGames });
+    allPlayers.push({ ...primary, jersey: p27?.jersey || p26?.jersey, height: p27?.height || p26?.height, country: p27?.country || p26?.country, birthYear: p27?.birthYear ?? p26?.birthYear, advanced: p27?.advanced || p26?.advanced, games: mergedGames });
   }
   allPlayers.sort((a, b) => {
     const aRecent = meanNums3(a.games.slice(0, 10).map((g) => g.points));
@@ -7253,7 +7603,7 @@ async function getSinglePlayerSummary(playerId, seasonMode = "continuous") {
   const bio = biosMap.get(playerId);
   if (!bio) return null;
   const tMeta = NBA_TEAMS_MAP[bio.teamAbbr];
-  return { id: bio.id, name: bio.name, teamId: bio.teamId || tMeta?.id || "", teamAbbr: bio.teamAbbr || "NBA", teamName: tMeta?.name || bio.teamAbbr || "NBA", position: bio.position || "G-F", jersey: bio.jersey || void 0, height: bio.height || void 0, country: bio.country || void 0, games: [] };
+  return { id: bio.id, name: bio.name, teamId: bio.teamId || tMeta?.id || "", teamAbbr: bio.teamAbbr || "NBA", teamName: tMeta?.name || bio.teamAbbr || "NBA", position: bio.position || "G-F", jersey: bio.jersey || void 0, height: bio.height || void 0, country: bio.country || void 0, ...bio.birthYear ? { birthYear: bio.birthYear } : {}, games: [] };
 }
 var cachedInspectorBenchmarks = null;
 async function getPlayerInspectorDossier(playerId) {
@@ -7266,7 +7616,7 @@ async function getPlayerInspectorDossier(playerId) {
     const bio = biosMap.get(playerId);
     if (!bio) return null;
     const tMeta = NBA_TEAMS_MAP[bio.teamAbbr];
-    player = { id: bio.id, name: bio.name, teamId: bio.teamId || tMeta?.id || "", teamAbbr: bio.teamAbbr || "NBA", teamName: tMeta?.name || bio.teamAbbr || "NBA", position: bio.position || "G-F", jersey: bio.jersey || void 0, height: bio.height || void 0, country: bio.country || void 0, games: [] };
+    player = { id: bio.id, name: bio.name, teamId: bio.teamId || tMeta?.id || "", teamAbbr: bio.teamAbbr || "NBA", teamName: tMeta?.name || bio.teamAbbr || "NBA", position: bio.position || "G-F", jersey: bio.jersey || void 0, height: bio.height || void 0, country: bio.country || void 0, ...bio.birthYear ? { birthYear: bio.birthYear } : {}, games: [] };
   }
   const now = Date.now();
   if (!cachedInspectorBenchmarks || cachedInspectorBenchmarks.expiresAt <= now) {
@@ -7295,14 +7645,14 @@ async function getTeamRoster(teamId) {
   for (const b of biosMap.values()) {
     if (b.teamId === teamId || targetAbbr && b.teamAbbr === targetAbbr) {
       seen.add(b.id);
-      roster.push({ id: b.id, name: b.name, position: b.position || "JUG", jersey: b.jersey || "0", height: b.height || void 0, country: b.country || void 0 });
+      roster.push({ id: b.id, name: b.name, position: b.position || "JUG", jersey: b.jersey || "0", height: b.height || void 0, country: b.country || void 0, ...b.birthYear ? { birthYear: b.birthYear } : {} });
     }
   }
   if (roster.length === 0 && targetAbbr) {
     for (const p of full.allPlayers) {
       if (p.teamAbbr === targetAbbr && !seen.has(p.id)) {
         seen.add(p.id);
-        roster.push({ id: p.id, name: p.name, position: p.position || "JUG", jersey: p.jersey || "0", height: p.height, country: p.country });
+        roster.push({ id: p.id, name: p.name, position: p.position || "JUG", jersey: p.jersey || "0", height: p.height, country: p.country, ...p.birthYear ? { birthYear: p.birthYear } : {} });
       }
     }
   }
@@ -8266,7 +8616,7 @@ var scoutingEngine = createScoutingEngine({ getFullLeagueMemory: __name5(async (
 }, "getFullLeagueMemory"), getPlayerBiosMap, getGameDayPayload, cachedFetchJson });
 async function getFantasyEspnSyncPayload(forceRefresh = false) {
   const biosMap = await getPlayerBiosMap(false);
-  const lightweightPlayers = [...biosMap.values()].map((b) => ({ id: b.id, name: b.name, teamId: b.teamId, teamAbbr: b.teamAbbr, teamName: NBA_TEAMS_MAP[b.teamAbbr]?.name || b.teamAbbr, position: b.position || "G-F", jersey: b.jersey || void 0, height: b.height || void 0, country: b.country || void 0, games: [] }));
+  const lightweightPlayers = [...biosMap.values()].map((b) => ({ id: b.id, name: b.name, teamId: b.teamId, teamAbbr: b.teamAbbr, teamName: NBA_TEAMS_MAP[b.teamAbbr]?.name || b.teamAbbr, position: b.position || "G-F", jersey: b.jersey || void 0, height: b.height || void 0, country: b.country || void 0, ...b.birthYear ? { birthYear: b.birthYear } : {}, games: [] }));
   return buildFantasyEspnSyncPayload({ allPlayers: lightweightPlayers, fetchLeagueScheduleGames: scoutingEngine.fetchLeagueScheduleGames, fetchEspnInjuriesByName: scoutingEngine.fetchEspnInjuriesByName, forceRefresh });
 }
 async function getSeasonAwardsPayload(seasonScope = "2027", forceRefresh = false) {

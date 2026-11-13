@@ -2,6 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { Search, Sliders, Star } from 'lucide-react';
 import type { ExperienceMode, TeamSummary, WindowSize } from '../types/nba';
 import {
+  DEFAULT_UNIFIED_FILTERS,
+  matchesTeamUnifiedFilters,
+  type UnifiedTableFiltersState,
+} from '../utils/entityFilters';
+import { UnifiedEntityFilterBar } from './UnifiedEntityFilterBar';
+import {
   formatSigned,
   mean,
   normalizeSearchText,
@@ -126,7 +132,9 @@ export function TeamsExplorerView({
   onInspectEntity,
 }: TeamsExplorerViewProps) {
   const [viewMode, setViewMode] = useState<TeamTableView>('basic');
-  const [confFilter, setConfFilter] = useState<'all' | 'Este' | 'Oeste'>('all');
+  const [unifiedFilters, setUnifiedFilters] = useState<UnifiedTableFiltersState>(
+    DEFAULT_UNIFIED_FILTERS
+  );
   const [query, setQuery] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('winPct');
   const [sortAsc, setSortAsc] = useState(false);
@@ -267,7 +275,7 @@ export function TeamsExplorerView({
     return enrichedTeams
       .filter((t) => {
         if (onlyWatchlist && !watchlistIds.has(`team:${t.id}`)) return false;
-        if (confFilter !== 'all' && t.conference !== confFilter) return false;
+        if (!matchesTeamUnifiedFilters(t, unifiedFilters)) return false;
         if (q) {
           const hay = normalizeSearchText(
               `${t.name} ${t.abbreviation} ${t.conference}`
@@ -299,7 +307,7 @@ export function TeamsExplorerView({
     enrichedTeams,
     onlyWatchlist,
     watchlistIds,
-    confFilter,
+    unifiedFilters,
     query,
     sortKey,
     sortAsc,
@@ -599,30 +607,7 @@ export function TeamsExplorerView({
         </div>
 
         <div className="pt-2.5 border-t border-[#1E293B] flex flex-col xl:flex-row xl:items-center justify-between gap-3">
-          <div className="flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg self-start overflow-x-auto no-scrollbar max-w-full">
-            {(
-              [
-                { id: 'all', label: 'Toda la NBA (30)' },
-                { id: 'Este', label: 'Conferencia Este' },
-                { id: 'Oeste', label: 'Conferencia Oeste' },
-              ] as const
-            ).map((c) => (
-              <button
-                key={c.id}
-                type="button"
-                onClick={() => setConfFilter(c.id)}
-                className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
-                  confFilter === c.id
-                    ? 'bg-[#1E293B] text-orange-400 font-semibold'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {c.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="relative w-full xl:w-72 shrink-0">
+          <div className="relative w-full xl:max-w-md shrink-0">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               type="text"
@@ -632,8 +617,21 @@ export function TeamsExplorerView({
               className="w-full pl-9 pr-3 py-2 sm:py-1.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500 transition-colors"
             />
           </div>
+          <span className="text-[11px] font-mono text-slate-400">
+            {filtered.length} de {enrichedTeams.length} franquicias visibles
+          </span>
         </div>
       </div>
+
+      <UnifiedEntityFilterBar
+        filters={unifiedFilters}
+        onChange={setUnifiedFilters}
+        teams={teams}
+        entityScope="team"
+        shownCount={filtered.length}
+        totalCount={enrichedTeams.length}
+        unitLabel="franquicias"
+      />
 
       {/* Row 3: Homogeneous Data Table / Mobile Franchise Cards */}
       <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">

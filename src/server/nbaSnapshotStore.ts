@@ -535,12 +535,14 @@ async function applyCdnDeltaGamesTo2027(dataset, biosMap, options) {
         const bio = biosMap.get(pid);
         let pSummary = dataset.playersById.get(pid);
         if (!pSummary) {
-          pSummary = { id: pid, name: fullName || bio?.name || pid, teamId: teamMeta?.id || bio?.teamId || "", teamAbbr: sideInfo.teamAbbr, teamName: teamMeta?.name || sideInfo.teamAbbr, position: pos || bio?.position || "G-F", jersey: jersey || bio?.jersey || void 0, height: bio?.height || void 0, country: bio?.country || void 0, games: [] };
+          pSummary = { id: pid, name: fullName || bio?.name || pid, teamId: teamMeta?.id || bio?.teamId || "", teamAbbr: sideInfo.teamAbbr, teamName: teamMeta?.name || sideInfo.teamAbbr, position: pos || bio?.position || "G-F", jersey: jersey || bio?.jersey || void 0, height: bio?.height || void 0, country: bio?.country || void 0, ...(bio?.birthYear ? { birthYear: bio.birthYear } : {}), games: [] };
           dataset.playersById.set(pid, pSummary);
         } else {
           pSummary.teamAbbr = sideInfo.teamAbbr;
           pSummary.teamId = teamMeta?.id || pSummary.teamId;
           pSummary.teamName = teamMeta?.name || pSummary.teamName;
+          if (!pSummary.birthYear && bio?.birthYear) pSummary.birthYear = bio.birthYear;
+          if (!pSummary.country && bio?.country) pSummary.country = bio.country;
         }
         if (pSummary.games.some((g) => g.eventId === ref.gameId)) continue;
         const st = cp.statistics || {};

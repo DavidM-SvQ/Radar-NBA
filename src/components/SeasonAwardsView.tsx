@@ -20,8 +20,17 @@ import type {
   AwardCategoryId,
   AwardSeasonScope,
   ExperienceMode,
+  PlayerSummary,
   SeasonAwardsPayload,
+  TeamSummary,
 } from '../types/nba';
+import {
+  DEFAULT_UNIFIED_FILTERS,
+  buildEntityLookupContext,
+  matchesPlayerUnifiedFilters,
+  type UnifiedTableFiltersState,
+} from '../utils/entityFilters';
+import { UnifiedEntityFilterBar } from './UnifiedEntityFilterBar';
 import { formatSigned, normalizeSearchText } from '../utils/analytics';
 import { STICKY_THEAD_CLASS, sortRows, useTableSort } from '../utils/tableSort';
 import { SortableTh } from './MetricUiHelpers';
@@ -47,6 +56,8 @@ function parseMetricDisplayValue(raw: string | undefined): number {
 
 interface SeasonAwardsViewProps {
   data: SeasonAwardsPayload | null;
+  players?: PlayerSummary[];
+  teams?: TeamSummary[];
   loading: boolean;
   errorMsg: string | null;
   seasonScope: AwardSeasonScope;
@@ -159,6 +170,8 @@ const STORAGE_SHOW_INELIGIBLE_KEY = 'radarnba_awards_show_ineligible_v1';
 
 export function SeasonAwardsView({
   data,
+  players = [],
+  teams = [],
   loading,
   errorMsg,
   seasonScope,
@@ -194,6 +207,14 @@ export function SeasonAwardsView({
   });
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [unifiedFilters, setUnifiedFilters] = useState<UnifiedTableFiltersState>(
+    DEFAULT_UNIFIED_FILTERS
+  );
+
+  const entityLookup = useMemo(
+    () => buildEntityLookupContext(players, teams),
+    [players, teams]
+  );
 
   const handleMinGamesChange = (val: number) => {
     const clean = Math.max(0, Math.min(82, Math.round(val)));
@@ -224,13 +245,27 @@ export function SeasonAwardsView({
       if (onlyWatchlist && !watchlistIds.has(`player:${entry.playerId}`)) {
         return false;
       }
+      if (
+        !matchesPlayerUnifiedFilters(
+          {
+            id: entry.playerId,
+            teamAbbr: entry.teamAbbr,
+            position: entry.position,
+            conference: entry.conference,
+          },
+          unifiedFilters,
+          entityLookup
+        )
+      ) {
+        return false;
+      }
       if (!qNorm) return true;
       const hay = normalizeSearchText(
         `${entry.playerName} ${entry.teamAbbr} ${entry.teamName} ${entry.position}`
       );
       return hay.includes(qNorm);
     };
-  }, [onlyWatchlist, watchlistIds, qNorm]);
+  }, [onlyWatchlist, watchlistIds, unifiedFilters, entityLookup, qNorm]);
 
   const individualRows = useMemo(() => {
     if (!data || activeCategory === 'all_nba') return [];
@@ -514,6 +549,25 @@ export function SeasonAwardsView({
           </div>
         </div>
       </section>
+
+      <UnifiedEntityFilterBar
+        filters={unifiedFilters}
+        onChange={setUnifiedFilters}
+        players={players}
+        teams={teams}
+        entityScope="player"
+        shownCount={
+          activeCategory === 'all_nba'
+            ? undefined
+            : individualRows.length
+        }
+        totalCount={
+          activeCategory === 'all_nba'
+            ? undefined
+            : data?.categories[activeCategory]?.length ?? 0
+        }
+        unitLabel="candidatos"
+      />
 
       {/* Error State */}
       {errorMsg && (

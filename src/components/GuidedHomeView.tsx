@@ -47,6 +47,15 @@ import {
 import { EntityBadge, PlayerAvatar, TeamLogo } from './NbaVisuals';
 import { ExportImageButton } from './ExportImageButton';
 import { buildTableSnapshotBlob } from '../utils/exportImageCard';
+import { UnifiedEntityFilterBar } from './UnifiedEntityFilterBar';
+import {
+  DEFAULT_UNIFIED_FILTERS,
+  buildEntityLookupContext,
+  hasActiveUnifiedFilters,
+  matchesEntityUnifiedFilters,
+  matchesTeamUnifiedFilters,
+  type UnifiedTableFiltersState,
+} from '../utils/entityFilters';
 
 interface GuidedHomeViewProps {
   players: PlayerSummary[];
@@ -67,6 +76,7 @@ interface GuidedHomeViewProps {
 }
 
 export function GuidedHomeView({
+  players,
   teams,
   anomalies,
   trendBreakouts,
@@ -94,6 +104,15 @@ export function GuidedHomeView({
   const [streakDirection, setStreakDirection] = useState<
     'all' | 'positive' | 'negative'
   >('all');
+  const [unifiedFilters, setUnifiedFilters] = useState<UnifiedTableFiltersState>(
+    DEFAULT_UNIFIED_FILTERS
+  );
+
+  const entityLookup = useMemo(
+    () => buildEntityLookupContext(players, teams),
+    [players, teams]
+  );
+  const unifiedActive = hasActiveUnifiedFilters(unifiedFilters, 'mixed');
 
   const {
     sortKey: protSortKey,
@@ -198,9 +217,18 @@ export function GuidedHomeView({
 
   // Block 01: Protagonistas del Día (Jugadores y Equipos · Positivas y Negativas)
   const { protagonistRows, posEntityCount, negEntityCount } = useMemo(() => {
-    const byEntityType = scopedAnomalies.filter((s) =>
-      protagonistEntity === 'all' ? true : s.entityType === protagonistEntity
-    );
+    const byEntityType = scopedAnomalies.filter((s) => {
+      if (protagonistEntity !== 'all' && s.entityType !== protagonistEntity) {
+        return false;
+      }
+      if (
+        unifiedActive &&
+        !matchesEntityUnifiedFilters(s, unifiedFilters, entityLookup)
+      ) {
+        return false;
+      }
+      return true;
+    });
 
     const seenPos = new Set<string>();
     const seenNeg = new Set<string>();
@@ -272,7 +300,14 @@ export function GuidedHomeView({
       posEntityCount: posDedup.length,
       negEntityCount: negDedup.length,
     };
-  }, [scopedAnomalies, protagonistDirection, protagonistEntity]);
+  }, [
+    scopedAnomalies,
+    protagonistDirection,
+    protagonistEntity,
+    unifiedActive,
+    unifiedFilters,
+    entityLookup,
+  ]);
 
   // Block 02 Left: Teams collective surges & slumps with matched metric benchmark
   const featuredTeams = useMemo(() => {
@@ -294,6 +329,9 @@ export function GuidedHomeView({
     return teams
       .filter((t) => {
         if (onlyWatchlist && !watchlistIds.has(`team:${t.id}`)) return false;
+        if (unifiedActive && !matchesTeamUnifiedFilters(t, unifiedFilters)) {
+          return false;
+        }
         return t.games.length > 0;
       })
       .map((t) => {
@@ -367,12 +405,19 @@ export function GuidedHomeView({
     watchlistIds,
     experienceMode,
     benchmarks,
+    unifiedActive,
+    unifiedFilters,
   ]);
 
   // Block 02 Right: Active statistical streaks (Positive & Negative)
   const featuredStreaks = useMemo(() => {
-    const pos = scopedStreaks.filter((s) => s.isPositive);
-    const neg = scopedStreaks.filter((s) => !s.isPositive);
+    const baseStreaks = unifiedActive
+      ? scopedStreaks.filter((s) =>
+          matchesEntityUnifiedFilters(s, unifiedFilters, entityLookup)
+        )
+      : scopedStreaks;
+    const pos = baseStreaks.filter((s) => s.isPositive);
+    const neg = baseStreaks.filter((s) => !s.isPositive);
 
     if (streakDirection === 'positive') return pos.slice(0, 5);
     if (streakDirection === 'negative') return neg.slice(0, 5);
@@ -386,7 +431,7 @@ export function GuidedHomeView({
 
     if (chosen.length < 5) {
       const usedIds = new Set(chosen.map((c) => c.id));
-      for (const s of scopedStreaks) {
+      for (const s of baseStreaks) {
         if (chosen.length >= 5) break;
         if (!usedIds.has(s.id)) {
           chosen.push(s);
@@ -396,7 +441,13 @@ export function GuidedHomeView({
     }
 
     return chosen.sort((a, b) => b.count - a.count);
-  }, [scopedStreaks, streakDirection]);
+  }, [
+    scopedStreaks,
+    streakDirection,
+    unifiedActive,
+    unifiedFilters,
+    entityLookup,
+  ]);
 
   const topPosBench = radarPulse.topPositive
     ? resolveSignalBenchmark(radarPulse.topPositive, benchmarks)
@@ -827,6 +878,14 @@ export function GuidedHomeView({
           })}
         </div>
       </section>
+
+      <UnifiedEntityFilterBar
+        filters={unifiedFilters}
+        onChange={setUnifiedFilters}
+        players={players}
+        teams={teams}
+        entityScope="mixed"
+      />
 
       {/* BLOCK 02: Protagonistas del Día (Positive & Negative Statistical Anomalies for Players & Teams) */}
       <section className="space-y-3">

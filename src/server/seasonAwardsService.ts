@@ -140,6 +140,10 @@ export async function getEspnRosterExperienceMap(forceRefresh = false, timeoutMs
         const debutYear = Number(ath?.debutYear) || null;
         const jersey = String(ath?.jersey ?? '').trim();
         const position = String(ath?.position?.abbreviation || '').trim();
+        const dobRaw = String(ath?.dateOfBirth || '').trim();
+        const dobYearMatch = dobRaw.match(/^(\d{4})-/);
+        const birthYear = dobYearMatch ? Number(dobYearMatch[1]) : null;
+        const country = String(ath?.birthPlace?.country || '').trim();
         byNormName.set(norm, {
           displayName,
           teamAbbr: nbaAbbr,
@@ -147,6 +151,8 @@ export async function getEspnRosterExperienceMap(forceRefresh = false, timeoutMs
           debutYear,
           jersey,
           position,
+          birthYear,
+          country,
         });
       }
     }
@@ -190,6 +196,12 @@ export async function enrichBiosWithEspnRosters(biosMap, options = {}) {
       }
       if (hit.debutYear && !bio.fromYear) {
         bio.fromYear = hit.debutYear;
+      }
+      if (hit.birthYear && !bio.birthYear) {
+        bio.birthYear = hit.birthYear;
+      }
+      if (hit.country && !bio.country) {
+        bio.country = hit.country;
       }
       if (options.updateActiveTeams && hit.teamAbbr && NBA_TEAMS_MAP[hit.teamAbbr]) {
         bio.teamAbbr = hit.teamAbbr;

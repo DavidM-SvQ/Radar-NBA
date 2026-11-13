@@ -582,3 +582,111 @@ export function resolveTeamMatchupColors(
   };
 }
 
+export type NbaConferenceEs = 'Este' | 'Oeste';
+
+export type NbaDivisionEs =
+  | 'Atlántico'
+  | 'Central'
+  | 'Sureste'
+  | 'Noroeste'
+  | 'Pacífico'
+  | 'Suroeste';
+
+export const NBA_DIVISIONS_BY_CONFERENCE: Record<NbaConferenceEs, NbaDivisionEs[]> = {
+  Este: ['Atlántico', 'Central', 'Sureste'],
+  Oeste: ['Noroeste', 'Pacífico', 'Suroeste'],
+};
+
+export const NBA_DIVISIONS_LIST: NbaDivisionEs[] = [
+  'Atlántico',
+  'Central',
+  'Sureste',
+  'Noroeste',
+  'Pacífico',
+  'Suroeste',
+];
+
+export const NBA_TEAM_DIVISION_MAP: Record<string, NbaDivisionEs> = {
+  BOS: 'Atlántico',
+  BKN: 'Atlántico',
+  NYK: 'Atlántico',
+  PHI: 'Atlántico',
+  TOR: 'Atlántico',
+  CHI: 'Central',
+  CLE: 'Central',
+  DET: 'Central',
+  IND: 'Central',
+  MIL: 'Central',
+  ATL: 'Sureste',
+  CHA: 'Sureste',
+  MIA: 'Sureste',
+  ORL: 'Sureste',
+  WAS: 'Sureste',
+  DEN: 'Noroeste',
+  MIN: 'Noroeste',
+  OKC: 'Noroeste',
+  POR: 'Noroeste',
+  UTA: 'Noroeste',
+  GSW: 'Pacífico',
+  LAC: 'Pacífico',
+  LAL: 'Pacífico',
+  PHX: 'Pacífico',
+  SAC: 'Pacífico',
+  DAL: 'Suroeste',
+  HOU: 'Suroeste',
+  MEM: 'Suroeste',
+  NOP: 'Suroeste',
+  SAS: 'Suroeste',
+};
+
+export const NBA_TEAM_CONFERENCE_MAP: Record<string, NbaConferenceEs> = {
+  ATL: 'Este',
+  BOS: 'Este',
+  BKN: 'Este',
+  CHA: 'Este',
+  CHI: 'Este',
+  CLE: 'Este',
+  DET: 'Este',
+  IND: 'Este',
+  MIA: 'Este',
+  MIL: 'Este',
+  NYK: 'Este',
+  ORL: 'Este',
+  PHI: 'Este',
+  TOR: 'Este',
+  WAS: 'Este',
+  DAL: 'Oeste',
+  DEN: 'Oeste',
+  GSW: 'Oeste',
+  HOU: 'Oeste',
+  LAC: 'Oeste',
+  LAL: 'Oeste',
+  MEM: 'Oeste',
+  MIN: 'Oeste',
+  NOP: 'Oeste',
+  OKC: 'Oeste',
+  PHX: 'Oeste',
+  POR: 'Oeste',
+  SAC: 'Oeste',
+  SAS: 'Oeste',
+  UTA: 'Oeste',
+};
+
+export function normalizeConferenceEs(raw?: string | null): NbaConferenceEs | null {
+  const val = String(raw || '').trim().toLowerCase();
+  if (val === 'este' || val === 'east') return 'Este';
+  if (val === 'oeste' || val === 'west') return 'Oeste';
+  return null;
+}
+
+export function getTeamDivision(abbr?: string | null): NbaDivisionEs | '' {
+  const clean = String(abbr || '').toUpperCase().trim();
+  return NBA_TEAM_DIVISION_MAP[clean] || '';
+}
+
+export function getTeamConference(abbr?: string | null): NbaConferenceEs | '' {
+  const clean = String(abbr || '').toUpperCase().trim();
+  return NBA_TEAM_CONFERENCE_MAP[clean] || '';
+}
+
+

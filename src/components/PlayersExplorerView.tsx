@@ -4,8 +4,16 @@ import type {
   ExperienceMode,
   PlayerSummary,
   SearchPlayerResult,
+  TeamSummary,
   WindowSize,
 } from '../types/nba';
+import {
+  DEFAULT_UNIFIED_FILTERS,
+  buildEntityLookupContext,
+  matchesPlayerUnifiedFilters,
+  type UnifiedTableFiltersState,
+} from '../utils/entityFilters';
+import { UnifiedEntityFilterBar } from './UnifiedEntityFilterBar';
 import {
   formatSigned,
   mean,
@@ -33,6 +41,7 @@ import {
 
 interface PlayersExplorerViewProps {
   players: PlayerSummary[];
+  teams?: TeamSummary[];
   experienceMode: ExperienceMode;
   benchmarks: LeagueBenchmarks;
   onSwitchToAdvanced: () => void;
@@ -86,6 +95,7 @@ type SortKey =
 
 export function PlayersExplorerView({
   players,
+  teams = [],
   experienceMode,
   benchmarks,
   onSwitchToAdvanced,
@@ -102,10 +112,17 @@ export function PlayersExplorerView({
   addingPlayerId,
 }: PlayersExplorerViewProps) {
   const [viewMode, setViewMode] = useState<TableViewMode>('basic');
-  const [posFilter, setPosFilter] = useState<'all' | 'G' | 'F' | 'C'>('all');
+  const [unifiedFilters, setUnifiedFilters] = useState<UnifiedTableFiltersState>(
+    DEFAULT_UNIFIED_FILTERS
+  );
   const [query, setQuery] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('ptsBase');
   const [sortAsc, setSortAsc] = useState(false);
+
+  const entityLookup = useMemo(
+    () => buildEntityLookupContext(players, teams),
+    [players, teams]
+  );
 
   const [remoteResults, setRemoteResults] = useState<SearchPlayerResult[]>([]);
   const [searchingRemote, setSearchingRemote] = useState(false);
@@ -245,11 +262,10 @@ export function PlayersExplorerView({
     return rows
       .filter((r) => {
         if (onlyWatchlist && !watchlistIds.has(`player:${r.id}`)) return false;
-        if (posFilter !== 'all' && !r.position.toUpperCase().includes(posFilter))
-          return false;
+        if (!matchesPlayerUnifiedFilters(r, unifiedFilters, entityLookup)) return false;
         if (q) {
           const hay = normalizeSearchText(
-            `${r.name} ${r.teamAbbr} ${r.teamName} ${r.position}`
+            `${r.name} ${r.teamAbbr} ${r.teamName} ${r.position} ${r.country || ''}`
           );
           if (!hay.includes(q)) return false;
         }
@@ -269,7 +285,7 @@ export function PlayersExplorerView({
         }
         return sortAsc ? a[sortKey] - b[sortKey] : b[sortKey] - a[sortKey];
       });
-  }, [rows, onlyWatchlist, watchlistIds, posFilter, query, sortKey, sortAsc]);
+  }, [rows, onlyWatchlist, watchlistIds, unifiedFilters, entityLookup, query, sortKey, sortAsc]);
 
   const existingIds = useMemo(() => new Set(players.map((p) => p.id)), [players]);
   const unaddedRemote = useMemo(
@@ -294,11 +310,11 @@ export function PlayersExplorerView({
     const filename = `radarnba-jugadores-${modeSlug}-${dateSlug}.png`;
 
     const posLabel =
-      posFilter === 'all'
+      unifiedFilters.position === 'all'
         ? 'Todas las posiciones'
-        : posFilter === 'G'
+        : unifiedFilters.position === 'G'
         ? 'Bases / Escoltas (G)'
-        : posFilter === 'F'
+        : unifiedFilters.position === 'F'
         ? 'Aleros (F)'
         : 'Pívots (C)';
 
@@ -719,41 +735,18 @@ export function PlayersExplorerView({
         </div>
 
         <div className="pt-2.5 border-t border-[#1E293B] flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-          <div className="flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg self-start overflow-x-auto no-scrollbar max-w-full">
-            {(
-              [
-                { id: 'all', label: 'Todas' },
-                { id: 'G', label: 'Bases / Escoltas (G)' },
-                { id: 'F', label: 'Aleros (F)' },
-                { id: 'C', label: 'Pívots (C)' },
-              ] as const
-            ).map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => setPosFilter(p.id)}
-                className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
-                  posFilter === p.id
-                    ? 'bg-[#1E293B] text-orange-400 font-semibold'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {p.label}
-              </button>
-            ))}
+          <div className="relative flex-1 lg:max-w-md">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => void handleQueryChange(e.target.value)}
+              placeholder="Buscar jugador (Jokic, Doncic, Aldama)..."
+              className="w-full pl-9 pr-3 py-2 sm:py-1.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500 transition-colors"
+            />
           </div>
 
-          <div className="flex items-center gap-2 w-full lg:w-auto shrink-0">
-            <div className="relative flex-1 lg:w-80">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => void handleQueryChange(e.target.value)}
-                placeholder="Buscar jugador (Jokic, Doncic, Aldama)..."
-                className="w-full pl-9 pr-3 py-2 sm:py-1.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500 transition-colors"
-              />
-            </div>
+          <div className="flex items-center gap-2 shrink-0">
             <ExportImageButton
               onBuildImage={handleBuildPlayersSnapshot}
               disabled={filtered.length === 0}
@@ -761,6 +754,17 @@ export function PlayersExplorerView({
           </div>
         </div>
       </div>
+
+      <UnifiedEntityFilterBar
+        filters={unifiedFilters}
+        onChange={setUnifiedFilters}
+        players={players}
+        teams={teams}
+        entityScope="player"
+        shownCount={filtered.length}
+        totalCount={rows.length}
+        unitLabel="jugadores"
+      />
 
       {/* On-demand NBA Player Loader Banner */}
       {query.trim().length >= 2 && (unaddedRemote.length > 0 || searchingRemote) && (

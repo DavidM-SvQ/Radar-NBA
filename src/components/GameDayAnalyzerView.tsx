@@ -27,6 +27,8 @@ import type {
   GameDayMatchupCard,
   GameDayPayload,
   GameDayPlayerLine,
+  PlayerSummary,
+  TeamSummary,
 } from '../types/nba';
 import { formatSigned } from '../utils/analytics';
 import {
@@ -46,8 +48,18 @@ import {
   useTableSort,
 } from '../utils/tableSort';
 import { PlayerAvatar, TeamLogo } from './NbaVisuals';
+import { UnifiedEntityFilterBar } from './UnifiedEntityFilterBar';
+import {
+  DEFAULT_UNIFIED_FILTERS,
+  buildEntityLookupContext,
+  hasActiveUnifiedFilters,
+  matchesPlayerUnifiedFilters,
+  type UnifiedTableFiltersState,
+} from '../utils/entityFilters';
 
 interface GameDayAnalyzerViewProps {
+  players?: PlayerSummary[];
+  teams?: TeamSummary[];
   experienceMode: ExperienceMode;
   watchlistIds: Set<string>;
   onToggleWatchlist: (entityKey: string) => void;
@@ -97,6 +109,8 @@ function formatCalendarChipDate(isoDate: string): {
 }
 
 export function GameDayAnalyzerView({
+  players = [],
+  teams = [],
   experienceMode,
   watchlistIds,
   onToggleWatchlist,
@@ -128,6 +142,9 @@ export function GameDayAnalyzerView({
   );
   const [streakFilter, setStreakFilter] = useState<'all' | 'broken' | 'extended'>(
     'all'
+  );
+  const [unifiedFilters, setUnifiedFilters] = useState<UnifiedTableFiltersState>(
+    DEFAULT_UNIFIED_FILTERS
   );
   const {
     sortKey: roleSortKey,
@@ -416,16 +433,42 @@ export function GameDayAnalyzerView({
     });
   }, [data, matchupFilter, watchlistIds]);
 
+  const entityLookup = useMemo(
+    () => buildEntityLookupContext(players, teams),
+    [players, teams]
+  );
+  const unifiedActive = hasActiveUnifiedFilters(unifiedFilters, 'player');
+
+  const filteredRoleShifts = useMemo(() => {
+    if (!data) return [];
+    if (!unifiedActive) return data.roleShifts;
+    return data.roleShifts.filter((r) =>
+      matchesPlayerUnifiedFilters(
+        { id: r.playerId, teamAbbr: r.teamAbbr, position: r.position },
+        unifiedFilters,
+        entityLookup
+      )
+    );
+  }, [data, unifiedActive, unifiedFilters, entityLookup]);
+
   const filteredStreaks = useMemo(() => {
     if (!data) return [];
-    if (streakFilter === 'broken') {
-      return data.streakShifts.filter((s) => s.status === 'broken');
-    }
-    if (streakFilter === 'extended') {
-      return data.streakShifts.filter((s) => s.status === 'extended');
-    }
-    return data.streakShifts;
-  }, [data, streakFilter]);
+    return data.streakShifts.filter((s) => {
+      if (streakFilter === 'broken' && s.status !== 'broken') return false;
+      if (streakFilter === 'extended' && s.status !== 'extended') return false;
+      if (
+        unifiedActive &&
+        !matchesPlayerUnifiedFilters(
+          { id: s.playerId, teamAbbr: s.teamAbbr },
+          unifiedFilters,
+          entityLookup
+        )
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [data, streakFilter, unifiedActive, unifiedFilters, entityLookup]);
 
   const chronicleHighlightEntities = useMemo(() => {
     if (!data) return [];
@@ -2270,32 +2313,46 @@ export function GameDayAnalyzerView({
 
       {/* SECTION 04: Radar de Rotación (Picos de Minutos / Rol) & Termómetro de Rachas */}
       {showRotationBlock && (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-stretch">
-          {/* 04A: Cambios de Rol y Minutos Inusuales */}
-          <section className="space-y-3 flex flex-col">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <TrendingUp className="w-4 h-4 text-orange-400 shrink-0" />
-                <h2 className="text-sm font-semibold text-slate-100 truncate">
-                  04A. Picos de Minutos y Nuevos Roles en Pista
-                </h2>
-                <MetricInfoTooltip helpKey="gamedayRoleShift" align="left" />
-              </div>
-              <span className="text-xs font-mono tabular-nums text-slate-400 shrink-0">
-                {data.roleShifts.length} alertas
-              </span>
-            </div>
+        <div className="space-y-4">
+          <UnifiedEntityFilterBar
+            filters={unifiedFilters}
+            onChange={setUnifiedFilters}
+            players={players}
+            teams={teams}
+            entityScope="player"
+            shownCount={filteredRoleShifts.length + filteredStreaks.length}
+            totalCount={data.roleShifts.length + data.streakShifts.length}
+            unitLabel="alertas de rotación y rachas"
+          />
 
-            <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden flex-1 flex flex-col">
-              {data.roleShifts.length === 0 ? (
-                <div className="p-8 text-center text-xs text-slate-400">
-                  Sin saltos bruscos de minutos (+6.5 MIN) ni uso ofensivo (+6% USG) en esta jornada.
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-stretch">
+            {/* 04A: Cambios de Rol y Minutos Inusuales */}
+            <section className="space-y-3 flex flex-col">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <TrendingUp className="w-4 h-4 text-orange-400 shrink-0" />
+                  <h2 className="text-sm font-semibold text-slate-100 truncate">
+                    04A. Picos de Minutos y Nuevos Roles en Pista
+                  </h2>
+                  <MetricInfoTooltip helpKey="gamedayRoleShift" align="left" />
                 </div>
-              ) : (
-                <>
-                  {/* Mobile list */}
-                  <div className="sm:hidden divide-y divide-[#1E293B] max-h-[720px] overflow-y-auto">
-                    {data.roleShifts.map((r) => (
+                <span className="text-xs font-mono tabular-nums text-slate-400 shrink-0">
+                  {filteredRoleShifts.length} alertas
+                </span>
+              </div>
+
+              <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden flex-1 flex flex-col">
+                {filteredRoleShifts.length === 0 ? (
+                  <div className="p-8 text-center text-xs text-slate-400">
+                    {unifiedActive
+                      ? 'Ningún cambio de rol coincide con el bloque de filtros actual.'
+                      : 'Sin saltos bruscos de minutos (+6.5 MIN) ni uso ofensivo (+6% USG) en esta jornada.'}
+                  </div>
+                ) : (
+                  <>
+                    {/* Mobile list */}
+                    <div className="sm:hidden divide-y divide-[#1E293B] max-h-[720px] overflow-y-auto">
+                      {filteredRoleShifts.map((r) => (
                       <div
                         key={r.playerId}
                         onClick={() => onInspectEntity('player', r.playerId)}
@@ -2394,7 +2451,7 @@ export function GameDayAnalyzerView({
                       </thead>
                       <tbody className="divide-y divide-[#1E293B] text-sm">
                         {sortRows(
-                          data.roleShifts,
+                          filteredRoleShifts,
                           (r) => {
                             switch (roleSortKey) {
                               case 'name':
@@ -2597,6 +2654,7 @@ export function GameDayAnalyzerView({
               )}
             </div>
           </section>
+          </div>
         </div>
       )}
 

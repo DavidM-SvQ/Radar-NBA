@@ -69,6 +69,14 @@ import {
   formatDayShortEs,
   getEasternTodayIso,
 } from '../utils/staticSchedule';
+import { UnifiedEntityFilterBar } from './UnifiedEntityFilterBar';
+import {
+  DEFAULT_UNIFIED_FILTERS,
+  buildEntityLookupContext,
+  hasActiveUnifiedFilters,
+  matchesPlayerUnifiedFilters,
+  type UnifiedTableFiltersState,
+} from '../utils/entityFilters';
 
 const OFFICIAL_SCORING_CATEGORIES_ROWS: Array<{
   action: string;
@@ -702,9 +710,14 @@ export function FantasyEspnAssistantView({
   // Smart Injury & B2B Weekly Projection Mode
   const [projectionMode, setProjectionMode] = useState<FantasyProjectionMode>('smart');
 
+  // Unified Table Filters for Roster & Waivers
+  const [rosterUnifiedFilters, setRosterUnifiedFilters] =
+    useState<UnifiedTableFiltersState>(DEFAULT_UNIFIED_FILTERS);
+  const [waiverUnifiedFilters, setWaiverUnifiedFilters] =
+    useState<UnifiedTableFiltersState>(DEFAULT_UNIFIED_FILTERS);
+
   // Waiver Wire Filters & Add/Drop Simulator State
   const [waiverQuery, setWaiverQuery] = useState<string>('');
-  const [waiverPosFilter, setWaiverPosFilter] = useState<'ALL' | 'G' | 'F' | 'C'>('ALL');
   const [waiverMinGames, setWaiverMinGames] = useState<number>(0);
   const [waiverOnlyRoleBreakouts, setWaiverOnlyRoleBreakouts] = useState<boolean>(false);
   const [waiverSortBy, setWaiverSortBy] = useState<
@@ -1331,6 +1344,27 @@ export function FantasyEspnAssistantView({
     [myRosterEnriched, sortRosterItems]
   );
 
+  const entityLookup = useMemo(
+    () => buildEntityLookupContext(effectivePlayers, teams),
+    [effectivePlayers, teams]
+  );
+  const rosterUnifiedActive = hasActiveUnifiedFilters(rosterUnifiedFilters, 'player');
+  const waiverUnifiedActive = hasActiveUnifiedFilters(waiverUnifiedFilters, 'player');
+
+  const displayedStarters = useMemo(() => {
+    if (!rosterUnifiedActive) return myStarters;
+    return myStarters.filter((item) =>
+      matchesPlayerUnifiedFilters(item.player, rosterUnifiedFilters, entityLookup)
+    );
+  }, [myStarters, rosterUnifiedActive, rosterUnifiedFilters, entityLookup]);
+
+  const displayedBench = useMemo(() => {
+    if (!rosterUnifiedActive) return myBench;
+    return myBench.filter((item) =>
+      matchesPlayerUnifiedFilters(item.player, rosterUnifiedFilters, entityLookup)
+    );
+  }, [myBench, rosterUnifiedActive, rosterUnifiedFilters, entityLookup]);
+
   const lineupTotals = useMemo(() => {
     let totalGames = 0;
     let playableGamesSum = 0;
@@ -1733,9 +1767,15 @@ export function FantasyEspnAssistantView({
       if (waiverMinGames > 0 && item.teamSched.gamesCount < waiverMinGames) {
         return false;
       }
-      if (waiverPosFilter !== 'ALL') {
-        const posUp = (item.player.position || '').toUpperCase();
-        if (!posUp.includes(waiverPosFilter)) return false;
+      if (
+        waiverUnifiedActive &&
+        !matchesPlayerUnifiedFilters(
+          item.player,
+          waiverUnifiedFilters,
+          entityLookup
+        )
+      ) {
+        return false;
       }
       if (q) {
         const hay = normalizeSearchText(
@@ -1832,7 +1872,9 @@ export function FantasyEspnAssistantView({
     roleBreakoutByPlayerId,
     waiverQuery,
     waiverMinGames,
-    waiverPosFilter,
+    waiverUnifiedActive,
+    waiverUnifiedFilters,
+    entityLookup,
     waiverSortBy,
     waiverTableSortKey,
     waiverTableSortAsc,
@@ -3041,6 +3083,20 @@ export function FantasyEspnAssistantView({
                 </div>
               )}
 
+              {/* Unified 6-Field Table Filter Block */}
+              <div className="p-3 sm:p-4 bg-[#0B1120]/30">
+                <UnifiedEntityFilterBar
+                  filters={rosterUnifiedFilters}
+                  onChange={setRosterUnifiedFilters}
+                  players={effectivePlayers}
+                  teams={teams}
+                  entityScope="player"
+                  shownCount={displayedStarters.length + displayedBench.length}
+                  totalCount={myRosterEnriched.length}
+                  unitLabel="jugadores en plantilla"
+                />
+              </div>
+
               {/* Roster Table (Starters + Bench Split) */}
               <div className="w-full overflow-auto max-h-[82vh] rounded-b-lg border-t border-[#1E293B] pb-8">
                 <table className="w-full text-left border-collapse table-auto text-xs">
@@ -3135,10 +3191,11 @@ export function FantasyEspnAssistantView({
                         colSpan={10}
                         className="py-1.5 px-3 text-[11px] font-semibold text-emerald-400"
                       >
-                        Titulares Activos que Puntúan ({myStarters.length}/10)
+                        Titulares Activos que Puntúan ({displayedStarters.length}
+                        {rosterUnifiedActive ? ` de ${myStarters.length}` : ''}/10)
                       </td>
                     </tr>
-                    {myStarters.map((item, idx) => {
+                    {displayedStarters.map((item, idx) => {
                       const shouldBench = !optimalStarterIds.has(item.player.id);
                       const hasCorrection = Boolean(
                         leagueState.gameCorrections &&
@@ -3286,10 +3343,11 @@ export function FantasyEspnAssistantView({
                         colSpan={10}
                         className="py-2 px-3 text-[11px] font-bold text-slate-300"
                       >
-                        Reservas en Banquillo — No Puntúan ({myBench.length} activos / 3 plazas de reserva)
+                        Reservas en Banquillo — No Puntúan ({displayedBench.length}
+                        {rosterUnifiedActive ? ` de ${myBench.length}` : ''} activos / 3 plazas de reserva)
                       </td>
                     </tr>
-                    {myBench.map((item, idx) => {
+                    {displayedBench.map((item, idx) => {
                       const shouldStart = optimalStarterIds.has(item.player.id);
                       const hasCorrection = Boolean(
                         leagueState.gameCorrections &&
@@ -3702,24 +3760,6 @@ export function FantasyEspnAssistantView({
 
             <div className="p-4 border-b border-[#1E293B] bg-[#0F172A]/60 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2">
-                {/* Position Filter */}
-                <div className="flex items-center p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg">
-                  {(['ALL', 'G', 'F', 'C'] as const).map((pos) => (
-                    <button
-                      key={pos}
-                      type="button"
-                      onClick={() => setWaiverPosFilter(pos)}
-                      className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-                        waiverPosFilter === pos
-                          ? 'bg-orange-500 text-slate-950 font-semibold'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      {pos === 'ALL' ? 'Todas Pos.' : pos}
-                    </button>
-                  ))}
-                </div>
-
                 {/* Min Weekly Games Filter */}
                 <div className="flex items-center p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg">
                   {(
@@ -3824,7 +3864,11 @@ export function FantasyEspnAssistantView({
                       filename: `radarnba-fantasy-waivers-${activeWeek?.id || 'semana'}`,
                       categoryTag: 'Fantasy · Mercado de Agentes Libres',
                       title: `Ranking Filtrado de Waivers (${activeWeek?.label || 'Semana activa'})`,
-                      subtitle: `Posición: ${waiverPosFilter === 'ALL' ? 'Todas' : waiverPosFilter}${
+                      subtitle: `Posición: ${
+                        waiverUnifiedFilters.position === 'all'
+                          ? 'Todas'
+                          : waiverUnifiedFilters.position
+                      }${
                         waiverMinGames > 0 ? ` · ≥${waiverMinGames} PJ` : ''
                       }${
                         effectiveDropMember
@@ -3905,6 +3949,19 @@ export function FantasyEspnAssistantView({
                   }
                 />
               </div>
+            </div>
+
+            <div className="p-3 sm:p-4 border-b border-[#1E293B] bg-[#0B1120]/40">
+              <UnifiedEntityFilterBar
+                filters={waiverUnifiedFilters}
+                onChange={setWaiverUnifiedFilters}
+                players={effectivePlayers}
+                teams={teams}
+                entityScope="player"
+                shownCount={availableWaiverPool.length}
+                totalCount={enrichedCatalog.length}
+                unitLabel="agentes libres"
+              />
             </div>
 
             <div className="overflow-x-auto max-h-[70vh] rounded-lg border border-[#1E293B]">

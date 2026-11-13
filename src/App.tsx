@@ -2539,6 +2539,8 @@ export default function App() {
               )
             ) : activeSection === 'gameday' ? (
               <GameDayAnalyzerView
+                players={players}
+                teams={teams}
                 experienceMode={experienceMode}
                 watchlistIds={watchlistIds}
                 onToggleWatchlist={handleToggleWatchlist}
@@ -2554,6 +2556,8 @@ export default function App() {
                 data={awardsByScope[awardsSeasonScope]}
                 loading={awardsLoading && !awardsByScope[awardsSeasonScope]}
                 errorMsg={awardsError}
+                players={players}
+                teams={teams}
                 seasonScope={awardsSeasonScope}
                 onChangeSeasonScope={setAwardsSeasonScope}
                 activeCategory={awardCategory}
@@ -2571,6 +2575,8 @@ export default function App() {
                 data={milestonesData}
                 loading={milestonesLoading && !milestonesData}
                 errorMsg={milestonesError}
+                players={players}
+                teams={teams}
                 experienceMode={experienceMode}
                 onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
                 onRetry={() => void fetchMilestones(false)}
@@ -2604,6 +2610,8 @@ export default function App() {
                   <AnomalyRadarView
                     signals={anomalies}
                     trendBreakouts={trendBreakouts}
+                    players={players}
+                    teams={teams}
                     benchmarks={benchmarks}
                     experienceMode={experienceMode}
                     watchlistIds={watchlistIds}
@@ -2638,6 +2646,7 @@ export default function App() {
                 {activeSection === 'streaks' && (
                   <StreaksConsistencyView
                     players={players}
+                    teams={teams}
                     players2027={seasonReferenceSlices.players2027}
                     players2026={seasonReferenceSlices.players2026}
                     streaks={streaks}
@@ -2716,6 +2725,7 @@ export default function App() {
                 {activeSection === 'players' && (
                   <PlayersExplorerView
                     players={players}
+                    teams={teams}
                     experienceMode={experienceMode}
                     benchmarks={benchmarks}
                     onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
