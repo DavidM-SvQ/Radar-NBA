@@ -2233,11 +2233,11 @@ export const COLUMN_HELP: Record<string, ColumnHelpEntry> = {
   gameReportQuarters: {
     title: 'Parciales por Cuartos y Punto de Quiebre',
     simpleDesc:
-      'Desglosa el tanteo periodo a periodo (Q1–Q4 y prórrogas) para identificar en qué tramo exacto cambió el mando táctico del encuentro.',
+      'Desglosa el tanteo periodo a periodo (Q1–Q4 y prórrogas) para identificar en qué tramo exacto se decidió el encuentro.',
     calculation:
-      'Extraído del acta oficial en vivo de NBA.com (liveData boxscore). El "Punto de quiebre" señala el cuarto donde el equipo ganador logró su mayor diferencial neto de puntos.',
+      'Extraído del acta oficial y Play-by-Play en vivo de NBA.com. El tramo decisivo prioriza prórrogas, cierres clutch (≤5 pts en los 2 minutos finales) o el mayor parcial ganador a partir del último empate o cambio de líder.',
     benchmarkText:
-      'Un parcial de +10 o más en un solo cuarto suele marcar la ruptura definitiva de pizarra.',
+      'Si el partido se empató o tuvo alternancias en el 3Q/4Q, un parcial previo de la primera parte no se marca como decisivo.',
   },
   gameReportPodium: {
     title: 'Podio del Partido (⭐⭐⭐ / ⭐⭐ / ⭐)',

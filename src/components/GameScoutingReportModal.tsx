@@ -610,7 +610,7 @@ export function GameScoutingReportModal({
       }
       const controller = new AbortController();
       narrativeAbortRef.current = controller;
-      const timeoutId = window.setTimeout(() => controller.abort(), 30000);
+      const timeoutId = window.setTimeout(() => controller.abort(), 65000);
 
       setLoadingNarrative(true);
       setNarrativeError(null);
@@ -2106,112 +2106,120 @@ export function GameScoutingReportModal({
         onClick={(e) => e.stopPropagation()}
         className="w-full max-w-6xl h-[94vh] sm:h-auto sm:max-h-[92vh] bg-[#0B1120] border border-[#1E293B] rounded-t-2xl sm:rounded-xl overflow-hidden flex flex-col"
       >
-        {/* TOP STICKY BAR: Official Match Header + Copy + Close */}
-        <div className="px-4 sm:px-6 py-3.5 bg-[#131C2E] border-b border-[#1E293B] flex items-start justify-between gap-3 shrink-0">
-          <div className="min-w-0">
-            <div className="text-[11px] text-slate-400 flex flex-wrap items-center gap-x-1.5">
-              <span className="font-semibold text-orange-400">
+        {/* TOP STICKY BAR: Compact 2-row header on mobile, full scouting bar on desktop */}
+        <div className="px-3.5 sm:px-6 py-2.5 sm:py-3.5 bg-[#131C2E] border-b border-[#1E293B] flex flex-col gap-1.5 shrink-0">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <div className="text-[11px] text-slate-400 truncate min-w-0">
+              <span className="font-semibold text-orange-400 sm:hidden">RadarNBA</span>
+              <span className="font-semibold text-orange-400 hidden sm:inline">
                 RadarNBA · Informe de Scouting
               </span>
               {report && (
                 <>
-                  <span aria-hidden="true">·</span>
-                  <span className="font-mono tabular-nums">{report.date}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>Temporada {report.seasonLabel}</span>
+                  <span className="font-mono tabular-nums"> · {report.date}</span>
+                  <span className="hidden sm:inline"> · Temporada {report.seasonLabel}</span>
                   {formatDurationHuman(report.durationMinutes) && (
-                    <>
-                      <span aria-hidden="true">·</span>
-                      <span>
-                        Duración {formatDurationHuman(report.durationMinutes)}
-                      </span>
-                    </>
+                    <span className="hidden md:inline">
+                      {' '}· Duración {formatDurationHuman(report.durationMinutes)}
+                    </span>
                   )}
                 </>
               )}
             </div>
 
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+              {report && (
+                <button
+                  type="button"
+                  onClick={() => void handleCopyPasoB()}
+                  className="min-h-[40px] sm:min-h-[36px] px-2.5 sm:px-3 py-1 inline-flex items-center gap-1.5 text-xs font-semibold rounded-lg border border-[#1E293B] bg-[#0B1120] text-slate-200 hover:border-orange-500/50 hover:text-orange-300 transition-colors whitespace-nowrap"
+                >
+                  {copied ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      <span className="text-emerald-400">Copiado</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5 text-orange-400" />
+                      <span className="hidden sm:inline">Copiar informe</span>
+                      <span className="sm:hidden">Copiar</span>
+                    </>
+                  )}
+                </button>
+              )}
+
+              {eventId && (
+                <button
+                  type="button"
+                  title="Actualizar acta y regenerar crónica"
+                  disabled={loadingNarrative || loadingBox}
+                  onClick={() => void loadFullGameReport(eventId, true)}
+                  className="min-h-[40px] min-w-[40px] sm:min-h-[36px] sm:min-w-[36px] inline-flex items-center justify-center rounded-lg border border-[#1E293B] bg-[#0B1120] text-slate-300 hover:text-orange-400 disabled:opacity-40 transition-colors"
+                >
+                  <RefreshCw
+                    className={`w-4 h-4 ${
+                      loadingNarrative || loadingBox ? 'animate-spin text-orange-400' : ''
+                    }`}
+                  />
+                </button>
+              )}
+
+              <button
+                type="button"
+                aria-label="Cerrar informe"
+                onClick={onClose}
+                className="min-h-[40px] min-w-[40px] sm:min-h-[36px] sm:min-w-[36px] inline-flex items-center justify-center rounded-lg border border-[#1E293B] bg-[#0B1120] text-slate-300 hover:text-white hover:bg-[#182338] transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          <div className="min-w-0">
             {loadingBox && !report ? (
-              <div className="mt-1.5 h-6 w-72 sm:w-[460px] bg-[#1E293B] rounded animate-pulse" />
+              <div className="h-5 sm:h-6 w-56 sm:w-[460px] bg-[#1E293B] rounded animate-pulse" />
             ) : report ? (
-              <div className="mt-1 flex items-center gap-2.5 min-w-0">
-                <div className="hidden sm:flex items-center gap-1.5 shrink-0">
-                  <TeamLogo
-                    abbr={report.away.abbr}
-                    teamId={report.away.teamId}
-                    size="sm"
-                    framed
-                  />
-                  <TeamLogo
-                    abbr={report.home.abbr}
-                    teamId={report.home.teamId}
-                    size="sm"
-                    framed
-                  />
+              <>
+                <div className="flex sm:hidden items-center justify-between gap-2 min-w-0">
+                  <h2 className="text-[15px] font-bold text-slate-100 leading-tight truncate">
+                    {report.away.shortName}{' '}
+                    <span className="font-mono tabular-nums">
+                      {report.away.score} - {report.home.score}
+                    </span>{' '}
+                    {report.home.shortName}
+                  </h2>
                 </div>
-                <h2 className="text-sm sm:text-lg font-bold text-slate-100 leading-snug">
-                  {report.pasoBTitle}
-                </h2>
-              </div>
+                <div className="hidden sm:flex items-center gap-2.5 min-w-0">
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <TeamLogo
+                      abbr={report.away.abbr}
+                      teamId={report.away.teamId}
+                      size="sm"
+                      framed
+                    />
+                    <TeamLogo
+                      abbr={report.home.abbr}
+                      teamId={report.home.teamId}
+                      size="sm"
+                      framed
+                    />
+                  </div>
+                  <h2 className="text-lg font-bold text-slate-100 leading-snug">
+                    {report.pasoBTitle}
+                  </h2>
+                </div>
+                {report.officials.length > 0 && (
+                  <p className="hidden sm:block mt-0.5 text-[11px] text-slate-400 truncate">
+                    Árbitros en acta: {report.officials.join(', ')}
+                  </p>
+                )}
+              </>
             ) : (
-              <h2 className="mt-1 text-sm sm:text-base font-semibold text-slate-200">
+              <h2 className="text-sm sm:text-base font-semibold text-slate-200 truncate">
                 Informe táctico del encuentro
               </h2>
             )}
-
-            {report && report.officials.length > 0 && (
-              <p className="mt-0.5 text-[11px] text-slate-400 truncate">
-                Árbitros en acta: {report.officials.join(', ')}
-              </p>
-            )}
-          </div>
-
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            {report && (
-              <button
-                type="button"
-                onClick={() => void handleCopyPasoB()}
-                className="min-h-[42px] sm:min-h-[36px] px-3 py-1.5 inline-flex items-center gap-1.5 text-xs font-semibold rounded-lg border border-[#1E293B] bg-[#0B1120] text-slate-200 hover:border-orange-500/50 hover:text-orange-300 transition-colors whitespace-nowrap"
-              >
-                {copied ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    <span className="text-emerald-400">Copiado</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5 text-orange-400" />
-                    <span className="hidden sm:inline">Copiar informe</span>
-                    <span className="sm:hidden">Copiar</span>
-                  </>
-                )}
-              </button>
-            )}
-
-            {eventId && (
-              <button
-                type="button"
-                title="Actualizar acta y regenerar crónica"
-                disabled={loadingNarrative || loadingBox}
-                onClick={() => void loadFullGameReport(eventId, true)}
-                className="min-h-[42px] min-w-[42px] sm:min-h-[36px] sm:min-w-[36px] inline-flex items-center justify-center rounded-lg border border-[#1E293B] bg-[#0B1120] text-slate-300 hover:text-orange-400 disabled:opacity-40 transition-colors"
-              >
-                <RefreshCw
-                  className={`w-4 h-4 ${
-                    loadingNarrative || loadingBox ? 'animate-spin text-orange-400' : ''
-                  }`}
-                />
-              </button>
-            )}
-
-            <button
-              type="button"
-              aria-label="Cerrar informe"
-              onClick={onClose}
-              className="min-h-[42px] min-w-[42px] sm:min-h-[36px] sm:min-w-[36px] inline-flex items-center justify-center rounded-lg border border-[#1E293B] bg-[#0B1120] text-slate-300 hover:text-white hover:bg-[#182338] transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
           </div>
         </div>
 
@@ -2235,6 +2243,21 @@ export function GameScoutingReportModal({
             </div>
           ) : report ? (
             <>
+              {/* MOBILE-ONLY COMPACT MATCH CONTEXT (venue, duration, officials) inside scrollable area */}
+              <div className="sm:hidden text-[11px] text-slate-400 leading-relaxed space-y-0.5 px-0.5">
+                <p>
+                  {report.arenaName}, {report.arenaCity} ({report.attendanceFormatted})
+                  {formatDurationHuman(report.durationMinutes)
+                    ? ` · Duración ${formatDurationHuman(report.durationMinutes)}`
+                    : ''}
+                </p>
+                {report.officials.length > 0 && (
+                  <p className="text-slate-500">
+                    Árbitros: {report.officials.join(', ')}
+                  </p>
+                )}
+              </div>
+
               {/* ALWAYS-VISIBLE QUARTER-BY-QUARTER SCOREBOARD & GAME FLOW STRIP */}
               <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden">
                 <div className="px-4 py-2.5 border-b border-[#1E293B] bg-[#0F172A]/60 flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -2545,6 +2568,22 @@ export function GameScoutingReportModal({
                                 </span>
                               )}
                             </span>
+
+                            {narrative.engineMode !== 'gemini_search' && (
+                              <button
+                                type="button"
+                                disabled={loadingNarrative}
+                                onClick={() => {
+                                  if (!eventId) return;
+                                  const reqId = ++activeRequestIdRef.current;
+                                  fetchGameNarrativeOnly(eventId, true, reqId);
+                                }}
+                                className="inline-flex items-center gap-1.5 min-h-[28px] px-2.5 py-0.5 rounded-md text-[11px] font-sans font-semibold bg-orange-500 hover:bg-orange-400 text-slate-950 disabled:opacity-60 transition-colors whitespace-nowrap"
+                              >
+                                <RefreshCw className={`w-3 h-3 shrink-0 ${loadingNarrative ? 'animate-spin' : ''}`} />
+                                <span>{loadingNarrative ? 'Generando con IA...' : 'Reintentar con IA'}</span>
+                              </button>
+                            )}
 
                             <span className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded-md bg-slate-800/80 text-slate-300 border border-slate-700/60">
                               <Clock className="w-3 h-3 text-slate-400 shrink-0" />

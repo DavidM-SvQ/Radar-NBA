@@ -48,14 +48,6 @@ import {
   useTableSort,
 } from '../utils/tableSort';
 import { PlayerAvatar, TeamLogo } from './NbaVisuals';
-import { UnifiedEntityFilterBar } from './UnifiedEntityFilterBar';
-import {
-  DEFAULT_UNIFIED_FILTERS,
-  buildEntityLookupContext,
-  hasActiveUnifiedFilters,
-  matchesPlayerUnifiedFilters,
-  type UnifiedTableFiltersState,
-} from '../utils/entityFilters';
 
 interface GameDayAnalyzerViewProps {
   players?: PlayerSummary[];
@@ -109,8 +101,8 @@ function formatCalendarChipDate(isoDate: string): {
 }
 
 export function GameDayAnalyzerView({
-  players = [],
-  teams = [],
+  players: _players = [],
+  teams: _teams = [],
   experienceMode,
   watchlistIds,
   onToggleWatchlist,
@@ -142,9 +134,6 @@ export function GameDayAnalyzerView({
   );
   const [streakFilter, setStreakFilter] = useState<'all' | 'broken' | 'extended'>(
     'all'
-  );
-  const [unifiedFilters, setUnifiedFilters] = useState<UnifiedTableFiltersState>(
-    DEFAULT_UNIFIED_FILTERS
   );
   const {
     sortKey: roleSortKey,
@@ -234,7 +223,7 @@ export function GameDayAnalyzerView({
       setLoadingChronicle(true);
       setChronicleError(null);
       const controller = new AbortController();
-      const timeoutId = window.setTimeout(() => controller.abort(), 50000);
+      const timeoutId = window.setTimeout(() => controller.abort(), 65000);
       try {
         const params = new URLSearchParams({ date: targetDate });
         if (forceRefresh) params.set('refresh', '1');
@@ -433,42 +422,14 @@ export function GameDayAnalyzerView({
     });
   }, [data, matchupFilter, watchlistIds]);
 
-  const entityLookup = useMemo(
-    () => buildEntityLookupContext(players, teams),
-    [players, teams]
-  );
-  const unifiedActive = hasActiveUnifiedFilters(unifiedFilters, 'player');
-
-  const filteredRoleShifts = useMemo(() => {
-    if (!data) return [];
-    if (!unifiedActive) return data.roleShifts;
-    return data.roleShifts.filter((r) =>
-      matchesPlayerUnifiedFilters(
-        { id: r.playerId, teamAbbr: r.teamAbbr, position: r.position },
-        unifiedFilters,
-        entityLookup
-      )
-    );
-  }, [data, unifiedActive, unifiedFilters, entityLookup]);
-
   const filteredStreaks = useMemo(() => {
     if (!data) return [];
     return data.streakShifts.filter((s) => {
       if (streakFilter === 'broken' && s.status !== 'broken') return false;
       if (streakFilter === 'extended' && s.status !== 'extended') return false;
-      if (
-        unifiedActive &&
-        !matchesPlayerUnifiedFilters(
-          { id: s.playerId, teamAbbr: s.teamAbbr },
-          unifiedFilters,
-          entityLookup
-        )
-      ) {
-        return false;
-      }
       return true;
     });
-  }, [data, streakFilter, unifiedActive, unifiedFilters, entityLookup]);
+  }, [data, streakFilter]);
 
   const chronicleHighlightEntities = useMemo(() => {
     if (!data) return [];
@@ -1411,12 +1372,24 @@ export function GameDayAnalyzerView({
                                   ? 'El backend no detecta la variable GEMINI_API_KEY en este entorno de ejecución (Vercel Preview/Dev o local). Asegúrate de que la variable esté asignada a todos los entornos en Vercel o en tu .env.'
                                   : ch.quotaExhausted || ch.fallbackReason === 'quota_exhausted_429'
                                   ? 'Has alcanzado el límite diario de 20 peticiones del plan gratuito (Free Tier) de Google AI Studio para este modelo. La cuota se restablece automáticamente cada 24 horas, o puedes utilizar una clave con facturación habilitada.'
-                                  : 'La llamada a los modelos de Gemini agotó el tiempo de espera o la API no respondió a tiempo. Se muestra esta crónica determinista de respaldo sin pérdida de datos. Pulsa "Refrescar" (↻) para volver a intentar la generación con IA.'}
+                                  : 'La llamada a los modelos de Gemini agotó el tiempo de espera o la API no respondió a tiempo. Se muestra esta crónica determinista de respaldo sin pérdida de datos. Pulsa "Reintentar con IA" para volver a intentar la generación.'}
                                 <span className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900/95" />
                               </span>
                             </span>
                           )}
                         </span>
+
+                        {ch.engineMode !== 'gemini_search' && (
+                          <button
+                            type="button"
+                            disabled={loadingChronicle}
+                            onClick={() => void fetchDailyChronicle(data.selectedDate, true)}
+                            className="inline-flex items-center gap-1.5 min-h-[30px] px-3 py-1 rounded-md text-xs font-semibold bg-orange-500 hover:bg-orange-400 text-slate-950 disabled:opacity-60 transition-colors whitespace-nowrap"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${loadingChronicle ? 'animate-spin' : ''}`} />
+                            <span>{loadingChronicle ? 'Generando con IA...' : 'Reintentar con IA'}</span>
+                          </button>
+                        )}
 
                         <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs bg-slate-800/80 text-slate-300 border border-slate-700/60 font-mono">
                           <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
@@ -2103,92 +2076,72 @@ export function GameDayAnalyzerView({
                     Ningún jugador superó el umbral de explosión atípica en esta jornada.
                   </div>
                 ) : (
-                  data.explosions.map((item) => {
-                    const watched = watchlistIds.has(`player:${item.playerId}`);
-                    return (
-                      <div
-                        key={item.playerId}
-                        onClick={() => onInspectEntity('player', item.playerId)}
-                        className="p-3.5 sm:px-4 sm:py-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-2.5"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <PlayerAvatar
-                              playerId={item.playerId}
-                              name={item.playerName}
-                              teamAbbr={item.teamAbbr}
-                              showTeamBadge
-                              size="sm"
-                            />
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="font-semibold text-sm text-slate-100 truncate">
-                                  {item.playerName}
-                                </span>
-                                <button
-                                  type="button"
-                                  aria-label="Alternar favorito"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onToggleWatchlist(`player:${item.playerId}`);
-                                  }}
-                                  className="p-1 -m-1 text-slate-500 hover:text-orange-400 shrink-0"
-                                >
-                                  <Star
-                                    className={`w-3.5 h-3.5 ${
-                                      watched
-                                        ? 'fill-orange-400 text-orange-400'
-                                        : ''
-                                    }`}
-                                  />
-                                </button>
-                              </div>
-                              <div className="mt-0.5 text-xs text-slate-400 flex items-center gap-1.5 flex-wrap">
-                                <span>
-                                  {item.teamAbbr} · {item.position} ·{' '}
-                                  {item.isHome ? 'vs' : '@'} {item.opponentAbbr} (
-                                  {item.result})
-                                </span>
-                                <span className="text-slate-600 hidden sm:inline" aria-hidden="true">·</span>
-                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                                  {item.driverTag}
-                                </span>
-                              </div>
+                  data.explosions.map((item) => (
+                    <div
+                      key={item.playerId}
+                      onClick={() => onInspectEntity('player', item.playerId)}
+                      className="p-3.5 sm:px-4 sm:py-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-2"
+                    >
+                      <div className="flex items-start justify-between gap-2.5">
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                          <PlayerAvatar
+                            playerId={item.playerId}
+                            name={item.playerName}
+                            teamAbbr={item.teamAbbr}
+                            showTeamBadge
+                            size="sm"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="font-semibold text-sm text-slate-100 truncate">
+                              {item.playerName}
                             </div>
-                          </div>
-
-                          <div className="text-right font-mono tabular-nums shrink-0">
-                            <div className="text-sm sm:text-base font-bold text-emerald-400 whitespace-nowrap">
-                              {item.triggerNightDisplay || `${item.points} PTS`}
-                            </div>
-                            <div className="text-[11px] sm:text-xs font-semibold text-emerald-300/90 whitespace-nowrap">
-                              ▲ {item.triggerDeltaDisplay?.startsWith('+') ? item.triggerDeltaDisplay : `+${item.triggerDeltaDisplay || formatSigned(item.ptsDelta, 1)}`} vs media ({item.triggerBaselineDisplay || item.ptsAvg.toFixed(1)})
+                            <div className="mt-0.5 text-xs text-slate-400 whitespace-nowrap truncate">
+                              {item.teamAbbr} · {item.position} ·{' '}
+                              {item.isHome ? 'vs' : '@'} {item.opponentAbbr} ({item.result})
                             </div>
                           </div>
                         </div>
 
-                        {/* Fila compacta de estadísticas de partido */}
-                        <div className="flex items-center justify-between text-xs text-slate-300 bg-slate-900/60 px-2.5 py-1.5 rounded-lg border border-slate-800 font-mono tabular-nums">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="text-slate-400 text-[11px] font-sans">Aportación:</span>
-                            <span className="font-semibold text-slate-100 whitespace-nowrap">
-                              {item.points} PTS · {item.rebounds} REB · {item.assists} AST
-                            </span>
-                            {item.fgm !== undefined && item.fga !== undefined && (
-                              <span className="text-slate-400 text-[11px] whitespace-nowrap hidden sm:inline">
-                                ({item.fgm}/{item.fga} TC)
-                              </span>
-                            )}
+                        <div className="text-right font-mono tabular-nums shrink-0">
+                          <div className="text-sm sm:text-base font-bold text-emerald-400 whitespace-nowrap">
+                            {item.triggerNightDisplay || `${item.points} PTS`}
                           </div>
-                          {item.gameScore !== undefined && (
-                            <div className="text-[11px] text-slate-400 shrink-0 font-sans">
-                              Impacto: <span className="font-semibold font-mono text-slate-200">{item.gameScore.toFixed(1)} GmSc</span>
-                            </div>
-                          )}
+                          <div className="hidden sm:block text-xs font-semibold text-emerald-300/90 whitespace-nowrap">
+                            ▲ {item.triggerDeltaDisplay?.startsWith('+') ? item.triggerDeltaDisplay : `+${item.triggerDeltaDisplay || formatSigned(item.ptsDelta, 1)}`} vs media ({item.triggerBaselineDisplay || item.ptsAvg.toFixed(1)})
+                          </div>
                         </div>
                       </div>
-                    );
-                  })
+
+                      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 whitespace-nowrap">
+                          {item.driverTag}
+                        </span>
+                        <span className="sm:hidden text-[11px] font-semibold font-mono tabular-nums text-emerald-300/90 whitespace-nowrap">
+                          ▲ {item.triggerDeltaDisplay?.startsWith('+') ? item.triggerDeltaDisplay : `+${item.triggerDeltaDisplay || formatSigned(item.ptsDelta, 1)}`} vs media ({item.triggerBaselineDisplay || item.ptsAvg.toFixed(1)})
+                        </span>
+                      </div>
+
+                      {/* Fila compacta de estadísticas de partido sin solapamiento */}
+                      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-slate-300 bg-slate-900/60 px-2.5 py-1.5 rounded-lg border border-slate-800 font-mono tabular-nums">
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="text-slate-400 text-[11px] font-sans">Aportación:</span>
+                          <span className="font-semibold text-slate-100 whitespace-nowrap">
+                            {item.points} PTS · {item.rebounds} REB · {item.assists} AST
+                          </span>
+                          {item.fgm !== undefined && item.fga !== undefined && (
+                            <span className="text-slate-400 text-[11px] whitespace-nowrap hidden sm:inline">
+                              ({item.fgm}/{item.fga} TC)
+                            </span>
+                          )}
+                        </div>
+                        {item.gameScore !== undefined && (
+                          <div className="text-[11px] text-slate-400 shrink-0 font-sans whitespace-nowrap">
+                            Impacto: <span className="font-semibold font-mono text-slate-200">{item.gameScore.toFixed(1)} GmSc</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))
                 )}
               </div>
             </div>
@@ -2218,92 +2171,72 @@ export function GameDayAnalyzerView({
                     Los titulares principales cumplieron con su suelo estadístico en esta fecha.
                   </div>
                 ) : (
-                  data.slumps.map((item) => {
-                    const watched = watchlistIds.has(`player:${item.playerId}`);
-                    return (
-                      <div
-                        key={item.playerId}
-                        onClick={() => onInspectEntity('player', item.playerId)}
-                        className="p-3.5 sm:px-4 sm:py-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-2.5"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <PlayerAvatar
-                              playerId={item.playerId}
-                              name={item.playerName}
-                              teamAbbr={item.teamAbbr}
-                              showTeamBadge
-                              size="sm"
-                            />
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="font-semibold text-sm text-slate-100 truncate">
-                                  {item.playerName}
-                                </span>
-                                <button
-                                  type="button"
-                                  aria-label="Alternar favorito"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onToggleWatchlist(`player:${item.playerId}`);
-                                  }}
-                                  className="p-1 -m-1 text-slate-500 hover:text-orange-400 shrink-0"
-                                >
-                                  <Star
-                                    className={`w-3.5 h-3.5 ${
-                                      watched
-                                        ? 'fill-orange-400 text-orange-400'
-                                        : ''
-                                    }`}
-                                  />
-                                </button>
-                              </div>
-                              <div className="mt-0.5 text-xs text-slate-400 flex items-center gap-1.5 flex-wrap">
-                                <span>
-                                  {item.teamAbbr} · {item.position} ·{' '}
-                                  {item.isHome ? 'vs' : '@'} {item.opponentAbbr} (
-                                  {item.result})
-                                </span>
-                                <span className="text-slate-600 hidden sm:inline" aria-hidden="true">·</span>
-                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20">
-                                  {item.driverTag}
-                                </span>
-                              </div>
+                  data.slumps.map((item) => (
+                    <div
+                      key={item.playerId}
+                      onClick={() => onInspectEntity('player', item.playerId)}
+                      className="p-3.5 sm:px-4 sm:py-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-2"
+                    >
+                      <div className="flex items-start justify-between gap-2.5">
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                          <PlayerAvatar
+                            playerId={item.playerId}
+                            name={item.playerName}
+                            teamAbbr={item.teamAbbr}
+                            showTeamBadge
+                            size="sm"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="font-semibold text-sm text-slate-100 truncate">
+                              {item.playerName}
                             </div>
-                          </div>
-
-                          <div className="text-right font-mono tabular-nums shrink-0">
-                            <div className="text-sm sm:text-base font-bold text-rose-400 whitespace-nowrap">
-                              {item.triggerNightDisplay || `${item.points} PTS`}
-                            </div>
-                            <div className="text-[11px] sm:text-xs font-semibold text-rose-300/90 whitespace-nowrap">
-                              ▼ {item.triggerDeltaDisplay?.startsWith('-') ? item.triggerDeltaDisplay : `-${item.triggerDeltaDisplay || formatSigned(item.ptsDelta, 1)}`} vs media ({item.triggerBaselineDisplay || item.ptsAvg.toFixed(1)})
+                            <div className="mt-0.5 text-xs text-slate-400 whitespace-nowrap truncate">
+                              {item.teamAbbr} · {item.position} ·{' '}
+                              {item.isHome ? 'vs' : '@'} {item.opponentAbbr} ({item.result})
                             </div>
                           </div>
                         </div>
 
-                        {/* Fila compacta de estadísticas de partido */}
-                        <div className="flex items-center justify-between text-xs text-slate-300 bg-slate-900/60 px-2.5 py-1.5 rounded-lg border border-slate-800 font-mono tabular-nums">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="text-slate-400 text-[11px] font-sans">Aportación:</span>
-                            <span className="font-semibold text-slate-100 whitespace-nowrap">
-                              {item.points} PTS · {item.rebounds} REB · {item.assists} AST
-                            </span>
-                            {item.fgm !== undefined && item.fga !== undefined && (
-                              <span className="text-slate-400 text-[11px] whitespace-nowrap hidden sm:inline">
-                                ({item.fgm}/{item.fga} TC)
-                              </span>
-                            )}
+                        <div className="text-right font-mono tabular-nums shrink-0">
+                          <div className="text-sm sm:text-base font-bold text-rose-400 whitespace-nowrap">
+                            {item.triggerNightDisplay || `${item.points} PTS`}
                           </div>
-                          {item.gameScore !== undefined && (
-                            <div className="text-[11px] text-slate-400 shrink-0 font-sans">
-                              Impacto: <span className="font-semibold font-mono text-slate-200">{item.gameScore.toFixed(1)} GmSc</span>
-                            </div>
-                          )}
+                          <div className="hidden sm:block text-xs font-semibold text-rose-300/90 whitespace-nowrap">
+                            ▼ {item.triggerDeltaDisplay?.startsWith('-') ? item.triggerDeltaDisplay : `-${item.triggerDeltaDisplay || formatSigned(item.ptsDelta, 1)}`} vs media ({item.triggerBaselineDisplay || item.ptsAvg.toFixed(1)})
+                          </div>
                         </div>
                       </div>
-                    );
-                  })
+
+                      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20 whitespace-nowrap">
+                          {item.driverTag}
+                        </span>
+                        <span className="sm:hidden text-[11px] font-semibold font-mono tabular-nums text-rose-300/90 whitespace-nowrap">
+                          ▼ {item.triggerDeltaDisplay?.startsWith('-') ? item.triggerDeltaDisplay : `-${item.triggerDeltaDisplay || formatSigned(item.ptsDelta, 1)}`} vs media ({item.triggerBaselineDisplay || item.ptsAvg.toFixed(1)})
+                        </span>
+                      </div>
+
+                      {/* Fila compacta de estadísticas de partido sin solapamiento */}
+                      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-slate-300 bg-slate-900/60 px-2.5 py-1.5 rounded-lg border border-slate-800 font-mono tabular-nums">
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="text-slate-400 text-[11px] font-sans">Aportación:</span>
+                          <span className="font-semibold text-slate-100 whitespace-nowrap">
+                            {item.points} PTS · {item.rebounds} REB · {item.assists} AST
+                          </span>
+                          {item.fgm !== undefined && item.fga !== undefined && (
+                            <span className="text-slate-400 text-[11px] whitespace-nowrap hidden sm:inline">
+                              ({item.fgm}/{item.fga} TC)
+                            </span>
+                          )}
+                        </div>
+                        {item.gameScore !== undefined && (
+                          <div className="text-[11px] text-slate-400 shrink-0 font-sans whitespace-nowrap">
+                            Impacto: <span className="font-semibold font-mono text-slate-200">{item.gameScore.toFixed(1)} GmSc</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))
                 )}
               </div>
             </div>
@@ -2314,17 +2247,6 @@ export function GameDayAnalyzerView({
       {/* SECTION 04: Radar de Rotación (Picos de Minutos / Rol) & Termómetro de Rachas */}
       {showRotationBlock && (
         <div className="space-y-4">
-          <UnifiedEntityFilterBar
-            filters={unifiedFilters}
-            onChange={setUnifiedFilters}
-            players={players}
-            teams={teams}
-            entityScope="player"
-            shownCount={filteredRoleShifts.length + filteredStreaks.length}
-            totalCount={data.roleShifts.length + data.streakShifts.length}
-            unitLabel="alertas de rotación y rachas"
-          />
-
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-stretch">
             {/* 04A: Cambios de Rol y Minutos Inusuales */}
             <section className="space-y-3 flex flex-col">
@@ -2337,22 +2259,20 @@ export function GameDayAnalyzerView({
                   <MetricInfoTooltip helpKey="gamedayRoleShift" align="left" />
                 </div>
                 <span className="text-xs font-mono tabular-nums text-slate-400 shrink-0">
-                  {filteredRoleShifts.length} alertas
+                  {data.roleShifts.length} alertas
                 </span>
               </div>
 
               <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden flex-1 flex flex-col">
-                {filteredRoleShifts.length === 0 ? (
+                {data.roleShifts.length === 0 ? (
                   <div className="p-8 text-center text-xs text-slate-400">
-                    {unifiedActive
-                      ? 'Ningún cambio de rol coincide con el bloque de filtros actual.'
-                      : 'Sin saltos bruscos de minutos (+6.5 MIN) ni uso ofensivo (+6% USG) en esta jornada.'}
+                    Sin saltos bruscos de minutos (+6.5 MIN) ni uso ofensivo (+6% USG) en esta jornada.
                   </div>
                 ) : (
                   <>
                     {/* Mobile list */}
                     <div className="sm:hidden divide-y divide-[#1E293B] max-h-[720px] overflow-y-auto">
-                      {filteredRoleShifts.map((r) => (
+                      {data.roleShifts.map((r) => (
                       <div
                         key={r.playerId}
                         onClick={() => onInspectEntity('player', r.playerId)}
@@ -2451,7 +2371,7 @@ export function GameDayAnalyzerView({
                       </thead>
                       <tbody className="divide-y divide-[#1E293B] text-sm">
                         {sortRows(
-                          filteredRoleShifts,
+                          data.roleShifts,
                           (r) => {
                             switch (roleSortKey) {
                               case 'name':
@@ -2594,59 +2514,62 @@ export function GameDayAnalyzerView({
                     <div
                       key={st.id}
                       onClick={() => onInspectEntity('player', st.playerId)}
-                      className="p-3.5 sm:px-4 sm:py-3 flex items-center justify-between gap-3 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors"
+                      className="p-3.5 sm:px-4 sm:py-3 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-1.5"
                     >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <PlayerAvatar
-                          playerId={st.playerId}
-                          name={st.playerName}
-                          teamAbbr={st.teamAbbr}
-                          showTeamBadge
-                          size="sm"
-                        />
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="font-semibold text-sm text-slate-100 truncate">
+                      <div className="flex items-start justify-between gap-2.5">
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                          <PlayerAvatar
+                            playerId={st.playerId}
+                            name={st.playerName}
+                            teamAbbr={st.teamAbbr}
+                            showTeamBadge
+                            size="sm"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="font-semibold text-sm text-slate-100 truncate">
                               {st.playerName}
-                            </span>
-                            <span className="text-xs text-slate-400 whitespace-nowrap">
-                              {st.teamAbbr} · {st.isHome ? 'vs' : '@'}{' '}
-                              {st.opponentAbbr}
-                            </span>
+                            </div>
+                            <div className="mt-0.5 text-xs text-slate-400 whitespace-nowrap truncate">
+                              {st.teamAbbr} · {st.isHome ? 'vs' : '@'} {st.opponentAbbr}
+                              <span className="sm:hidden">
+                                {' '}· Media: {st.avgDuringStreak.toFixed(1)} {st.unit}
+                              </span>
+                            </div>
                           </div>
-                          <div className="mt-0.5 text-xs flex flex-wrap items-center gap-x-1.5">
-                            <span
-                              className={`font-semibold ${
-                                isBroken ? 'text-rose-400' : 'text-emerald-400'
-                              }`}
-                            >
-                              {isBroken
-                                ? `▼ Racha rota (${st.thresholdLabel})`
-                                : `▲ Racha activa (${st.thresholdLabel})`}
-                            </span>
-                            <span className="text-slate-600" aria-hidden="true">
-                              ·
-                            </span>
-                            <span className="text-slate-300 font-mono tabular-nums">
-                              {st.nightValueDisplay}
-                            </span>
+                        </div>
+
+                        <div className="text-right font-mono tabular-nums shrink-0">
+                          <div
+                            className={`text-sm font-bold whitespace-nowrap ${
+                              isBroken ? 'text-rose-400' : 'text-orange-400'
+                            }`}
+                          >
+                            {isBroken
+                              ? `Fin a ${st.streakCount} PJ`
+                              : `${st.streakCount} seguidos`}
+                          </div>
+                          <div className="hidden sm:block text-[11px] text-slate-400 whitespace-nowrap">
+                            Media racha: {st.avgDuringStreak.toFixed(1)} {st.unit}
                           </div>
                         </div>
                       </div>
 
-                      <div className="text-right font-mono tabular-nums shrink-0">
-                        <div
-                          className={`text-sm font-bold whitespace-nowrap ${
-                            isBroken ? 'text-rose-400' : 'text-orange-400'
+                      <div className="text-xs flex flex-wrap items-center gap-x-1.5 gap-y-0.5 sm:pl-[42px]">
+                        <span
+                          className={`font-semibold ${
+                            isBroken ? 'text-rose-400' : 'text-emerald-400'
                           }`}
                         >
                           {isBroken
-                            ? `Fin a ${st.streakCount} PJ`
-                            : `${st.streakCount} seguidos`}
-                        </div>
-                        <div className="text-[11px] text-slate-400 whitespace-nowrap">
-                          Media racha: {st.avgDuringStreak.toFixed(1)} {st.unit}
-                        </div>
+                            ? `▼ Racha rota (${st.thresholdLabel})`
+                            : `▲ Racha activa (${st.thresholdLabel})`}
+                        </span>
+                        <span className="text-slate-600" aria-hidden="true">
+                          ·
+                        </span>
+                        <span className="text-slate-300 font-mono tabular-nums">
+                          {st.nightValueDisplay}
+                        </span>
                       </div>
                     </div>
                   );
