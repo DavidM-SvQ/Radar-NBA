@@ -3688,11 +3688,11 @@ export function GameScoutingReportModal({
                                     size="xs"
                                   />
                                   <div className="min-w-0">
-                                    <p className="text-xs font-semibold text-slate-100 truncate">
+                                    <p className="text-xs font-semibold text-slate-100 leading-snug">
                                       <span className="font-mono text-orange-300 mr-1">
                                         #{collector.jersey}
                                       </span>
-                                      {collector.shortName}
+                                      {collector.name || collector.shortName}
                                     </p>
                                     <p className="text-[10px] text-slate-400 truncate">
                                       {abbr} · {collector.categories.slice(0, 3).join(', ')}
@@ -3731,12 +3731,14 @@ export function GameScoutingReportModal({
                             row.lowerIsBetter
                           );
 
-                          const awayNameDisplay =
+                          const awayFullName =
+                            row.awayPlayerName ||
                             row.awayShortName ||
                             row.awayFormatted
                               .replace(/^#\d+\s*/, '')
                               .replace(/\s*\(.*\)$/, '');
-                          const homeNameDisplay =
+                          const homeFullName =
+                            row.homePlayerName ||
                             row.homeShortName ||
                             row.homeFormatted
                               .replace(/^#\d+\s*/, '')
@@ -3753,17 +3755,17 @@ export function GameScoutingReportModal({
                           return (
                             <Fragment key={`mob-${row.categoryKey}`}>
                               {showGroupDivider && (
-                                <div className="bg-[#0B1120]/85 px-3 py-1 text-[10px] font-bold tracking-wider uppercase text-orange-400">
+                                <div className="bg-[#0B1120]/85 px-3 py-1.5 text-[10px] font-bold tracking-wider uppercase text-orange-400">
                                   {row.groupLabel}
                                 </div>
                               )}
-                              <div className="px-3 py-2 space-y-1.5">
+                              <div className="px-3 py-2.5 space-y-2">
                                 <div className="flex items-center justify-between gap-2 text-[11px]">
                                   <span className="inline-flex items-center gap-1.5 min-w-0">
-                                    <span className="font-mono tabular-nums text-[10px] text-slate-500">
+                                    <span className="font-mono tabular-nums text-[10px] text-slate-500 shrink-0">
                                       {String(ordinal).padStart(2, '0')}
                                     </span>
-                                    <span className="font-medium text-slate-100 truncate">
+                                    <span className="font-semibold text-slate-100 leading-snug">
                                       {row.categoryLabel}
                                     </span>
                                     {row.helpKey && (
@@ -3785,28 +3787,41 @@ export function GameScoutingReportModal({
                                   </span>
                                 </div>
 
-                                <div className="grid grid-cols-2 gap-2">
+                                <div className="flex flex-col gap-1.5">
                                   <button
                                     type="button"
                                     onClick={() => {
                                       onClose();
                                       onInspectEntity('player', row.awayPlayerId);
                                     }}
-                                    className={`px-2 py-1 rounded border border-[#1E293B] flex items-center justify-between gap-1.5 text-left min-w-0 ${
+                                    className={`w-full min-h-[44px] px-2.5 py-1.5 rounded-lg border flex items-center justify-between gap-2.5 text-left transition-colors ${
                                       awayWon
-                                        ? 'bg-orange-500/[0.08]'
-                                        : 'bg-[#0B1120]/45'
+                                        ? 'border-orange-500/35 bg-orange-500/[0.08]'
+                                        : 'border-[#1E293B] bg-[#0B1120]/55'
                                     }`}
                                   >
-                                    <span className="inline-flex items-center gap-1.5 min-w-0">
+                                    <span className="inline-flex items-center gap-2 min-w-0 flex-1">
                                       <PlayerAvatar
                                         playerId={row.awayPlayerId}
-                                        name={row.awayPlayerName || awayNameDisplay}
+                                        name={awayFullName}
                                         teamAbbr={report.away.abbr}
                                         size="xs"
                                       />
-                                      <span className="truncate text-[11px] font-medium text-slate-200">
-                                        {awayNameDisplay}
+                                      <span className="min-w-0 flex-1">
+                                        <span className="flex items-baseline gap-1.5 flex-wrap">
+                                          <span className="font-mono text-[10px] font-semibold text-slate-400 shrink-0">
+                                            {report.away.abbr}
+                                          </span>
+                                          <span
+                                            className={`text-xs leading-snug break-words ${
+                                              awayWon
+                                                ? 'font-bold text-slate-100'
+                                                : 'font-medium text-slate-200'
+                                            }`}
+                                          >
+                                            {awayFullName}
+                                          </span>
+                                        </span>
                                       </span>
                                     </span>
                                     <span className="flex flex-col items-end leading-none shrink-0">
@@ -3814,14 +3829,22 @@ export function GameScoutingReportModal({
                                         className={`font-mono tabular-nums text-xs ${
                                           awayWon
                                             ? 'font-bold text-emerald-400'
-                                            : 'text-slate-300'
+                                            : 'font-medium text-slate-200'
                                         }`}
                                       >
                                         {row.awayIsElite ? '★ ' : ''}
                                         {awayStatText}
                                       </span>
                                       {row.awayDeltaDisplay && (
-                                        <span className="mt-0.5 font-mono tabular-nums text-[9px] text-slate-400">
+                                        <span
+                                          className={`mt-1 font-mono tabular-nums text-[10px] ${
+                                            row.awayDeltaTone === 'positive'
+                                              ? 'text-emerald-400/90'
+                                              : row.awayDeltaTone === 'negative'
+                                              ? 'text-rose-400/90'
+                                              : 'text-slate-400'
+                                          }`}
+                                        >
                                           {row.awayDeltaDisplay}
                                         </span>
                                       )}
@@ -3834,21 +3857,34 @@ export function GameScoutingReportModal({
                                       onClose();
                                       onInspectEntity('player', row.homePlayerId);
                                     }}
-                                    className={`px-2 py-1 rounded border border-[#1E293B] flex items-center justify-between gap-1.5 text-left min-w-0 ${
+                                    className={`w-full min-h-[44px] px-2.5 py-1.5 rounded-lg border flex items-center justify-between gap-2.5 text-left transition-colors ${
                                       homeWon
-                                        ? 'bg-orange-500/[0.08]'
-                                        : 'bg-[#0B1120]/45'
+                                        ? 'border-orange-500/35 bg-orange-500/[0.08]'
+                                        : 'border-[#1E293B] bg-[#0B1120]/55'
                                     }`}
                                   >
-                                    <span className="inline-flex items-center gap-1.5 min-w-0">
+                                    <span className="inline-flex items-center gap-2 min-w-0 flex-1">
                                       <PlayerAvatar
                                         playerId={row.homePlayerId}
-                                        name={row.homePlayerName || homeNameDisplay}
+                                        name={homeFullName}
                                         teamAbbr={report.home.abbr}
                                         size="xs"
                                       />
-                                      <span className="truncate text-[11px] font-medium text-slate-200">
-                                        {homeNameDisplay}
+                                      <span className="min-w-0 flex-1">
+                                        <span className="flex items-baseline gap-1.5 flex-wrap">
+                                          <span className="font-mono text-[10px] font-semibold text-slate-400 shrink-0">
+                                            {report.home.abbr}
+                                          </span>
+                                          <span
+                                            className={`text-xs leading-snug break-words ${
+                                              homeWon
+                                                ? 'font-bold text-slate-100'
+                                                : 'font-medium text-slate-200'
+                                            }`}
+                                          >
+                                            {homeFullName}
+                                          </span>
+                                        </span>
                                       </span>
                                     </span>
                                     <span className="flex flex-col items-end leading-none shrink-0">
@@ -3856,14 +3892,22 @@ export function GameScoutingReportModal({
                                         className={`font-mono tabular-nums text-xs ${
                                           homeWon
                                             ? 'font-bold text-emerald-400'
-                                            : 'text-slate-300'
+                                            : 'font-medium text-slate-200'
                                         }`}
                                       >
                                         {row.homeIsElite ? '★ ' : ''}
                                         {homeStatText}
                                       </span>
                                       {row.homeDeltaDisplay && (
-                                        <span className="mt-0.5 font-mono tabular-nums text-[9px] text-slate-400">
+                                        <span
+                                          className={`mt-1 font-mono tabular-nums text-[10px] ${
+                                            row.homeDeltaTone === 'positive'
+                                              ? 'text-emerald-400/90'
+                                              : row.homeDeltaTone === 'negative'
+                                              ? 'text-rose-400/90'
+                                              : 'text-slate-400'
+                                          }`}
+                                        >
                                           {row.homeDeltaDisplay}
                                         </span>
                                       )}

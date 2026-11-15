@@ -317,17 +317,21 @@ app.get("/api/nba/gameday", validateRequest({ query: gamedayQuerySchema }), asyn
 app.get("/api/nba/gameday/chronicle", validateRequest({ query: gamedayQuerySchema }), async (req, res) => {
   try {
     const { query } = getValidated(req);
+    const payload = await scoutingEngine.buildGameDayChroniclePayload(query.date, Boolean(query.refresh));
     const todayIso = getEasternTodayIso();
-    const isPastDate = query.date && query.date < todayIso;
+    const targetDate = query.date || payload?.date;
+    const isPastDate = Boolean(targetDate && targetDate < todayIso);
+    const isAi = payload?.engineMode === "gemini_search";
     res.setHeader(
       "Cache-Control",
       query.refresh
         ? "no-store"
+        : !isAi
+        ? "public, max-age=15, s-maxage=30, must-revalidate"
         : isPastDate
         ? "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800"
         : "public, max-age=60, s-maxage=300, stale-while-revalidate=1800"
     );
-    const payload = await scoutingEngine.buildGameDayChroniclePayload(query.date, Boolean(query.refresh));
     res.json(payload);
   } catch (err) {
     console.error("Error in /api/nba/gameday/chronicle:", err);
@@ -380,10 +384,13 @@ app.get("/api/nba/game/:eventId/narrative", validateRequest({ params: gameEventP
     const { params, query } = getValidated(req);
     const narrative = await scoutingEngine.buildGameNarrativePayload(params.eventId, Boolean(query.refresh));
     const isFinal = narrative?.isFinal || Boolean(narrative?.report?.isFinal);
+    const isAi = narrative?.engineMode === "gemini_search";
     res.setHeader(
       "Cache-Control",
       query.refresh
         ? "no-store"
+        : !isAi
+        ? "public, max-age=15, s-maxage=30, must-revalidate"
         : isFinal
         ? "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800"
         : "public, max-age=60, s-maxage=300, stale-while-revalidate=1800"
@@ -396,7 +403,7 @@ app.get("/api/nba/game/:eventId/narrative", validateRequest({ params: gameEventP
       const { params } = getValidated(req);
       const report = await scoutingEngine.buildGameOfficialReportData(params.eventId, false);
       const fallback = scoutingEngine.buildDeterministicGameNarrative(report);
-      res.setHeader("Cache-Control", "public, max-age=60, s-maxage=300, stale-while-revalidate=1800");
+      res.setHeader("Cache-Control", "public, max-age=15, s-maxage=30, must-revalidate");
       res.json(fallback);
     } catch (innerErr) {
       const cleanInner = String(innerErr instanceof Error ? innerErr.message : innerErr || "").replace(/[\{\}\"\:]/g, " ").slice(0, 100);

@@ -9,8 +9,8 @@ import helmet from "helmet";
 
 // src/server/nbaDataService.ts
 import crypto from "crypto";
-import fs3 from "fs";
-import path3 from "path";
+import fs4 from "fs";
+import path4 from "path";
 
 // src/utils/playerInspectorAnalytics.ts
 function r1(v) {
@@ -1761,6 +1761,8 @@ var ESPN_TEAM_IDS = Object.fromEntries(
 );
 
 // src/server/scoutingEngine.ts
+import fs from "fs";
+import path from "path";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 
 // src/data/nbaSchedule2027.ts
@@ -1926,14 +1928,212 @@ function buildWeeklyWindowsFromSchedule(scheduleGames, referenceTodayIso = getEa
   });
 }
 
-// src/server/scoutingEngine.ts
+// src/server/upstashRedis.ts
 var __name = (fn, _n) => fn;
+function getRedisRestConfig() {
+  const explicitPairs = [
+    [process.env.UPSTASH_REDIS_REST_URL, process.env.UPSTASH_REDIS_REST_TOKEN],
+    [process.env.KV_REST_API_URL, process.env.KV_REST_API_TOKEN],
+    [process.env.REDIS_REST_URL, process.env.REDIS_REST_TOKEN],
+    [process.env.FANTASY_REDIS_REST_URL, process.env.FANTASY_REDIS_REST_TOKEN]
+  ];
+  for (const [rawUrl, rawToken] of explicitPairs) {
+    if (typeof rawUrl === "string" && rawUrl.trim().startsWith("https://") && typeof rawToken === "string" && rawToken.trim()) {
+      return {
+        url: rawUrl.trim().replace(/\/+$/, ""),
+        token: rawToken.trim()
+      };
+    }
+  }
+  for (const [key, val] of Object.entries(process.env)) {
+    if (typeof val !== "string" || !val.trim().startsWith("https://")) continue;
+    if (key.endsWith("_REDIS_REST_URL")) {
+      const prefix = key.slice(0, -"_REDIS_REST_URL".length);
+      const tok = process.env[`${prefix}_REDIS_REST_TOKEN`];
+      if (typeof tok === "string" && tok.trim()) {
+        return { url: val.trim().replace(/\/+$/, ""), token: tok.trim() };
+      }
+    }
+    if (key.endsWith("_KV_REST_API_URL")) {
+      const prefix = key.slice(0, -"_KV_REST_API_URL".length);
+      const tok = process.env[`${prefix}_KV_REST_API_TOKEN`];
+      if (typeof tok === "string" && tok.trim()) {
+        return { url: val.trim().replace(/\/+$/, ""), token: tok.trim() };
+      }
+    }
+  }
+  return null;
+}
+__name(getRedisRestConfig, "getRedisRestConfig");
+function isUpstashRedisConfigured() {
+  return getRedisRestConfig() !== null;
+}
+__name(isUpstashRedisConfigured, "isUpstashRedisConfigured");
+async function executeUpstashCommand(redisCfg, commandArgs, timeoutMs = 5e3) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(redisCfg.url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${redisCfg.token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(commandArgs),
+      cache: "no-store",
+      signal: controller.signal
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      throw new Error(`Upstash HTTP ${res.status}: ${errText.slice(0, 160)}`);
+    }
+    const payload = await res.json();
+    if (payload && payload.error) {
+      throw new Error(`Upstash Redis error: ${String(payload.error)}`);
+    }
+    return payload ? payload.result : null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+__name(executeUpstashCommand, "executeUpstashCommand");
+async function executeUpstashPipeline(redisCfg, commandsList, timeoutMs = 5e3) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${redisCfg.url}/pipeline`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${redisCfg.token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(commandsList),
+      cache: "no-store",
+      signal: controller.signal
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      throw new Error(`Upstash Pipeline HTTP ${res.status}: ${errText.slice(0, 160)}`);
+    }
+    const payload = await res.json();
+    if (!Array.isArray(payload)) {
+      throw new Error("Upstash Pipeline malformed response");
+    }
+    return payload.map((item) => {
+      if (item && item.error) {
+        throw new Error(`Upstash Redis pipeline item error: ${String(item.error)}`);
+      }
+      return item ? item.result : null;
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+__name(executeUpstashPipeline, "executeUpstashPipeline");
+
+// src/server/scoutingEngine.ts
+var __name2 = (fn, _n) => fn;
 var NBA_LIVE_HEADERS = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36", Referer: "https://www.nba.com/", Origin: "https://www.nba.com", Accept: "application/json" };
 var NBA_TEAM_ARENAS = { ATL: { arenaName: "State Farm Arena", arenaCity: "Atlanta" }, BOS: { arenaName: "TD Garden", arenaCity: "Boston" }, BKN: { arenaName: "Barclays Center", arenaCity: "Brooklyn" }, CHA: { arenaName: "Spectrum Center", arenaCity: "Charlotte" }, CHI: { arenaName: "United Center", arenaCity: "Chicago" }, CLE: { arenaName: "Rocket Arena", arenaCity: "Cleveland" }, DAL: { arenaName: "American Airlines Center", arenaCity: "Dallas" }, DEN: { arenaName: "Ball Arena", arenaCity: "Denver" }, DET: { arenaName: "Little Caesars Arena", arenaCity: "Detroit" }, GSW: { arenaName: "Chase Center", arenaCity: "San Francisco" }, HOU: { arenaName: "Toyota Center", arenaCity: "Houston" }, IND: { arenaName: "Gainbridge Fieldhouse", arenaCity: "Indianapolis" }, LAC: { arenaName: "Intuit Dome", arenaCity: "Inglewood" }, LAL: { arenaName: "Crypto.com Arena", arenaCity: "Los \xC1ngeles" }, MEM: { arenaName: "FedExForum", arenaCity: "Memphis" }, MIA: { arenaName: "Kaseya Center", arenaCity: "Miami" }, MIL: { arenaName: "Fiserv Forum", arenaCity: "Milwaukee" }, MIN: { arenaName: "Target Center", arenaCity: "Minneapolis" }, NOP: { arenaName: "Smoothie King Center", arenaCity: "Nueva Orleans" }, NYK: { arenaName: "Madison Square Garden", arenaCity: "Nueva York" }, OKC: { arenaName: "Paycom Center", arenaCity: "Oklahoma City" }, ORL: { arenaName: "Kia Center", arenaCity: "Orlando" }, PHI: { arenaName: "Wells Fargo Center", arenaCity: "Filadelfia" }, PHX: { arenaName: "Footprint Center", arenaCity: "Phoenix" }, POR: { arenaName: "Moda Center", arenaCity: "Portland" }, SAC: { arenaName: "Golden 1 Center", arenaCity: "Sacramento" }, SAS: { arenaName: "Frost Bank Center", arenaCity: "San Antonio" }, TOR: { arenaName: "Scotiabank Arena", arenaCity: "Toronto" }, UTA: { arenaName: "Delta Center", arenaCity: "Salt Lake City" }, WAS: { arenaName: "Capital One Arena", arenaCity: "Washington" } };
 var KNOWN_SPANISH_NBA_PLAYERS = /* @__PURE__ */ new Set(["santi aldama", "santiago aldama", "hugo gonzalez", "usman garuba", "eli ndiaye", "eli john ndiaye", "juan nunez", "aday mara", "izan almansa", "baba miller", "great osobor", "willy hernangomez", "juancho hernangomez", "ricky rubio", "alex abrines"]);
 var reportMemoryCache = /* @__PURE__ */ new Map();
 var reportInflight = /* @__PURE__ */ new Map();
 var reportInflightStartedAt = /* @__PURE__ */ new Map();
+var NARRATIVE_DISK_CACHE_FILE = process.env.VERCEL ? "/tmp/radarnba-narratives-cache.json" : path.resolve(process.cwd(), "data", "scouting-narratives-cache.json");
+var diskNarrativeStoreCache = null;
+var diskNarrativeFlushTimer = null;
+function loadDiskNarrativeStore() {
+  if (diskNarrativeStoreCache) return diskNarrativeStoreCache;
+  try {
+    if (fs.existsSync(NARRATIVE_DISK_CACHE_FILE)) {
+      const raw = fs.readFileSync(NARRATIVE_DISK_CACHE_FILE, "utf8");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const now = Date.now();
+        const pruned = {};
+        for (const [k, v] of Object.entries(parsed)) {
+          if (v && typeof v === "object" && typeof v.expiresAt === "number" && v.expiresAt > now && v.data) {
+            pruned[k] = v;
+          }
+        }
+        diskNarrativeStoreCache = pruned;
+        return diskNarrativeStoreCache;
+      }
+    }
+  } catch {
+  }
+  diskNarrativeStoreCache = {};
+  return diskNarrativeStoreCache;
+}
+function scheduleDiskNarrativeFlush() {
+  if (diskNarrativeFlushTimer) return;
+  diskNarrativeFlushTimer = setTimeout(() => {
+    diskNarrativeFlushTimer = null;
+    try {
+      const store = loadDiskNarrativeStore();
+      const now = Date.now();
+      const entries = Object.entries(store).filter(([, v]) => v && v.expiresAt > now).slice(-250);
+      const compact = Object.fromEntries(entries);
+      diskNarrativeStoreCache = compact;
+      if (!process.env.VERCEL) {
+        fs.mkdirSync(path.dirname(NARRATIVE_DISK_CACHE_FILE), { recursive: true });
+      }
+      const tmp = `${NARRATIVE_DISK_CACHE_FILE}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(compact), "utf8");
+      fs.renameSync(tmp, NARRATIVE_DISK_CACHE_FILE);
+    } catch {
+    }
+  }, 400);
+}
+async function readSharedPersistedNarrative(cacheKey) {
+  const mem = reportMemoryCache.get(cacheKey);
+  if (mem && mem.expiresAt > Date.now()) {
+    return mem.data;
+  }
+  const diskStore = loadDiskNarrativeStore();
+  const diskHit = diskStore[cacheKey];
+  if (diskHit && diskHit.expiresAt > Date.now() && diskHit.data) {
+    reportMemoryCache.set(cacheKey, diskHit);
+    return diskHit.data;
+  }
+  const redisCfg = getRedisRestConfig();
+  if (redisCfg) {
+    try {
+      const raw = await executeUpstashCommand(redisCfg, ["GET", `radarnba:nar:${cacheKey}`], 2500);
+      if (raw) {
+        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (parsed && parsed.expiresAt > Date.now() && parsed.data) {
+          reportMemoryCache.set(cacheKey, parsed);
+          diskStore[cacheKey] = parsed;
+          scheduleDiskNarrativeFlush();
+          return parsed.data;
+        }
+      }
+    } catch {
+    }
+  }
+  return null;
+}
+async function writeSharedPersistedNarrative(cacheKey, data, ttlMs) {
+  const entry = { expiresAt: Date.now() + ttlMs, data };
+  reportMemoryCache.set(cacheKey, entry);
+  if (data?.engineMode !== "gemini_search") return;
+  const diskStore = loadDiskNarrativeStore();
+  diskStore[cacheKey] = entry;
+  scheduleDiskNarrativeFlush();
+  const redisCfg = getRedisRestConfig();
+  if (redisCfg) {
+    try {
+      const ttlSec = Math.max(60, Math.round(ttlMs / 1e3));
+      await executeUpstashCommand(
+        redisCfg,
+        ["SET", `radarnba:nar:${cacheKey}`, JSON.stringify(entry), "EX", String(ttlSec)],
+        3e3
+      );
+    } catch {
+    }
+  }
+}
 function round1(val) {
   return Math.round((Number(val) || 0) * 10) / 10;
 }
@@ -2001,22 +2201,25 @@ function sanitizeJersey(rawJersey, fallbackJersey) {
 function computeHollingerGmSc(stats) {
   return round1(stats.points + 0.4 * stats.fgm - 0.7 * stats.fga - 0.4 * (stats.fta - stats.ftm) + 0.7 * stats.oreb + 0.3 * stats.dreb + stats.stl + 0.7 * stats.ast + 0.7 * stats.blk - 0.4 * stats.pf - stats.tov);
 }
-function parsePbpClockRemaining(rawClock) {
+function parsePbpClockRemaining(rawClock, periodNum = 1) {
+  const maxPeriodMins = Number(periodNum) > 4 ? 5 : 12;
   const str = String(rawClock || "").trim();
-  const isoMatch = str.match(/^PT(\d+)M(\d+(?:\.\d+)?)S$/i);
-  if (isoMatch) {
-    let mins = Math.max(0, Number(isoMatch[1]) || 0);
-    let secs = Math.round(Math.max(0, Number(isoMatch[2]) || 0));
+  const isoMatch = str.match(/^PT(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/i);
+  if (isoMatch && (isoMatch[1] !== void 0 || isoMatch[2] !== void 0)) {
+    let mins = Math.max(0, Number(isoMatch[1] || 0) || 0);
+    let secs = Math.round(Math.max(0, Number(isoMatch[2] || 0) || 0));
     if (secs >= 60) {
-      mins += 1;
-      secs = 0;
+      mins += Math.floor(secs / 60);
+      secs = secs % 60;
     }
+    if (mins > maxPeriodMins || mins === maxPeriodMins && secs > 0) return "";
     return `${mins}:${String(secs).padStart(2, "0")}`;
   }
   const colonMatch = str.match(/^(\d{1,2}):(\d{2})(?:\.\d+)?$/);
   if (colonMatch) {
     const mins = Number(colonMatch[1]) || 0;
     const secs = Math.min(59, Number(colonMatch[2]) || 0);
+    if (mins > maxPeriodMins || mins === maxPeriodMins && secs > 0) return "";
     return `${mins}:${String(secs).padStart(2, "0")}`;
   }
   const secOnlyMatch = str.match(/^(\d+(?:\.\d+)?)$/);
@@ -2024,6 +2227,7 @@ function parsePbpClockRemaining(rawClock) {
     const totalSecs = Math.round(Math.max(0, Number(secOnlyMatch[1]) || 0));
     const mins = Math.floor(totalSecs / 60);
     const secs = totalSecs % 60;
+    if (mins > maxPeriodMins || mins === maxPeriodMins && secs > 0) return "";
     return `${mins}:${String(secs).padStart(2, "0")}`;
   }
   return "";
@@ -2034,7 +2238,7 @@ function formatPbpPeriodLabel(periodNum) {
   return pNum === 5 ? "OT" : `OT${pNum - 4}`;
 }
 var MEDICAL_BODY_PARTS_ES = [{ rx: /\bplantar\s+fascia\b/i, es: "fascia plantar", gender: "f" }, { rx: /\bfifth\s+metatarsal\b/i, es: "quinto metatarsiano", gender: "m" }, { rx: /\bmetatarsal\b/i, es: "metatarsiano", gender: "m" }, { rx: /\bachilles(?:\s+tendon)?\b/i, es: "tend\xF3n de Aquiles", gender: "m" }, { rx: /\bacl\b|\banterior\s+cruciate(?:\s+ligament)?\b/i, es: "ligamento cruzado anterior (LCA)", gender: "m" }, { rx: /\bmcl\b|\bmedial\s+collateral(?:\s+ligament)?\b/i, es: "ligamento lateral interno", gender: "m" }, { rx: /\blcl\b|\blateral\s+collateral(?:\s+ligament)?\b/i, es: "ligamento lateral externo", gender: "m" }, { rx: /\bpcl\b|\bposterior\s+cruciate(?:\s+ligament)?\b/i, es: "ligamento cruzado posterior", gender: "m" }, { rx: /\bmeniscus\b/i, es: "menisco", gender: "m" }, { rx: /\brotator\s+cuff\b/i, es: "manguito rotador", gender: "m" }, { rx: /\blabrum\b/i, es: "labrum", gender: "m" }, { rx: /\bhip\s+flexor\b/i, es: "flexor de la cadera", gender: "m" }, { rx: /\blow(?:er)?\s+back\b|\blumbar\b/i, es: "zona lumbar", gender: "f" }, { rx: /\bupper\s+back\b|\bthoracic\b/i, es: "zona dorsal", gender: "f" }, { rx: /\bgreat\s+toe\b|\bbig\s+toe\b/i, es: "dedo gordo del pie", gender: "m" }, { rx: /\bindex\s+finger\b/i, es: "dedo \xEDndice", gender: "m" }, { rx: /\bring\s+finger\b/i, es: "dedo anular", gender: "m" }, { rx: /\bmiddle\s+finger\b/i, es: "dedo coraz\xF3n", gender: "m" }, { rx: /\bpinky(?:\s+finger)?\b|\blittle\s+finger\b/i, es: "dedo me\xF1ique", gender: "m" }, { rx: /\bankle\b/i, es: "tobillo", gender: "m" }, { rx: /\bknee\b|\bpatella(?:r)?\b/i, es: "rodilla", gender: "f" }, { rx: /\bhamstring\b/i, es: "isquiotibiales", gender: "mp" }, { rx: /\bcalf\b|\bgastrocnemius\b|\bsoleus\b/i, es: "gemelo", gender: "m" }, { rx: /\badductor\b/i, es: "aductor", gender: "m" }, { rx: /\babductor\b|\bgroin\b/i, es: "abductor", gender: "m" }, { rx: /\bquad(?:riceps)?\b/i, es: "cu\xE1driceps", gender: "m" }, { rx: /\bthigh\b/i, es: "muslo", gender: "m" }, { rx: /\bhip\b/i, es: "cadera", gender: "f" }, { rx: /\bpelvis\b|\bpelvic\b/i, es: "pelvis", gender: "f" }, { rx: /\bback\b|\bspine\b|\bspinal\b/i, es: "espalda", gender: "f" }, { rx: /\bshoulder\b|\bclavicle\b|\bcollarbone\b/i, es: "hombro", gender: "m" }, { rx: /\bwrist\b/i, es: "mu\xF1eca", gender: "f" }, { rx: /\bthumb\b/i, es: "pulgar", gender: "m" }, { rx: /\bfinger\b/i, es: "dedo de la mano", gender: "m" }, { rx: /\bhand\b|\bmetacarpal\b/i, es: "mano", gender: "f" }, { rx: /\bforearm\b/i, es: "antebrazo", gender: "m" }, { rx: /\belbow\b/i, es: "codo", gender: "m" }, { rx: /\bbiceps?\b/i, es: "b\xEDceps", gender: "m" }, { rx: /\btriceps?\b/i, es: "tr\xEDceps", gender: "m" }, { rx: /\bpectoral\b|\bchest\b/i, es: "pectoral", gender: "m" }, { rx: /\bfoot\b/i, es: "pie", gender: "m" }, { rx: /\btoe\b/i, es: "dedo del pie", gender: "m" }, { rx: /\bheel\b/i, es: "tal\xF3n", gender: "m" }, { rx: /\bshin\b|\btibia(?:l)?\b/i, es: "tibia", gender: "f" }, { rx: /\bfibula(?:r)?\b/i, es: "peron\xE9", gender: "m" }, { rx: /\bleg\b|\blower\s+leg\b/i, es: "pierna", gender: "f" }, { rx: /\barm\b/i, es: "brazo", gender: "m" }, { rx: /\bneck\b|\bcervical\b/i, es: "cuello", gender: "m" }, { rx: /\brib(?:s|cage)?\b/i, es: "costillas", gender: "fp" }, { rx: /\babdom(?:en|inal)\b|\bcore\b|\boblique\b/i, es: "zona abdominal", gender: "f" }, { rx: /\btailbone\b|\bcoccyx\b|\bglute(?:al)?\b/i, es: "zona gl\xFAtea", gender: "f" }, { rx: /\bnose\b|\bnasal\b/i, es: "tabique nasal", gender: "m" }, { rx: /\beye\b|\borbital\b/i, es: "zona ocular", gender: "f" }, { rx: /\bjaw\b/i, es: "mand\xEDbula", gender: "f" }, { rx: /\bface\b|\bfacial\b|\bcheek\b/i, es: "rostro", gender: "m" }, { rx: /\bhead\b/i, es: "cabeza", gender: "f" }];
-var MEDICAL_CONDITIONS_ES = [{ rx: /\bconcussion(?:\s+protocol)?\b/i, withBody: __name(() => "protocolo de conmoci\xF3n cerebral", "withBody"), standalone: "protocolo de conmoci\xF3n cerebral" }, { rx: /\bplantar\s+fasciitis\b/i, withBody: __name((b) => b.includes("plantar") ? `fascitis en ${b}` : `fascitis plantar (${b})`, "withBody"), standalone: "fascitis plantar" }, { rx: /\bgastroenteritis\b|\bstomach\s+(?:illness|virus|flu|bug)\b/i, withBody: __name(() => "gastroenteritis", "withBody"), standalone: "gastroenteritis" }, { rx: /\bupper\s+respiratory(?:\s+illness|\s+infection)?\b|\brespiratory\s+illness\b|\bsinus(?:itis)?\b/i, withBody: __name(() => "infecci\xF3n respiratoria", "withBody"), standalone: "infecci\xF3n respiratoria" }, { rx: /\bmigraine\b/i, withBody: __name(() => "cuadro de migra\xF1a", "withBody"), standalone: "cuadro de migra\xF1a" }, { rx: /\b(?:non-covid\s+)?illness\b|\bflu\b|\bviral\b|\bsick(?:ness)?\b/i, withBody: __name(() => "proceso v\xEDrico", "withBody"), standalone: "proceso v\xEDrico" }, { rx: /\bhealth\s+and\s+safety(?:\s+protocols?)?\b/i, withBody: __name(() => "protocolo m\xE9dico de salud", "withBody"), standalone: "protocolo m\xE9dico de salud" }, { rx: /\breturn\s+to\s+competition(?:\s+reconditioning)?\b|\breconditioning\b/i, withBody: __name((b) => `readaptaci\xF3n competitiva (${b})`, "withBody"), standalone: "readaptaci\xF3n f\xEDsica a la competici\xF3n" }, { rx: /\binjury\s+management\b|\bload\s+management\b|\bmanagement\b/i, withBody: __name((b) => `gesti\xF3n m\xE9dica de cargas en ${b}`, "withBody"), standalone: "gesti\xF3n m\xE9dica de cargas" }, { rx: /\bsurgery\b|\bsurgical\b|\barthroscop(?:y|ic)\b|\brepair\b|\breconstruction\b/i, withBody: __name((b) => `recuperaci\xF3n quir\xFArgica en ${b}`, "withBody"), standalone: "recuperaci\xF3n tras intervenci\xF3n quir\xFArgica" }, { rx: /\btorn\b|\btear\b|\brupture(?:d)?\b/i, withBody: __name((b) => `rotura fibrilar/ligamentosa en ${b}`, "withBody"), standalone: "rotura fibrilar o ligamentosa" }, { rx: /\bstress\s+fracture\b/i, withBody: __name((b) => `fractura por estr\xE9s en ${b}`, "withBody"), standalone: "fractura por estr\xE9s" }, { rx: /\bstress\s+reaction\b/i, withBody: __name((b) => `reacci\xF3n \xF3sea por estr\xE9s en ${b}`, "withBody"), standalone: "reacci\xF3n \xF3sea por estr\xE9s" }, { rx: /\bavulsion\b|\bfracture(?:d)?\b|\bbroken\b/i, withBody: __name((b) => `fractura en ${b}`, "withBody"), standalone: "fractura \xF3sea" }, { rx: /\bdislocat(?:ion|ed)\b/i, withBody: __name((b) => `luxaci\xF3n en ${b}`, "withBody"), standalone: "luxaci\xF3n articular" }, { rx: /\bsubluxation\b/i, withBody: __name((b) => `subluxaci\xF3n en ${b}`, "withBody"), standalone: "subluxaci\xF3n articular" }, { rx: /\bsprain(?:ed)?\b/i, withBody: __name((b) => `esguince de ${b}`, "withBody"), standalone: "esguince articular" }, { rx: /\bstrain(?:ed)?\b|\bpulled\b/i, withBody: __name((b) => `distensi\xF3n en ${b}`, "withBody"), standalone: "distensi\xF3n muscular" }, { rx: /\btendinopathy\b/i, withBody: __name((b) => `tendinopat\xEDa en ${b}`, "withBody"), standalone: "tendinopat\xEDa" }, { rx: /\btendinitis\b|\btendonitis\b/i, withBody: __name((b) => `tendinitis en ${b}`, "withBody"), standalone: "tendinitis" }, { rx: /\bbursitis\b/i, withBody: __name((b) => `bursitis en ${b}`, "withBody"), standalone: "bursitis" }, { rx: /\bimpingement\b/i, withBody: __name((b) => `pinzamiento articular en ${b}`, "withBody"), standalone: "pinzamiento articular" }, { rx: /\bbone\s+bruise\b/i, withBody: __name((b) => `edema \xF3seo en ${b}`, "withBody"), standalone: "edema \xF3seo" }, { rx: /\bcontusion\b|\bbruis(?:e|ed|ing)\b/i, withBody: __name((b) => `contusi\xF3n en ${b}`, "withBody"), standalone: "contusi\xF3n" }, { rx: /\binflammation\b|\bswelling\b|\beffusion\b/i, withBody: __name((b) => `inflamaci\xF3n en ${b}`, "withBody"), standalone: "inflamaci\xF3n articular" }, { rx: /\bspasms?\b/i, withBody: __name((b) => `espasmos musculares en ${b}`, "withBody"), standalone: "espasmos musculares" }, { rx: /\btightness\b|\bstiffness\b/i, withBody: __name((b) => `sobrecarga en ${b}`, "withBody"), standalone: "sobrecarga muscular" }, { rx: /\blaceration\b|\bcut\b/i, withBody: __name((b) => `herida inciso-contusa en ${b}`, "withBody"), standalone: "herida inciso-contusa" }, { rx: /\bsore(?:ness)?\b|\bpain\b|\bach(?:e|ing)\b|\bdiscomfort\b/i, withBody: __name((b) => `molestias en ${b}`, "withBody"), standalone: "molestias f\xEDsicas" }, { rx: /\brecovery\b|\brehab(?:ilitation)?\b/i, withBody: __name((b) => `proceso de recuperaci\xF3n en ${b}`, "withBody"), standalone: "proceso de recuperaci\xF3n m\xE9dica" }];
+var MEDICAL_CONDITIONS_ES = [{ rx: /\bconcussion(?:\s+protocol)?\b/i, withBody: __name2(() => "protocolo de conmoci\xF3n cerebral", "withBody"), standalone: "protocolo de conmoci\xF3n cerebral" }, { rx: /\bplantar\s+fasciitis\b/i, withBody: __name2((b) => b.includes("plantar") ? `fascitis en ${b}` : `fascitis plantar (${b})`, "withBody"), standalone: "fascitis plantar" }, { rx: /\bgastroenteritis\b|\bstomach\s+(?:illness|virus|flu|bug)\b/i, withBody: __name2(() => "gastroenteritis", "withBody"), standalone: "gastroenteritis" }, { rx: /\bupper\s+respiratory(?:\s+illness|\s+infection)?\b|\brespiratory\s+illness\b|\bsinus(?:itis)?\b/i, withBody: __name2(() => "infecci\xF3n respiratoria", "withBody"), standalone: "infecci\xF3n respiratoria" }, { rx: /\bmigraine\b/i, withBody: __name2(() => "cuadro de migra\xF1a", "withBody"), standalone: "cuadro de migra\xF1a" }, { rx: /\b(?:non-covid\s+)?illness\b|\bflu\b|\bviral\b|\bsick(?:ness)?\b/i, withBody: __name2(() => "proceso v\xEDrico", "withBody"), standalone: "proceso v\xEDrico" }, { rx: /\bhealth\s+and\s+safety(?:\s+protocols?)?\b/i, withBody: __name2(() => "protocolo m\xE9dico de salud", "withBody"), standalone: "protocolo m\xE9dico de salud" }, { rx: /\breturn\s+to\s+competition(?:\s+reconditioning)?\b|\breconditioning\b/i, withBody: __name2((b) => `readaptaci\xF3n competitiva (${b})`, "withBody"), standalone: "readaptaci\xF3n f\xEDsica a la competici\xF3n" }, { rx: /\binjury\s+management\b|\bload\s+management\b|\bmanagement\b/i, withBody: __name2((b) => `gesti\xF3n m\xE9dica de cargas en ${b}`, "withBody"), standalone: "gesti\xF3n m\xE9dica de cargas" }, { rx: /\bsurgery\b|\bsurgical\b|\barthroscop(?:y|ic)\b|\brepair\b|\breconstruction\b/i, withBody: __name2((b) => `recuperaci\xF3n quir\xFArgica en ${b}`, "withBody"), standalone: "recuperaci\xF3n tras intervenci\xF3n quir\xFArgica" }, { rx: /\btorn\b|\btear\b|\brupture(?:d)?\b/i, withBody: __name2((b) => `rotura fibrilar/ligamentosa en ${b}`, "withBody"), standalone: "rotura fibrilar o ligamentosa" }, { rx: /\bstress\s+fracture\b/i, withBody: __name2((b) => `fractura por estr\xE9s en ${b}`, "withBody"), standalone: "fractura por estr\xE9s" }, { rx: /\bstress\s+reaction\b/i, withBody: __name2((b) => `reacci\xF3n \xF3sea por estr\xE9s en ${b}`, "withBody"), standalone: "reacci\xF3n \xF3sea por estr\xE9s" }, { rx: /\bavulsion\b|\bfracture(?:d)?\b|\bbroken\b/i, withBody: __name2((b) => `fractura en ${b}`, "withBody"), standalone: "fractura \xF3sea" }, { rx: /\bdislocat(?:ion|ed)\b/i, withBody: __name2((b) => `luxaci\xF3n en ${b}`, "withBody"), standalone: "luxaci\xF3n articular" }, { rx: /\bsubluxation\b/i, withBody: __name2((b) => `subluxaci\xF3n en ${b}`, "withBody"), standalone: "subluxaci\xF3n articular" }, { rx: /\bsprain(?:ed)?\b/i, withBody: __name2((b) => `esguince de ${b}`, "withBody"), standalone: "esguince articular" }, { rx: /\bstrain(?:ed)?\b|\bpulled\b/i, withBody: __name2((b) => `distensi\xF3n en ${b}`, "withBody"), standalone: "distensi\xF3n muscular" }, { rx: /\btendinopathy\b/i, withBody: __name2((b) => `tendinopat\xEDa en ${b}`, "withBody"), standalone: "tendinopat\xEDa" }, { rx: /\btendinitis\b|\btendonitis\b/i, withBody: __name2((b) => `tendinitis en ${b}`, "withBody"), standalone: "tendinitis" }, { rx: /\bbursitis\b/i, withBody: __name2((b) => `bursitis en ${b}`, "withBody"), standalone: "bursitis" }, { rx: /\bimpingement\b/i, withBody: __name2((b) => `pinzamiento articular en ${b}`, "withBody"), standalone: "pinzamiento articular" }, { rx: /\bbone\s+bruise\b/i, withBody: __name2((b) => `edema \xF3seo en ${b}`, "withBody"), standalone: "edema \xF3seo" }, { rx: /\bcontusion\b|\bbruis(?:e|ed|ing)\b/i, withBody: __name2((b) => `contusi\xF3n en ${b}`, "withBody"), standalone: "contusi\xF3n" }, { rx: /\binflammation\b|\bswelling\b|\beffusion\b/i, withBody: __name2((b) => `inflamaci\xF3n en ${b}`, "withBody"), standalone: "inflamaci\xF3n articular" }, { rx: /\bspasms?\b/i, withBody: __name2((b) => `espasmos musculares en ${b}`, "withBody"), standalone: "espasmos musculares" }, { rx: /\btightness\b|\bstiffness\b/i, withBody: __name2((b) => `sobrecarga en ${b}`, "withBody"), standalone: "sobrecarga muscular" }, { rx: /\blaceration\b|\bcut\b/i, withBody: __name2((b) => `herida inciso-contusa en ${b}`, "withBody"), standalone: "herida inciso-contusa" }, { rx: /\bsore(?:ness)?\b|\bpain\b|\bach(?:e|ing)\b|\bdiscomfort\b/i, withBody: __name2((b) => `molestias en ${b}`, "withBody"), standalone: "molestias f\xEDsicas" }, { rx: /\brecovery\b|\brehab(?:ilitation)?\b/i, withBody: __name2((b) => `proceso de recuperaci\xF3n en ${b}`, "withBody"), standalone: "proceso de recuperaci\xF3n m\xE9dica" }];
 function formatSpanishLaterality(side, gender) {
   if (!side) return "";
   if (side === "bilateral") {
@@ -2147,7 +2351,7 @@ function sanitizeUnverifiedCoachClaims(text, verifiedPlayerNames = []) {
   if (!text) return text;
   const playerTokens = buildVerifiedPlayerTokenSet(verifiedPlayerNames);
   const teamTokens = new Set(NBA_TEAM_SAFE_TOKENS.map((t) => normalizePlain(t)));
-  const isVerifiedPlayerOrTeam = __name((candidate) => {
+  const isVerifiedPlayerOrTeam = __name2((candidate) => {
     const norm = normalizePlain(candidate.replace(/\*/g, "")).replace(/^(?:los|las|el|la|de|del)\s+/, "");
     if (!norm) return true;
     if (playerTokens.has(norm) || teamTokens.has(norm)) return true;
@@ -2185,6 +2389,76 @@ function sanitizeUnverifiedCoachClaims(text, verifiedPlayerNames = []) {
   }
   return sanitizeEditorialSpanishGrammar(out);
 }
+function normalizeClockForCompare(clockStr) {
+  const parts = String(clockStr || "").trim().split(":");
+  if (parts.length !== 2) return "";
+  return `${Number(parts[0]) || 0}:${String(Number(parts[1]) || 0).padStart(2, "0")}`;
+}
+function toDiacriticInsensitivePattern(word) {
+  const map = {
+    a: "[a\xE1\xE0\xE4\xE2]",
+    e: "[e\xE9\xE8\xEB\xEA]",
+    i: "[i\xED\xEC\xEF\xEE]",
+    o: "[o\xF3\xF2\xF6\xF4]",
+    u: "[u\xFA\xF9\xFC\xFB]",
+    c: "[c\u0107\u010D\xE7]",
+    n: "[n\xF1]",
+    s: "[s\u0161]",
+    z: "[z\u017E]"
+  };
+  return Array.from(normalizePlain(word)).map((ch) => map[ch] || ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("");
+}
+function reconcileVerifiedFoulOutTimings(text, verifiedFoulOuts = []) {
+  if (!text) return text;
+  let out = String(text);
+  const timingTailPattern = `(?:en\\s+el\\s+(?:primer|segundo|tercer|cuarto|\xFAltimo|[1-4]Q|OT\\d*|pr[o\xF3]rroga(?:\\s*\\d+)?)\\s*(?:periodo|cuarto)?\\s*(?:,\\s*)?)?(?:faltando|a\\s+falta\\s+de|con|a)\\s+(\\d{1,2}:\\d{2})(?:\\s*(?:para\\s+(?:la\\s+conclusi[o\xF3]n|el\\s+final|el\\s+cierre)|del\\s+(?:partido|cuarto|encuentro|choque|final)|por\\s+jugar))?`;
+  for (const fo of verifiedFoulOuts) {
+    const period = String(fo?.foulOutPeriod || "").trim();
+    const clock = String(fo?.foulOutClock || "").trim();
+    const normClockExpected = normalizeClockForCompare(clock);
+    const fullNorm = normalizePlain(fo?.name || "");
+    if (!fullNorm || !period || !normClockExpected) continue;
+    const parts = fullNorm.split(/\s+/).filter((p) => p.length >= 2);
+    const suffixes = /* @__PURE__ */ new Set(["jr", "jr.", "sr", "sr.", "ii", "iii", "iv"]);
+    const nonSuffixParts = parts.filter((p) => !suffixes.has(p));
+    const lastName = nonSuffixParts[nonSuffixParts.length - 1] || parts[parts.length - 1] || fullNorm;
+    const escapedLast = toDiacriticInsensitivePattern(lastName);
+    const clauseRx = new RegExp(
+      `(${escapedLast}[^.!?
+]{0,140}?(?:expuls|seis\\s+faltas|6\\s+faltas|sexta\\s+falta|l[i\xED]mite\\s+de\\s+faltas)[^.!?
+]{0,100}?)(${timingTailPattern})`,
+      "giu"
+    );
+    out = out.replace(clauseRx, (match, lead, _timingPhrase, foundClock) => {
+      if (normalizeClockForCompare(foundClock) === normClockExpected) {
+        return match;
+      }
+      return `${lead}en el ${period} faltando ${clock}`;
+    });
+    const preClauseRx = new RegExp(
+      `((?:la\\s+expulsi[o\xF3]n(?:\\s+por\\s+(?:seis|6)\\s+faltas)?\\s+de|expulsad[oa]\\s+por\\s+(?:seis|6)\\s+faltas[^.!?
+]{0,40})[^.!?
+]{0,90}?${escapedLast}[^.!?
+]{0,50}?)(${timingTailPattern})`,
+      "giu"
+    );
+    out = out.replace(preClauseRx, (match, lead, _timingPhrase, foundClock) => {
+      if (normalizeClockForCompare(foundClock) === normClockExpected) {
+        return match;
+      }
+      return `${lead}en el ${period} faltando ${clock}`;
+    });
+  }
+  out = out.replace(
+    /((?:expulsad[oa]s?\s+(?:por\s+(?:seis|6)\s+faltas|por\s+acumulaci[oó]n\s+de\s+faltas)|la\s+expulsi[oó]n(?:\s+por\s+(?:seis|6)\s+faltas)?\s+de)[^.!?\n]{0,110}?)\s+(?:en\s+el\s+(?:primer|segundo|tercer|cuarto|último|[1-4]Q|OT\d*|pr[oó]rroga(?:\s*\d+)?)\s*(?:periodo|cuarto)?\s*(?:,\s*)?)?(?:faltando|a\s+falta\s+de|con|a)\s+(\d{1,2}):(\d{2})(?:\s*(?:para\s+(?:la\s+conclusi[oó]n|el\s+final|el\s+cierre)|del\s+(?:partido|cuarto|encuentro|choque|final)|por\s+jugar))?/giu,
+    (full, prefix, mmStr) => {
+      const mm = Number(mmStr) || 0;
+      if (mm > 12) return prefix.trimEnd();
+      return full;
+    }
+  );
+  return out;
+}
 function sanitizeEditorialSpanishGrammar(text) {
   if (!text) return text;
   const preserveLeadCase = (match, phrase) => {
@@ -2211,7 +2485,7 @@ function normalizeEspnTeamAbbr(raw) {
 function extractGroundingSources(response, seedSources = []) {
   const seen = /* @__PURE__ */ new Set();
   const links = [];
-  const pushLink = __name((uri, title) => {
+  const pushLink = __name2((uri, title) => {
     const cleanUri = (uri || "").trim();
     if (!cleanUri || seen.has(cleanUri)) return;
     seen.add(cleanUri);
@@ -2699,7 +2973,7 @@ function createScoutingEngine(deps) {
           const dispName = String(inj?.athlete?.displayName || "").trim();
           if (!dispName) continue;
           const status = String(inj?.status || "").trim();
-          const cleanField = __name((val) => {
+          const cleanField = __name2((val) => {
             const s = String(val || "").trim();
             return /^not\s+specified$/i.test(s) ? "" : s;
           }, "cleanField");
@@ -2737,20 +3011,40 @@ function createScoutingEngine(deps) {
     }
     return `${m} min y ${String(s).padStart(2, "0")}s de pr\xF3rroga`;
   }
-  async function fetchPlayByPlayFoulOuts(eventId, fouledOutTargets, seasonLabel, forceRefresh = false) {
+  async function resolveEspnEventIdForGame(gameDate, awayAbbr, homeAbbr, forceRefresh = false) {
+    if (!gameDate || !awayAbbr || !homeAbbr) return "";
+    try {
+      const yyyymmdd = String(gameDate).slice(0, 10).replace(/-/g, "");
+      if (!/^\d{8}$/.test(yyyymmdd)) return "";
+      const sb = await deps.cachedFetchJson(`https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${yyyymmdd}`, 15 * 60 * 1e3, {}, 5500, forceRefresh);
+      const events = Array.isArray(sb?.events) ? sb.events : [];
+      for (const ev of events) {
+        const comp = ev?.competitions?.[0];
+        const competitors = Array.isArray(comp?.competitors) ? comp.competitors : [];
+        const h = normalizeEspnTeamAbbr(competitors.find((c) => c?.homeAway === "home")?.team?.abbreviation || "");
+        const a = normalizeEspnTeamAbbr(competitors.find((c) => c?.homeAway === "away")?.team?.abbreviation || "");
+        if (h === homeAbbr && a === awayAbbr && ev?.id) {
+          return String(ev.id);
+        }
+      }
+    } catch {
+    }
+    return "";
+  }
+  async function fetchPlayByPlayFoulOuts(eventId, fouledOutTargets, seasonLabel, forceRefresh = false, matchupMeta = null) {
     const out = /* @__PURE__ */ new Map();
     if (!Array.isArray(fouledOutTargets) || fouledOutTargets.length === 0 || !eventId) {
       return out;
     }
     const normalizedTargets = fouledOutTargets.map(
-      (t) => typeof t === "string" ? { playerId: t, name: "" } : { playerId: String(t?.playerId || ""), name: String(t?.name || "") }
+      (t) => typeof t === "string" ? { playerId: t, name: "", teamAbbr: "" } : { playerId: String(t?.playerId || ""), name: String(t?.name || ""), teamAbbr: String(t?.teamAbbr || "").toUpperCase() }
     );
     const ttl = seasonLabel === "2026-27" ? 15 * 60 * 1e3 : 180 * 60 * 1e3;
     try {
       let actions = [];
       if (/^00\d{8}$/.test(eventId)) {
         try {
-          const pbp = await deps.cachedFetchJson(`https://cdn.nba.com/static/json/liveData/playbyplay/playbyplay_${eventId}.json`, ttl, NBA_LIVE_HEADERS, 7500, forceRefresh);
+          const pbp = await deps.cachedFetchJson(`https://cdn.nba.com/static/json/liveData/playbyplay/playbyplay_${eventId}.json`, ttl, NBA_LIVE_HEADERS, 8500, forceRefresh);
           if (Array.isArray(pbp?.game?.actions)) {
             actions = pbp.game.actions;
           }
@@ -2759,18 +3053,22 @@ function createScoutingEngine(deps) {
       }
       if (actions.length === 0) {
         try {
-          const espnSummary = await deps.cachedFetchJson(`https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${eventId}`, ttl, {}, 7500, forceRefresh);
-          const espnPlays = Array.isArray(espnSummary?.plays) ? espnSummary.plays : [];
-          if (espnPlays.length > 0) {
-            actions = espnPlays.map((p) => ({
-              period: Number(p?.period?.number) || 1,
-              clock: p?.clock?.displayValue || "0:00",
-              personId: p?.athlete?.id || "",
-              playerNameI: p?.athlete?.displayName || "",
-              description: String(p?.text || "").trim(),
-              actionType: /foul/i.test(String(p?.type?.text || p?.text || "")) ? "foul" : String(p?.type?.text || "").toLowerCase(),
-              subType: String(p?.type?.text || "").toLowerCase()
-            }));
+          const espnEventId = !/^00\d{8}$/.test(eventId) ? eventId : await resolveEspnEventIdForGame(matchupMeta?.gameDate, matchupMeta?.awayAbbr, matchupMeta?.homeAbbr, forceRefresh);
+          if (espnEventId) {
+            const espnSummary = await deps.cachedFetchJson(`https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${espnEventId}`, ttl, {}, 7500, forceRefresh);
+            const espnPlays = Array.isArray(espnSummary?.plays) ? espnSummary.plays : [];
+            if (espnPlays.length > 0) {
+              actions = espnPlays.map((p) => ({
+                period: Number(p?.period?.number) || 1,
+                clock: p?.clock?.displayValue || "",
+                teamTricode: normalizeEspnTeamAbbr(p?.team?.abbreviation || ""),
+                personId: p?.athlete?.id || "",
+                playerNameI: p?.athlete?.displayName || "",
+                description: String(p?.text || "").trim(),
+                actionType: /foul/i.test(String(p?.type?.text || p?.text || "")) ? "foul" : String(p?.type?.text || "").toLowerCase(),
+                subType: String(p?.type?.text || "").toLowerCase()
+              }));
+            }
           }
         } catch {
         }
@@ -2781,22 +3079,29 @@ function createScoutingEngine(deps) {
         const numPid = Number(pid);
         const normTargetName = normalizePlain(target.name);
         const nameParts = normTargetName.split(/\s+/).filter(Boolean);
+        const firstInitial = nameParts.length > 1 ? nameParts[0][0] : "";
         const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : nameParts[0] || "";
-        const initialLast = nameParts.length > 1 ? `${nameParts[0][0]}. ${lastName}` : normTargetName;
+        const initialLast = nameParts.length > 1 ? `${firstInitial}. ${lastName}` : normTargetName;
         const playerFouls = actions.filter((a) => {
           const actType = String(a?.actionType || "").toLowerCase();
           const descRaw = String(a?.description || "");
           const descLow = descRaw.toLowerCase();
+          if (actType === "ejection" || descLow.includes("ejection")) return false;
           if (actType !== "foul" && !descLow.includes("foul")) return false;
           const subType = String(a?.subType || "").toLowerCase();
           if (subType.includes("technical") || subType.includes("defense 3 second") || descLow.includes("technical foul") || descLow.includes("defensive 3 second")) {
             return false;
           }
           if (numPid && Number(a?.personId) === numPid) return true;
+          const actTeam = String(a?.teamTricode || "").toUpperCase();
+          if (target.teamAbbr && actTeam && actTeam !== target.teamAbbr) return false;
           if (!normTargetName) return false;
           const actionPlayerNorm = normalizePlain(a?.playerNameI || a?.playerName || "");
-          if (actionPlayerNorm && (actionPlayerNorm === normTargetName || actionPlayerNorm === initialLast || lastName.length >= 3 && actionPlayerNorm.endsWith(lastName))) {
-            return true;
+          if (actionPlayerNorm) {
+            if (actionPlayerNorm === normTargetName || actionPlayerNorm === initialLast) return true;
+            if (firstInitial && lastName.length >= 3 && actionPlayerNorm.startsWith(firstInitial) && actionPlayerNorm.endsWith(lastName)) {
+              return true;
+            }
           }
           const descNorm = normalizePlain(descRaw);
           if (descNorm.startsWith(normTargetName) || descNorm.startsWith(initialLast)) {
@@ -2805,12 +3110,12 @@ function createScoutingEngine(deps) {
           return false;
         });
         if (playerFouls.length === 0) continue;
-        const exactSixth = playerFouls.find((a) => Number(a?.foulPersonalTotal) === 6 || /\b(?:P6|6\s*PF)\b/i.test(String(a?.description || ""))) || playerFouls[playerFouls.length - 1];
+        const exactSixth = playerFouls.find((a) => Number(a?.foulPersonalTotal) === 6 || /\b(?:P6|6\s*PF)\b/i.test(String(a?.description || ""))) || (playerFouls.length >= 6 ? playerFouls[5] : playerFouls[playerFouls.length - 1]);
         const pNum = Number(exactSixth?.period) || 4;
         const periodLabel = formatPbpPeriodLabel(pNum);
-        const clockRemaining = parsePbpClockRemaining(exactSixth?.clock) || "0:00";
+        const clockRemaining = parsePbpClockRemaining(exactSixth?.clock, pNum);
         const key = pid || target.name;
-        if (key) {
+        if (key && clockRemaining) {
           out.set(key, { periodLabel, clockRemaining, periodNum: pNum });
         }
       }
@@ -2818,7 +3123,7 @@ function createScoutingEngine(deps) {
     }
     return out;
   }
-  async function fetchPlayByPlayHighlights(eventId, awayAbbr, homeAbbr, winnerAbbr, seasonLabel, forceRefresh = false) {
+  async function fetchPlayByPlayHighlights(eventId, awayAbbr, homeAbbr, winnerAbbr, seasonLabel, forceRefresh = false, gameDate = "") {
     const emptyRes = { keyRun: null, breakpoint: null, clutchPlays: [], playerHotSpurts: [], formattedDossierBlock: "" };
     if (!eventId) return emptyRes;
     let actions = [];
@@ -2834,7 +3139,8 @@ function createScoutingEngine(deps) {
     }
     if (actions.length === 0) {
       try {
-        const espnSummary = await deps.cachedFetchJson(`https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${eventId}`, ttl, {}, 7500, forceRefresh);
+        const espnEventId = !/^00\d{8}$/.test(eventId) ? eventId : await resolveEspnEventIdForGame(gameDate, awayAbbr, homeAbbr, forceRefresh);
+        const espnSummary = espnEventId ? await deps.cachedFetchJson(`https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${espnEventId}`, ttl, {}, 7500, forceRefresh) : null;
         const espnPlays = Array.isArray(espnSummary?.plays) ? espnSummary.plays : [];
         if (espnPlays.length > 0) {
           actions = espnPlays.map((p) => {
@@ -2875,7 +3181,7 @@ function createScoutingEngine(deps) {
       if (!isTimeout) continue;
       const pNum = Number(a?.period) || 1;
       const periodLabel = formatPbpPeriodLabel(pNum);
-      const clock = parsePbpClockRemaining(a?.clock) || String(a?.clock || "0:00");
+      const clock = parsePbpClockRemaining(a?.clock, pNum) || "0:00";
       const clockSec = clockToSec(clock);
       let teamAbbr = String(a?.teamTricode || "").toUpperCase();
       if (!teamAbbr || teamAbbr !== awayAbbr && teamAbbr !== homeAbbr) {
@@ -2897,7 +3203,7 @@ function createScoutingEngine(deps) {
     for (const a of actions) {
       const pNum = Number(a?.period) || 1;
       const periodLabel = formatPbpPeriodLabel(pNum);
-      const clockRemaining = parsePbpClockRemaining(a?.clock) || String(a?.clock || "0:00");
+      const clockRemaining = parsePbpClockRemaining(a?.clock, pNum) || "0:00";
       const teamAbbr = String(a?.teamTricode || "").toUpperCase();
       const desc = String(a?.description || "").trim();
       const playerName = String(a?.playerNameI || a?.playerName || "").trim();
@@ -3088,7 +3394,7 @@ function createScoutingEngine(deps) {
       const teamAbbr = String(a?.teamTricode || "").toUpperCase();
       const pNum = Number(a?.period) || 1;
       const periodLabel = formatPbpPeriodLabel(pNum);
-      const clock = parsePbpClockRemaining(a?.clock) || String(a?.clock || "0:00");
+      const clock = parsePbpClockRemaining(a?.clock, pNum) || "0:00";
       const entry = playerFoulMap.get(pid) || { fouls: 0, logged1Q: false, logged2Q: false, loggedOut: false };
       const explicitTotal = Number(a?.foulPersonalTotal);
       entry.fouls = Number.isFinite(explicitTotal) && explicitTotal > 0 ? explicitTotal : entry.fouls + 1;
@@ -3151,7 +3457,7 @@ function createScoutingEngine(deps) {
       for (const a of actions) {
         const pNum = Number(a?.period) || 1;
         if (pNum < 4) continue;
-        const clock = parsePbpClockRemaining(a?.clock) || String(a?.clock || "00:00");
+        const clock = parsePbpClockRemaining(a?.clock, pNum) || "00:00";
         const sec = clockToSec(clock);
         if (sec > 120) continue;
         const actType = String(a?.actionType || "").toLowerCase();
@@ -3312,7 +3618,7 @@ function createScoutingEngine(deps) {
   async function resolveTeamNextGameInfo(params) {
     const { currentEventId, teamObj, recordAfter, fullTeams, gameDate, seasonLabel, scheduleGames, forceRefresh } = params;
     const abbr = teamObj.abbreviation;
-    const findTeamIdByAbbr = __name((targetAbbr) => fullTeams.find((t) => t.abbreviation === targetAbbr)?.id, "findTeamIdByAbbr");
+    const findTeamIdByAbbr = __name2((targetAbbr) => fullTeams.find((t) => t.abbreviation === targetAbbr)?.id, "findTeamIdByAbbr");
     const confPeers = fullTeams.filter((t) => t.conference === teamObj.conference).map((t) => {
       const logs = t.games.filter((g) => g.seasonLabel === seasonLabel && g.date.slice(0, 10) <= gameDate).sort((a, b) => b.date.localeCompare(a.date));
       const w = logs.filter((g) => g.result === "W").length;
@@ -3520,7 +3826,7 @@ function createScoutingEngine(deps) {
         decisivePeriodLabel = `Cierre en ${p4.label} (${p4.awayScore}-${p4.homeScore})`;
       }
     }
-    const computeRecordUpToDate = __name((tm) => {
+    const computeRecordUpToDate = __name2((tm) => {
       const slice = tm.games.filter((g) => g.seasonLabel === seasonLabel && g.date.slice(0, 10) <= gameDate);
       const w = slice.filter((g) => g.result === "W").length;
       const l = slice.length - w;
@@ -3529,7 +3835,7 @@ function createScoutingEngine(deps) {
     const spanishDetails = [];
     const milestonesList = [];
     const seenSpanishIds = /* @__PURE__ */ new Set();
-    const buildSideReport = __name((sideRole, teamObj, teamLog, cdnTeam, oppAbbr) => {
+    const buildSideReport = __name2((sideRole, teamObj, teamLog, cdnTeam, oppAbbr) => {
       const abbr = teamObj.abbreviation;
       const isWinner = teamLog.result === "W";
       const starters = [];
@@ -3695,7 +4001,7 @@ function createScoutingEngine(deps) {
         if (otherSeasonGames.length >= 1) {
           const totalGamesSample = otherSeasonGames.length + 1;
           const highs = {};
-          const evalSeasonHigh = __name((colKey, tonightVal, extractOther, opts) => {
+          const evalSeasonHigh = __name2((colKey, tonightVal, extractOther, opts) => {
             if (opts?.qualifyTonight === false) return;
             if ((opts?.minPositive ?? true) && tonightVal <= 0) return;
             const eligibleOthers = opts?.qualifyOther ? otherSeasonGames.filter(opts.qualifyOther) : otherSeasonGames;
@@ -3726,13 +4032,13 @@ function createScoutingEngine(deps) {
           evalSeasonHigh("pts", pl.points, (g) => g.points);
           evalSeasonHigh("fgm", pl.fgm, (g) => g.fgm);
           evalSeasonHigh("fga", pl.fga, (g) => g.fga);
-          evalSeasonHigh("fgPct", pl.fgPct, (g) => g.fgPct, { qualifyTonight: pl.fga >= 4, qualifyOther: __name((g) => g.fga >= 4, "qualifyOther"), eps: 0.15, skipRoutinePerfectTie: true });
+          evalSeasonHigh("fgPct", pl.fgPct, (g) => g.fgPct, { qualifyTonight: pl.fga >= 4, qualifyOther: __name2((g) => g.fga >= 4, "qualifyOther"), eps: 0.15, skipRoutinePerfectTie: true });
           evalSeasonHigh("fg3m", pl.fg3m, (g) => g.fg3m);
           evalSeasonHigh("fg3a", pl.fg3a, (g) => g.fg3a);
-          evalSeasonHigh("fg3Pct", pl.fg3Pct, (g) => g.fg3Pct, { qualifyTonight: pl.fg3a >= 3, qualifyOther: __name((g) => g.fg3a >= 3, "qualifyOther"), eps: 0.15, skipRoutinePerfectTie: true });
+          evalSeasonHigh("fg3Pct", pl.fg3Pct, (g) => g.fg3Pct, { qualifyTonight: pl.fg3a >= 3, qualifyOther: __name2((g) => g.fg3a >= 3, "qualifyOther"), eps: 0.15, skipRoutinePerfectTie: true });
           evalSeasonHigh("ftm", pl.ftm, (g) => g.ftm);
           evalSeasonHigh("fta", pl.fta, (g) => g.fta);
-          evalSeasonHigh("ftPct", pl.ftPct, (g) => g.ftPct, { qualifyTonight: pl.fta >= 4, qualifyOther: __name((g) => g.fta >= 4, "qualifyOther"), eps: 0.15, skipRoutinePerfectTie: true });
+          evalSeasonHigh("ftPct", pl.ftPct, (g) => g.ftPct, { qualifyTonight: pl.fta >= 4, qualifyOther: __name2((g) => g.fta >= 4, "qualifyOther"), eps: 0.15, skipRoutinePerfectTie: true });
           evalSeasonHigh("oreb", pl.oreb, (g) => g.oreb);
           evalSeasonHigh("dreb", pl.dreb, (g) => g.dreb);
           evalSeasonHigh("reb", pl.rebounds, (g) => g.rebounds);
@@ -3741,8 +4047,8 @@ function createScoutingEngine(deps) {
           evalSeasonHigh("blk", pl.blocks, (g) => g.blocks);
           evalSeasonHigh("plusMinus", pl.plusMinus, (g) => g.plusMinus, { minPositive: true });
           evalSeasonHigh("gameScore", pl.gameScore, (g) => g.gameScore, { minPositive: true, eps: 0.09 });
-          evalSeasonHigh("tsPct", pl.tsPct, (g) => g.tsPct, { qualifyTonight: pl.fga + pl.fta >= 5, qualifyOther: __name((g) => g.fga + g.fta >= 5, "qualifyOther"), eps: 0.15 });
-          evalSeasonHigh("usgEst", pl.usgEst || 0, (g) => g.usgEst || 0, { qualifyTonight: pl.minutes >= 10, qualifyOther: __name((g) => g.minutes >= 10, "qualifyOther"), eps: 0.25 });
+          evalSeasonHigh("tsPct", pl.tsPct, (g) => g.tsPct, { qualifyTonight: pl.fga + pl.fta >= 5, qualifyOther: __name2((g) => g.fga + g.fta >= 5, "qualifyOther"), eps: 0.15 });
+          evalSeasonHigh("usgEst", pl.usgEst || 0, (g) => g.usgEst || 0, { qualifyTonight: pl.minutes >= 10, qualifyOther: __name2((g) => g.minutes >= 10, "qualifyOther"), eps: 0.25 });
           if (Object.keys(highs).length > 0) {
             pl.seasonHighs = highs;
           }
@@ -3768,12 +4074,15 @@ function createScoutingEngine(deps) {
     }, "buildSideReport");
     const awaySide = buildSideReport("away", awayTeamObj, awayLog, cdnGame?.awayTeam, homeAbbr);
     const homeSide = buildSideReport("home", homeTeamObj, homeLog, cdnGame?.homeTeam, awayAbbr);
-    const fouledOutTargets = [...awaySide.absencesAndDnp, ...homeSide.absencesAndDnp].filter((item) => item.statusType === "foul_out").map((item) => ({ playerId: item.playerId ? String(item.playerId) : "", name: item.name }));
+    const fouledOutTargets = [
+      ...awaySide.absencesAndDnp.filter((item) => item.statusType === "foul_out").map((item) => ({ playerId: item.playerId ? String(item.playerId) : "", name: item.name, teamAbbr: awaySide.abbr })),
+      ...homeSide.absencesAndDnp.filter((item) => item.statusType === "foul_out").map((item) => ({ playerId: item.playerId ? String(item.playerId) : "", name: item.name, teamAbbr: homeSide.abbr }))
+    ];
     const [foulOutTimings, awayNextGame, homeNextGame, pbpHighlights] = await Promise.all([
-      fetchPlayByPlayFoulOuts(eventId, fouledOutTargets, seasonLabel, forceRefresh),
+      fetchPlayByPlayFoulOuts(eventId, fouledOutTargets, seasonLabel, forceRefresh, { gameDate, awayAbbr, homeAbbr }),
       resolveTeamNextGameInfo({ currentEventId: eventId, teamObj: awayTeamObj, recordAfter: awaySide.recordAfter, fullTeams: full.teams, gameDate, seasonLabel, scheduleGames, forceRefresh }),
       resolveTeamNextGameInfo({ currentEventId: eventId, teamObj: homeTeamObj, recordAfter: homeSide.recordAfter, fullTeams: full.teams, gameDate, seasonLabel, scheduleGames, forceRefresh }),
-      fetchPlayByPlayHighlights(eventId, awayAbbr, homeAbbr, winnerAbbr, seasonLabel, forceRefresh)
+      fetchPlayByPlayHighlights(eventId, awayAbbr, homeAbbr, winnerAbbr, seasonLabel, forceRefresh, gameDate)
     ]);
     awaySide.nextGame = awayNextGame;
     homeSide.nextGame = homeNextGame;
@@ -3885,7 +4194,7 @@ function createScoutingEngine(deps) {
     const otSuffix = isOvertime ? overtimeCount > 1 ? ` (${overtimeCount} PR)` : " (PR)" : "";
     const pasoBTitle = `${awaySide.name} vs ${homeSide.name} | ${awaySide.score}-${homeSide.score}${otSuffix} | ${arenaName}, ${arenaCity} (${attendanceFormatted})`;
     const teamComparisonRows = [];
-    const pushTeamRow = __name((opts) => {
+    const pushTeamRow = __name2((opts) => {
       const dec = opts.decimals ?? 0;
       const suf = opts.suffix ?? "";
       const rawDiff = opts.awayVal - opts.homeVal;
@@ -3933,7 +4242,7 @@ function createScoutingEngine(deps) {
     const awayPool = [...awaySide.starters, ...awaySide.bench];
     const homePool = [...homeSide.starters, ...homeSide.bench];
     const leaderComparisonRows = [];
-    const pickTopLeader = __name((pool, getter, tieBreakMoreMinutes = false) => {
+    const pickTopLeader = __name2((pool, getter, tieBreakMoreMinutes = false) => {
       if (pool.length === 0) return null;
       return [...pool].sort((a, b) => {
         const diff = getter(b) - getter(a);
@@ -3949,7 +4258,7 @@ function createScoutingEngine(deps) {
     for (const p of full.allPlayers) {
       playerByNameKey.set(normalizePlain(p.name), p);
     }
-    const resolvePlayerBaselineLogs = __name((playerId, fullName) => {
+    const resolvePlayerBaselineLogs = __name2((playerId, fullName) => {
       const summary = playerById.get(playerId) || playerByNameKey.get(normalizePlain(fullName));
       if (!summary) return { logs: [] };
       const seasonLogs = summary.games.filter((g) => g.seasonLabel === seasonLabel && g.minutes > 0);
@@ -3959,30 +4268,30 @@ function createScoutingEngine(deps) {
       const allActiveLogs = summary.games.filter((g) => g.minutes > 0);
       return { summary, logs: allActiveLogs.length >= 2 ? allActiveLogs : [] };
     }, "resolvePlayerBaselineLogs");
-    const avgOf = __name((logs, fn) => {
+    const avgOf = __name2((logs, fn) => {
       if (logs.length === 0) return null;
       const sum = logs.reduce((acc, g) => acc + fn(g), 0);
       return round1(sum / logs.length);
     }, "avgOf");
-    const leaderDefs = [{ key: "min", label: "Minutos Jugados", groupLabel: "I. Volumen Base y Tableros", helpKey: "minBase", getter: __name((p) => p.minutes, "getter"), formatStat: __name((p) => `${p.minutesFormatted}`, "formatStat"), baselineGetter: __name((logs) => avgOf(logs, (g) => g.minutes), "baselineGetter"), deltaUnit: "m", surgeThreshold: 3, isElite: __name((v) => v >= 38, "isElite"), decimals: 1, diffSuffix: "m" }, { key: "pts", label: "Puntos", groupLabel: "I. Volumen Base y Tableros", helpKey: "ptsBase", getter: __name((p) => p.points, "getter"), formatStat: __name((p) => `${p.points} PTS`, "formatStat"), baselineGetter: __name((logs) => avgOf(logs, (g) => g.points), "baselineGetter"), surgeThreshold: 3, isElite: __name((v) => v >= 30, "isElite"), diffSuffix: " PTS" }, { key: "reb", label: "Rebotes Totales", groupLabel: "I. Volumen Base y Tableros", helpKey: "rebBase", getter: __name((p) => p.rebounds, "getter"), formatStat: __name((p) => `${p.rebounds} REB`, "formatStat"), baselineGetter: __name((logs) => avgOf(logs, (g) => g.rebounds), "baselineGetter"), surgeThreshold: 2, isElite: __name((v) => v >= 13, "isElite"), diffSuffix: " REB" }, { key: "ast", label: "Asistencias", groupLabel: "I. Volumen Base y Tableros", helpKey: "astBase", getter: __name((p) => p.assists, "getter"), formatStat: __name((p) => `${p.assists} AST`, "formatStat"), baselineGetter: __name((logs) => avgOf(logs, (g) => g.assists), "baselineGetter"), surgeThreshold: 1.8, isElite: __name((v) => v >= 10, "isElite"), diffSuffix: " AST" }, { key: "oreb", label: "Rebotes Ofensivos", groupLabel: "I. Volumen Base y Tableros", helpKey: "orebBase", getter: __name((p) => p.oreb, "getter"), formatStat: __name((p) => `${p.oreb} OREB`, "formatStat"), baselineGetter: __name((logs) => avgOf(logs, (g) => g.oreb), "baselineGetter"), surgeThreshold: 1.2, isElite: __name((v) => v >= 5, "isElite"), diffSuffix: " OR" }, { key: "tc", label: "Tiros de Campo Anotados", groupLabel: "II. Producci\xF3n de Tiro y Eficiencia", helpKey: "fgmMade", getter: __name((p) => p.fgm, "getter"), formatStat: __name((p) => `${p.fgm}/${p.fga} TC`, "formatStat"), baselineGetter: __name((logs) => avgOf(logs, (g) => g.fgm), "baselineGetter"), surgeThreshold: 2, isElite: __name((v) => v >= 11, "isElite"), diffSuffix: " TC" }, { key: "fg3m", label: "Triples Anotados", groupLabel: "II. Producci\xF3n de Tiro y Eficiencia", helpKey: "fg3m", getter: __name((p) => p.fg3m, "getter"), formatStat: __name((p) => `${p.fg3m}/${p.fg3a} T3`, "formatStat"), baselineGetter: __name((logs) => avgOf(logs, (g) => g.fg3m), "baselineGetter"), surgeThreshold: 1.2, isElite: __name((v) => v >= 5, "isElite"), diffSuffix: " T3" }, { key: "tl", label: "Tiros Libres Anotados", groupLabel: "II. Producci\xF3n de Tiro y Eficiencia", helpKey: "ftmMade", getter: __name((p) => p.ftm, "getter"), formatStat: __name((p) => `${p.ftm}/${p.fta} TL`, "formatStat"), baselineGetter: __name((logs) => avgOf(logs, (g) => g.ftm), "baselineGetter"), surgeThreshold: 1.8, isElite: __name((v) => v >= 8, "isElite"), diffSuffix: " TL" }, { key: "tsPct", label: "Acierto Real (TS%)", groupLabel: "II. Producci\xF3n de Tiro y Eficiencia", helpKey: "tsPct", filter: __name((p) => p.fga >= 6, "filter"), getter: __name((p) => p.tsPct, "getter"), formatStat: __name((p) => `${p.tsPct.toFixed(1)}%`, "formatStat"), baselineGetter: __name((logs, summary) => {
+    const leaderDefs = [{ key: "min", label: "Minutos Jugados", groupLabel: "I. Volumen Base y Tableros", helpKey: "minBase", getter: __name2((p) => p.minutes, "getter"), formatStat: __name2((p) => `${p.minutesFormatted}`, "formatStat"), baselineGetter: __name2((logs) => avgOf(logs, (g) => g.minutes), "baselineGetter"), deltaUnit: "m", surgeThreshold: 3, isElite: __name2((v) => v >= 38, "isElite"), decimals: 1, diffSuffix: "m" }, { key: "pts", label: "Puntos", groupLabel: "I. Volumen Base y Tableros", helpKey: "ptsBase", getter: __name2((p) => p.points, "getter"), formatStat: __name2((p) => `${p.points} PTS`, "formatStat"), baselineGetter: __name2((logs) => avgOf(logs, (g) => g.points), "baselineGetter"), surgeThreshold: 3, isElite: __name2((v) => v >= 30, "isElite"), diffSuffix: " PTS" }, { key: "reb", label: "Rebotes Totales", groupLabel: "I. Volumen Base y Tableros", helpKey: "rebBase", getter: __name2((p) => p.rebounds, "getter"), formatStat: __name2((p) => `${p.rebounds} REB`, "formatStat"), baselineGetter: __name2((logs) => avgOf(logs, (g) => g.rebounds), "baselineGetter"), surgeThreshold: 2, isElite: __name2((v) => v >= 13, "isElite"), diffSuffix: " REB" }, { key: "ast", label: "Asistencias", groupLabel: "I. Volumen Base y Tableros", helpKey: "astBase", getter: __name2((p) => p.assists, "getter"), formatStat: __name2((p) => `${p.assists} AST`, "formatStat"), baselineGetter: __name2((logs) => avgOf(logs, (g) => g.assists), "baselineGetter"), surgeThreshold: 1.8, isElite: __name2((v) => v >= 10, "isElite"), diffSuffix: " AST" }, { key: "oreb", label: "Rebotes Ofensivos", groupLabel: "I. Volumen Base y Tableros", helpKey: "orebBase", getter: __name2((p) => p.oreb, "getter"), formatStat: __name2((p) => `${p.oreb} OREB`, "formatStat"), baselineGetter: __name2((logs) => avgOf(logs, (g) => g.oreb), "baselineGetter"), surgeThreshold: 1.2, isElite: __name2((v) => v >= 5, "isElite"), diffSuffix: " OR" }, { key: "tc", label: "Tiros de Campo Anotados", groupLabel: "II. Producci\xF3n de Tiro y Eficiencia", helpKey: "fgmMade", getter: __name2((p) => p.fgm, "getter"), formatStat: __name2((p) => `${p.fgm}/${p.fga} TC`, "formatStat"), baselineGetter: __name2((logs) => avgOf(logs, (g) => g.fgm), "baselineGetter"), surgeThreshold: 2, isElite: __name2((v) => v >= 11, "isElite"), diffSuffix: " TC" }, { key: "fg3m", label: "Triples Anotados", groupLabel: "II. Producci\xF3n de Tiro y Eficiencia", helpKey: "fg3m", getter: __name2((p) => p.fg3m, "getter"), formatStat: __name2((p) => `${p.fg3m}/${p.fg3a} T3`, "formatStat"), baselineGetter: __name2((logs) => avgOf(logs, (g) => g.fg3m), "baselineGetter"), surgeThreshold: 1.2, isElite: __name2((v) => v >= 5, "isElite"), diffSuffix: " T3" }, { key: "tl", label: "Tiros Libres Anotados", groupLabel: "II. Producci\xF3n de Tiro y Eficiencia", helpKey: "ftmMade", getter: __name2((p) => p.ftm, "getter"), formatStat: __name2((p) => `${p.ftm}/${p.fta} TL`, "formatStat"), baselineGetter: __name2((logs) => avgOf(logs, (g) => g.ftm), "baselineGetter"), surgeThreshold: 1.8, isElite: __name2((v) => v >= 8, "isElite"), diffSuffix: " TL" }, { key: "tsPct", label: "Acierto Real (TS%)", groupLabel: "II. Producci\xF3n de Tiro y Eficiencia", helpKey: "tsPct", filter: __name2((p) => p.fga >= 6, "filter"), getter: __name2((p) => p.tsPct, "getter"), formatStat: __name2((p) => `${p.tsPct.toFixed(1)}%`, "formatStat"), baselineGetter: __name2((logs, summary) => {
       if (logs.length === 0) return summary?.advanced?.tsPct ?? null;
       const pts = logs.reduce((s, g) => s + g.points, 0);
       const fga = logs.reduce((s, g) => s + g.fga, 0);
       const fta = logs.reduce((s, g) => s + g.fta, 0);
       const denom = 2 * (fga + 0.44 * fta);
       return denom > 0 ? round1(pts / denom * 100) : avgOf(logs, (g) => g.tsPct);
-    }, "baselineGetter"), deltaUnit: "%", surgeThreshold: 4.5, isElite: __name((v, p) => p.fga >= 6 && v >= 70, "isElite"), decimals: 1, diffSuffix: "%" }, { key: "tov", label: "P\xE9rdidas", groupLabel: "III. Control de Bal\xF3n y Defensa", helpKey: "leaderTurnovers", getter: __name((p) => p.turnovers, "getter"), formatStat: __name((p) => `${p.turnovers} PER`, "formatStat"), baselineGetter: __name((logs) => avgOf(logs, (g) => g.turnovers), "baselineGetter"), surgeThreshold: 0.8, isElite: __name((v) => v <= 1, "isElite"), lowerIsBetter: true, diffSuffix: " menos" }, { key: "astTo", label: "Ratio Asistencias/P\xE9rdidas", groupLabel: "III. Control de Bal\xF3n y Defensa", helpKey: "astTo", filter: __name((p) => p.assists >= 4, "filter"), getter: __name((p) => p.turnovers > 0 ? round1(p.assists / p.turnovers) : p.assists, "getter"), formatStat: __name((p) => `${(p.turnovers > 0 ? round1(p.assists / p.turnovers) : p.assists).toFixed(1)} A/P`, "formatStat"), baselineGetter: __name((logs) => {
+    }, "baselineGetter"), deltaUnit: "%", surgeThreshold: 4.5, isElite: __name2((v, p) => p.fga >= 6 && v >= 70, "isElite"), decimals: 1, diffSuffix: "%" }, { key: "tov", label: "P\xE9rdidas", groupLabel: "III. Control de Bal\xF3n y Defensa", helpKey: "leaderTurnovers", getter: __name2((p) => p.turnovers, "getter"), formatStat: __name2((p) => `${p.turnovers} PER`, "formatStat"), baselineGetter: __name2((logs) => avgOf(logs, (g) => g.turnovers), "baselineGetter"), surgeThreshold: 0.8, isElite: __name2((v) => v <= 1, "isElite"), lowerIsBetter: true, diffSuffix: " menos" }, { key: "astTo", label: "Ratio Asistencias/P\xE9rdidas", groupLabel: "III. Control de Bal\xF3n y Defensa", helpKey: "astTo", filter: __name2((p) => p.assists >= 4, "filter"), getter: __name2((p) => p.turnovers > 0 ? round1(p.assists / p.turnovers) : p.assists, "getter"), formatStat: __name2((p) => `${(p.turnovers > 0 ? round1(p.assists / p.turnovers) : p.assists).toFixed(1)} A/P`, "formatStat"), baselineGetter: __name2((logs) => {
       if (logs.length === 0) return null;
       const ast = logs.reduce((s, g) => s + g.assists, 0);
       const tov = logs.reduce((s, g) => s + g.turnovers, 0);
       return round1(ast / Math.max(1, tov));
-    }, "baselineGetter"), surgeThreshold: 1, isElite: __name((v, p) => p.assists >= 5 && v >= 4.5, "isElite"), decimals: 1 }, { key: "stl", label: "Robos de Bal\xF3n", groupLabel: "III. Control de Bal\xF3n y Defensa", helpKey: "steals", getter: __name((p) => p.steals, "getter"), formatStat: __name((p) => `${p.steals} ROB`, "formatStat"), baselineGetter: __name((logs) => avgOf(logs, (g) => g.steals), "baselineGetter"), surgeThreshold: 0.8, isElite: __name((v) => v >= 3, "isElite"), diffSuffix: " ROB" }, { key: "blk", label: "Tapones", groupLabel: "III. Control de Bal\xF3n y Defensa", helpKey: "blocks", getter: __name((p) => p.blocks, "getter"), formatStat: __name((p) => `${p.blocks} TAP`, "formatStat"), baselineGetter: __name((logs) => avgOf(logs, (g) => g.blocks), "baselineGetter"), surgeThreshold: 0.8, isElite: __name((v) => v >= 3, "isElite"), diffSuffix: " TAP" }, { key: "pm", label: "Impacto M\xE1s / Menos", groupLabel: "IV. Impacto Avanzado y Rotaci\xF3n", helpKey: "plusMinusBase", getter: __name((p) => p.plusMinus, "getter"), formatStat: __name((p) => `${p.plusMinus >= 0 ? `+${p.plusMinus}` : p.plusMinus}`, "formatStat"), baselineGetter: __name((logs) => avgOf(logs, (g) => g.plusMinus), "baselineGetter"), surgeThreshold: 4, isElite: __name((v) => v >= 15, "isElite") }, { key: "gmSc", label: "Valoraci\xF3n (GmSc)", groupLabel: "IV. Impacto Avanzado y Rotaci\xF3n", helpKey: "gmSc", getter: __name((p) => p.gameScore, "getter"), formatStat: __name((p) => `${p.gameScore.toFixed(1)}`, "formatStat"), baselineGetter: __name((logs) => avgOf(logs, (g) => g.gameScore), "baselineGetter"), surgeThreshold: 3, isElite: __name((v) => v >= 24, "isElite"), decimals: 1 }, { key: "usgEst", label: "Uso Ofensivo Est. (USG%)", groupLabel: "IV. Impacto Avanzado y Rotaci\xF3n", helpKey: "usgPct", filter: __name((p) => p.minutes >= 12, "filter"), getter: __name((p) => p.usgEst || 0, "getter"), formatStat: __name((p) => `${(p.usgEst || 0).toFixed(1)}%`, "formatStat"), baselineGetter: __name((logs, summary) => {
+    }, "baselineGetter"), surgeThreshold: 1, isElite: __name2((v, p) => p.assists >= 5 && v >= 4.5, "isElite"), decimals: 1 }, { key: "stl", label: "Robos de Bal\xF3n", groupLabel: "III. Control de Bal\xF3n y Defensa", helpKey: "steals", getter: __name2((p) => p.steals, "getter"), formatStat: __name2((p) => `${p.steals} ROB`, "formatStat"), baselineGetter: __name2((logs) => avgOf(logs, (g) => g.steals), "baselineGetter"), surgeThreshold: 0.8, isElite: __name2((v) => v >= 3, "isElite"), diffSuffix: " ROB" }, { key: "blk", label: "Tapones", groupLabel: "III. Control de Bal\xF3n y Defensa", helpKey: "blocks", getter: __name2((p) => p.blocks, "getter"), formatStat: __name2((p) => `${p.blocks} TAP`, "formatStat"), baselineGetter: __name2((logs) => avgOf(logs, (g) => g.blocks), "baselineGetter"), surgeThreshold: 0.8, isElite: __name2((v) => v >= 3, "isElite"), diffSuffix: " TAP" }, { key: "pm", label: "Impacto M\xE1s / Menos", groupLabel: "IV. Impacto Avanzado y Rotaci\xF3n", helpKey: "plusMinusBase", getter: __name2((p) => p.plusMinus, "getter"), formatStat: __name2((p) => `${p.plusMinus >= 0 ? `+${p.plusMinus}` : p.plusMinus}`, "formatStat"), baselineGetter: __name2((logs) => avgOf(logs, (g) => g.plusMinus), "baselineGetter"), surgeThreshold: 4, isElite: __name2((v) => v >= 15, "isElite") }, { key: "gmSc", label: "Valoraci\xF3n (GmSc)", groupLabel: "IV. Impacto Avanzado y Rotaci\xF3n", helpKey: "gmSc", getter: __name2((p) => p.gameScore, "getter"), formatStat: __name2((p) => `${p.gameScore.toFixed(1)}`, "formatStat"), baselineGetter: __name2((logs) => avgOf(logs, (g) => g.gameScore), "baselineGetter"), surgeThreshold: 3, isElite: __name2((v) => v >= 24, "isElite"), decimals: 1 }, { key: "usgEst", label: "Uso Ofensivo Est. (USG%)", groupLabel: "IV. Impacto Avanzado y Rotaci\xF3n", helpKey: "usgPct", filter: __name2((p) => p.minutes >= 12, "filter"), getter: __name2((p) => p.usgEst || 0, "getter"), formatStat: __name2((p) => `${(p.usgEst || 0).toFixed(1)}%`, "formatStat"), baselineGetter: __name2((logs, summary) => {
       if (seasonLabel === "2026-27" && summary?.advanced?.usgPct) {
         return round1(summary.advanced.usgPct);
       }
       return avgOf(logs, (g) => g.usgEst || 0);
-    }, "baselineGetter"), deltaUnit: "%", surgeThreshold: 3, isElite: __name((v) => v >= 32, "isElite"), decimals: 1, diffSuffix: "%" }, { key: "sixthMan", label: "Mejor Suplente (6\xBA Hombre)", groupLabel: "IV. Impacto Avanzado y Rotaci\xF3n", helpKey: "sixthMan", filter: __name((p) => !p.isStarter, "filter"), getter: __name((p) => p.gameScore, "getter"), formatStat: __name((p) => `${p.points}P \xB7 ${p.gameScore.toFixed(1)} GmSc`, "formatStat"), baselineGetter: __name((logs) => avgOf(logs, (g) => g.gameScore), "baselineGetter"), surgeThreshold: 2.5, isElite: __name((v) => v >= 14, "isElite"), decimals: 1, diffSuffix: " GmSc" }];
-    const buildLeaderDeltaMeta = __name((val, player, def) => {
+    }, "baselineGetter"), deltaUnit: "%", surgeThreshold: 3, isElite: __name2((v) => v >= 32, "isElite"), decimals: 1, diffSuffix: "%" }, { key: "sixthMan", label: "Mejor Suplente (6\xBA Hombre)", groupLabel: "IV. Impacto Avanzado y Rotaci\xF3n", helpKey: "sixthMan", filter: __name2((p) => !p.isStarter, "filter"), getter: __name2((p) => p.gameScore, "getter"), formatStat: __name2((p) => `${p.points}P \xB7 ${p.gameScore.toFixed(1)} GmSc`, "formatStat"), baselineGetter: __name2((logs) => avgOf(logs, (g) => g.gameScore), "baselineGetter"), surgeThreshold: 2.5, isElite: __name2((v) => v >= 14, "isElite"), decimals: 1, diffSuffix: " GmSc" }];
+    const buildLeaderDeltaMeta = __name2((val, player, def) => {
       const { summary, logs } = resolvePlayerBaselineLogs(player.playerId, player.name);
       const avg = def.baselineGetter(logs, summary);
       if (avg === null || !Number.isFinite(avg)) return {};
@@ -4031,12 +4340,15 @@ function createScoutingEngine(deps) {
     const hasSpanishPlayers = spanishDetails.length > 0;
     const spanishSummaryLine = hasSpanishPlayers ? spanishDetails.map((s) => s.lineSummary).join(" \xB7 ") : `Sin representaci\xF3n espa\xF1ola en las plantillas de ${awaySide.shortName} ni ${homeSide.shortName} en este encuentro.`;
     const report = { eventId, date: gameDate, seasonLabel, pasoBTitle, arenaName, arenaCity, attendance, attendanceFormatted, durationMinutes, officials, isOvertime, overtimeCount, decisivePeriodLabel, leadChanges, timesTied, leagueAvgPace, paceDiffVsLeague, periods, away: awaySide, home: homeSide, spanishPlayersReport: { hasSpanishPlayers, summaryLine: spanishSummaryLine, details: spanishDetails }, milestonesList, teamComparisonRows, leaderComparisonRows, pbpHighlights };
-    const ttlMs = seasonLabel === "2026-27" ? 10 * 60 * 1e3 : 120 * 60 * 1e3;
+    const missingFoulOutClock = [...awaySide.absencesAndDnp, ...homeSide.absencesAndDnp].some(
+      (a) => a.statusType === "foul_out" && (!a.foulOutPeriod || !a.foulOutClock)
+    );
+    const ttlMs = missingFoulOutClock ? 60 * 1e3 : seasonLabel === "2026-27" ? 10 * 60 * 1e3 : 120 * 60 * 1e3;
     reportMemoryCache.set(cacheKey, { expiresAt: Date.now() + ttlMs, data: report });
     return report;
   }
   async function buildGameOfficialReportData(eventId, forceRefresh = false) {
-    const cacheKey = `game_official_report_v8:${eventId}`;
+    const cacheKey = `game_official_report_v9:${eventId}`;
     if (!forceRefresh) {
       const cached = reportMemoryCache.get(cacheKey);
       if (cached && cached.expiresAt > Date.now()) {
@@ -4102,7 +4414,7 @@ function createScoutingEngine(deps) {
       runAndClutchProse += ` En los minutos calientes del clutch, destacaron estas acciones clave: ${clutchSummary}.`;
     }
     const paintAndThreeBattle = wt.ptsPaint !== null && lt.ptsPaint !== null ? `En la pizarra de espacios, **${winner.name}** **domin\xF3 la selecci\xF3n de tiro interior y exterior** con un ${wt.efgPct.toFixed(1)}% en tiro efectivo (${wt.fg3m}/${wt.fg3a} en triples) y ${wt.ptsPaint} puntos en la pintura frente a los ${lt.ptsPaint} de **${loser.shortName}**, mientras que en el rebote el pulso cerr\xF3 ${wt.reb}-${lt.reb} (${wt.oreb} capturas ofensivas del ganador por ${lt.oreb} del rival).` : `En el pulso de los Cuatro Factores, **${winner.name}** **marc\xF3 diferencias desde la eficiencia real de tiro** con un ${wt.efgPct.toFixed(1)}% de acierto efectivo (${wt.fg3m}/${wt.fg3a} desde el per\xEDmetro) frente al ${lt.efgPct.toFixed(1)}% de **${loser.name}**, acompa\xF1ando el acierto con un balance reboteador de ${wt.reb}-${lt.reb}.`;
-    const isNonTechnicalAbsence = __name((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague" && a.statusType !== "foul_out", "isNonTechnicalAbsence");
+    const isNonTechnicalAbsence = __name2((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague" && a.statusType !== "foul_out", "isNonTechnicalAbsence");
     const awayMedAbs = report.away.absencesAndDnp.filter(isNonTechnicalAbsence);
     const homeMedAbs = report.home.absencesAndDnp.filter(isNonTechnicalAbsence);
     const awayFoulOuts = report.away.absencesAndDnp.filter((a) => a.statusType === "foul_out");
@@ -4147,12 +4459,12 @@ ${benchAndAbsences}`),
     };
   }
   async function buildGameNarrativePayload(eventId, forceRefresh = false) {
-    const cacheKey = `game_narrative_v14:${eventId}`;
+    const cacheKey = `game_narrative_v15:${eventId}`;
     if (!forceRefresh) {
-      const cached = reportMemoryCache.get(cacheKey);
-      if (cached && cached.expiresAt > Date.now()) {
-        if (!(cached.data.engineMode === "empirical_fallback" && getGeminiClient())) {
-          return cached.data;
+      const persisted = await readSharedPersistedNarrative(cacheKey);
+      if (persisted) {
+        if (!(persisted.engineMode === "empirical_fallback" && getGeminiClient())) {
+          return persisted;
         }
       }
     }
@@ -4184,7 +4496,7 @@ ${benchAndAbsences}`),
       }
       const matchPress = pressCtx.byMatchup.get(`${report.away.abbr}@${report.home.abbr}`);
       const seedSources = [{ uri: `https://www.nba.com/game/${report.away.abbr.toLowerCase()}-vs-${report.home.abbr.toLowerCase()}-${report.eventId}/box-score`, title: `NBA.com Acta Oficial \u2014 ${report.away.abbr} vs ${report.home.abbr}` }, { uri: `https://www.nba.com/game/${report.away.abbr.toLowerCase()}-vs-${report.home.abbr.toLowerCase()}-${report.eventId}/play-by-play`, title: `NBA.com Play-by-Play \u2014 ${report.away.abbr} vs ${report.home.abbr}` }, ...matchPress?.sources || []];
-      const formatPlayerDossier = __name((p) => `#${p.jersey} ${p.name} (${p.position}, ${p.isStarter ? "Titular" : "Suplente"}): ${p.points} PTS, ${p.rebounds} REB (${p.oreb} OR), ${p.assists} AST, ${p.steals} ROB, ${p.blocks} TAP, ${p.turnovers} PER, ${p.fgm}/${p.fga} TC, ${p.fg3m}/${p.fg3a} T3, ${p.ftm}/${p.fta} TL, ${p.minutesFormatted} MIN, +/- ${p.plusMinus >= 0 ? `+${p.plusMinus}` : p.plusMinus}, GmSc ${p.gameScore.toFixed(1)}${p.tripleDouble ? " [TRIPLE-DOBLE]" : p.doubleDouble ? " [DOBLE-DOBLE]" : ""}`, "formatPlayerDossier");
+      const formatPlayerDossier = __name2((p) => `#${p.jersey} ${p.name} (${p.position}, ${p.isStarter ? "Titular" : "Suplente"}): ${p.points} PTS, ${p.rebounds} REB (${p.oreb} OR), ${p.assists} AST, ${p.steals} ROB, ${p.blocks} TAP, ${p.turnovers} PER, ${p.fgm}/${p.fga} TC, ${p.fg3m}/${p.fg3a} T3, ${p.ftm}/${p.fta} TL, ${p.minutesFormatted} MIN, +/- ${p.plusMinus >= 0 ? `+${p.plusMinus}` : p.plusMinus}, GmSc ${p.gameScore.toFixed(1)}${p.tripleDouble ? " [TRIPLE-DOBLE]" : p.doubleDouble ? " [DOBLE-DOBLE]" : ""}`, "formatPlayerDossier");
       const verifiedGamePlayers = [...report.away.starters.map((p) => p.name), ...report.away.bench.map((p) => p.name), ...report.away.absencesAndDnp.map((p) => p.name), ...report.home.starters.map((p) => p.name), ...report.home.bench.map((p) => p.name), ...report.home.absencesAndDnp.map((p) => p.name)];
       const isRelevantTechnicalDnp = (a) => (a.statusType === "coach_decision" || a.statusType === "gleague") && ((a.minAvg ?? 0) >= 12 || (a.ptsAvg ?? 0) >= 5 || a.isSpanish);
       const formatRelevantDnp = (a) => `#${a.jersey} ${a.name} [${a.statusLabel || "Decisi\xF3n t\xE9cnica"}${a.minAvg !== void 0 ? ` \xB7 media ${a.ptsAvg?.toFixed(1) ?? "0.0"} PTS y ${a.minAvg.toFixed(1)} MIN` : ""}]`;
@@ -4197,7 +4509,7 @@ ${report.pbpHighlights.formattedDossierBlock}` : "", ``, `ESTAD\xCDSTICAS COLECT
         "REGLAS INQUEBRANTABLES DE RIGOR Y MUNDO CERRADO (CERO DATOS POR SUPUESTOS):",
         '1. RIGOR EMP\xCDRICO ABSOLUTO: Usa EXCLUSIVAMENTE las cifras estad\xEDsticas exactas, el pabell\xF3n oficial indicado en T\xCDTULO y la informaci\xF3n expl\xEDcita del dossier adjunto. Jam\xE1s inventes puntos, rebotes, parciales, jugadas concretas segundo a segundo (ej. "triple desde la esquina a falta de 2 segundos") ni dorsales que no figuren en el acta.',
         '2. PROHIBICI\xD3N TOTAL DE DAR DATOS POR SUPUESTOS O USAR MEMORIA PREENTRENADA: Tu conocimiento interno previo est\xE1 desactualizado respecto a la temporada actual. Tienes TERMINANTEMENTE PROHIBIDO dar por supuesto o mencionar: (a) nombres propios o apodos de entrenadores, asistentes o directivos (ej. Tom Thibodeau dej\xF3 los NY Knicks hace a\xF1os; NUNCA cites nombres de entrenadores, usa SIEMPRE "el cuerpo t\xE9cnico de [Equipo]", "la direcci\xF3n t\xE9cnica de [Equipo]" o "la pizarra de [Equipo]"); (b) antig\xFCedad, edad, rondas de Draft, condici\xF3n de rookie, contratos, exequipos o traspasos de jugadores; (c) premios pasados, anillos, "vigente campe\xF3n" o series de temporadas anteriores; (d) puestos exactos en la tabla clasificatoria (ej. "3\xBA del Este") o pr\xF3ximos rivales del calendario; (e) diagn\xF3sticos m\xE9dicos o plazos de recuperaci\xF3n m\xE1s all\xE1 de la nota literal del dossier.',
-        `3. PULCRITUD EN BAJAS (LESI\xD3N VS DECISI\xD3N T\xC9CNICA VS EXPULSI\xD3N), MINUTOS Y RITMO: Al mencionar ausencias o jugadores sin minutos en PIZARRA_Y_ROTACION o ESPANOLES, s\xE9 escrupulosamente pulcro distinguiendo entre quienes causaron baja por lesi\xF3n / parte m\xE9dico (bloque BAJAS M\xC9DICAS / LESIONADOS), quienes fueron expulsados por 6 faltas (bloque EXPULSADOS POR 6 FALTAS) y quienes figuraran como rotaci\xF3n habitual sin minutos por decisi\xF3n t\xE9cnica (bloque ROTACI\xD3N HABITUAL SIN MINUTOS POR DECISI\xD3N T\xC9CNICA). Si ese bloque no aparece en el dossier porque los descartes fueron \xFAnicamente jugadores de G-League o fondo de banquillo sin peso en la rotaci\xF3n, NO los menciones en absoluto ni redactes listas de descartes irrelevantes. Jam\xE1s llames "lesionado" a un expulsado por faltas ni a un descarte por decisi\xF3n t\xE9cnica. Cuando menciones a un expulsado por 6 faltas, escribe SIEMPRE sus minutos entre par\xE9ntesis tras el nombre, el cuarto o pr\xF3rroga (1Q, 2Q, 3Q, 4Q, OT, OT2...) y el tiempo que faltaba con este estilo natural: "**#24 Daniss Jenkins** (42') tambi\xE9n fue expulsado por seis faltas en el OT2 faltando 0:16" (PROHIBIDO escribir solo "despu\xE9s de X minutos" sin cuarto y reloj). Integra tambi\xE9n el Pace frente a la media oficial NBA.`,
+        `3. PULCRITUD EN BAJAS (LESI\xD3N VS DECISI\xD3N T\xC9CNICA VS EXPULSI\xD3N), MINUTOS Y RITMO: Al mencionar ausencias o jugadores sin minutos en PIZARRA_Y_ROTACION o ESPANOLES, s\xE9 escrupulosamente pulcro distinguiendo entre quienes causaron baja por lesi\xF3n / parte m\xE9dico (bloque BAJAS M\xC9DICAS / LESIONADOS), quienes fueron expulsados por 6 faltas (bloque EXPULSADOS POR 6 FALTAS) y quienes figuraran como rotaci\xF3n habitual sin minutos por decisi\xF3n t\xE9cnica (bloque ROTACI\xD3N HABITUAL SIN MINUTOS POR DECISI\xD3N T\xC9CNICA). Si ese bloque no aparece en el dossier porque los descartes fueron \xFAnicamente jugadores de G-League o fondo de banquillo sin peso en la rotaci\xF3n, NO los menciones en absoluto ni redactes listas de descartes irrelevantes. Jam\xE1s llames "lesionado" a un expulsado por faltas ni a un descarte por decisi\xF3n t\xE9cnica. Cuando menciones a un expulsado por 6 faltas: si el dossier especifica su cuarto y reloj exactos (ej. "en el 4Q faltando 0:52" o "en el OT2 faltando 0:16"), c\xF3pialos LITERALMENTE con ese formato ("**#24 Daniss Jenkins** (42') fue expulsado por seis faltas en el OT2 faltando 0:16"); y si el dossier NO incluye cuarto/reloj, escribe solo los minutos jugados sin inventar ni restar 48 menos minutos jugados (PROHIBIDO deducir "faltando 18:00" o simular tiempos del reloj). Integra tambi\xE9n el Pace frente a la media oficial NBA.`,
         '4. REDACCI\xD3N 100% NATURAL Y TERMINOLOG\xCDA NBA EN ESPA\xD1OL: Escribe en espa\xF1ol de Espa\xF1a fluido, con vocabulario t\xE1ctico aut\xE9ntico (espaciado, pintura, bloqueo directo, ajuste tras descanso, transici\xF3n defensiva, segunda unidad, rebote ofensivo, clutch). NUNCA traduzcas literalmente anglicismos t\xE9cnicos de la NBA: el t\xE9rmino "back-to-back" (o B2B) NO se traduce jam\xE1s; PROHIBIDO escribir "espalda con espalda", "espalda contra espalda" o "en situaci\xF3n de espalda con espalda" \u2014 escribe siempre "en back-to-back" (o "en segunda noche consecutiva sin descanso"). Mant\xE9n igualmente t\xE9rminos asentados como clutch, pick and roll, box score o play-in sin calcos artificiales.',
         '5. CERO CLICH\xC9S NI RELLENO: Prohibido usar "En conclusi\xF3n", "Cabe destacar", "Sin lugar a dudas", "Sin duda" o metatexto. Redacta p\xE1rrafos cohesivos, sin listas de vi\xF1etas ni tablas Markdown.',
         '6. JERARQU\xCDA VISUAL Y \xC9NFASIS EN NEGRITA (**...**): En todos los p\xE1rrafos del cuerpo (ENTRADILLA, GUION_Y_QUIEBRE, PIZARRA_Y_ROTACION, cuerpo de FOCO_ESPECIAL, FACTOR_X_Y_LIDERES, ESPANOLES y VEREDICTO_E_HITOS), utiliza negrita Markdown (**texto**) EXCLUSIVAMENTE para estos tres elementos: (a) nombres de jugadores (incluyendo su dorsal cuando lo cites, ej. **#15 Nikola Joki\u0107**), (b) nombres o apodos oficiales de equipos/franquicias (ej. **Boston Celtics**, **Knicks**), y (c) UNA sola idea t\xE1ctica clave por p\xE1rrafo (frase breve de 4 a 10 palabras que resuma la clave del juego, ej. **colapsando la pintura tras cada bloqueo directo**). PROHIBIDO poner en negrita cifras o estad\xEDsticas sueltas (como "49 puntos", "12 rebotes" o "58.4%"): int\xE9gralas en texto normal sin formato especial. PROHIBIDO usar ** en TITULAR_PRENSA ni en el t\xEDtulo corto previo a || en FOCO_ESPECIAL.',
@@ -4233,11 +4545,13 @@ ${report.pbpHighlights.formattedDossierBlock}` : "", ``, `ESTAD\xCDSTICAS COLECT
           (_, reject) => setTimeout(() => reject(new Error(`Timeout ${cascadeBudgetMs}ms en cascada IA`)), cascadeBudgetMs + 500)
         );
         const { text: rawText, sources, model: modelUsed } = await Promise.race([geminiCall, cascadeTimer]);
-        const safeRawText = sanitizeUnverifiedCoachClaims(rawText, verifiedGamePlayers);
+        const verifiedFoulOuts = [...report.away.absencesAndDnp, ...report.home.absencesAndDnp].filter((a) => a.statusType === "foul_out");
+        const safeRawText = reconcileVerifiedFoulOutTimings(sanitizeUnverifiedCoachClaims(rawText, verifiedGamePlayers), verifiedFoulOuts);
         const parsed = parseDelimitedSections(safeRawText, ["TITULAR_PRENSA", "ENTRADILLA", "GUION_Y_QUIEBRE", "PIZARRA_Y_ROTACION", "FOCO_ESPECIAL", "FACTOR_X_Y_LIDERES", "ESPANOLES", "VEREDICTO_E_HITOS"]);
         const fallback = buildDeterministicGameNarrative(report);
         const payload = { eventId: report.eventId, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), engineMode: "gemini_search", modelUsed, generationTimeMs: Date.now() - startTime, pressHeadline: parsed.TITULAR_PRENSA && parsed.TITULAR_PRENSA.length > 12 ? stripInlineWrapper(parsed.TITULAR_PRENSA) : fallback.pressHeadline, pressLead: parsed.ENTRADILLA && parsed.ENTRADILLA.length > 25 ? parsed.ENTRADILLA : fallback.pressLead, gameFlowSection: parsed.GUION_Y_QUIEBRE && parsed.GUION_Y_QUIEBRE.length > 60 ? parsed.GUION_Y_QUIEBRE : fallback.gameFlowSection, chalkboardSection: parsed.PIZARRA_Y_ROTACION && parsed.PIZARRA_Y_ROTACION.length > 60 ? parsed.PIZARRA_Y_ROTACION : fallback.chalkboardSection, dynamicSpotlight: parseSpotlight(parsed.FOCO_ESPECIAL, fallback.dynamicSpotlight), xFactorSection: parsed.FACTOR_X_Y_LIDERES && parsed.FACTOR_X_Y_LIDERES.length > 50 ? parsed.FACTOR_X_Y_LIDERES : fallback.xFactorSection, spanishSection: parsed.ESPANOLES && parsed.ESPANOLES.length > 12 ? parsed.ESPANOLES : fallback.spanishSection, verdictSection: parsed.VEREDICTO_E_HITOS && parsed.VEREDICTO_E_HITOS.length > 45 ? parsed.VEREDICTO_E_HITOS : fallback.verdictSection, sources };
-        reportMemoryCache.set(cacheKey, { expiresAt: Date.now() + 6 * 60 * 60 * 1e3, data: payload });
+        const persistTtlMs = report.seasonLabel === "2026-27" ? 7 * 24 * 60 * 60 * 1e3 : 30 * 24 * 60 * 60 * 1e3;
+        await writeSharedPersistedNarrative(cacheKey, payload, persistTtlMs);
         return payload;
       } catch (err) {
         const rawErrStr = String(err instanceof Error ? err.message : err || "timeout/offline");
@@ -4422,12 +4736,12 @@ ${c2p2}`
   }
   async function buildGameDayChroniclePayload(requestedDate, forceRefresh = false) {
     const gd = await deps.getGameDayPayload(requestedDate, forceRefresh);
-    const cacheKey = `gameday_chronicle_v13:${gd.selectedDate}`;
+    const cacheKey = `gameday_chronicle_v14:${gd.selectedDate}`;
     if (!forceRefresh) {
-      const cached = reportMemoryCache.get(cacheKey);
-      if (cached && cached.expiresAt > Date.now()) {
-        if (cached.data.engineMode === "gemini_search" || !getGeminiClient()) {
-          return cached.data;
+      const persisted = await readSharedPersistedNarrative(cacheKey);
+      if (persisted) {
+        if (persisted.engineMode === "gemini_search" || !getGeminiClient()) {
+          return persisted;
         }
       }
     }
@@ -4562,6 +4876,7 @@ ${c2p2}`
           if (enr.pbp.clutchExecution?.summaryNarrative) pbpLines.push(`Clutch 2min: ${enr.pbp.clutchExecution.summaryNarrative}`);
           if (enr.pbp.playerHotSpurts?.length) pbpLines.push(`Rachas PBP: ${enr.pbp.playerHotSpurts.map((s) => s.summary).join("; ")}`);
           if (enr.pbp.earlyFoulTroubles?.length) pbpLines.push(`Faltas tempranas PBP: ${enr.pbp.earlyFoulTroubles.map((f) => f.summary).join("; ")}`);
+          if (enr.pbp.foulOuts?.length) pbpLines.push(`Expulsados 6 faltas PBP: ${enr.pbp.foulOuts.map((f) => f.summary).join("; ")}`);
         }
         return [
           `PARTIDO: ${m.away.name} (${m.away.abbr} ${m.away.recordAfter || ""}${m.away.isBackToBack ? ", en back-to-back" : ""}) ${m.away.score} - ${m.home.score} ${m.home.name} (${m.home.abbr} ${m.home.recordAfter || ""}${m.home.isBackToBack ? ", en back-to-back" : ""}) [${m.contextTag} \xB7 Margen ${m.margin} \xB7 Pace ${m.pace.toFixed(1)}]`,
@@ -4598,7 +4913,7 @@ ${pressCtx.dayNotes.slice(0, 12).map((n) => `  \u2022 ${n}`).join("\n")}` : "",
       const systemInstruction = [
         "Eres el analista jefe y cronista de scouting NBA de referencia en Espa\xF1a. Cada ma\xF1ana escribes la gran revista editorial de la jornada para que un lector exigente entienda en pocos minutos qu\xE9 ocurri\xF3 exactamente y por qu\xE9 se ganaron o perdieron los partidos.",
         "REGLAS INQUEBRANTABLES DE RIGOR, CONCRECI\xD3N Y PRUEBA NUM\xC9RICA:",
-        "1. RIGOR EMP\xCDRICO TOTAL: Todos los marcadores, puntos, series de tiro, porcentajes, p\xE9rdidas, rebotes, r\xE9cords y rachas que cites deben coincidir al 100% con el dossier adjunto. Jam\xE1s inventes resultados, cifras ni jugadas concretas no descritas.",
+        "1. RIGOR EMP\xCDRICO TOTAL: Todos los marcadores, puntos, series de tiro, porcentajes, p\xE9rdidas, rebotes, r\xE9cords y rachas que cites deben coincidir al 100% con el dossier adjunto. Jam\xE1s inventes resultados, cifras ni jugadas concretas no descritas. Si mencionas a un expulsado por 6 faltas, copia literalmente su cuarto y reloj si aparecen en `Expulsados 6 faltas PBP`; si no figuran, NO deduzcas ni restes `48 - minutos` (prohibido inventar relojes como `18:00`).",
         '2. PROHIBICI\xD3N DE DAR DATOS POR SUPUESTOS: Tienes TERMINANTEMENTE PROHIBIDO mencionar: (a) nombres propios o apodos de entrenadores, asistentes o directivos (usa SIEMPRE "el cuerpo t\xE9cnico de [Equipo]", "la direcci\xF3n t\xE9cnica de [Equipo]" o "la pizarra de [Equipo]"); (b) antig\xFCedad, edad, rondas de Draft, condici\xF3n de rookie, contratos, exequipos o traspasos de jugadores; (c) premios pasados, anillos o series de temporadas anteriores; (d) puestos exactos en la clasificaci\xF3n o pr\xF3ximos rivales; (e) causas m\xE9dicas no escritas literalmente en el dossier.',
         '3. PRUEBA NUM\xC9RICA OBLIGATORIA EN CADA AFIRMACI\xD3N (CERO PROSA VAGA O GEN\xC9RICA): Queda TERMINANTEMENTE PROHIBIDO soltar afirmaciones cualitativas sin mostrar inmediatamente las cifras reales que las prueban. Por ejemplo:\n   - PROHIBIDO escribir "secando a su rival casi 20 puntos por debajo de su media" sin mostrar los n\xFAmeros \u2192 OBLIGATORIO: "dejando a **Dallas Mavericks** en 94 puntos (112-94, 19.8 por debajo de su media de 113.8) tras limitarles al 40.2% TC y 8/31 en triples".\n   - PROHIBIDO escribir "con una eficiencia asombrosa", "control de p\xE9rdidas ejemplar" o "superioridad interior abrumadora" sin cifras \u2192 OBLIGATORIO mostrar la serie exacta (ej. "11/16 TC, 4/6 en triples y 78.9% TS", "apenas 8 p\xE9rdidas frente a 17 del rival", "28/45 en tiros de dos \u201462.2%\u2014 y 46 rebotes").\n   - PROHIBIDO mencionar un partido o duelo sin incluir su marcador exacto (ej. 124-121) la primera vez que se analiza.',
         '4. PROFUNDIDAD Y COHESI\xD3N TEM\xC1TICA (PROHIBIDAS LAS IDEAS DISPERSAS Y EL REPASO UNO A UNO): No enumeres partidos secuencialmente ("En el partido 1... en el partido 2...") ni saltes superficialmente de un tema a otro en frases sueltas. Cada secci\xF3n y cap\xEDtulo debe desarrollar 1 o 2 tesis claras con profundidad real, hilando causa-efecto t\xE1ctico respaldada por los datos exactos (incluyendo hitos Play-by-Play de parciales/tiempos muertos y ejecuci\xF3n en los \xFAltimos 2 minutos del clutch cuando consten en el dossier).',
@@ -4631,11 +4946,20 @@ ${pressCtx.dayNotes.slice(0, 12).map((n) => `  \u2022 ${n}`).join("\n")}` : "",
           (_, reject) => setTimeout(() => reject(new Error(`Timeout ${cascadeBudgetMs}ms en cr\xF3nica de jornada`)), cascadeBudgetMs + 500)
         );
         const { text: rawText, sources, model: modelUsed } = await Promise.race([geminiCall, cascadeTimer]);
-        const safeRawText = sanitizeUnverifiedCoachClaims(rawText, verifiedNightPlayerNames);
+        const nightVerifiedFoulOuts = [];
+        for (const enr of matchEnrichments.values()) {
+          if (Array.isArray(enr?.pbp?.foulOuts)) {
+            for (const fo of enr.pbp.foulOuts) {
+              nightVerifiedFoulOuts.push({ name: fo.playerName, foulOutPeriod: fo.periodLabel, foulOutClock: fo.clock });
+            }
+          }
+        }
+        const safeRawText = reconcileVerifiedFoulOutTimings(sanitizeUnverifiedCoachClaims(rawText, verifiedNightPlayerNames), nightVerifiedFoulOuts);
         const parsed = parseDelimitedSections(safeRawText, ["TITULAR", "ENTRADILLA", "CAPITULOS_DINAMICOS", "PIZARRAS", "HITOS", "ESPANOLES", "CLAVES"]);
         const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments, tripleDoublesNight);
         const payload = { date: gd.selectedDate, seasonLabel: gd.seasonLabel, gamesCount: gd.pulse.gamesCount, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), generationTimeMs: Date.now() - startTime, engineMode: "gemini_search", modelUsed, headline: parsed.TITULAR && parsed.TITULAR.length > 12 ? stripInlineWrapper(parsed.TITULAR) : fallback.headline, lead: parsed.ENTRADILLA && parsed.ENTRADILLA.length > 25 ? parsed.ENTRADILLA : fallback.lead, dynamicSections: parseDynamicChapters(parsed.CAPITULOS_DINAMICOS, fallback.dynamicSections), pizarrasSection: parsed.PIZARRAS && parsed.PIZARRAS.length > 60 ? parsed.PIZARRAS : fallback.pizarrasSection, hitosSection: parsed.HITOS && parsed.HITOS.length > 60 ? parsed.HITOS : fallback.hitosSection, espanolesSection: parsed.ESPANOLES && parsed.ESPANOLES.length > 12 ? parsed.ESPANOLES : fallback.espanolesSection, clavesList: parseClavesList(parsed.CLAVES, fallback.clavesList), spanishPlayersSummary: spanishNightNotes.length > 0 ? spanishNightNotes.join(" \xB7 ") : "Sin minutos en pista de jugadores espa\xF1oles en los encuentros disputados esta fecha.", sources };
-        reportMemoryCache.set(cacheKey, { expiresAt: Date.now() + 4 * 60 * 60 * 1e3, data: payload });
+        const persistTtlMs = 7 * 24 * 60 * 60 * 1e3;
+        await writeSharedPersistedNarrative(cacheKey, payload, persistTtlMs);
         return payload;
       } catch (err) {
         const isQuota = isQuotaExhaustedError(err);
@@ -4664,8 +4988,8 @@ ${pressCtx.dayNotes.slice(0, 12).map((n) => `  \u2022 ${n}`).join("\n")}` : "",
 }
 
 // src/server/fantasyEspnService.ts
-import fs from "fs";
-import path from "path";
+import fs2 from "fs";
+import path2 from "path";
 import { fileURLToPath } from "url";
 
 // src/utils/fantasyScoring.ts
@@ -4696,115 +5020,12 @@ function normalizePlayerLookupKey(raw) {
   return norm;
 }
 
-// src/server/upstashRedis.ts
-var __name2 = (fn, _n) => fn;
-function getRedisRestConfig() {
-  const explicitPairs = [
-    [process.env.UPSTASH_REDIS_REST_URL, process.env.UPSTASH_REDIS_REST_TOKEN],
-    [process.env.KV_REST_API_URL, process.env.KV_REST_API_TOKEN],
-    [process.env.REDIS_REST_URL, process.env.REDIS_REST_TOKEN],
-    [process.env.FANTASY_REDIS_REST_URL, process.env.FANTASY_REDIS_REST_TOKEN]
-  ];
-  for (const [rawUrl, rawToken] of explicitPairs) {
-    if (typeof rawUrl === "string" && rawUrl.trim().startsWith("https://") && typeof rawToken === "string" && rawToken.trim()) {
-      return {
-        url: rawUrl.trim().replace(/\/+$/, ""),
-        token: rawToken.trim()
-      };
-    }
-  }
-  for (const [key, val] of Object.entries(process.env)) {
-    if (typeof val !== "string" || !val.trim().startsWith("https://")) continue;
-    if (key.endsWith("_REDIS_REST_URL")) {
-      const prefix = key.slice(0, -"_REDIS_REST_URL".length);
-      const tok = process.env[`${prefix}_REDIS_REST_TOKEN`];
-      if (typeof tok === "string" && tok.trim()) {
-        return { url: val.trim().replace(/\/+$/, ""), token: tok.trim() };
-      }
-    }
-    if (key.endsWith("_KV_REST_API_URL")) {
-      const prefix = key.slice(0, -"_KV_REST_API_URL".length);
-      const tok = process.env[`${prefix}_KV_REST_API_TOKEN`];
-      if (typeof tok === "string" && tok.trim()) {
-        return { url: val.trim().replace(/\/+$/, ""), token: tok.trim() };
-      }
-    }
-  }
-  return null;
-}
-__name2(getRedisRestConfig, "getRedisRestConfig");
-function isUpstashRedisConfigured() {
-  return getRedisRestConfig() !== null;
-}
-__name2(isUpstashRedisConfigured, "isUpstashRedisConfigured");
-async function executeUpstashCommand(redisCfg, commandArgs, timeoutMs = 5e3) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(redisCfg.url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${redisCfg.token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(commandArgs),
-      cache: "no-store",
-      signal: controller.signal
-    });
-    if (!res.ok) {
-      const errText = await res.text().catch(() => "");
-      throw new Error(`Upstash HTTP ${res.status}: ${errText.slice(0, 160)}`);
-    }
-    const payload = await res.json();
-    if (payload && payload.error) {
-      throw new Error(`Upstash Redis error: ${String(payload.error)}`);
-    }
-    return payload ? payload.result : null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-__name2(executeUpstashCommand, "executeUpstashCommand");
-async function executeUpstashPipeline(redisCfg, commandsList, timeoutMs = 5e3) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${redisCfg.url}/pipeline`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${redisCfg.token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(commandsList),
-      cache: "no-store",
-      signal: controller.signal
-    });
-    if (!res.ok) {
-      const errText = await res.text().catch(() => "");
-      throw new Error(`Upstash Pipeline HTTP ${res.status}: ${errText.slice(0, 160)}`);
-    }
-    const payload = await res.json();
-    if (!Array.isArray(payload)) {
-      throw new Error("Upstash Pipeline malformed response");
-    }
-    return payload.map((item) => {
-      if (item && item.error) {
-        throw new Error(`Upstash Redis pipeline item error: ${String(item.error)}`);
-      }
-      return item ? item.result : null;
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-__name2(executeUpstashPipeline, "executeUpstashPipeline");
-
 // src/server/fantasyEspnService.ts
 var __name3 = (fn, _n) => fn;
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path.dirname(__filename);
-var DATA_DIR = [path.resolve(process.cwd(), "data"), path.resolve(__dirname, "../data"), path.resolve(__dirname, "../../data")].find((p) => fs.existsSync(p)) || path.resolve(process.cwd(), "data");
-var MANUAL_STATE_FILE = path.join(DATA_DIR, "fantasy-manual-league.json");
+var __dirname = path2.dirname(__filename);
+var DATA_DIR = [path2.resolve(process.cwd(), "data"), path2.resolve(__dirname, "../data"), path2.resolve(__dirname, "../../data")].find((p) => fs2.existsSync(p)) || path2.resolve(process.cwd(), "data");
+var MANUAL_STATE_FILE = path2.join(DATA_DIR, "fantasy-manual-league.json");
 var SERVERLESS_TMP_STATE_FILE = "/tmp/radarnba-fantasy-manual-league.json";
 var FANTASY_REDIS_KEY = "radarnba:fantasy:manual_league_v1";
 function getFantasyStorageBackendInfo() {
@@ -4887,8 +5108,8 @@ function readManualFantasyStateFromDisk() {
   const candidates = process.env.VERCEL ? [SERVERLESS_TMP_STATE_FILE, MANUAL_STATE_FILE] : [MANUAL_STATE_FILE];
   for (const target of candidates) {
     try {
-      if (!fs.existsSync(target)) continue;
-      const content = fs.readFileSync(target, "utf8");
+      if (!fs2.existsSync(target)) continue;
+      const content = fs2.readFileSync(target, "utf8");
       const parsed = JSON.parse(content);
       const valid = sanitizeManualFantasyState(parsed);
       if (valid) return valid;
@@ -4901,13 +5122,13 @@ function persistNormalizedStateToLocalDisk(toSave) {
   try {
     if (process.env.VERCEL) {
       const tmpTarget = `${SERVERLESS_TMP_STATE_FILE}.tmp`;
-      fs.writeFileSync(tmpTarget, JSON.stringify(toSave, null, 2), "utf8");
-      fs.renameSync(tmpTarget, SERVERLESS_TMP_STATE_FILE);
+      fs2.writeFileSync(tmpTarget, JSON.stringify(toSave, null, 2), "utf8");
+      fs2.renameSync(tmpTarget, SERVERLESS_TMP_STATE_FILE);
     } else {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs2.mkdirSync(DATA_DIR, { recursive: true });
       const tmpFile = `${MANUAL_STATE_FILE}.tmp`;
-      fs.writeFileSync(tmpFile, JSON.stringify(toSave, null, 2), "utf8");
-      fs.renameSync(tmpFile, MANUAL_STATE_FILE);
+      fs2.writeFileSync(tmpFile, JSON.stringify(toSave, null, 2), "utf8");
+      fs2.renameSync(tmpFile, MANUAL_STATE_FILE);
     }
   } catch (err) {
     console.error("Error writing fantasy-manual-league.json:", err);
@@ -5268,8 +5489,8 @@ function packBootstrapWirePayload(payload) {
 }
 
 // src/server/nbaSnapshotStore.ts
-import fs2 from "fs";
-import path2 from "path";
+import fs3 from "fs";
+import path3 from "path";
 import zlib from "zlib";
 import { fileURLToPath as fileURLToPath2 } from "url";
 
@@ -5463,7 +5684,7 @@ function resetCircuit(provider) {
 // src/server/nbaSnapshotStore.ts
 var __name4 = (fn, _n) => fn;
 var __filename2 = fileURLToPath2(import.meta.url);
-var __dirname2 = path2.dirname(__filename2);
+var __dirname2 = path3.dirname(__filename2);
 var NBA_CDN_HEADERS = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36", Referer: "https://www.nba.com/", Origin: "https://www.nba.com", Accept: "application/json" };
 var EAST_TEAM_ABBRS = /* @__PURE__ */ new Set(["ATL", "BOS", "BKN", "CHA", "CHI", "CLE", "DET", "IND", "MIA", "MIL", "NYK", "ORL", "PHI", "TOR", "WAS"]);
 function round12(val) {
@@ -5549,7 +5770,7 @@ function normalizeScheduleDateToEasternIso(estRaw, gdDateRaw, utcRaw) {
   return utcTrim.slice(0, 10);
 }
 function getSnapshotCandidatePaths() {
-  const candidates = [path2.resolve(process.cwd(), "data", "nba-snapshot.json.gz"), path2.resolve(__dirname2, "data", "nba-snapshot.json.gz"), path2.resolve(__dirname2, "..", "data", "nba-snapshot.json.gz"), path2.resolve(__dirname2, "..", "..", "data", "nba-snapshot.json.gz"), path2.resolve(__dirname2, "..", "..", "..", "data", "nba-snapshot.json.gz")];
+  const candidates = [path3.resolve(process.cwd(), "data", "nba-snapshot.json.gz"), path3.resolve(__dirname2, "data", "nba-snapshot.json.gz"), path3.resolve(__dirname2, "..", "data", "nba-snapshot.json.gz"), path3.resolve(__dirname2, "..", "..", "data", "nba-snapshot.json.gz"), path3.resolve(__dirname2, "..", "..", "..", "data", "nba-snapshot.json.gz")];
   return Array.from(new Set(candidates));
 }
 var memorySnapshotCache = null;
@@ -5575,12 +5796,12 @@ function isValidSnapshotPayload(candidate) {
 function readNbaSnapshotFromDisk() {
   for (const filePath of getSnapshotCandidatePaths()) {
     try {
-      if (!fs2.existsSync(filePath)) continue;
-      const stat = fs2.statSync(filePath);
+      if (!fs3.existsSync(filePath)) continue;
+      const stat = fs3.statSync(filePath);
       if (memorySnapshotCache && memorySnapshotCache.filePath === filePath && memorySnapshotCache.mtimeMs === stat.mtimeMs) {
         return memorySnapshotCache.snapshot;
       }
-      const compressed = fs2.readFileSync(filePath);
+      const compressed = fs3.readFileSync(filePath);
       const jsonStr = zlib.gunzipSync(compressed).toString("utf8");
       const parsed = JSON.parse(jsonStr);
       if (!isValidSnapshotPayload(parsed)) {
@@ -7052,7 +7273,7 @@ async function buildSeasonAwardsPayload({
 
 // src/server/nbaDataService.ts
 var __name5 = (fn, _name) => fn;
-var GAMEDAY_THRESHOLDS_FILE = path3.resolve(process.cwd(), "data", "gameday-thresholds-config.json");
+var GAMEDAY_THRESHOLDS_FILE = path4.resolve(process.cwd(), "data", "gameday-thresholds-config.json");
 var DEFAULT_GAMEDAY_THRESHOLDS = {
   // 03A. Noches de Explosión
   explosionShootingTsDiff: 10,
@@ -7088,8 +7309,8 @@ var DEFAULT_GAMEDAY_THRESHOLDS = {
 var activeGamedayThresholds = { ...DEFAULT_GAMEDAY_THRESHOLDS, updatedAt: 0 };
 function initGamedayThresholdsFromDisk() {
   try {
-    if (fs3.existsSync(GAMEDAY_THRESHOLDS_FILE)) {
-      const raw = fs3.readFileSync(GAMEDAY_THRESHOLDS_FILE, "utf-8");
+    if (fs4.existsSync(GAMEDAY_THRESHOLDS_FILE)) {
+      const raw = fs4.readFileSync(GAMEDAY_THRESHOLDS_FILE, "utf-8");
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed.explosionShootingTsDiff === "number") {
         activeGamedayThresholds = { ...DEFAULT_GAMEDAY_THRESHOLDS, ...parsed };
@@ -7110,9 +7331,9 @@ function updateGamedayThresholdsConfig(values) {
   };
   activeGamedayThresholds = updated;
   try {
-    const dir = path3.dirname(GAMEDAY_THRESHOLDS_FILE);
-    if (!fs3.existsSync(dir)) fs3.mkdirSync(dir, { recursive: true });
-    fs3.writeFileSync(GAMEDAY_THRESHOLDS_FILE, JSON.stringify(updated, null, 2), "utf-8");
+    const dir = path4.dirname(GAMEDAY_THRESHOLDS_FILE);
+    if (!fs4.existsSync(dir)) fs4.mkdirSync(dir, { recursive: true });
+    fs4.writeFileSync(GAMEDAY_THRESHOLDS_FILE, JSON.stringify(updated, null, 2), "utf-8");
   } catch {
   }
   return { ...activeGamedayThresholds };
@@ -7124,8 +7345,8 @@ function resetGamedayThresholdsConfigDefaults() {
   };
   activeGamedayThresholds = reset;
   try {
-    if (fs3.existsSync(GAMEDAY_THRESHOLDS_FILE)) {
-      fs3.unlinkSync(GAMEDAY_THRESHOLDS_FILE);
+    if (fs4.existsSync(GAMEDAY_THRESHOLDS_FILE)) {
+      fs4.unlinkSync(GAMEDAY_THRESHOLDS_FILE);
     }
   } catch {
   }
@@ -8876,8 +9097,8 @@ async function getSeasonAwardsPayload(seasonScope = "2027", forceRefresh = false
 
 // src/server/securityMiddleware.ts
 import crypto2 from "crypto";
-import fs4 from "fs";
-import path4 from "path";
+import fs5 from "fs";
+import path5 from "path";
 import { fileURLToPath as fileURLToPath3 } from "url";
 import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 
@@ -9026,13 +9247,13 @@ function validateRequest(schemas) {
 // src/server/securityMiddleware.ts
 var __name6 = (fn, _n) => fn;
 var __filename3 = fileURLToPath3(import.meta.url);
-var __dirname3 = path4.dirname(__filename3);
+var __dirname3 = path5.dirname(__filename3);
 var DATA_DIR2 = [
-  path4.resolve(process.cwd(), "data"),
-  path4.resolve(__dirname3, "../data"),
-  path4.resolve(__dirname3, "../../data")
-].find((p) => fs4.existsSync(p)) || path4.resolve(process.cwd(), "data");
-var SECURITY_CONFIG_FILE = path4.join(DATA_DIR2, "admin-security-config.json");
+  path5.resolve(process.cwd(), "data"),
+  path5.resolve(__dirname3, "../data"),
+  path5.resolve(__dirname3, "../../data")
+].find((p) => fs5.existsSync(p)) || path5.resolve(process.cwd(), "data");
+var SECURITY_CONFIG_FILE = path5.join(DATA_DIR2, "admin-security-config.json");
 var SERVERLESS_TMP_SECURITY_CONFIG_FILE = "/tmp/radarnba-admin-security-config.json";
 var ADMIN_COOKIE_NAME = "radarnba_admin_session";
 var ADMIN_CSRF_HEADER_NAME = "x-radarnba-csrf";
@@ -9214,8 +9435,8 @@ function readSecurityConfigFromDisk() {
   const candidates = process.env.VERCEL ? [SERVERLESS_TMP_SECURITY_CONFIG_FILE, SECURITY_CONFIG_FILE] : [SECURITY_CONFIG_FILE];
   for (const target of candidates) {
     try {
-      if (!fs4.existsSync(target)) continue;
-      const rawContent = fs4.readFileSync(target, "utf8");
+      if (!fs5.existsSync(target)) continue;
+      const rawContent = fs5.readFileSync(target, "utf8");
       const parsed = JSON.parse(rawContent);
       const valid = parseValidatedSecurityConfigObject(parsed);
       if (valid) return valid;
@@ -9229,13 +9450,13 @@ function writeSecurityConfigToDisk(config) {
   try {
     if (process.env.VERCEL) {
       const tmpTarget = `${SERVERLESS_TMP_SECURITY_CONFIG_FILE}.tmp`;
-      fs4.writeFileSync(tmpTarget, JSON.stringify(config, null, 2), "utf8");
-      fs4.renameSync(tmpTarget, SERVERLESS_TMP_SECURITY_CONFIG_FILE);
+      fs5.writeFileSync(tmpTarget, JSON.stringify(config, null, 2), "utf8");
+      fs5.renameSync(tmpTarget, SERVERLESS_TMP_SECURITY_CONFIG_FILE);
     } else {
-      fs4.mkdirSync(DATA_DIR2, { recursive: true });
+      fs5.mkdirSync(DATA_DIR2, { recursive: true });
       const tmpFile = `${SECURITY_CONFIG_FILE}.tmp`;
-      fs4.writeFileSync(tmpFile, JSON.stringify(config, null, 2), "utf8");
-      fs4.renameSync(tmpFile, SECURITY_CONFIG_FILE);
+      fs5.writeFileSync(tmpFile, JSON.stringify(config, null, 2), "utf8");
+      fs5.renameSync(tmpFile, SECURITY_CONFIG_FILE);
     }
   } catch (err) {
     console.error("Error writing admin-security-config.json:", err);
@@ -10318,13 +10539,15 @@ app.get("/api/nba/gameday", validateRequest({ query: gamedayQuerySchema }), asyn
 app.get("/api/nba/gameday/chronicle", validateRequest({ query: gamedayQuerySchema }), async (req, res) => {
   try {
     const { query } = getValidated(req);
+    const payload = await scoutingEngine.buildGameDayChroniclePayload(query.date, Boolean(query.refresh));
     const todayIso = getEasternTodayIso();
-    const isPastDate = query.date && query.date < todayIso;
+    const targetDate = query.date || payload?.date;
+    const isPastDate = Boolean(targetDate && targetDate < todayIso);
+    const isAi = payload?.engineMode === "gemini_search";
     res.setHeader(
       "Cache-Control",
-      query.refresh ? "no-store" : isPastDate ? "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800" : "public, max-age=60, s-maxage=300, stale-while-revalidate=1800"
+      query.refresh ? "no-store" : !isAi ? "public, max-age=15, s-maxage=30, must-revalidate" : isPastDate ? "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800" : "public, max-age=60, s-maxage=300, stale-while-revalidate=1800"
     );
-    const payload = await scoutingEngine.buildGameDayChroniclePayload(query.date, Boolean(query.refresh));
     res.json(payload);
   } catch (err) {
     console.error("Error in /api/nba/gameday/chronicle:", err);
@@ -10373,9 +10596,10 @@ app.get("/api/nba/game/:eventId/narrative", validateRequest({ params: gameEventP
     const { params, query } = getValidated(req);
     const narrative = await scoutingEngine.buildGameNarrativePayload(params.eventId, Boolean(query.refresh));
     const isFinal = narrative?.isFinal || Boolean(narrative?.report?.isFinal);
+    const isAi = narrative?.engineMode === "gemini_search";
     res.setHeader(
       "Cache-Control",
-      query.refresh ? "no-store" : isFinal ? "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800" : "public, max-age=60, s-maxage=300, stale-while-revalidate=1800"
+      query.refresh ? "no-store" : !isAi ? "public, max-age=15, s-maxage=30, must-revalidate" : isFinal ? "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800" : "public, max-age=60, s-maxage=300, stale-while-revalidate=1800"
     );
     res.json(narrative);
   } catch (err) {
@@ -10385,7 +10609,7 @@ app.get("/api/nba/game/:eventId/narrative", validateRequest({ params: gameEventP
       const { params } = getValidated(req);
       const report = await scoutingEngine.buildGameOfficialReportData(params.eventId, false);
       const fallback = scoutingEngine.buildDeterministicGameNarrative(report);
-      res.setHeader("Cache-Control", "public, max-age=60, s-maxage=300, stale-while-revalidate=1800");
+      res.setHeader("Cache-Control", "public, max-age=15, s-maxage=30, must-revalidate");
       res.json(fallback);
     } catch (innerErr) {
       const cleanInner = String(innerErr instanceof Error ? innerErr.message : innerErr || "").replace(/[\{\}\"\:]/g, " ").slice(0, 100);

@@ -509,6 +509,9 @@ export default function App() {
     () => initialRoute.section === 'fantasy_espn'
   );
   const skipNextAdminSessionCheckRef = useRef<boolean>(false);
+  const dailyChronicleWarmedRef = useRef<boolean>(false);
+  const dailyChronicleWarmAbortRef = useRef<AbortController | null>(null);
+  const dailyChronicleWarmTimerRef = useRef<number | null>(null);
   const [adminZoneSection, setAdminZoneSection] = useState<'fantasy' | 'thresholds' | 'web_config'>(
     'fantasy'
   );
@@ -926,6 +929,33 @@ export default function App() {
     if (milestonesData) return;
     void fetchMilestones(false);
   }, [activeSection, milestonesData, fetchMilestones]);
+
+  useEffect(() => {
+    return () => {
+      if (dailyChronicleWarmTimerRef.current !== null) {
+        window.clearTimeout(dailyChronicleWarmTimerRef.current);
+        dailyChronicleWarmTimerRef.current = null;
+      }
+      dailyChronicleWarmAbortRef.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (loading || errorMsg || teams.length === 0) return;
+    if (dailyChronicleWarmedRef.current) return;
+    dailyChronicleWarmedRef.current = true;
+    const targetUrl = gamedayDateParam
+      ? `/api/nba/gameday/chronicle?date=${encodeURIComponent(gamedayDateParam)}`
+      : '/api/nba/gameday/chronicle';
+    dailyChronicleWarmTimerRef.current = window.setTimeout(() => {
+      dailyChronicleWarmTimerRef.current = null;
+      const controller = new AbortController();
+      dailyChronicleWarmAbortRef.current = controller;
+      void fetch(targetUrl, { signal: controller.signal }).catch(() => {
+        // Precalentamiento silencioso en segundo plano para dejar lista la crónica compartida
+      });
+    }, 1200);
+  }, [loading, errorMsg, teams.length, gamedayDateParam]);
 
   useEffect(() => {
     if (activeSection !== 'awards') return;
