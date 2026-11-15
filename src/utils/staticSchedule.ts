@@ -92,12 +92,28 @@ export function buildWeeklyWindowsFromSchedule(
   const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
   const dow = dt.getUTCDay(); // 0=Dom, 1=Lun, ...
 
-  // Fantasy Pivot Logic:
-  // - Monday: Current actionable week is the one starting today.
-  // - Tuesday-Sunday: Current actionable week pivots to NEXT week (planning mode).
+  const nowMs = Date.now();
+  const isLiveToday = referenceTodayIso === getEasternTodayIso();
+
+  // Fantasy Pivot Logic (Monday Lock Deadline):
+  // - Monday before first tip-off: Actionable week is the one starting today.
+  // - Monday after first tip-off & Tuesday-Sunday: Actionable week pivots to NEXT Monday's week.
   let pivotMonday = getMondayOfWeekIso(referenceTodayIso);
   if (dow !== 1) {
     pivotMonday = addDaysIso(pivotMonday, 7);
+  } else if (isLiveToday) {
+    const mondayFirstGame = scheduleGames
+      .filter(
+        (g) =>
+          g.dateIso === pivotMonday && g.dateTimeUtc && g.dateTimeUtc.includes('T')
+      )
+      .sort((a, b) => a.dateTimeUtc.localeCompare(b.dateTimeUtc))[0];
+    if (mondayFirstGame) {
+      const firstTipMs = Date.parse(mondayFirstGame.dateTimeUtc);
+      if (Number.isFinite(firstTipMs) && nowMs >= firstTipMs) {
+        pivotMonday = addDaysIso(pivotMonday, 7);
+      }
+    }
   }
 
   const currentMonday = pivotMonday;
@@ -113,7 +129,6 @@ export function buildWeeklyWindowsFromSchedule(
   ];
 
   const allTeamAbbrs = Object.keys(NBA_TEAMS_MAP);
-  const nowMs = Date.now();
 
   return specs.map((spec) => {
     const startIso = addDaysIso(currentMonday, spec.offsetWeeks * 7);

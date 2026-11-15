@@ -1733,24 +1733,12 @@ export function FantasyEspnAssistantView({
     effectiveDropMember,
   ]);
 
-  // Dynamic target week window for Waiver Wire / Free Agents:
-  // - On Monday (e.g. today Nov 9): Defaults to current week (Semana del 9: Lun 9 - Dom 15 nov)
-  // - From Tuesday onwards (Martes 10 nov a Dom 15 nov): Defaults to next week (Semana del 16: Lun 16 - Dom 22 nov)
-  // - If the user selects a week in the week bar, uses that selected week
-  const targetWaiverWeekWindow = useMemo(() => {
-    if (selectedWeekId && selectedWeekId !== 'current') {
-      return effectiveWeeks.find((w) => w.id === selectedWeekId) || null;
-    }
-    const todayEastern = getEasternTodayIso();
-    const [y, m, d] = todayEastern.split('-').map(Number);
-    const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
-    const isMonday = dt.getUTCDay() === 1;
-
-    if (isMonday) {
-      return effectiveWeeks.find((w) => w.id === 'current') || effectiveWeeks[0] || null;
-    }
-    return effectiveWeeks.find((w) => w.id === 'next') || effectiveWeeks.find((w) => w.id === 'current') || null;
-  }, [effectiveWeeks, selectedWeekId]);
+  // Target week window for Waiver Wire / Free Agents:
+  // `effectiveWeeks` ('current') already applies the Monday Lock Horizon pivot:
+  // - Tue–Sun & Mon before first tip-off: actionable week starting on that upcoming/current Monday (e.g. Nov 16–22 on Nov 15 & Nov 16)
+  // - Mon after first tip-off & Tue onwards: automatically pivots to the next Monday's week (e.g. Nov 23–29 on Nov 17)
+  // Using `activeWeek` keeps the Free Agents PJ column, min-games filter, and Week Selector Bar 100% synchronized.
+  const targetWaiverWeekWindow = activeWeek;
 
   // Available Waiver / Free Agent Pool
   const availableWaiverPool = useMemo(() => {
@@ -3753,7 +3741,7 @@ export function FantasyEspnAssistantView({
                   </span>
                 </h3>
                 <p className="text-xs text-slate-400">
-                  Consulta y filtra agentes libres alineables. La columna <strong className="text-slate-200 font-semibold">Partidos Próx. Sem.</strong> indica el número de partidos de la 1ª semana en la que podrías alinear al jugador recién fichado.
+                  Consulta y filtra agentes libres alineables. La columna <strong className="text-slate-200 font-semibold">PJ Próx. Sem.</strong> muestra los partidos de la semana a alinear ({targetWaiverWeekWindow?.rangeLabel || 'Lun–Dom'}) antes del cierre del primer partido del lunes.
                 </p>
               </div>
             </div>
@@ -3993,7 +3981,18 @@ export function FantasyEspnAssistantView({
                       className="py-2 px-2 whitespace-nowrap"
                     />
                     <SortableTh
-                      label={targetWaiverWeekWindow?.id === 'current' ? 'PJ Sem. Actual' : 'PJ Próx. Sem.'}
+                      label={(() => {
+                        if (!targetWaiverWeekWindow?.startIso || !targetWaiverWeekWindow?.endIso) {
+                          return 'PJ Próx. Sem.';
+                        }
+                        const [, m1, d1] = targetWaiverWeekWindow.startIso.split('-').map(Number);
+                        const [, m2, d2] = targetWaiverWeekWindow.endIso.split('-').map(Number);
+                        const mos = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+                        const mo1 = mos[(m1 || 1) - 1] || '';
+                        const mo2 = mos[(m2 || 1) - 1] || '';
+                        const shortRange = m1 === m2 ? `${d1}–${d2} ${mo2}` : `${d1} ${mo1}–${d2} ${mo2}`;
+                        return `PJ (${shortRange})`;
+                      })()}
                       align="center"
                       active={waiverTableSortKey === 'gamesNextWeek'}
                       asc={waiverTableSortAsc}
@@ -4044,7 +4043,7 @@ export function FantasyEspnAssistantView({
                         ? item.nextWeekGamesList
                             .map((g) => `${g.dayShortEs || ''} ${g.isHome ? 'vs' : '@'}${g.opponentAbbr}`)
                             .join(' · ')
-                        : 'Sin partidos programados la próxima semana';
+                        : 'Sin partidos programados en la semana seleccionada';
 
                     return (
                       <tr
@@ -4135,7 +4134,7 @@ export function FantasyEspnAssistantView({
                               </button>
                               <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1.5 hidden group-hover/nxtwk:flex flex-col z-[80] w-56 p-2 rounded-lg bg-[#0F172A] border border-[#1E293B] shadow-2xl text-[11px] pointer-events-none">
                                 <span className="font-bold text-orange-400 pb-1 border-b border-[#1E293B] mb-1">
-                                  {targetWaiverWeekWindow?.label || 'Semana'} ({targetWaiverWeekWindow?.rangeLabel || '9-15 nov'}): {item.nextWeekGamesCount} PJ
+                                  {targetWaiverWeekWindow?.label || 'Semana'} ({targetWaiverWeekWindow?.rangeLabel || 'Lun–Dom'}): {item.nextWeekGamesCount} PJ
                                 </span>
                                 {item.nextWeekGamesList.length > 0 ? (
                                   <div className="space-y-0.5 font-mono text-[10px] text-slate-300">

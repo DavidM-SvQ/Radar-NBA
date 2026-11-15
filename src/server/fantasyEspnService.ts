@@ -285,7 +285,14 @@ async function buildFantasyEspnSyncPayload(params) {
     readManualFantasyState(),
     Promise.resolve(getFantasyStorageBackendInfo()),
   ]);
-  if (!forceRefresh && cachedNbaContext && cachedNbaContext.expiresAt > Date.now()) {
+  const todayIso = getEasternTodayIso();
+  if (
+    !forceRefresh &&
+    cachedNbaContext &&
+    cachedNbaContext.expiresAt > Date.now() &&
+    cachedNbaContext.todayIso === todayIso &&
+    (!cachedNbaContext.nextLockTransitionMs || Date.now() < cachedNbaContext.nextLockTransitionMs)
+  ) {
     return { ...cachedNbaContext.payloadBase, savedState, ...backendInfo };
   }
   const playersByNorm = /* @__PURE__ */ new Map();
@@ -313,7 +320,6 @@ async function buildFantasyEspnSyncPayload(params) {
     return cands.length > 0 ? cands[0].id : null;
   }, "resolveNbaPlayerId");
   const [scheduleGames, rawInjuriesMap] = await Promise.all([fetchLeagueScheduleGames(forceRefresh), fetchEspnInjuriesByName(forceRefresh)]);
-  const todayIso = getEasternTodayIso();
   const weeks = buildWeeklyWindows(scheduleGames, todayIso);
   const injuriesByNormName = {};
   const injuriesByPlayerId = {};
@@ -337,8 +343,16 @@ async function buildFantasyEspnSyncPayload(params) {
       injuriesByPlayerId[matchedNbaId] = alert;
     }
   }
+  const currentWin = weeks.find((w) => w.id === "current");
+  const currentMondayFirstGame = currentWin
+    ? scheduleGames
+        .filter((g) => g.dateIso === currentWin.startIso && g.dateTimeUtc && g.dateTimeUtc.includes("T"))
+        .sort((a, b) => a.dateTimeUtc.localeCompare(b.dateTimeUtc))[0]
+    : null;
+  const parsedLockMs = currentMondayFirstGame ? Date.parse(currentMondayFirstGame.dateTimeUtc) : NaN;
+  const nextLockTransitionMs = Number.isFinite(parsedLockMs) && parsedLockMs > Date.now() ? parsedLockMs : null;
   const payloadBase = { generatedAt: (/* @__PURE__ */ new Date()).toISOString(), injuriesByNormName, injuriesByPlayerId, weeks, defaultWeekId: "current" };
-  cachedNbaContext = { expiresAt: Date.now() + 5 * 60 * 1e3, payloadBase };
+  cachedNbaContext = { expiresAt: Date.now() + 5 * 60 * 1e3, todayIso, nextLockTransitionMs, payloadBase };
   return { ...payloadBase, savedState, ...backendInfo };
 }
 export {
