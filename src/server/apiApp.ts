@@ -4,10 +4,11 @@ import express from "express";
 import helmet from "helmet";
 import zlib from "zlib";
 import { DEFAULT_GAMEDAY_THRESHOLDS, getBootstrapPayload, getBootstrapWireBuffers, getFantasyEspnSyncPayload, getGameDayPayload, getGamedayThresholdsConfig, getMilestonesPayload, getPlayerInspectorDossier, getSeasonAwardsPayload, getScoreboardDeltaPayload, getSinglePlayerSummary, getTeamRoster, resetGamedayThresholdsConfigDefaults, scoutingEngine, searchLeaguePlayers, updateGamedayThresholdsConfig } from "./nbaDataService.ts";
+import { getLeagueShotZonesAdvanced, getLeagueClutchAdvanced, getLeagueDefenseHustleAdvanced, getLeagueTrackingAdvanced, getLeaguePlaytypesAdvanced, getLeagueScoringSplitsAdvanced, getLeagueFourFactorsAdvanced, getLeagueViolationsAdvanced, getLeagueLineups, getTeamAdvancedDossier, getPlayerAdvancedDossier } from "./nbaAdvancedStatsService.ts";
 import { readNbaSnapshotFromDisk } from "./nbaSnapshotStore.ts";
 import { getFantasyStorageBackendInfo, readManualFantasyState, writeManualFantasyState } from "./fantasyEspnService.ts";
 import { DEFAULT_ADMIN_SECURITY_VALUES, adminBruteForceLimiter, adminEndpointFloodLimiter, buildAdminSessionCookieHeader, buildClearAdminSessionCookieHeader, extractAdminTokenFromRequest, getAdminAuthReadiness, getAdminSecurityConfig, getRateLimitBackendInfo, issueAdminSessionToken, nbaApiRateLimiter, nbaHeavyRefreshLimiter, recordAdminLoginFailure, requireAdminAuth, requireAdminCsrfProtection, resetAdminBruteForceForRequest, resetAdminSecurityConfigToDefaults, resetAllRateLimitCounters, saveAdminSecurityConfig, verifyAdminPasscodeConstantTime, verifyAdminSessionToken } from "./securityMiddleware.ts";
-import { ADMIN_SECURITY_BOUNDS, adminLoginBodySchema, adminSecurityConfigBodySchema, awardsQuerySchema, bootstrapQuerySchema, emptyQuerySchema, gameEventParamsSchema, gamedayQuerySchema, gamedayThresholdsBodySchema, getValidated, manualFantasyStateBodySchema, playerParamsSchema, playerSummaryQuerySchema, refreshOnlyQuerySchema, searchQuerySchema, teamParamsSchema, validateRequest } from "./validationSchemas.ts";
+import { ADMIN_SECURITY_BOUNDS, adminLoginBodySchema, adminSecurityConfigBodySchema, awardsQuerySchema, bootstrapQuerySchema, emptyQuerySchema, gameEventParamsSchema, gamedayQuerySchema, gamedayThresholdsBodySchema, getValidated, manualFantasyStateBodySchema, playerParamsSchema, playerSummaryQuerySchema, refreshOnlyQuerySchema, searchQuerySchema, teamParamsSchema, validateRequest, advancedLeagueQuerySchema, advancedLineupsQuerySchema, advancedEntityQuerySchema } from "./validationSchemas.ts";
 import { getAllCircuitMetrics, resetCircuit } from "./circuitBreaker.ts";
 import { expressTelemetryMiddleware, getTelemetrySummary } from "./telemetryLogger.ts";
 import { getEasternTodayIso } from "../utils/staticSchedule.ts";
@@ -451,6 +452,83 @@ app.put("/api/nba/fantasy/manual-state", validateRequest({ query: emptyQuerySche
   }
 });
 
+app.get("/api/nba/advanced/teams", validateRequest({ query: advancedLeagueQuerySchema }), async (req, res) => {
+  try {
+    const { query } = getValidated(req);
+    res.setHeader("Cache-Control", query.refresh ? "no-store" : "public, max-age=300, s-maxage=1800, stale-while-revalidate=86400");
+    let payload;
+    if (query.category === "zones") payload = await getLeagueShotZonesAdvanced(query.season, "team", Boolean(query.refresh));
+    else if (query.category === "clutch") payload = await getLeagueClutchAdvanced(query.season, "team", Boolean(query.refresh));
+    else if (query.category === "defense_hustle") payload = await getLeagueDefenseHustleAdvanced(query.season, "team", Boolean(query.refresh));
+    else if (query.category === "tracking") payload = await getLeagueTrackingAdvanced(query.season, "team", Boolean(query.refresh));
+    else if (query.category === "playtypes") payload = await getLeaguePlaytypesAdvanced(query.season, "team", Boolean(query.refresh));
+    else if (query.category === "scoring") payload = await getLeagueScoringSplitsAdvanced(query.season, "team", Boolean(query.refresh));
+    else if (query.category === "four_factors") payload = await getLeagueFourFactorsAdvanced(query.season, "team", Boolean(query.refresh));
+    else if (query.category === "violations") payload = await getLeagueViolationsAdvanced(query.season, "team", Boolean(query.refresh));
+    else payload = await getLeagueShotZonesAdvanced(query.season, "team", Boolean(query.refresh));
+    res.json(payload);
+  } catch (err) {
+    console.error("Error in /api/nba/advanced/teams:", err);
+    res.status(500).json({ error: err?.message || "Error al cargar estadísticas avanzadas de equipos." });
+  }
+});
+
+app.get("/api/nba/advanced/players", validateRequest({ query: advancedLeagueQuerySchema }), async (req, res) => {
+  try {
+    const { query } = getValidated(req);
+    res.setHeader("Cache-Control", query.refresh ? "no-store" : "public, max-age=300, s-maxage=1800, stale-while-revalidate=86400");
+    let payload;
+    if (query.category === "zones") payload = await getLeagueShotZonesAdvanced(query.season, "player", Boolean(query.refresh));
+    else if (query.category === "clutch") payload = await getLeagueClutchAdvanced(query.season, "player", Boolean(query.refresh));
+    else if (query.category === "defense_hustle") payload = await getLeagueDefenseHustleAdvanced(query.season, "player", Boolean(query.refresh));
+    else if (query.category === "tracking") payload = await getLeagueTrackingAdvanced(query.season, "player", Boolean(query.refresh));
+    else if (query.category === "playtypes") payload = await getLeaguePlaytypesAdvanced(query.season, "player", Boolean(query.refresh));
+    else if (query.category === "scoring") payload = await getLeagueScoringSplitsAdvanced(query.season, "player", Boolean(query.refresh));
+    else if (query.category === "four_factors") payload = await getLeagueFourFactorsAdvanced(query.season, "player", Boolean(query.refresh));
+    else if (query.category === "violations") payload = await getLeagueViolationsAdvanced(query.season, "player", Boolean(query.refresh));
+    else payload = await getLeagueShotZonesAdvanced(query.season, "player", Boolean(query.refresh));
+    res.json(payload);
+  } catch (err) {
+    console.error("Error in /api/nba/advanced/players:", err);
+    res.status(500).json({ error: err?.message || "Error al cargar estadísticas avanzadas de jugadores." });
+  }
+});
+
+app.get("/api/nba/advanced/lineups", validateRequest({ query: advancedLineupsQuerySchema }), async (req, res) => {
+  try {
+    const { query } = getValidated(req);
+    res.setHeader("Cache-Control", query.refresh ? "no-store" : "public, max-age=300, s-maxage=1800, stale-while-revalidate=86400");
+    const payload = await getLeagueLineups(query.season, query.group as any, query.teamId, Boolean(query.refresh));
+    res.json(payload);
+  } catch (err) {
+    console.error("Error in /api/nba/advanced/lineups:", err);
+    res.status(500).json({ error: err?.message || "Error al cargar quintetos y alineaciones." });
+  }
+});
+
+app.get("/api/nba/advanced/team/:teamId", validateRequest({ params: teamParamsSchema, query: advancedEntityQuerySchema }), async (req, res) => {
+  try {
+    const { params, query } = getValidated(req);
+    res.setHeader("Cache-Control", query.refresh ? "no-store" : "public, max-age=300, s-maxage=1800, stale-while-revalidate=86400");
+    const dossier = await getTeamAdvancedDossier(params.teamId, query.season, Boolean(query.refresh));
+    res.json(dossier);
+  } catch (err) {
+    console.error("Error in /api/nba/advanced/team/:teamId:", err);
+    res.status(500).json({ error: err?.message || "Error al cargar dossier avanzado de equipo." });
+  }
+});
+
+app.get("/api/nba/advanced/player/:playerId", validateRequest({ params: playerParamsSchema, query: advancedEntityQuerySchema }), async (req, res) => {
+  try {
+    const { params, query } = getValidated(req);
+    res.setHeader("Cache-Control", query.refresh ? "no-store" : "public, max-age=300, s-maxage=1800, stale-while-revalidate=86400");
+    const dossier = await getPlayerAdvancedDossier(params.playerId, query.teamId, query.season, Boolean(query.refresh));
+    res.json(dossier);
+  } catch (err) {
+    console.error("Error in /api/nba/advanced/player/:playerId:", err);
+    res.status(500).json({ error: err?.message || "Error al cargar dossier avanzado de jugador." });
+  }
+});
 
 app.use("/api", (_req, res) => {
   res.status(404).json({ error: "Ruta de API no encontrada.", code: "API_ROUTE_NOT_FOUND" });

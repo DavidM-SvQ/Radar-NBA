@@ -16,7 +16,7 @@ if (!process.env.NBA_SNAPSHOT_ONLY) {
 
 import { app } from '../src/server/compiledApiApp.mjs';
 
-// Explicit static file hint so @vercel/nft automatically bundles data/nba-snapshot.json.gz
+// Explicit static file hint so @vercel/nft automatically bundles data/nba-snapshot.json.gz and data/nba-advanced-snapshot.json.gz
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const BUNDLED_SNAPSHOT_FILE = path.join(
@@ -25,7 +25,14 @@ const BUNDLED_SNAPSHOT_FILE = path.join(
   'data',
   'nba-snapshot.json.gz'
 );
+const BUNDLED_ADVANCED_SNAPSHOT_FILE = path.join(
+  __dirname,
+  '..',
+  'data',
+  'nba-advanced-snapshot.json.gz'
+);
 void fs.existsSync(BUNDLED_SNAPSHOT_FILE);
+void fs.existsSync(BUNDLED_ADVANCED_SNAPSHOT_FILE);
 
 function normalizeVercelApiRequest(req) {
   const rawUrl = String(req.url || '/');

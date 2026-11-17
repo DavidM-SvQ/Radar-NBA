@@ -13,7 +13,7 @@ if (!process.env.NBA_SNAPSHOT_ONLY) {
 
 import { app } from './apiApp.ts';
 
-// Static file reference hint so @vercel/nft automatically traces data/nba-snapshot.json.gz
+// Static file reference hint so @vercel/nft automatically traces data/nba-snapshot.json.gz and data/nba-advanced-snapshot.json.gz
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const STATIC_NFT_SNAPSHOT_HINT = path.join(
@@ -22,7 +22,14 @@ const STATIC_NFT_SNAPSHOT_HINT = path.join(
   'data',
   'nba-snapshot.json.gz'
 );
+const STATIC_NFT_ADVANCED_SNAPSHOT_HINT = path.join(
+  __dirname,
+  '..',
+  'data',
+  'nba-advanced-snapshot.json.gz'
+);
 void fs.existsSync(STATIC_NFT_SNAPSHOT_HINT);
+void fs.existsSync(STATIC_NFT_ADVANCED_SNAPSHOT_HINT);
 
 function normalizeVercelApiRequest(
   req: IncomingMessage & {

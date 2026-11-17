@@ -4031,11 +4031,13 @@ export function GameScoutingReportModal({
                             );
 
                             const awayNameDisplay =
+                              row.awayPlayerName ||
                               row.awayShortName ||
                               row.awayFormatted
                                 .replace(/^#\d+\s*/, '')
                                 .replace(/\s*\(.*\)$/, '');
                             const homeNameDisplay =
+                              row.homePlayerName ||
                               row.homeShortName ||
                               row.homeFormatted
                                 .replace(/^#\d+\s*/, '')

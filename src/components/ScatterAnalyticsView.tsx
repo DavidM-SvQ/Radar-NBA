@@ -19,6 +19,8 @@ import {
   Sparkles,
   HelpCircle,
   BarChart2,
+  X,
+  ExternalLink,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -52,6 +54,17 @@ import { PlayerAvatar, TeamLogo } from './NbaVisuals';
 import { ExportImageButton } from './ExportImageButton';
 import { buildTableSnapshotBlob } from '../utils/exportImageCard';
 import { type LeagueBenchmarks } from '../utils/humanize';
+import { extractUnifiedFilterOptions } from '../utils/entityFilters';
+
+function isPlayerRookie(p: PlayerSummary): boolean {
+  if (typeof p.fromYear === 'number' && p.fromYear > 0) {
+    return p.fromYear >= 2026;
+  }
+  if (typeof p.experienceYears === 'number' && p.experienceYears >= 0) {
+    return p.experienceYears === 0;
+  }
+  return false;
+}
 
 const TEAM_TO_DIV: Record<string, string> = {
   BOS: 'Atlantic', BKN: 'Atlantic', NYK: 'Atlantic', PHI: 'Atlantic', TOR: 'Atlantic',
@@ -548,8 +561,8 @@ const PLAYER_PRESETS: PlayerPresetOption[] = [
     id: 'creation_control',
     label: '4. Creación y Control (AST vs TOV)',
     desc: 'Volumen de pases frente a pérdidas de balón cometidas en juego.',
-    xMetric: 'ast',
-    yMetric: 'tov',
+    xMetric: 'assists',
+    yMetric: 'turnovers',
     sizeMetric: 'plusMinus',
     quadrants: {
       tr: 'Generadores con Gran Carga de Balón',
@@ -577,6 +590,8 @@ const PLAYER_PRESETS: PlayerPresetOption[] = [
 interface ScatterAnalyticsViewProps {
   players: PlayerSummary[];
   teams: TeamSummary[];
+  currentSeasonPlayers?: PlayerSummary[];
+  currentSeasonTeams?: TeamSummary[];
   benchmarks: LeagueBenchmarks;
   experienceMode: ExperienceMode;
   watchlistIds: Set<string>;
@@ -687,6 +702,8 @@ function MetricInfoButton({
 export function ScatterAnalyticsView({
   players,
   teams,
+  currentSeasonPlayers,
+  currentSeasonTeams,
   onInspectEntity,
 }: ScatterAnalyticsViewProps) {
   // Main view segment: 'teams' | 'players' | 'correlation'
@@ -700,6 +717,7 @@ export function ScatterAnalyticsView({
   const [teamConfFilter, setTeamConfFilter] = useState<'all' | 'Este' | 'Oeste'>('all');
   const [teamDivFilter, setTeamDivFilter] = useState<string>('all');
   const [teamQuery, setTeamQuery] = useState('');
+  const [teamMeanScope, setTeamMeanScope] = useState<'league' | 'filtered'>('league');
 
   // Players view state
   const [playerPresetId, setPlayerPresetId] = useState<string>('usage_efficiency');
@@ -710,12 +728,47 @@ export function ScatterAnalyticsView({
   const [playerConfFilter, setPlayerConfFilter] = useState<'all' | 'East' | 'West'>('all');
   const [playerDivFilter, setPlayerDivFilter] = useState<string>('all');
   const [playerTeamFilter, setPlayerTeamFilter] = useState<string>('all');
+  const [playerCountryFilter, setPlayerCountryFilter] = useState<string>('all');
+  const [playerBirthYearFilter, setPlayerBirthYearFilter] = useState<string>('all');
+  const [onlyRookies, setOnlyRookies] = useState<boolean>(false);
   const [playerQuery, setPlayerQuery] = useState('');
   const [minGames, setMinGames] = useState(5);
   const [minMpg, setMinMpg] = useState(15);
+  const [playerMeanScope, setPlayerMeanScope] = useState<'league' | 'filtered'>('league');
 
-  // Hover states for tooltips
+  // Hover & selection states for tooltips and bubble mark/unmark
   const [hoveredEntity, setHoveredEntity] = useState<any>(null);
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
+  const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
+  const [tooltipDismissed, setTooltipDismissed] = useState(false);
+
+  const leagueTeams2027 = useMemo(() => {
+    if (currentSeasonTeams && currentSeasonTeams.length > 0) {
+      return currentSeasonTeams;
+    }
+    return teams;
+  }, [currentSeasonTeams, teams]);
+
+  const leaguePlayers2027 = useMemo(() => {
+    if (currentSeasonPlayers && currentSeasonPlayers.length > 0) {
+      return currentSeasonPlayers;
+    }
+    const has2027Games = players.some((p) => p.games.some((g) => g.seasonLabel === '2026-27'));
+    if (has2027Games) {
+      return players
+        .map((p) => {
+          const games2027 = p.games.filter((g) => g.seasonLabel === '2026-27');
+          return games2027.length === p.games.length ? p : { ...p, games: games2027 };
+        })
+        .filter((p) => p.games.length > 0);
+    }
+    return players;
+  }, [currentSeasonPlayers, players]);
+
+  const playerFilterOptions = useMemo(
+    () => extractUnifiedFilterOptions(players, teams),
+    [players, teams]
+  );
 
   // Enriched Teams Data with real official CDN logos and franchise colors
   const enrichedTeams = useMemo<EnrichedTeamMetricData[]>(() => {
@@ -761,14 +814,17 @@ export function ScatterAnalyticsView({
     [teamMetricYId]
   );
   const teamMetricSize = useMemo(
-    () => TEAM_METRIC_DEFINITIONS.find((m) => m.id === teamMetricSizeId) || TEAM_METRIC_DEFINITIONS[4],
+    () =>
+      teamMetricSizeId === 'none'
+        ? null
+        : TEAM_METRIC_DEFINITIONS.find((m) => m.id === teamMetricSizeId) || null,
     [teamMetricSizeId]
   );
 
-  // Filtered Teams for Scatter Plot
+  // Filtered Teams for Scatter Plot (with normalized bubble radius)
   const filteredTeams = useMemo(() => {
     const q = normalizeSearchText(teamQuery);
-    return enrichedTeams.filter((t) => {
+    const matching = enrichedTeams.filter((t) => {
       if (teamConfFilter !== 'all' && t.conference !== teamConfFilter) return false;
       if (teamDivFilter !== 'all' && t.division !== teamDivFilter) return false;
       if (q) {
@@ -777,18 +833,67 @@ export function ScatterAnalyticsView({
       }
       return true;
     });
-  }, [enrichedTeams, teamConfFilter, teamDivFilter, teamQuery]);
 
-  // Average benchmarks for current team axes
-  const teamMeanX = useMemo(() => {
+    if (!teamMetricSize || matching.length === 0) {
+      return matching.map((t) => ({ ...t, bubbleRadius: 15 }));
+    }
+
+    const vals = matching.map((t) => t.stats[teamMetricSize.id] ?? 0);
+    const minVal = Math.min(...vals);
+    const maxVal = Math.max(...vals);
+    const span = maxVal - minVal;
+
+    return matching.map((t) => {
+      const val = t.stats[teamMetricSize.id] ?? 0;
+      const rawNorm = span > 0 ? (val - minVal) / span : 0.5;
+      const norm = teamMetricSize.lowerIsBetter ? 1 - rawNorm : rawNorm;
+      const bubbleRadius = round1(9 + norm * 16);
+      return { ...t, bubbleRadius };
+    });
+  }, [enrichedTeams, teamConfFilter, teamDivFilter, teamQuery, teamMetricSize]);
+
+  const selectedTeam = useMemo(
+    () => filteredTeams.find((t) => t.id === selectedTeamId) || null,
+    [filteredTeams, selectedTeamId]
+  );
+
+  const hasTeamFilterSelection =
+    teamConfFilter !== 'all' || teamDivFilter !== 'all' || teamQuery.trim() !== '';
+
+  const effectiveTeamMeanScope: 'league' | 'filtered' =
+    hasTeamFilterSelection && filteredTeams.length > 0 ? teamMeanScope : 'league';
+
+  const leagueTeamMeanX = useMemo(() => {
+    if (leagueTeams2027.length === 0) return 0;
+    const vals = leagueTeams2027
+      .map((t) => teamMetricX.getValue(t))
+      .filter((v) => !Number.isNaN(v));
+    return vals.length > 0 ? round1(mean(vals)) : 0;
+  }, [leagueTeams2027, teamMetricX]);
+
+  const leagueTeamMeanY = useMemo(() => {
+    if (leagueTeams2027.length === 0) return 0;
+    const vals = leagueTeams2027
+      .map((t) => teamMetricY.getValue(t))
+      .filter((v) => !Number.isNaN(v));
+    return vals.length > 0 ? round1(mean(vals)) : 0;
+  }, [leagueTeams2027, teamMetricY]);
+
+  const filteredTeamMeanX = useMemo(() => {
     if (filteredTeams.length === 0) return 0;
     return round1(mean(filteredTeams.map((t) => t.stats[teamMetricX.id] ?? 0)));
   }, [filteredTeams, teamMetricX.id]);
 
-  const teamMeanY = useMemo(() => {
+  const filteredTeamMeanY = useMemo(() => {
     if (filteredTeams.length === 0) return 0;
     return round1(mean(filteredTeams.map((t) => t.stats[teamMetricY.id] ?? 0)));
   }, [filteredTeams, teamMetricY.id]);
+
+  // Active benchmark means for current team axes (2026-27 NBA league by default, toggleable to selected)
+  const teamMeanX =
+    effectiveTeamMeanScope === 'filtered' ? filteredTeamMeanX : leagueTeamMeanX;
+  const teamMeanY =
+    effectiveTeamMeanScope === 'filtered' ? filteredTeamMeanY : leagueTeamMeanY;
 
   // Handle Team Preset Select
   const handleSelectTeamPreset = (presetId: string) => {
@@ -811,14 +916,17 @@ export function ScatterAnalyticsView({
     [playerMetricYId]
   );
   const playerMetricSize = useMemo(
-    () => STREAK_METRIC_OPTIONS.find((m) => m.id === playerMetricSizeId) || STREAK_METRIC_OPTIONS[2],
+    () =>
+      playerMetricSizeId === 'none'
+        ? null
+        : STREAK_METRIC_OPTIONS.find((m) => m.id === playerMetricSizeId) || null,
     [playerMetricSizeId]
   );
 
-  // Filtered Players for Scatter Plot with team colors
+  // Filtered Players for Scatter Plot with team colors & normalized bubble radius
   const filteredPlayers = useMemo(() => {
     const q = normalizeSearchText(playerQuery);
-    return players
+    const rows = players
       .filter((p) => {
         if (p.games.length < minGames) return false;
         const avgMin = mean(p.games.map((g) => g.minutes));
@@ -833,6 +941,9 @@ export function ScatterAnalyticsView({
         }
         if (playerDivFilter !== 'all' && TEAM_TO_DIV[p.teamAbbr] !== playerDivFilter) return false;
         if (playerTeamFilter !== 'all' && p.teamAbbr !== playerTeamFilter) return false;
+        if (playerCountryFilter !== 'all' && (p.country || '').trim() !== playerCountryFilter) return false;
+        if (playerBirthYearFilter !== 'all' && String(p.birthYear ?? '') !== playerBirthYearFilter) return false;
+        if (onlyRookies && !isPlayerRookie(p)) return false;
 
         if (q) {
           const hay = normalizeSearchText(`${p.name} ${p.teamAbbr}`);
@@ -843,7 +954,9 @@ export function ScatterAnalyticsView({
       .map((p) => {
         const xVal = round1(mean(p.games.map((g) => playerMetricX.getValue(g))));
         const yVal = round1(mean(p.games.map((g) => playerMetricY.getValue(g))));
-        const sVal = round1(mean(p.games.map((g) => playerMetricSize.getValue(g))));
+        const sVal = playerMetricSize
+          ? round1(mean(p.games.map((g) => playerMetricSize.getValue(g))))
+          : null;
         const avgMin = round1(mean(p.games.map((g) => g.minutes)));
         const meta = NBA_TEAMS_MAP[p.teamAbbr?.toUpperCase()];
         const teamPrimaryColor = meta?.primaryColor || '#38BDF8';
@@ -864,6 +977,23 @@ export function ScatterAnalyticsView({
         };
       })
       .filter((p) => !isNaN(p.x) && !isNaN(p.y));
+
+    if (!playerMetricSize || rows.length === 0) {
+      return rows.map((p) => ({ ...p, bubbleRadius: 6 }));
+    }
+
+    const vals = rows.map((p) => p.size ?? 0);
+    const minVal = Math.min(...vals);
+    const maxVal = Math.max(...vals);
+    const span = maxVal - minVal;
+
+    return rows.map((p) => {
+      const val = p.size ?? 0;
+      const rawNorm = span > 0 ? (val - minVal) / span : 0.5;
+      const norm = playerMetricSize.lowerIsBetter ? 1 - rawNorm : rawNorm;
+      const bubbleRadius = round1(3.5 + norm * 10);
+      return { ...p, bubbleRadius };
+    });
   }, [
     players,
     teams,
@@ -873,21 +1003,78 @@ export function ScatterAnalyticsView({
     playerConfFilter,
     playerDivFilter,
     playerTeamFilter,
+    playerCountryFilter,
+    playerBirthYearFilter,
+    onlyRookies,
     playerQuery,
     playerMetricX,
     playerMetricY,
     playerMetricSize,
   ]);
 
-  const playerMeanX = useMemo(() => {
+  const selectedPlayer = useMemo(
+    () => filteredPlayers.find((p) => p.id === selectedPlayerId) || null,
+    [filteredPlayers, selectedPlayerId]
+  );
+
+  const hasPlayerFilterSelection =
+    playerPosFilter !== 'all' ||
+    playerConfFilter !== 'all' ||
+    playerDivFilter !== 'all' ||
+    playerTeamFilter !== 'all' ||
+    playerCountryFilter !== 'all' ||
+    playerBirthYearFilter !== 'all' ||
+    onlyRookies ||
+    playerQuery.trim() !== '' ||
+    minGames !== 5 ||
+    minMpg !== 15;
+
+  const effectivePlayerMeanScope: 'league' | 'filtered' =
+    hasPlayerFilterSelection && filteredPlayers.length > 0 ? playerMeanScope : 'league';
+
+  const leagueQualifiedPlayers2027 = useMemo(() => {
+    const computeQualified = (gamesThreshold: number, mpgThreshold: number) =>
+      leaguePlayers2027
+        .filter((p) => {
+          if (p.games.length < gamesThreshold) return false;
+          const avgMin = mean(p.games.map((g) => g.minutes));
+          return avgMin >= mpgThreshold;
+        })
+        .map((p) => ({
+          x: round1(mean(p.games.map((g) => playerMetricX.getValue(g)))),
+          y: round1(mean(p.games.map((g) => playerMetricY.getValue(g)))),
+        }))
+        .filter((p) => !Number.isNaN(p.x) && !Number.isNaN(p.y));
+
+    const primary = computeQualified(5, 15);
+    if (primary.length > 0) return primary;
+    return computeQualified(1, 0);
+  }, [leaguePlayers2027, playerMetricX, playerMetricY]);
+
+  const leaguePlayerMeanX = useMemo(() => {
+    if (leagueQualifiedPlayers2027.length === 0) return 0;
+    return round1(mean(leagueQualifiedPlayers2027.map((p) => p.x)));
+  }, [leagueQualifiedPlayers2027]);
+
+  const leaguePlayerMeanY = useMemo(() => {
+    if (leagueQualifiedPlayers2027.length === 0) return 0;
+    return round1(mean(leagueQualifiedPlayers2027.map((p) => p.y)));
+  }, [leagueQualifiedPlayers2027]);
+
+  const filteredPlayerMeanX = useMemo(() => {
     if (filteredPlayers.length === 0) return 0;
     return round1(mean(filteredPlayers.map((p) => p.x)));
   }, [filteredPlayers]);
 
-  const playerMeanY = useMemo(() => {
+  const filteredPlayerMeanY = useMemo(() => {
     if (filteredPlayers.length === 0) return 0;
     return round1(mean(filteredPlayers.map((p) => p.y)));
   }, [filteredPlayers]);
+
+  const playerMeanX =
+    effectivePlayerMeanScope === 'filtered' ? filteredPlayerMeanX : leaguePlayerMeanX;
+  const playerMeanY =
+    effectivePlayerMeanScope === 'filtered' ? filteredPlayerMeanY : leaguePlayerMeanY;
 
   // Handle Player Preset Select
   const handleSelectPlayerPreset = (presetId: string) => {
@@ -973,19 +1160,28 @@ export function ScatterAnalyticsView({
 
   // Reset helper
   const handleResetFilters = () => {
+    setHoveredEntity(null);
+    setTooltipDismissed(true);
     if (activeTab === 'teams') {
       setTeamConfFilter('all');
       setTeamDivFilter('all');
       setTeamQuery('');
+      setTeamMeanScope('league');
+      setSelectedTeamId(null);
       handleSelectTeamPreset('contenders');
     } else {
       setPlayerPosFilter('all');
       setPlayerConfFilter('all');
       setPlayerDivFilter('all');
       setPlayerTeamFilter('all');
+      setPlayerCountryFilter('all');
+      setPlayerBirthYearFilter('all');
+      setOnlyRookies(false);
       setPlayerQuery('');
       setMinGames(5);
       setMinMpg(15);
+      setPlayerMeanScope('league');
+      setSelectedPlayerId(null);
       handleSelectPlayerPreset('usage_efficiency');
     }
   };
@@ -1000,27 +1196,52 @@ export function ScatterAnalyticsView({
       normalizeSearchText(payload.name + ' ' + payload.abbreviation).includes(
         normalizeSearchText(teamQuery)
       );
+    const isSelected = selectedTeamId === payload.id;
     const isHovered = hoveredEntity?.id === payload.id;
-    const radius = isHovered ? 20 : isHighlighted ? 18 : 15;
-    const imgSize = (radius - 2) * 2;
+    const baseRadius = Number(payload.bubbleRadius) || 15;
+    const radius = isSelected
+      ? Math.max(baseRadius + 4, 18)
+      : isHovered
+        ? Math.max(baseRadius + 3, 17)
+        : isHighlighted
+          ? Math.max(baseRadius + 2, 17)
+          : baseRadius;
+    const imgSize = Math.max(12, (radius - 2) * 2);
 
     return (
       <g
         className="cursor-pointer transition-transform duration-150 select-none"
-        onMouseEnter={() => setHoveredEntity(payload)}
-        onClick={() => onInspectEntity('team', payload.id)}
+        onMouseEnter={() => {
+          setTooltipDismissed(false);
+          setHoveredEntity(payload);
+        }}
+        onMouseLeave={() => {
+          setHoveredEntity((prev: any) => (prev?.id === payload.id ? null : prev));
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          setHoveredEntity(null);
+          setTooltipDismissed(true);
+          setSelectedTeamId((prev) => (prev === payload.id ? null : payload.id));
+        }}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          setHoveredEntity(null);
+          setTooltipDismissed(true);
+          onInspectEntity('team', payload.id);
+        }}
       >
         {/* Glow / Highlight ring */}
-        {(isHighlighted || isHovered) && (
+        {(isHighlighted || isHovered || isSelected) && (
           <circle
             cx={cx}
             cy={cy}
             r={radius + 4}
             fill="none"
             stroke="#F97316"
-            strokeWidth={2.5}
-            strokeDasharray={isHovered ? 'none' : '3 3'}
-            className="animate-pulse"
+            strokeWidth={isSelected ? 3 : 2.5}
+            strokeDasharray={isHovered || isSelected ? 'none' : '3 3'}
+            className={isSelected ? '' : 'animate-pulse'}
           />
         )}
 
@@ -1030,8 +1251,8 @@ export function ScatterAnalyticsView({
           cy={cy}
           r={radius}
           fill="#0B1120"
-          stroke={isHovered ? '#F97316' : payload.primaryColor || '#1E293B'}
-          strokeWidth={isHovered ? 2 : 1.5}
+          stroke={isSelected || isHovered ? '#F97316' : payload.primaryColor || '#1E293B'}
+          strokeWidth={isSelected || isHovered ? 2.2 : 1.5}
           className="shadow-md"
         />
 
@@ -1071,25 +1292,50 @@ export function ScatterAnalyticsView({
     const isHighlighted =
       playerQuery &&
       normalizeSearchText(payload.name).includes(normalizeSearchText(playerQuery));
+    const isSelected = selectedPlayerId === payload.id;
     const isHovered = hoveredEntity?.id === payload.id;
-    const r = isHovered ? 9 : isHighlighted ? 8 : 6;
-    const dotColor = isHighlighted ? '#F97316' : payload.teamPrimaryColor || '#38BDF8';
+    const baseR = Number(payload.bubbleRadius) || 6;
+    const r = isSelected
+      ? baseR + 3
+      : isHovered
+        ? baseR + 2.5
+        : isHighlighted
+          ? baseR + 2
+          : baseR;
+    const dotColor = isHighlighted || isSelected ? '#F97316' : payload.teamPrimaryColor || '#38BDF8';
 
     return (
       <g
         className="cursor-pointer select-none"
-        onMouseEnter={() => setHoveredEntity(payload)}
-        onClick={() => onInspectEntity('player', payload.id)}
+        onMouseEnter={() => {
+          setTooltipDismissed(false);
+          setHoveredEntity(payload);
+        }}
+        onMouseLeave={() => {
+          setHoveredEntity((prev: any) => (prev?.id === payload.id ? null : prev));
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          setHoveredEntity(null);
+          setTooltipDismissed(true);
+          setSelectedPlayerId((prev) => (prev === payload.id ? null : payload.id));
+        }}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          setHoveredEntity(null);
+          setTooltipDismissed(true);
+          onInspectEntity('player', payload.id);
+        }}
       >
-        {isHovered && (
+        {(isHovered || isSelected) && (
           <circle
             cx={cx}
             cy={cy}
             r={r + 4}
             fill="none"
-            stroke="#FFFFFF"
-            strokeWidth={1.5}
-            className="animate-pulse"
+            stroke={isSelected ? '#F97316' : '#FFFFFF'}
+            strokeWidth={isSelected ? 2 : 1.5}
+            className={isSelected ? '' : 'animate-pulse'}
           />
         )}
         <circle
@@ -1097,9 +1343,9 @@ export function ScatterAnalyticsView({
           cy={cy}
           r={r}
           fill={dotColor}
-          fillOpacity={isHovered ? 1 : 0.85}
-          stroke={isHovered ? '#FFFFFF' : '#0B1120'}
-          strokeWidth={isHovered ? 2 : 1}
+          fillOpacity={isHovered || isSelected ? 1 : 0.85}
+          stroke={isHovered || isSelected ? '#FFFFFF' : '#0B1120'}
+          strokeWidth={isHovered || isSelected ? 2 : 1}
           className="transition-all duration-150"
         />
       </g>
@@ -1137,6 +1383,7 @@ export function ScatterAnalyticsView({
               onClick={() => {
                 setActiveTab('teams');
                 setHoveredEntity(null);
+                setTooltipDismissed(true);
               }}
               className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-medium rounded-md transition-all whitespace-nowrap shrink-0 ${
                 activeTab === 'teams'
@@ -1153,6 +1400,7 @@ export function ScatterAnalyticsView({
               onClick={() => {
                 setActiveTab('players');
                 setHoveredEntity(null);
+                setTooltipDismissed(true);
               }}
               className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-medium rounded-md transition-all whitespace-nowrap shrink-0 ${
                 activeTab === 'players'
@@ -1169,6 +1417,7 @@ export function ScatterAnalyticsView({
               onClick={() => {
                 setActiveTab('correlation');
                 setHoveredEntity(null);
+                setTooltipDismissed(true);
               }}
               className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-medium rounded-md transition-all whitespace-nowrap shrink-0 ${
                 activeTab === 'correlation'
@@ -1365,11 +1614,15 @@ export function ScatterAnalyticsView({
                   <Activity className="w-3 h-3" /> Tamaño Burbuja
                 </span>
                 <MetricInfoButton
-                  title={teamMetricSize.label}
-                  desc={teamMetricSize.description}
-                  interpretation={teamMetricSize.interpretation}
-                  unit={teamMetricSize.unit}
-                  lowerIsBetter={teamMetricSize.lowerIsBetter}
+                  title={teamMetricSize ? teamMetricSize.label : 'Tamaño Burbuja uniforme (---)'}
+                  desc={
+                    teamMetricSize
+                      ? teamMetricSize.description
+                      : 'Todas las burbujas mantienen el mismo tamaño estándar sin ponderación.'
+                  }
+                  interpretation={teamMetricSize?.interpretation}
+                  unit={teamMetricSize?.unit}
+                  lowerIsBetter={teamMetricSize?.lowerIsBetter}
                   align="right"
                   placement="bottom"
                 />
@@ -1379,6 +1632,7 @@ export function ScatterAnalyticsView({
                 onChange={(e) => setTeamMetricSizeId(e.target.value)}
                 className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
               >
+                <option value="none">---</option>
                 {TEAM_METRIC_DEFINITIONS.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.label}
@@ -1407,109 +1661,209 @@ export function ScatterAnalyticsView({
         )}
 
         {activeTab === 'players' && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-3 border-t border-[#1E293B]">
-            {/* Player X Metric Selector with (i) */}
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-                <span className="flex items-center gap-1 text-orange-400">
-                  <Filter className="w-3 h-3" /> Eje Horizontal (X)
-                </span>
-                <MetricInfoButton
-                  title={playerMetricX.label}
-                  desc={playerMetricX.qualificationNote || playerMetricX.label}
-                  unit={playerMetricX.unit}
-                  align="left"
-                  placement="bottom"
-                />
-              </label>
-              <select
-                value={playerMetricXId}
-                onChange={(e) => {
-                  setPlayerMetricXId(e.target.value);
-                  setPlayerPresetId('custom');
-                }}
-                className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
-              >
-                {STREAK_METRIC_OPTIONS.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
+          <div className="space-y-3 pt-3 border-t border-[#1E293B]">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* Player X Metric Selector with (i) */}
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                  <span className="flex items-center gap-1 text-orange-400">
+                    <Filter className="w-3 h-3" /> Eje Horizontal (X)
+                  </span>
+                  <MetricInfoButton
+                    title={playerMetricX.label}
+                    desc={playerMetricX.qualificationNote || playerMetricX.label}
+                    unit={playerMetricX.unit}
+                    align="left"
+                    placement="bottom"
+                  />
+                </label>
+                <select
+                  value={playerMetricXId}
+                  onChange={(e) => {
+                    setPlayerMetricXId(e.target.value);
+                    setPlayerPresetId('custom');
+                  }}
+                  className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
+                >
+                  {STREAK_METRIC_OPTIONS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Player Y Metric Selector with (i) */}
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                  <span className="flex items-center gap-1 text-sky-400">
+                    <Filter className="w-3 h-3" /> Eje Vertical (Y)
+                  </span>
+                  <MetricInfoButton
+                    title={playerMetricY.label}
+                    desc={playerMetricY.qualificationNote || playerMetricY.label}
+                    unit={playerMetricY.unit}
+                    align="left"
+                    placement="bottom"
+                  />
+                </label>
+                <select
+                  value={playerMetricYId}
+                  onChange={(e) => {
+                    setPlayerMetricYId(e.target.value);
+                    setPlayerPresetId('custom');
+                  }}
+                  className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
+                >
+                  {STREAK_METRIC_OPTIONS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Player Size Metric Selector with (i) */}
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                  <span className="flex items-center gap-1 text-purple-400">
+                    <Activity className="w-3 h-3" /> Tamaño Burbuja
+                  </span>
+                  <MetricInfoButton
+                    title={playerMetricSize ? playerMetricSize.label : 'Tamaño Burbuja uniforme (---)'}
+                    desc={
+                      playerMetricSize
+                        ? playerMetricSize.qualificationNote || playerMetricSize.label
+                        : 'Todas las burbujas mantienen el mismo tamaño estándar sin ponderación.'
+                    }
+                    unit={playerMetricSize?.unit}
+                    lowerIsBetter={playerMetricSize?.lowerIsBetter}
+                    align="right"
+                    placement="bottom"
+                  />
+                </label>
+                <select
+                  value={playerMetricSizeId}
+                  onChange={(e) => setPlayerMetricSizeId(e.target.value)}
+                  className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
+                >
+                  <option value="none">---</option>
+                  {STREAK_METRIC_OPTIONS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Live Search */}
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Search className="w-3 h-3 text-slate-400" /> Resaltar Jugador
+                </label>
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={playerQuery}
+                    onChange={(e) => setPlayerQuery(e.target.value)}
+                    placeholder="Buscar jugador..."
+                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+              </div>
             </div>
 
-            {/* Player Y Metric Selector with (i) */}
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-                <span className="flex items-center gap-1 text-sky-400">
-                  <Filter className="w-3 h-3" /> Eje Vertical (Y)
-                </span>
-                <MetricInfoButton
-                  title={playerMetricY.label}
-                  desc={playerMetricY.qualificationNote || playerMetricY.label}
-                  unit={playerMetricY.unit}
-                  align="left"
-                  placement="bottom"
-                />
-              </label>
-              <select
-                value={playerMetricYId}
-                onChange={(e) => {
-                  setPlayerMetricYId(e.target.value);
-                  setPlayerPresetId('custom');
-                }}
-                className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
-              >
-                {STREAK_METRIC_OPTIONS.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Player Position & Conference Filter */}
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                <Users className="w-3 h-3 text-emerald-400" /> Posición y Conf.
-              </label>
-              <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              {/* Position */}
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Users className="w-3 h-3 text-emerald-400" /> Posición
+                </label>
                 <select
                   value={playerPosFilter}
                   onChange={(e) => setPlayerPosFilter(e.target.value as any)}
-                  className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200"
+                  className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
                 >
                   <option value="all">Pos: Todas</option>
                   <option value="G">G - Bases</option>
                   <option value="F">F - Aleros</option>
                   <option value="C">C - Pívots</option>
                 </select>
+              </div>
+
+              {/* Conference */}
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Shield className="w-3 h-3 text-emerald-400" /> Conferencia
+                </label>
                 <select
                   value={playerConfFilter}
                   onChange={(e) => setPlayerConfFilter(e.target.value as any)}
-                  className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200"
+                  className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
                 >
                   <option value="all">Conf: Todas</option>
                   <option value="East">Este</option>
                   <option value="West">Oeste</option>
                 </select>
               </div>
-            </div>
 
-            {/* Live Search */}
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                <Search className="w-3 h-3 text-slate-400" /> Resaltar Jugador
-              </label>
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  type="text"
-                  value={playerQuery}
-                  onChange={(e) => setPlayerQuery(e.target.value)}
-                  placeholder="Buscar jugador..."
-                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500"
-                />
+              {/* Nationality */}
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Layers className="w-3 h-3 text-sky-400" /> Nacionalidad
+                </label>
+                <select
+                  value={playerCountryFilter}
+                  onChange={(e) => setPlayerCountryFilter(e.target.value)}
+                  className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
+                >
+                  <option value="all">País: Todos</option>
+                  {playerFilterOptions.countries.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Birth Year */}
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <BarChart2 className="w-3 h-3 text-amber-400" /> Año nacimiento
+                </label>
+                <select
+                  value={playerBirthYearFilter}
+                  onChange={(e) => setPlayerBirthYearFilter(e.target.value)}
+                  className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
+                >
+                  <option value="all">Año: Todos</option>
+                  {playerFilterOptions.birthYears.map((yr) => (
+                    <option key={yr} value={String(yr)}>
+                      {yr}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Solo rookies toggle button */}
+              <div className="space-y-1 col-span-2 sm:col-span-1 flex flex-col justify-end">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Sparkles className="w-3 h-3 text-orange-400" /> Experiencia
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setOnlyRookies((prev) => !prev)}
+                  aria-pressed={onlyRookies}
+                  className={`w-full min-h-[32px] px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 transition-all whitespace-nowrap ${
+                    onlyRookies
+                      ? 'bg-orange-500 text-slate-950 border-orange-400 shadow-sm'
+                      : 'bg-[#0B1120] text-slate-300 border-[#1E293B] hover:border-orange-500/50 hover:text-white'
+                  }`}
+                >
+                  <Zap className="w-3.5 h-3.5 shrink-0" />
+                  <span>Solo rookies</span>
+                </button>
               </div>
             </div>
           </div>
@@ -1566,9 +1920,45 @@ export function ScatterAnalyticsView({
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {hasTeamFilterSelection && (
+                    <div
+                      className="inline-flex items-center rounded-md bg-[#0B1120] border border-[#1E293B] p-0.5 text-[11px]"
+                      role="group"
+                      aria-label="Ámbito de la media de los ejes (Equipos)"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setTeamMeanScope('league')}
+                        className={`px-2 py-1 rounded transition-colors whitespace-nowrap font-medium ${
+                          effectiveTeamMeanScope === 'league'
+                            ? 'bg-orange-500 text-slate-950 font-semibold'
+                            : 'text-slate-300 hover:text-white'
+                        }`}
+                      >
+                        Toda la liga (26-27)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTeamMeanScope('filtered')}
+                        disabled={filteredTeams.length === 0}
+                        className={`px-2 py-1 rounded transition-colors whitespace-nowrap font-medium disabled:opacity-40 disabled:cursor-not-allowed ${
+                          effectiveTeamMeanScope === 'filtered'
+                            ? 'bg-sky-500 text-slate-950 font-semibold'
+                            : 'text-slate-300 hover:text-white'
+                        }`}
+                      >
+                        Seleccionados ({filteredTeams.length})
+                      </button>
+                    </div>
+                  )}
                   <span className="text-[11px] font-mono text-slate-400">
-                    Media NBA: X={teamMeanX.toFixed(1)}{teamMetricX.unit} · Y={teamMeanY.toFixed(1)}{teamMetricY.unit}
+                    {effectiveTeamMeanScope === 'filtered'
+                      ? `Media Sel. (${filteredTeams.length})`
+                      : 'Media Liga (26-27)'}
+                    : X={teamMeanX.toFixed(1)}
+                    {teamMetricX.unit} · Y={teamMeanY.toFixed(1)}
+                    {teamMetricY.unit}
                   </span>
                   <ExportImageButton
                     onBuildImage={() =>
@@ -1605,8 +1995,84 @@ export function ScatterAnalyticsView({
                 </div>
               </div>
 
+              {/* Selected Team Bar (Mark / Unmark / Open) */}
+              {selectedTeam && (
+                <div className="mb-2.5 px-3 py-2 bg-[#0B1120] border border-orange-500/40 rounded-lg flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <TeamLogo
+                      abbr={selectedTeam.abbreviation}
+                      teamId={selectedTeam.id}
+                      logoUrl={selectedTeam.logoUrl}
+                      size="xs"
+                    />
+                    <div className="min-w-0">
+                      <span className="text-xs font-bold text-slate-100 truncate block">
+                        {selectedTeam.name} ({selectedTeam.wins}-{selectedTeam.losses})
+                      </span>
+                      <span className="text-[11px] font-mono text-slate-300">
+                        {teamMetricX.shortLabel}:{' '}
+                        <strong className="text-orange-400">
+                          {selectedTeam.stats[teamMetricX.id]}
+                          {teamMetricX.unit}
+                        </strong>
+                        {' · '}
+                        {teamMetricY.shortLabel}:{' '}
+                        <strong className="text-sky-400">
+                          {selectedTeam.stats[teamMetricY.id]}
+                          {teamMetricY.unit}
+                        </strong>
+                        {teamMetricSize && (
+                          <>
+                            {' · '}
+                            {teamMetricSize.shortLabel}:{' '}
+                            <strong className="text-purple-400">
+                              {selectedTeam.stats[teamMetricSize.id]}
+                              {teamMetricSize.unit}
+                            </strong>
+                          </>
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => onInspectEntity('team', selectedTeam.id)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold bg-orange-500 text-slate-950 rounded-md hover:bg-orange-400 transition-colors whitespace-nowrap"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Abrir ficha</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedTeamId(null);
+                        setHoveredEntity(null);
+                        setTooltipDismissed(true);
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium bg-slate-800 text-slate-200 border border-slate-700 rounded-md hover:bg-slate-700 transition-colors whitespace-nowrap"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>Desmarcar</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Recharts Scatter Chart with Official Team Badges */}
-              <div id="teams-scatter-container" className="w-full h-[460px] bg-[#0E1626]/40 rounded-lg p-2">
+              <div
+                id="teams-scatter-container"
+                className="w-full h-[460px] bg-[#0E1626]/40 rounded-lg p-2"
+                onClick={() => {
+                  setSelectedTeamId(null);
+                  setHoveredEntity(null);
+                  setTooltipDismissed(true);
+                }}
+                onMouseMove={() => {
+                  if (tooltipDismissed) setTooltipDismissed(false);
+                }}
+                onMouseLeave={() => setHoveredEntity(null)}
+              >
                 <ResponsiveContainer width="100%" height="100%">
                   <ScatterChart margin={{ top: 25, right: 35, bottom: 45, left: 45 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1E293B" opacity={0.7} />
@@ -1652,17 +2118,21 @@ export function ScatterAnalyticsView({
                       }}
                     />
 
-                    <ZAxis range={[140, 140]} />
+                    <ZAxis type="number" dataKey="bubbleRadius" range={[120, 900]} />
 
-                    {/* League Mean Reference Lines */}
+                    {/* League / Selection Mean Reference Lines */}
                     <ReferenceLine
                       x={teamMeanX}
+                      ifOverflow="extendDomain"
                       stroke="#F97316"
                       strokeDasharray="4 4"
                       strokeOpacity={0.6}
                       strokeWidth={1.5}
                       label={{
-                        value: `Media X: ${teamMeanX}`,
+                        value:
+                          effectiveTeamMeanScope === 'filtered'
+                            ? `Media Sel. X: ${teamMeanX}`
+                            : `Media Liga X: ${teamMeanX}`,
                         fill: '#F97316',
                         fontSize: 10,
                         position: 'top',
@@ -1670,12 +2140,16 @@ export function ScatterAnalyticsView({
                     />
                     <ReferenceLine
                       y={teamMeanY}
+                      ifOverflow="extendDomain"
                       stroke="#38BDF8"
                       strokeDasharray="4 4"
                       strokeOpacity={0.6}
                       strokeWidth={1.5}
                       label={{
-                        value: `Media Y: ${teamMeanY}`,
+                        value:
+                          effectiveTeamMeanScope === 'filtered'
+                            ? `Media Sel. Y: ${teamMeanY}`
+                            : `Media Liga Y: ${teamMeanY}`,
                         fill: '#38BDF8',
                         fontSize: 10,
                         position: 'right',
@@ -1683,6 +2157,7 @@ export function ScatterAnalyticsView({
                     />
 
                     <Tooltip
+                      active={tooltipDismissed ? false : undefined}
                       content={({ payload }) => {
                         if (!payload || payload.length === 0) return null;
                         const data: EnrichedTeamMetricData = payload[0].payload;
@@ -1720,6 +2195,15 @@ export function ScatterAnalyticsView({
                                   {teamMetricY.unit}
                                 </span>
                               </div>
+                              {teamMetricSize && (
+                                <div className="flex items-center justify-between text-slate-300">
+                                  <span className="text-slate-400">Tamaño ({teamMetricSize.shortLabel}):</span>
+                                  <span className="font-mono font-bold text-purple-400">
+                                    {data.stats[teamMetricSize.id]}
+                                    {teamMetricSize.unit}
+                                  </span>
+                                </div>
+                              )}
                               <div className="flex items-center justify-between text-slate-300">
                                 <span className="text-slate-400">Net Rating:</span>
                                 <span className={`font-mono font-bold ${data.stats.netRtg >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -1728,7 +2212,7 @@ export function ScatterAnalyticsView({
                               </div>
                             </div>
                             <p className="text-[10px] text-orange-400 font-sans italic pt-1 border-t border-[#1E293B]/60 text-center">
-                              Haz click para abrir expediente completo
+                              Click para marcar/desmarcar · Doble click para abrir ficha
                             </p>
                           </div>
                         );
@@ -1804,18 +2288,26 @@ export function ScatterAnalyticsView({
                     return teamMetricX.lowerIsBetter ? valA - valB : valB - valA;
                   })
                   .map((t, idx) => {
-                    const isHovered = hoveredEntity?.id === t.id;
+                    const isSelected = selectedTeamId === t.id;
+                    const isHovered = hoveredEntity?.id === t.id || isSelected;
                     const valX = t.stats[teamMetricX.id];
                     const valY = t.stats[teamMetricY.id];
 
                     return (
                       <div
                         key={t.id}
-                        onMouseEnter={() => setHoveredEntity(t)}
+                        onMouseEnter={() => {
+                          setTooltipDismissed(false);
+                          setHoveredEntity(t);
+                        }}
                         onMouseLeave={() => setHoveredEntity(null)}
                         onClick={() => onInspectEntity('team', t.id)}
                         className={`flex items-center justify-between py-2 px-1.5 rounded-md cursor-pointer transition-colors ${
-                          isHovered ? 'bg-[#1E293B]' : 'hover:bg-[#182338]'
+                          isSelected
+                            ? 'bg-orange-500/15 ring-1 ring-orange-500/40'
+                            : isHovered
+                              ? 'bg-[#1E293B]'
+                              : 'hover:bg-[#182338]'
                         }`}
                       >
                         <div className="flex items-center gap-2 min-w-0">
@@ -1896,9 +2388,46 @@ export function ScatterAnalyticsView({
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {hasPlayerFilterSelection && (
+                    <div
+                      className="inline-flex items-center rounded-md bg-[#0B1120] border border-[#1E293B] p-0.5 text-[11px]"
+                      role="group"
+                      aria-label="Ámbito de la media de los ejes (Jugadores)"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setPlayerMeanScope('league')}
+                        className={`px-2 py-1 rounded transition-colors whitespace-nowrap font-medium ${
+                          effectivePlayerMeanScope === 'league'
+                            ? 'bg-orange-500 text-slate-950 font-semibold'
+                            : 'text-slate-300 hover:text-white'
+                        }`}
+                      >
+                        Toda la liga (26-27)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPlayerMeanScope('filtered')}
+                        disabled={filteredPlayers.length === 0}
+                        className={`px-2 py-1 rounded transition-colors whitespace-nowrap font-medium disabled:opacity-40 disabled:cursor-not-allowed ${
+                          effectivePlayerMeanScope === 'filtered'
+                            ? 'bg-sky-500 text-slate-950 font-semibold'
+                            : 'text-slate-300 hover:text-white'
+                        }`}
+                      >
+                        Seleccionados ({filteredPlayers.length})
+                      </button>
+                    </div>
+                  )}
                   <span className="text-[11px] font-mono text-slate-400">
-                    Muestra: {filteredPlayers.length} jugadores (Media: X={playerMeanX.toFixed(1)} · Y={playerMeanY.toFixed(1)})
+                    Muestra: {filteredPlayers.length} jugadores ·{' '}
+                    {effectivePlayerMeanScope === 'filtered'
+                      ? 'Media Sel.'
+                      : 'Media Liga (26-27)'}
+                    : X={playerMeanX.toFixed(1)}
+                    {playerMetricX.unit} · Y={playerMeanY.toFixed(1)}
+                    {playerMetricY.unit}
                   </span>
                   <ExportImageButton
                     onBuildImage={() =>
@@ -1935,8 +2464,84 @@ export function ScatterAnalyticsView({
                 </div>
               </div>
 
+              {/* Selected Player Bar (Mark / Unmark / Open) */}
+              {selectedPlayer && (
+                <div className="mb-2.5 px-3 py-2 bg-[#0B1120] border border-orange-500/40 rounded-lg flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <PlayerAvatar
+                      playerId={selectedPlayer.id}
+                      name={selectedPlayer.name}
+                      teamAbbr={selectedPlayer.teamAbbr}
+                      size="xs"
+                    />
+                    <div className="min-w-0">
+                      <span className="text-xs font-bold text-slate-100 truncate block">
+                        {selectedPlayer.name} · {selectedPlayer.teamAbbr} ({selectedPlayer.position})
+                      </span>
+                      <span className="text-[11px] font-mono text-slate-300">
+                        {playerMetricX.shortLabel}:{' '}
+                        <strong className="text-orange-400">
+                          {selectedPlayer.x}
+                          {playerMetricX.unit}
+                        </strong>
+                        {' · '}
+                        {playerMetricY.shortLabel}:{' '}
+                        <strong className="text-sky-400">
+                          {selectedPlayer.y}
+                          {playerMetricY.unit}
+                        </strong>
+                        {playerMetricSize && selectedPlayer.size !== null && (
+                          <>
+                            {' · '}
+                            {playerMetricSize.shortLabel}:{' '}
+                            <strong className="text-purple-400">
+                              {selectedPlayer.size}
+                              {playerMetricSize.unit}
+                            </strong>
+                          </>
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => onInspectEntity('player', selectedPlayer.id)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold bg-orange-500 text-slate-950 rounded-md hover:bg-orange-400 transition-colors whitespace-nowrap"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Abrir ficha</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedPlayerId(null);
+                        setHoveredEntity(null);
+                        setTooltipDismissed(true);
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium bg-slate-800 text-slate-200 border border-slate-700 rounded-md hover:bg-slate-700 transition-colors whitespace-nowrap"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>Desmarcar</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Recharts Scatter Chart with Official Franchise Colors */}
-              <div id="players-scatter-container" className="w-full h-[460px] bg-[#0E1626]/40 rounded-lg p-2">
+              <div
+                id="players-scatter-container"
+                className="w-full h-[460px] bg-[#0E1626]/40 rounded-lg p-2"
+                onClick={() => {
+                  setSelectedPlayerId(null);
+                  setHoveredEntity(null);
+                  setTooltipDismissed(true);
+                }}
+                onMouseMove={() => {
+                  if (tooltipDismissed) setTooltipDismissed(false);
+                }}
+                onMouseLeave={() => setHoveredEntity(null)}
+              >
                 <ResponsiveContainer width="100%" height="100%">
                   <ScatterChart margin={{ top: 25, right: 35, bottom: 45, left: 45 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1E293B" opacity={0.7} />
@@ -1980,16 +2585,20 @@ export function ScatterAnalyticsView({
                       }}
                     />
 
-                    <ZAxis range={[60, 60]} />
+                    <ZAxis type="number" dataKey="bubbleRadius" range={[40, 560]} />
 
                     <ReferenceLine
                       x={playerMeanX}
+                      ifOverflow="extendDomain"
                       stroke="#F97316"
                       strokeDasharray="4 4"
                       strokeOpacity={0.6}
                       strokeWidth={1.5}
                       label={{
-                        value: `Media X: ${playerMeanX}`,
+                        value:
+                          effectivePlayerMeanScope === 'filtered'
+                            ? `Media Sel. X: ${playerMeanX}`
+                            : `Media Liga X: ${playerMeanX}`,
                         fill: '#F97316',
                         fontSize: 10,
                         position: 'top',
@@ -1997,12 +2606,16 @@ export function ScatterAnalyticsView({
                     />
                     <ReferenceLine
                       y={playerMeanY}
+                      ifOverflow="extendDomain"
                       stroke="#38BDF8"
                       strokeDasharray="4 4"
                       strokeOpacity={0.6}
                       strokeWidth={1.5}
                       label={{
-                        value: `Media Y: ${playerMeanY}`,
+                        value:
+                          effectivePlayerMeanScope === 'filtered'
+                            ? `Media Sel. Y: ${playerMeanY}`
+                            : `Media Liga Y: ${playerMeanY}`,
                         fill: '#38BDF8',
                         fontSize: 10,
                         position: 'right',
@@ -2010,6 +2623,7 @@ export function ScatterAnalyticsView({
                     />
 
                     <Tooltip
+                      active={tooltipDismissed ? false : undefined}
                       content={({ payload }) => {
                         if (!payload || payload.length === 0) return null;
                         const data = payload[0].payload;
@@ -2037,22 +2651,31 @@ export function ScatterAnalyticsView({
 
                             <div className="space-y-1.5 pt-1.5 border-t border-[#1E293B] text-[11px]">
                               <div className="flex items-center justify-between text-slate-300">
-                                <span className="text-slate-400">{playerMetricX.label}:</span>
+                                <span className="text-slate-400">{playerMetricX.shortLabel}:</span>
                                 <span className="font-mono font-bold text-orange-400">
                                   {data.x}
                                   {playerMetricX.unit}
                                 </span>
                               </div>
                               <div className="flex items-center justify-between text-slate-300">
-                                <span className="text-slate-400">{playerMetricY.label}:</span>
+                                <span className="text-slate-400">{playerMetricY.shortLabel}:</span>
                                 <span className="font-mono font-bold text-sky-400">
                                   {data.y}
                                   {playerMetricY.unit}
                                 </span>
                               </div>
+                              {playerMetricSize && data.size !== null && (
+                                <div className="flex items-center justify-between text-slate-300">
+                                  <span className="text-slate-400">Tamaño ({playerMetricSize.shortLabel}):</span>
+                                  <span className="font-mono font-bold text-purple-400">
+                                    {data.size}
+                                    {playerMetricSize.unit}
+                                  </span>
+                                </div>
+                              )}
                             </div>
                             <p className="text-[10px] text-orange-400 font-sans italic pt-1 border-t border-[#1E293B]/60 text-center">
-                              Haz click para abrir expediente completo
+                              Click para marcar/desmarcar · Doble click para abrir ficha
                             </p>
                           </div>
                         );
@@ -2125,15 +2748,23 @@ export function ScatterAnalyticsView({
                   .sort((a, b) => b.x - a.x)
                   .slice(0, 50)
                   .map((p, idx) => {
-                    const isHovered = hoveredEntity?.id === p.id;
+                    const isSelected = selectedPlayerId === p.id;
+                    const isHovered = hoveredEntity?.id === p.id || isSelected;
                     return (
                       <div
                         key={p.id}
-                        onMouseEnter={() => setHoveredEntity(p)}
+                        onMouseEnter={() => {
+                          setTooltipDismissed(false);
+                          setHoveredEntity(p);
+                        }}
                         onMouseLeave={() => setHoveredEntity(null)}
                         onClick={() => onInspectEntity('player', p.id)}
                         className={`flex items-center justify-between py-2 px-1.5 rounded-md cursor-pointer transition-colors ${
-                          isHovered ? 'bg-[#1E293B]' : 'hover:bg-[#182338]'
+                          isSelected
+                            ? 'bg-orange-500/15 ring-1 ring-orange-500/40'
+                            : isHovered
+                              ? 'bg-[#1E293B]'
+                              : 'hover:bg-[#182338]'
                         }`}
                       >
                         <div className="flex items-center gap-2 min-w-0">

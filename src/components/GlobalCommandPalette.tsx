@@ -120,6 +120,13 @@ const SECTION_COMMANDS: Array<{
     icon: Compass,
   },
   {
+    sectionId: 'lineups',
+    label: 'Alineaciones',
+    subtitle: 'Rendimiento en pista de alineaciones de 5, 3 y 2 jugadores (NBA.com)',
+    keywords: 'quintetos alineaciones lineups parejas trios formaciones',
+    icon: Users,
+  },
+  {
     sectionId: 'gameday',
     label: 'Analizador de Jornadas',
     subtitle: 'Marcadores NBA, quinteto ideal de la noche e informe de partido',

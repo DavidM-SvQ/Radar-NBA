@@ -107,15 +107,23 @@ jobs:
           STATUS="${DATA_CHANGED%%:*}"
           GAMES27="${DATA_CHANGED#*:}"
 
-          if [ "$STATUS" != "yes" ]; then
+          # Comprobar también si ha cambiado el snapshot avanzado
+          if [ -f "data/nba-advanced-snapshot.json.gz" ]; then
+            git add data/nba-advanced-snapshot.json.gz
+          fi
+
+          if [ "$STATUS" != "yes" ] && ! git status --porcelain | grep -q "nba-advanced-snapshot.json.gz"; then
             echo "[RadarNBA CI] Sin partidos ni cambios nuevos en la NBA hoy. Se omite commit para no lanzar despliegue innecesario en Vercel."
-            git checkout -- data/nba-snapshot.json.gz || true
+            git checkout -- data/nba-snapshot.json.gz data/nba-advanced-snapshot.json.gz 2>/dev/null || true
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/nba-snapshot.json.gz
+          if [ -f "data/nba-advanced-snapshot.json.gz" ]; then
+            git add data/nba-advanced-snapshot.json.gz
+          fi
 
           if git diff --cached --quiet; then
             echo "[RadarNBA CI] No hay cambios binarios para confirmar."

@@ -10,8 +10,10 @@ import {
   Edit3,
   Eye,
   Info,
+  Layers,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldAlert,
   Sparkles,
@@ -206,7 +208,7 @@ interface FantasyEspnAssistantViewProps {
   onTabChange?: (tab: FantasyTab) => void;
 }
 
-type ManagerModalTab = 'my_team' | 'rivals_manager' | 'backup';
+type ManagerModalTab = 'my_team' | 'rivals_manager' | 'bulk_moves' | 'backup';
 
 const STORAGE_FANTASY_PERMANENT_KEY = 'radarnba_fantasy_manual_league_permanent';
 const LEGACY_STORAGE_KEYS = [
@@ -214,6 +216,28 @@ const LEGACY_STORAGE_KEYS = [
   'radarnba_fantasy_espn_445109163_t11_v2',
   'radarnba_fantasy_espn_445109163_t11_v1',
 ];
+
+const MY_TEAM_BULK_ID = '__MY_TEAM__';
+
+type BulkOperation =
+  | {
+      id: string;
+      kind: 'waiver_move';
+      teamId: string; // '__MY_TEAM__' | 'team_1' | ...
+      action: 'swap' | 'add' | 'drop';
+      addPlayerId?: string;
+      dropPlayerId?: string;
+    }
+  | {
+      id: string;
+      kind: 'team_trade';
+      teamAId: string; // '__MY_TEAM__' | 'team_1' | ...
+      teamBId: string; // '__MY_TEAM__' | 'team_1' | ...
+      fromAPlayerIds: string[];
+      fromBPlayerIds: string[];
+      extraDropAIds: string[];
+      extraDropBIds: string[];
+    };
 
 const DEFAULT_RIVAL_COUNT = 12;
 
@@ -241,6 +265,106 @@ function normalizeRosterSlots(contracts: FantasyRosterContract[]): FantasyRoster
     }
     return { playerId: c.playerId, slot: 'bench' };
   });
+}
+
+function cloneFantasyLeagueState(state: FantasyManualLeagueState): FantasyManualLeagueState {
+  const clonedRivals: Record<string, string[]> = {};
+  for (const [k, list] of Object.entries(state.rivalRosters || {})) {
+    if (Array.isArray(list)) clonedRivals[k] = [...list];
+  }
+  return {
+    ...state,
+    roster: (state.roster || []).map((c) => ({ ...c })),
+    rivalRosters: clonedRivals,
+    rivalTeamNames: { ...(state.rivalTeamNames || {}) },
+    takenRivalIds: [...(state.takenRivalIds || [])],
+    gameCorrections: state.gameCorrections ? { ...state.gameCorrections } : undefined,
+  };
+}
+
+function simulateLeagueStateWithOperations(
+  base: FantasyManualLeagueState,
+  ops: BulkOperation[]
+): FantasyManualLeagueState {
+  if (ops.length === 0) return base;
+  const draft = cloneFantasyLeagueState(base);
+
+  const stripEverywhere = (pid: string) => {
+    draft.roster = draft.roster.filter((c) => c.playerId !== pid);
+    for (const k of Object.keys(draft.rivalRosters)) {
+      draft.rivalRosters[k] = (draft.rivalRosters[k] || []).filter((id) => id !== pid);
+    }
+    draft.takenRivalIds = draft.takenRivalIds.filter((id) => id !== pid);
+  };
+
+  const addToTeam = (
+    teamId: string,
+    pid: string,
+    preferredSlot?: FantasyRosterContract['slot']
+  ) => {
+    if (!pid) return;
+    if (teamId === MY_TEAM_BULK_ID) {
+      if (!draft.roster.some((c) => c.playerId === pid)) {
+        const starterCount = draft.roster.filter((c) => c.slot === 'starter').length;
+        const fallbackSlot: FantasyRosterContract['slot'] =
+          starterCount < OFFICIAL_LEAGUE_RULES.activeStarters ? 'starter' : 'bench';
+        draft.roster.push({ playerId: pid, slot: preferredSlot || fallbackSlot });
+      }
+      return;
+    }
+    const list = draft.rivalRosters[teamId] || [];
+    if (!list.includes(pid)) {
+      draft.rivalRosters[teamId] = [...list, pid];
+    }
+  };
+
+  for (const op of ops) {
+    if (op.kind === 'waiver_move') {
+      let droppedSlot: FantasyRosterContract['slot'] | undefined;
+      if (op.dropPlayerId) {
+        if (op.teamId === MY_TEAM_BULK_ID) {
+          droppedSlot = draft.roster.find((c) => c.playerId === op.dropPlayerId)?.slot;
+        }
+        stripEverywhere(op.dropPlayerId);
+      }
+      if (op.addPlayerId && op.action !== 'drop') {
+        stripEverywhere(op.addPlayerId);
+        addToTeam(op.teamId, op.addPlayerId, droppedSlot);
+      }
+    } else if (op.kind === 'team_trade') {
+      const slotMapForMyTeam = new Map<string, FantasyRosterContract['slot']>();
+      for (const c of draft.roster) {
+        slotMapForMyTeam.set(c.playerId, c.slot);
+      }
+      const reusedSlotsFromA: Array<FantasyRosterContract['slot']> = op.fromAPlayerIds
+        .map((pid) => slotMapForMyTeam.get(pid))
+        .filter((s): s is FantasyRosterContract['slot'] => Boolean(s));
+      const reusedSlotsFromB: Array<FantasyRosterContract['slot']> = op.fromBPlayerIds
+        .map((pid) => slotMapForMyTeam.get(pid))
+        .filter((s): s is FantasyRosterContract['slot'] => Boolean(s));
+
+      for (const dropId of [...op.extraDropAIds, ...op.extraDropBIds]) {
+        stripEverywhere(dropId);
+      }
+      for (const pid of op.fromAPlayerIds) {
+        stripEverywhere(pid);
+      }
+      for (const pid of op.fromBPlayerIds) {
+        stripEverywhere(pid);
+      }
+      op.fromAPlayerIds.forEach((pid, idx) => {
+        const pref = op.teamBId === MY_TEAM_BULK_ID ? reusedSlotsFromB[idx] : undefined;
+        addToTeam(op.teamBId, pid, pref);
+      });
+      op.fromBPlayerIds.forEach((pid, idx) => {
+        const pref = op.teamAId === MY_TEAM_BULK_ID ? reusedSlotsFromA[idx] : undefined;
+        addToTeam(op.teamAId, pid, pref);
+      });
+    }
+  }
+
+  draft.roster = normalizeRosterSlots(draft.roster);
+  return draft;
 }
 
 function parseStoredFantasyState(rawJson: string | null, fallbackUpdatedAt: number): FantasyManualLeagueState | null {
@@ -706,6 +830,26 @@ export function FantasyEspnAssistantView({
   const [rivalSearchQuery, setRivalSearchQuery] = useState<string>('');
   const [rivalPasteBuffer, setRivalPasteBuffer] = useState<string>('');
   const [rivalPasteFeedback, setRivalPasteFeedback] = useState<string | null>(null);
+
+  // Bulk Roster Changes & Multi-Team Trades State
+  const [bulkSubMode, setBulkSubMode] = useState<'waiver' | 'trade'>('waiver');
+  const [bulkQueue, setBulkQueue] = useState<BulkOperation[]>([]);
+  const [bulkUndoSnapshot, setBulkUndoSnapshot] = useState<FantasyManualLeagueState | null>(null);
+  const [bulkTeamId, setBulkTeamId] = useState<string>('team_1');
+  const [bulkWaiverAction, setBulkWaiverAction] = useState<'swap' | 'add' | 'drop'>('swap');
+  const [bulkDropPlayerId, setBulkDropPlayerId] = useState<string>('');
+  const [bulkAddPlayerId, setBulkAddPlayerId] = useState<string>('');
+  const [bulkSearchQuery, setBulkSearchQuery] = useState<string>('');
+  const [bulkIncludeOwnedInSearch, setBulkIncludeOwnedInSearch] = useState<boolean>(false);
+  const [bulkBatchTextOpen, setBulkBatchTextOpen] = useState<boolean>(false);
+  const [bulkBatchText, setBulkBatchText] = useState<string>('');
+  const [bulkFeedback, setBulkFeedback] = useState<string | null>(null);
+  const [bulkTradeTeamA, setBulkTradeTeamA] = useState<string>('team_1');
+  const [bulkTradeTeamB, setBulkTradeTeamB] = useState<string>('team_2');
+  const [bulkTradeFromAIds, setBulkTradeFromAIds] = useState<string[]>([]);
+  const [bulkTradeFromBIds, setBulkTradeFromBIds] = useState<string[]>([]);
+  const [bulkTradeExtraDropAIds, setBulkTradeExtraDropAIds] = useState<string[]>([]);
+  const [bulkTradeExtraDropBIds, setBulkTradeExtraDropBIds] = useState<string[]>([]);
 
   // Smart Injury & B2B Weekly Projection Mode
   const [projectionMode, setProjectionMode] = useState<FantasyProjectionMode>('smart');
@@ -2435,6 +2579,441 @@ export function FantasyEspnAssistantView({
     reader.readAsText(file);
   };
 
+  // --- Bulk Roster Changes & Multi-Team Trade Engine ---
+  const simulatedBulkLeagueState = useMemo(
+    () => simulateLeagueStateWithOperations(leagueState, bulkQueue),
+    [leagueState, bulkQueue]
+  );
+
+  const getBulkTeamLabel = useCallback(
+    (teamId: string): string => {
+      if (teamId === MY_TEAM_BULK_ID) {
+        return leagueState.myTeamName?.trim() || 'Mi Equipo';
+      }
+      return getRivalDisplayName(teamId);
+    },
+    [leagueState.myTeamName, getRivalDisplayName]
+  );
+
+  const getTeamPlayerIdsInSim = useCallback(
+    (state: FantasyManualLeagueState, teamId: string): string[] => {
+      if (teamId === MY_TEAM_BULK_ID) {
+        return (state.roster || []).map((c) => c.playerId);
+      }
+      return state.rivalRosters?.[teamId] || [];
+    },
+    []
+  );
+
+  const simOwnerByPlayerId = useMemo(() => {
+    const map = new Map<string, { teamId: string; teamName: string }>();
+    for (const c of simulatedBulkLeagueState.roster || []) {
+      map.set(c.playerId, {
+        teamId: MY_TEAM_BULK_ID,
+        teamName: getBulkTeamLabel(MY_TEAM_BULK_ID),
+      });
+    }
+    for (const [tKey, pIds] of Object.entries(simulatedBulkLeagueState.rivalRosters || {})) {
+      if (!Array.isArray(pIds)) continue;
+      const tName = getBulkTeamLabel(tKey);
+      for (const pid of pIds) {
+        if (pid) map.set(pid, { teamId: tKey, teamName: tName });
+      }
+    }
+    return map;
+  }, [simulatedBulkLeagueState, getBulkTeamLabel]);
+
+  const bulkAllTeamOptions = useMemo(() => {
+    return [
+      {
+        id: MY_TEAM_BULK_ID,
+        label: getBulkTeamLabel(MY_TEAM_BULK_ID),
+        count: (simulatedBulkLeagueState.roster || []).length,
+        isMine: true,
+      },
+      ...rivalSlotKeys.map((tKey) => ({
+        id: tKey,
+        label: getBulkTeamLabel(tKey),
+        count: (simulatedBulkLeagueState.rivalRosters?.[tKey] || []).length,
+        isMine: false,
+      })),
+    ];
+  }, [rivalSlotKeys, simulatedBulkLeagueState, getBulkTeamLabel]);
+
+  const bulkSelectedTeamRosterItems = useMemo(() => {
+    const ids = getTeamPlayerIdsInSim(simulatedBulkLeagueState, bulkTeamId);
+    return ids
+      .map((pid) => enrichedById.get(pid))
+      .filter((x): x is NonNullable<typeof x> => Boolean(x))
+      .sort((a, b) => b.stats.seasonAvgFpts - a.stats.seasonAvgFpts);
+  }, [simulatedBulkLeagueState, bulkTeamId, getTeamPlayerIdsInSim, enrichedById]);
+
+  const bulkFilteredAddCandidates = useMemo(() => {
+    const q = normalizeSearchText(bulkSearchQuery);
+    const takenInSim = new Set(simulatedBulkLeagueState.takenRivalIds || []);
+    return enrichedCatalog
+      .filter((x) => {
+        const owner = simOwnerByPlayerId.get(x.player.id);
+        const isGenericTaken = takenInSim.has(x.player.id);
+        if (owner?.teamId === bulkTeamId) return false;
+        if (!bulkIncludeOwnedInSearch && (owner || isGenericTaken)) return false;
+        if (!q) return true;
+        return normalizeSearchText(
+          `${x.player.name} ${x.player.teamAbbr} ${x.player.position}`
+        ).includes(q);
+      })
+      .sort((a, b) => b.stats.seasonAvgFpts - a.stats.seasonAvgFpts)
+      .slice(0, 32);
+  }, [
+    enrichedCatalog,
+    bulkSearchQuery,
+    bulkIncludeOwnedInSearch,
+    bulkTeamId,
+    simOwnerByPlayerId,
+    simulatedBulkLeagueState.takenRivalIds,
+  ]);
+
+  const bulkTradeTeamAItems = useMemo(() => {
+    const ids = getTeamPlayerIdsInSim(simulatedBulkLeagueState, bulkTradeTeamA);
+    return ids
+      .map((pid) => enrichedById.get(pid))
+      .filter((x): x is NonNullable<typeof x> => Boolean(x))
+      .sort((a, b) => b.stats.seasonAvgFpts - a.stats.seasonAvgFpts);
+  }, [simulatedBulkLeagueState, bulkTradeTeamA, getTeamPlayerIdsInSim, enrichedById]);
+
+  const bulkTradeTeamBItems = useMemo(() => {
+    const ids = getTeamPlayerIdsInSim(simulatedBulkLeagueState, bulkTradeTeamB);
+    return ids
+      .map((pid) => enrichedById.get(pid))
+      .filter((x): x is NonNullable<typeof x> => Boolean(x))
+      .sort((a, b) => b.stats.seasonAvgFpts - a.stats.seasonAvgFpts);
+  }, [simulatedBulkLeagueState, bulkTradeTeamB, getTeamPlayerIdsInSim, enrichedById]);
+
+  const bulkTradeSummary = useMemo(() => {
+    const fromAItems = bulkTradeFromAIds
+      .map((id) => enrichedById.get(id))
+      .filter((x): x is NonNullable<typeof x> => Boolean(x));
+    const fromBItems = bulkTradeFromBIds
+      .map((id) => enrichedById.get(id))
+      .filter((x): x is NonNullable<typeof x> => Boolean(x));
+    const sumAvgA = fromAItems.reduce((acc, x) => acc + x.stats.seasonAvgFpts, 0);
+    const sumAvgB = fromBItems.reduce((acc, x) => acc + x.stats.seasonAvgFpts, 0);
+    const deltaA = sumAvgB - sumAvgA;
+    const contractDeltaA =
+      fromBItems.length - fromAItems.length - bulkTradeExtraDropAIds.length;
+    const contractDeltaB =
+      fromAItems.length - fromBItems.length - bulkTradeExtraDropBIds.length;
+    return {
+      fromAItems,
+      fromBItems,
+      sumAvgA,
+      sumAvgB,
+      deltaA,
+      contractDeltaA,
+      contractDeltaB,
+    };
+  }, [
+    bulkTradeFromAIds,
+    bulkTradeFromBIds,
+    bulkTradeExtraDropAIds,
+    bulkTradeExtraDropBIds,
+    enrichedById,
+  ]);
+
+  const describeBulkOperation = useCallback(
+    (op: BulkOperation): string => {
+      if (op.kind === 'waiver_move') {
+        const teamLabel = getBulkTeamLabel(op.teamId);
+        const addName = op.addPlayerId ? playersById.get(op.addPlayerId)?.name || op.addPlayerId : '';
+        const dropName = op.dropPlayerId ? playersById.get(op.dropPlayerId)?.name || op.dropPlayerId : '';
+        if (op.action === 'swap') {
+          return `${teamLabel}: +${addName} / −${dropName}`;
+        }
+        if (op.action === 'add') {
+          return `${teamLabel}: Fichar +${addName}`;
+        }
+        return `${teamLabel}: Cortar −${dropName}`;
+      }
+      const labelA = getBulkTeamLabel(op.teamAId);
+      const labelB = getBulkTeamLabel(op.teamBId);
+      const namesA = op.fromAPlayerIds.map((id) => playersById.get(id)?.name || id).join(', ');
+      const namesB = op.fromBPlayerIds.map((id) => playersById.get(id)?.name || id).join(', ');
+      const extraDrops = [...op.extraDropAIds, ...op.extraDropBIds]
+        .map((id) => playersById.get(id)?.name || id)
+        .filter(Boolean);
+      return `Trade ${labelA} (${namesA || '—'}) ⇄ ${labelB} (${namesB || '—'})${
+        extraDrops.length > 0 ? ` · Cortan: ${extraDrops.join(', ')}` : ''
+      }`;
+    },
+    [getBulkTeamLabel, playersById]
+  );
+
+  const buildPendingWaiverOp = (): BulkOperation | null => {
+    if (bulkWaiverAction === 'swap') {
+      if (!bulkAddPlayerId || !bulkDropPlayerId) {
+        setBulkFeedback('Selecciona tanto el jugador que cortas (−) como el agente libre que fichas (+).');
+        return null;
+      }
+    } else if (bulkWaiverAction === 'add') {
+      if (!bulkAddPlayerId) {
+        setBulkFeedback('Selecciona el jugador libre (+) que quieres añadir.');
+        return null;
+      }
+    } else if (bulkWaiverAction === 'drop') {
+      if (!bulkDropPlayerId) {
+        setBulkFeedback('Selecciona el jugador (−) que quieres cortar de este equipo.');
+        return null;
+      }
+    }
+    return {
+      id: `op_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      kind: 'waiver_move',
+      teamId: bulkTeamId,
+      action: bulkWaiverAction,
+      addPlayerId: bulkWaiverAction !== 'drop' ? bulkAddPlayerId : undefined,
+      dropPlayerId: bulkWaiverAction !== 'add' ? bulkDropPlayerId : undefined,
+    };
+  };
+
+  const handleEnqueueWaiverMove = () => {
+    const op = buildPendingWaiverOp();
+    if (!op) return;
+    setBulkQueue((prev) => [...prev, op]);
+    setBulkFeedback(`Añadido a la cola: ${describeBulkOperation(op)}`);
+    setBulkAddPlayerId('');
+    setBulkDropPlayerId('');
+  };
+
+  const handleApplySingleWaiverNow = () => {
+    const op = buildPendingWaiverOp();
+    if (!op) return;
+    setBulkUndoSnapshot(cloneFantasyLeagueState(leagueState));
+    const opsToRun = [...bulkQueue, op];
+    commitLeagueState((prev) => simulateLeagueStateWithOperations(prev, opsToRun));
+    setBulkQueue([]);
+    setBulkAddPlayerId('');
+    setBulkDropPlayerId('');
+    const summary = describeBulkOperation(op);
+    setBulkFeedback(`Guardado permanentemente: ${summary}`);
+    setActionBannerMsg(
+      opsToRun.length > 1
+        ? `Lote de ${opsToRun.length} movimientos guardado en la liga (${summary}).`
+        : `Movimiento guardado en la liga: ${summary}.`
+    );
+  };
+
+  const resolveBulkTeamFromText = (rawTeamName: string): string | null => {
+    const norm = normalizeSearchText(rawTeamName);
+    if (!norm) return null;
+    const myNorm = normalizeSearchText(leagueState.myTeamName || 'mi equipo');
+    if (norm === 'mi equipo' || norm === 'mio' || norm === myNorm || myNorm.includes(norm)) {
+      return MY_TEAM_BULK_ID;
+    }
+    const rivalMatch = norm.match(/^(?:rival|equipo|team)\s*(\d{1,2})$/);
+    if (rivalMatch) {
+      return `team_${Number(rivalMatch[1])}`;
+    }
+    for (const tKey of rivalSlotKeys) {
+      const labelNorm = normalizeSearchText(getRivalDisplayName(tKey));
+      if (labelNorm === norm || labelNorm.includes(norm)) {
+        return tKey;
+      }
+    }
+    return null;
+  };
+
+  const findSinglePlayerByTextFragment = (fragment: string): PlayerSummary | null => {
+    const cleaned = fragment.replace(/^[+-]\s*/, '').trim();
+    if (!cleaned) return null;
+    const parsed = parseCopiedEspnTextToPlayers(cleaned, effectivePlayers, 1);
+    if (parsed.length > 0) return parsed[0].player;
+    const norm = normalizeSearchText(cleaned);
+    const direct = effectivePlayers.find((p) => normalizeSearchText(p.name) === norm);
+    if (direct) return direct;
+    return (
+      effectivePlayers.find((p) => normalizeSearchText(p.name).includes(norm)) || null
+    );
+  };
+
+  const handleParseBulkBatchText = () => {
+    const lines = bulkBatchText
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (lines.length === 0) {
+      setBulkFeedback('Escribe al menos una línea con movimientos (ej: Rival 1: +Jugador / -Jugador).');
+      return;
+    }
+    const createdOps: BulkOperation[] = [];
+    const skippedLines: string[] = [];
+
+    for (const line of lines) {
+      let targetTeamId = bulkTeamId;
+      let expr = line;
+      const colonIdx = line.indexOf(':');
+      if (colonIdx > 0) {
+        const teamPart = line.slice(0, colonIdx).trim();
+        const resolvedTeam = resolveBulkTeamFromText(teamPart);
+        if (resolvedTeam) {
+          targetTeamId = resolvedTeam;
+          expr = line.slice(colonIdx + 1).trim();
+        }
+      }
+
+      const tokens = expr
+        .split(/[/,;]+|\s+por\s+|\s+x\s+/i)
+        .map((t) => t.trim())
+        .filter(Boolean);
+
+      let addId: string | undefined;
+      let dropId: string | undefined;
+      for (const tok of tokens) {
+        if (tok.startsWith('+') || /^alta\s+/i.test(tok) || /^ficha\s+/i.test(tok)) {
+          const p = findSinglePlayerByTextFragment(tok.replace(/^(alta|ficha)\s+/i, '+'));
+          if (p) addId = p.id;
+        } else if (
+          tok.startsWith('-') ||
+          tok.startsWith('−') ||
+          /^corta\s+/i.test(tok) ||
+          /^baja\s+/i.test(tok)
+        ) {
+          const p = findSinglePlayerByTextFragment(tok.replace(/^(corta|baja)\s+/i, '-'));
+          if (p) dropId = p.id;
+        } else {
+          // If no prefix and we already have addId, assume second token is drop, else add
+          const p = findSinglePlayerByTextFragment(tok);
+          if (p) {
+            if (!addId) addId = p.id;
+            else if (!dropId) dropId = p.id;
+          }
+        }
+      }
+
+      if (addId && dropId && addId !== dropId) {
+        createdOps.push({
+          id: `op_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          kind: 'waiver_move',
+          teamId: targetTeamId,
+          action: 'swap',
+          addPlayerId: addId,
+          dropPlayerId: dropId,
+        });
+      } else if (addId) {
+        createdOps.push({
+          id: `op_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          kind: 'waiver_move',
+          teamId: targetTeamId,
+          action: 'add',
+          addPlayerId: addId,
+        });
+      } else if (dropId) {
+        createdOps.push({
+          id: `op_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          kind: 'waiver_move',
+          teamId: targetTeamId,
+          action: 'drop',
+          dropPlayerId: dropId,
+        });
+      } else {
+        skippedLines.push(line);
+      }
+    }
+
+    if (createdOps.length === 0) {
+      setBulkFeedback(
+        'No se pudo reconocer ningún jugador. Usa el formato "Rival 1: +Nombre Jugador / -Nombre Cortado".'
+      );
+      return;
+    }
+
+    setBulkQueue((prev) => [...prev, ...createdOps]);
+    setBulkBatchText('');
+    setBulkBatchTextOpen(false);
+    setBulkFeedback(
+      `Encolados ${createdOps.length} movimientos correctamente.${
+        skippedLines.length > 0 ? ` (${skippedLines.length} línea(s) no reconocidas)` : ''
+      }`
+    );
+  };
+
+  const buildPendingTradeOp = (): BulkOperation | null => {
+    if (bulkTradeTeamA === bulkTradeTeamB) {
+      setBulkFeedback('Elige dos equipos distintos para ejecutar el traspaso.');
+      return null;
+    }
+    if (bulkTradeFromAIds.length === 0 || bulkTradeFromBIds.length === 0) {
+      setBulkFeedback('Selecciona al menos un jugador en cada bando del traspaso.');
+      return null;
+    }
+    return {
+      id: `op_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      kind: 'team_trade',
+      teamAId: bulkTradeTeamA,
+      teamBId: bulkTradeTeamB,
+      fromAPlayerIds: [...bulkTradeFromAIds],
+      fromBPlayerIds: [...bulkTradeFromBIds],
+      extraDropAIds: [...bulkTradeExtraDropAIds],
+      extraDropBIds: [...bulkTradeExtraDropBIds],
+    };
+  };
+
+  const resetBulkTradeSelections = () => {
+    setBulkTradeFromAIds([]);
+    setBulkTradeFromBIds([]);
+    setBulkTradeExtraDropAIds([]);
+    setBulkTradeExtraDropBIds([]);
+  };
+
+  const handleEnqueueTeamTrade = () => {
+    const op = buildPendingTradeOp();
+    if (!op) return;
+    setBulkQueue((prev) => [...prev, op]);
+    resetBulkTradeSelections();
+    setBulkFeedback(`Traspaso añadido a la cola: ${describeBulkOperation(op)}`);
+  };
+
+  const handleApplyTeamTradeNow = () => {
+    const op = buildPendingTradeOp();
+    if (!op) return;
+    setBulkUndoSnapshot(cloneFantasyLeagueState(leagueState));
+    const opsToRun = [...bulkQueue, op];
+    commitLeagueState((prev) => simulateLeagueStateWithOperations(prev, opsToRun));
+    setBulkQueue([]);
+    resetBulkTradeSelections();
+    const summary = describeBulkOperation(op);
+    setBulkFeedback(`Traspaso ejecutado y guardado: ${summary}`);
+    setActionBannerMsg(
+      opsToRun.length > 1
+        ? `Lote de ${opsToRun.length} movimientos (incluido trade) guardado en la liga.`
+        : `Traspaso ejecutado y guardado permanentemente: ${summary}.`
+    );
+  };
+
+  const handleApplyBulkQueue = () => {
+    if (bulkQueue.length === 0) return;
+    const count = bulkQueue.length;
+    setBulkUndoSnapshot(cloneFantasyLeagueState(leagueState));
+    const snapshotOps = [...bulkQueue];
+    commitLeagueState((prev) => simulateLeagueStateWithOperations(prev, snapshotOps));
+    setBulkQueue([]);
+    setBulkAddPlayerId('');
+    setBulkDropPlayerId('');
+    resetBulkTradeSelections();
+    setBulkFeedback(`Lote completo de ${count} cambios aplicado y guardado en la liga.`);
+    setActionBannerMsg(
+      `Lote masivo de ${count} cambios en plantillas guardado permanentemente.`
+    );
+  };
+
+  const handleUndoLastBulkBatch = () => {
+    if (!bulkUndoSnapshot) return;
+    const restored = cloneFantasyLeagueState(bulkUndoSnapshot);
+    commitLeagueState(() => restored);
+    setBulkUndoSnapshot(null);
+    setBulkFeedback('Se ha revertido el último lote de movimientos masivos.');
+    setActionBannerMsg('Último lote de cambios masivos deshecho correctamente.');
+  };
+
   // Audited Player for Tab 4 (Scoring Breakdown)
   const auditedPlayerItem = useMemo(() => {
     if (auditPlayerId && enrichedById.has(auditPlayerId)) {
@@ -2631,12 +3210,12 @@ export function FantasyEspnAssistantView({
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 min-w-0 max-w-full">
       {/* Top Command Header: Manual League Control + NBA Schedule & Medical Context */}
-      <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4">
-        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex flex-wrap items-center gap-x-2 text-xs text-slate-400">
+      <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4 min-w-0 max-w-full">
+        <div className="flex flex-col gap-3.5 min-w-0">
+          <div className="space-y-1.5 min-w-0">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400 min-w-0">
               <span className="font-semibold text-orange-400">
                 {leagueState.myTeamName}
               </span>
@@ -2651,12 +3230,12 @@ export function FantasyEspnAssistantView({
                 <span className="text-amber-300 font-medium">Sincronizando cambios...</span>
               ) : storageMode === 'upstash-redis' ? (
                 <span className="inline-flex items-center gap-1 text-emerald-400 font-medium">
-                  <Cloud className="w-3.5 h-3.5" />
+                  <Cloud className="w-3.5 h-3.5 shrink-0" />
                   <span>Nube Upstash activa · Sincronizado en todos tus dispositivos</span>
                 </span>
               ) : diskSaveStatus === 'saved' ? (
                 <span className="inline-flex items-center gap-1 text-emerald-400 font-medium">
-                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                   <span>Guardado en servidor y navegador (Sincronizado)</span>
                 </span>
               ) : (
@@ -2666,25 +3245,25 @@ export function FantasyEspnAssistantView({
               )}
             </div>
 
-            <h1 className="text-xl sm:text-2xl font-bold text-slate-100 tracking-tight">
+            <h1 className="text-lg sm:text-2xl font-bold text-slate-100 tracking-tight leading-snug">
               Asistente Fantasy NBA · Gestión Manual de Liga Privada
             </h1>
-            <p className="text-xs sm:text-sm text-slate-400 max-w-3xl">
+            <p className="text-xs sm:text-sm text-slate-400 max-w-4xl leading-relaxed">
               Puntuación oficial exacta partido a partido, control permanente de tu plantilla (10 titulares + 2 reservas) y de los equipos rivales para filtrar Agentes Libres reales y cierres semanales del lunes.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 min-w-0 w-full">
             <button
               type="button"
               onClick={() => {
                 setManagerTab('my_team');
                 setRosterModalOpen(true);
               }}
-              className="min-h-[40px] inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-orange-500 hover:bg-orange-400 text-slate-950 rounded-lg transition-colors whitespace-nowrap shrink-0"
+              className="min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 text-xs font-semibold bg-orange-500 hover:bg-orange-400 text-slate-950 rounded-lg transition-colors text-center"
             >
-              <Users className="w-3.5 h-3.5" />
-              <span>Mi Equipo ({myRosterEnriched.length}/12)</span>
+              <Users className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Mi Equipo ({myRosterEnriched.length}/12)</span>
             </button>
 
             <button
@@ -2693,64 +3272,74 @@ export function FantasyEspnAssistantView({
                 setManagerTab('rivals_manager');
                 setRosterModalOpen(true);
               }}
-              className="min-h-[40px] inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/60 text-slate-100 rounded-lg transition-colors whitespace-nowrap shrink-0"
+              className="min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 sm:px-3.5 py-2 text-xs font-semibold bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/60 text-slate-100 rounded-lg transition-colors text-center"
             >
-              <ClipboardPaste className="w-3.5 h-3.5 text-orange-400" />
-              <span>Equipos Rivales ({activeRivalTeamsCount})</span>
+              <ClipboardPaste className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+              <span className="truncate">Equipos Rivales ({activeRivalTeamsCount})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setManagerTab('bulk_moves');
+                setBulkFeedback(null);
+                setRosterModalOpen(true);
+              }}
+              className="min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 sm:px-3.5 py-2 text-xs font-semibold bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/60 text-slate-100 rounded-lg transition-colors text-center"
+            >
+              <Layers className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+              <span className="truncate">Movimientos Masivos</span>
+              {bulkQueue.length > 0 && (
+                <span className="px-1.5 py-0.5 text-[10px] font-mono font-bold rounded bg-orange-500 text-slate-950 shrink-0">
+                  {bulkQueue.length}
+                </span>
+              )}
             </button>
 
             <button
               type="button"
               disabled={contextRefreshing || contextLoading}
               onClick={() => void fetchNbaFantasyContext(true)}
-              className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-[#0B1120] border border-[#1E293B] hover:border-slate-600 text-slate-300 hover:text-white rounded-lg transition-colors whitespace-nowrap shrink-0 disabled:opacity-60"
+              className="min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium bg-[#0B1120] border border-[#1E293B] hover:border-slate-600 text-slate-300 hover:text-white rounded-lg transition-colors disabled:opacity-60 text-center"
             >
               <RefreshCw
-                className={`w-3.5 h-3.5 text-orange-400 ${
+                className={`w-3.5 h-3.5 text-orange-400 shrink-0 ${
                   contextRefreshing ? 'animate-spin' : ''
                 }`}
               />
-              <span>Actualizar Partes NBA</span>
+              <span className="truncate">Actualizar Partes NBA</span>
             </button>
           </div>
         </div>
 
         {/* Week Selector Bar (Monday Lock Horizon) */}
         {effectiveWeeks.length > 0 && (
-          <div className="pt-3 border-t border-[#1E293B] flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-300 whitespace-nowrap">
-                <Calendar className="w-3.5 h-3.5 text-orange-400" />
+          <div className="pt-3 border-t border-[#1E293B] flex flex-col sm:flex-row sm:items-center justify-between gap-3 min-w-0">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2 min-w-0 max-w-full w-full sm:w-auto">
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-300 shrink-0">
+                <Calendar className="w-3.5 h-3.5 text-orange-400 shrink-0" />
                 <span>Semana de bloqueo (Lun–Dom):</span>
               </span>
-              <div className="flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
-                {effectiveWeeks.map((wk) => {
-                  const active = activeWeek?.id === wk.id;
-                  return (
-                    <button
-                      key={wk.id}
-                      type="button"
-                      onClick={() => setSelectedWeekId(wk.id)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                        active
-                          ? 'bg-orange-500 text-slate-950 font-semibold'
-                          : 'text-slate-300 hover:text-white'
-                      }`}
-                    >
-                      {wk.label} ({wk.rangeLabel})
-                    </button>
-                  );
-                })}
-              </div>
+              <select
+                value={activeWeek?.id || selectedWeekId}
+                onChange={(e) => setSelectedWeekId(e.target.value)}
+                className="w-full sm:w-72 px-3 py-2 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 font-medium focus:outline-none focus:border-orange-500"
+              >
+                {effectiveWeeks.map((wk) => (
+                  <option key={wk.id} value={wk.id}>
+                    {wk.label} ({wk.rangeLabel}) {wk.isLocked ? '[Bloqueada]' : '[Abierta]'}
+                  </option>
+                ))}
+              </select>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="inline-flex items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="grid grid-cols-2 sm:inline-flex items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs w-full sm:w-auto max-w-full min-w-0">
                 <button
                   type="button"
                   onClick={() => setProjectionMode('smart')}
                   title="Distingue bajas puntuales (DTD/Duda), descansos en Back-to-Back y bajas de larga duración (Out/IR)"
-                  className={`px-2.5 py-1 rounded-md font-medium transition-colors whitespace-nowrap shrink-0 ${
+                  className={`px-2.5 py-1.5 sm:py-1 rounded-md font-medium transition-colors text-center leading-tight ${
                     projectionMode === 'smart'
                       ? 'bg-[#1E293B] text-orange-400 font-semibold'
                       : 'text-slate-400 hover:text-slate-200'
@@ -2762,7 +3351,7 @@ export function FantasyEspnAssistantView({
                   type="button"
                   onClick={() => setProjectionMode('conservative')}
                   title="Aplica recortes más estrictos ante dudas médicas o semanas con Back-to-Back"
-                  className={`px-2.5 py-1 rounded-md font-medium transition-colors whitespace-nowrap shrink-0 ${
+                  className={`px-2.5 py-1.5 sm:py-1 rounded-md font-medium transition-colors text-center leading-tight ${
                     projectionMode === 'conservative'
                       ? 'bg-[#1E293B] text-amber-300 font-semibold'
                       : 'text-slate-400 hover:text-slate-200'
@@ -2771,19 +3360,6 @@ export function FantasyEspnAssistantView({
                   Conservador
                 </button>
               </div>
-
-              {activeWeek && (
-                <div className="text-xs text-slate-400 font-mono tabular-nums">
-                  Cierre: {activeWeek.lockDeadlineLabel} ·{' '}
-                  <span
-                    className={
-                      activeWeek.isLocked ? 'text-amber-300' : 'text-emerald-400'
-                    }
-                  >
-                    {activeWeek.isLocked ? 'Semana bloqueada' : 'Abierta a cambios'}
-                  </span>
-                </div>
-              )}
             </div>
           </div>
         )}
@@ -2792,17 +3368,29 @@ export function FantasyEspnAssistantView({
       {/* Feedback Banner on Roster / Market Actions */}
       {actionBannerMsg && (
         <div className="bg-[#131C2E] border border-emerald-500/40 rounded-lg px-4 py-2.5 flex items-center justify-between gap-3 text-xs text-emerald-300">
-          <span className="flex items-center gap-2">
+          <span className="flex items-center gap-2 min-w-0">
             <Check className="w-4 h-4 shrink-0" />
-            <span>{actionBannerMsg}</span>
+            <span className="truncate">{actionBannerMsg}</span>
           </span>
-          <button
-            type="button"
-            onClick={() => setActionBannerMsg(null)}
-            className="text-slate-400 hover:text-white shrink-0"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {bulkUndoSnapshot && (
+              <button
+                type="button"
+                onClick={handleUndoLastBulkBatch}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-amber-500/20 border border-amber-500/40 hover:bg-amber-500/30 text-amber-200 font-semibold transition-colors"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Deshacer último lote</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setActionBannerMsg(null)}
+              className="text-slate-400 hover:text-white shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       )}
 
@@ -2848,76 +3436,76 @@ export function FantasyEspnAssistantView({
       </div>
 
       {/* Main 5-Tab Navigation */}
-      <div className="flex items-center gap-1 bg-[#131C2E] border border-[#1E293B] p-1 rounded-lg overflow-x-auto no-scrollbar">
+      <div className="flex flex-wrap items-center gap-1.5 bg-[#131C2E] border border-[#1E293B] p-1.5 rounded-lg w-full min-w-0 max-w-full">
         <button
           type="button"
           onClick={() => handleSelectFantasyTab('lineup')}
-          className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-2 text-xs font-semibold rounded-md transition-colors max-w-full text-left ${
             activeTab === 'lineup'
               ? 'bg-orange-500 text-slate-950'
               : 'text-slate-300 hover:text-white hover:bg-[#182338]'
           }`}
         >
-          <Zap className="w-3.5 h-3.5" />
+          <Zap className="w-3.5 h-3.5 shrink-0" />
           <span>1. Mi Equipo y Bloqueo Semanal</span>
         </button>
 
         <button
           type="button"
           onClick={() => handleSelectFantasyTab('waivers')}
-          className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-2 text-xs font-semibold rounded-md transition-colors max-w-full text-left ${
             activeTab === 'waivers'
               ? 'bg-orange-500 text-slate-950'
               : 'text-slate-300 hover:text-white hover:bg-[#182338]'
           }`}
         >
-          <TrendingUp className="w-3.5 h-3.5" />
-          <span>2. Agentes Libres & Alta × Corte ({availableWaiverPool.length})</span>
+          <TrendingUp className="w-3.5 h-3.5 shrink-0" />
+          <span>2. Agentes Libres &amp; Alta × Corte ({availableWaiverPool.length})</span>
         </button>
 
         <button
           type="button"
           onClick={() => handleSelectFantasyTab('trades')}
-          className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-2 text-xs font-semibold rounded-md transition-colors max-w-full text-left ${
             activeTab === 'trades'
               ? 'bg-orange-500 text-slate-950'
               : 'text-slate-300 hover:text-white hover:bg-[#182338]'
           }`}
         >
-          <ArrowLeftRight className="w-3.5 h-3.5" />
+          <ArrowLeftRight className="w-3.5 h-3.5 shrink-0" />
           <span>3. Analizador de Traspasos</span>
         </button>
 
         <button
           type="button"
           onClick={() => handleSelectFantasyTab('injuries_rules')}
-          className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-2 text-xs font-semibold rounded-md transition-colors max-w-full text-left ${
             activeTab === 'injuries_rules'
               ? 'bg-orange-500 text-slate-950'
               : 'text-slate-300 hover:text-white hover:bg-[#182338]'
           }`}
         >
-          <ShieldAlert className="w-3.5 h-3.5" />
-          <span>4. Bajas (Riesgo 0 FPTS) & Auditoría</span>
+          <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
+          <span>4. Bajas (Riesgo 0 FPTS) &amp; Auditoría</span>
         </button>
 
         <button
           type="button"
           onClick={() => handleSelectFantasyTab('rules')}
-          className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-2 text-xs font-semibold rounded-md transition-colors max-w-full text-left ${
             activeTab === 'rules'
               ? 'bg-orange-500 text-slate-950'
               : 'text-slate-300 hover:text-white hover:bg-[#182338]'
           }`}
         >
-          <Sparkles className="w-3.5 h-3.5" />
+          <Sparkles className="w-3.5 h-3.5 shrink-0" />
           <span>5. Reglas</span>
         </button>
       </div>
 
       {/* TAB 1: WEEKLY LINEUP LOCK OPTIMIZER (10 STARTERS + 2 BENCH) */}
       {activeTab === 'lineup' && (
-        <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
+        <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden min-w-0 max-w-full">
           {myRosterEnriched.length === 0 ? (
             <div className="py-12 px-6 text-center max-w-xl mx-auto space-y-4">
               <h3 className="text-base font-bold text-slate-100">
@@ -2933,7 +3521,7 @@ export function FantasyEspnAssistantView({
                     setManagerTab('my_team');
                     setRosterModalOpen(true);
                   }}
-                  className="px-4 py-2 text-xs font-semibold bg-orange-500 hover:bg-orange-400 text-slate-950 rounded-lg transition-colors whitespace-nowrap"
+                  className="px-4 py-2 text-xs font-semibold bg-orange-500 hover:bg-orange-400 text-slate-950 rounded-lg transition-colors"
                 >
                   Configurar mi plantilla (12 contratos)
                 </button>
@@ -2943,7 +3531,7 @@ export function FantasyEspnAssistantView({
                     setManagerTab('rivals_manager');
                     setRosterModalOpen(true);
                   }}
-                  className="px-4 py-2 text-xs font-medium bg-[#0B1120] border border-[#1E293B] hover:border-slate-600 text-slate-300 hover:text-white rounded-lg transition-colors whitespace-nowrap"
+                  className="px-4 py-2 text-xs font-medium bg-[#0B1120] border border-[#1E293B] hover:border-slate-600 text-slate-300 hover:text-white rounded-lg transition-colors"
                 >
                   Registrar equipos rivales
                 </button>
@@ -2952,8 +3540,8 @@ export function FantasyEspnAssistantView({
           ) : (
             <div className="divide-y divide-[#1E293B]">
               {/* Action Toolbar */}
-              <div className="px-4 py-3.5 bg-[#0F172A]/70 flex flex-wrap items-center justify-between gap-3">
-                <div className="space-y-0.5">
+              <div className="px-4 py-3.5 bg-[#0F172A]/70 flex flex-col lg:flex-row lg:items-center justify-between gap-3 min-w-0">
+                <div className="space-y-0.5 min-w-0">
                   <h3 className="text-sm font-semibold text-slate-100">
                     {leagueState.myTeamName} · Cierre Semanal ({activeWeek?.label}:{' '}
                     {activeWeek?.rangeLabel})
@@ -2963,7 +3551,7 @@ export function FantasyEspnAssistantView({
                   </p>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 min-w-0">
                   <button
                     type="button"
                     onClick={() => {
@@ -2974,18 +3562,18 @@ export function FantasyEspnAssistantView({
                         null;
                       setInspectedPlayerForLogsId(ajayOrFirst);
                     }}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold bg-amber-500/25 hover:bg-amber-500/35 border-2 border-amber-500/60 text-amber-200 rounded-lg transition-all shadow-sm whitespace-nowrap shrink-0"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-amber-500/25 hover:bg-amber-500/35 border-2 border-amber-500/60 text-amber-200 rounded-lg transition-all shadow-sm max-w-full text-left"
                     title="Abre el panel de corrección manual de puntos por partido (± FPTS), explicación y desglose oficial"
                   >
-                    <Edit3 className="w-3.5 h-3.5 text-amber-400" />
+                    <Edit3 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                     <span>✏️ Auditar / Corregir Puntos de Partido (±)</span>
                   </button>
                   <button
                     type="button"
                     onClick={handleAutoOptimizeStarters}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg transition-colors"
                   >
-                    <Sparkles className="w-3.5 h-3.5" />
+                    <Sparkles className="w-3.5 h-3.5 shrink-0" />
                     <span>Auto-Optimizar 10 Titulares</span>
                   </button>
                   <button
@@ -2994,7 +3582,7 @@ export function FantasyEspnAssistantView({
                       setManagerTab('my_team');
                       setRosterModalOpen(true);
                     }}
-                    className="px-3 py-1.5 text-xs font-medium bg-[#0B1120] border border-[#1E293B] hover:border-slate-600 text-slate-300 hover:text-white rounded-lg transition-colors whitespace-nowrap shrink-0"
+                    className="px-3 py-1.5 text-xs font-medium bg-[#0B1120] border border-[#1E293B] hover:border-slate-600 text-slate-300 hover:text-white rounded-lg transition-colors"
                   >
                     Editar plantilla
                   </button>
@@ -3505,10 +4093,10 @@ export function FantasyEspnAssistantView({
       {activeTab === 'waivers' && (
         <div className="space-y-4">
           {/* Mandatory 12-Contract Add x Drop Simulator Strip */}
-          <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            <div className="space-y-1">
+          <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4 min-w-0 max-w-full">
+            <div className="space-y-1 min-w-0">
               <h3 className="text-sm font-semibold text-slate-100">
-                Mercado Real de Agentes Libres & Simulador Alta × Corte (Tope de 12 contratos)
+                Mercado Real de Agentes Libres &amp; Simulador Alta × Corte (Tope de 12 contratos)
               </h3>
               <p className="text-xs text-slate-400">
                 Excluye automáticamente tus {myRosterEnriched.length} jugadores y los{' '}
@@ -3517,14 +4105,14 @@ export function FantasyEspnAssistantView({
             </div>
 
             {myRosterEnriched.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-                <span className="text-xs text-slate-300 font-medium whitespace-nowrap">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full lg:w-auto min-w-0">
+                <span className="text-xs text-slate-300 font-medium shrink-0">
                   Jugador a cortar (Drop):
                 </span>
                 <select
                   value={effectiveDropMember?.player.id || ''}
                   onChange={(e) => setSelectedDropPlayerId(e.target.value)}
-                  className="px-3 py-2 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 focus:outline-none focus:border-orange-500"
+                  className="w-full sm:w-auto max-w-full min-w-0 px-3 py-2 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 focus:outline-none focus:border-orange-500"
                 >
                   {myRosterEnriched
                     .slice()
@@ -3544,9 +4132,9 @@ export function FantasyEspnAssistantView({
           </section>
 
           {/* Radar Minutes/Usage × League Free Agents × Lineup Gaps Streaming Panel */}
-          <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden divide-y divide-[#1E293B]">
-            <div className="px-4 py-3.5 bg-[#0F172A]/70 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-              <div className="space-y-0.5">
+          <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden divide-y divide-[#1E293B] min-w-0 max-w-full">
+            <div className="px-4 py-3.5 bg-[#0F172A]/70 flex flex-col lg:flex-row lg:items-center justify-between gap-3 min-w-0">
+              <div className="space-y-0.5 min-w-0">
                 <div className="flex flex-wrap items-center gap-x-2 text-xs text-slate-400">
                   <span className="font-semibold text-emerald-400 flex items-center gap-1">
                     <span>⚡ Radar de Chollos (Smart Waiver Watcher)</span>
@@ -3567,13 +4155,13 @@ export function FantasyEspnAssistantView({
                 </p>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
                 <button
                   type="button"
                   onClick={() =>
                     setWaiverOnlyRoleBreakouts((prev) => !prev)
                   }
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
                     waiverOnlyRoleBreakouts
                       ? 'bg-orange-500 border-orange-500 text-slate-950'
                       : 'bg-[#0B1120] border-[#1E293B] hover:border-orange-500/60 text-slate-200'
@@ -3587,7 +4175,7 @@ export function FantasyEspnAssistantView({
                   <button
                     type="button"
                     onClick={onOpenRadarMinutesUsage}
-                    className="px-3 py-1.5 text-xs font-medium bg-[#0B1120] border border-[#1E293B] hover:border-slate-600 text-slate-300 hover:text-white rounded-lg transition-colors whitespace-nowrap shrink-0"
+                    className="px-3 py-1.5 text-xs font-medium bg-[#0B1120] border border-[#1E293B] hover:border-slate-600 text-slate-300 hover:text-white rounded-lg transition-colors"
                   >
                     Abrir Radar Minutos/Uso →
                   </button>
@@ -3730,11 +4318,11 @@ export function FantasyEspnAssistantView({
           </section>
 
           {/* Filters + Waiver Table */}
-          <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
+          <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden min-w-0 max-w-full">
             {/* Main Section Title */}
-            <div className="px-4 pt-3.5 pb-2.5 border-b border-[#1E293B] bg-[#0F172A]/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div>
-                <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+            <div className="px-4 pt-3.5 pb-2.5 border-b border-[#1E293B] bg-[#0F172A]/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 min-w-0">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-slate-100 flex flex-wrap items-center gap-2">
                   <span>Agentes Libres Disponibles — Mercado de Fichajes y Streaming</span>
                   <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-orange-500/20 text-orange-400 border border-orange-500/30 font-mono">
                     {availableWaiverPool.length} disponibles
@@ -3746,10 +4334,10 @@ export function FantasyEspnAssistantView({
               </div>
             </div>
 
-            <div className="p-4 border-b border-[#1E293B] bg-[#0F172A]/60 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2">
+            <div className="p-4 border-b border-[#1E293B] bg-[#0F172A]/60 flex flex-col xl:flex-row xl:items-center justify-between gap-3 min-w-0">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
                 {/* Min Weekly Games Filter */}
-                <div className="flex items-center p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg">
+                <div className="flex flex-wrap items-center p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg max-w-full min-w-0">
                   {(
                     [
                       { val: 0, label: 'Cualquier PJ' },
@@ -3776,7 +4364,7 @@ export function FantasyEspnAssistantView({
                 <button
                   type="button"
                   onClick={() => setWaiverOnlyRoleBreakouts((prev) => !prev)}
-                  className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                  className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors max-w-full ${
                     waiverOnlyRoleBreakouts
                       ? 'bg-emerald-500 border-emerald-500 text-slate-950'
                       : 'bg-[#0B1120] border-[#1E293B] text-emerald-400 hover:border-emerald-500/50'
@@ -3786,7 +4374,7 @@ export function FantasyEspnAssistantView({
                 </button>
 
                 {/* Sort Mode with Info icons */}
-                <div className="flex flex-wrap items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg">
+                <div className="flex flex-wrap items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg max-w-full min-w-0">
                   {WAIVER_QUICK_FILTERS.map((sOpt) => {
                     const isActive = waiverSortBy === sOpt.id && waiverTableSortKey === 'default';
                     return (
@@ -3805,7 +4393,7 @@ export function FantasyEspnAssistantView({
                             setWaiverTableSortKey('default');
                             setWaiverTableSortAsc(false);
                           }}
-                          className="whitespace-nowrap"
+                          className="text-left"
                         >
                           {sOpt.label}
                         </button>
@@ -3822,8 +4410,8 @@ export function FantasyEspnAssistantView({
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="relative w-full sm:w-60">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
+                <div className="relative w-full sm:w-60 min-w-0">
                   <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
                     type="text"
@@ -3839,7 +4427,7 @@ export function FantasyEspnAssistantView({
                     setManagerTab('rivals_manager');
                     setRosterModalOpen(true);
                   }}
-                  className="px-3 py-1.5 text-xs font-medium bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/60 text-slate-200 rounded-lg whitespace-nowrap shrink-0"
+                  className="px-3 py-1.5 text-xs font-medium bg-[#0B1120] border border-[#1E293B] hover:border-orange-500/60 text-slate-200 rounded-lg max-w-full"
                 >
                   Gestionar Rivales ({totalRivalPlayersCount} ocupados)
                 </button>
@@ -4398,13 +4986,13 @@ export function FantasyEspnAssistantView({
 
       {/* TAB 3: OFFICIAL RULES TRADE ANALYZER */}
       {activeTab === 'trades' && (
-        <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-5">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-[#1E293B]">
-            <div>
-              <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+        <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-5 min-w-0 max-w-full">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-[#1E293B] min-w-0">
+            <div className="min-w-0">
+              <h3 className="text-base font-bold text-slate-100 flex flex-wrap items-center gap-2">
                 <span>⚡ Simulador de Traspasos Proyectivo (Net Impact)</span>
                 <span className="text-xs px-2 py-0.5 rounded bg-orange-500/20 text-orange-300 font-mono font-normal">
-                  Proyecciones ROS & Densidad
+                  Proyecciones ROS &amp; Densidad
                 </span>
               </h3>
               <p className="text-xs text-slate-400 mt-0.5">
@@ -4927,18 +5515,18 @@ export function FantasyEspnAssistantView({
       {activeTab === 'injuries_rules' && (
         <div className="space-y-5">
           {/* Panel A: Active Medical Alerts + Same-Team Rotation Streamers */}
-          <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4">
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-              <div>
+          <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4 min-w-0 max-w-full">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 min-w-0">
+              <div className="min-w-0">
                 <h3 className="text-base font-bold text-slate-100">
-                  Clasificación Inteligente de Bajas & Relevos de Rotación (Riesgo Cierre Lunes)
+                  Clasificación Inteligente de Bajas &amp; Relevos de Rotación (Riesgo Cierre Lunes)
                 </h3>
                 <p className="text-xs text-slate-400">
                   Distingue bajas puntuales (DTD / Cuestionable y descansos en Back-to-Back) frente a lesionados de larga duración (Out / IR · 0.0 PJ) y señala los relevos sanos con subida de rol.
                 </p>
               </div>
 
-              <div className="inline-flex items-center p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs shrink-0">
+              <div className="flex flex-wrap items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs max-w-full min-w-0">
                 {(
                   [
                     { id: 'all', label: 'Todas las alertas' },
@@ -4950,7 +5538,7 @@ export function FantasyEspnAssistantView({
                     key={opt.id}
                     type="button"
                     onClick={() => setInjuryTierFilter(opt.id)}
-                    className={`px-3 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap shrink-0 ${
+                    className={`px-2.5 sm:px-3 py-1.5 rounded-md font-medium transition-colors ${
                       injuryTierFilter === opt.id
                         ? 'bg-orange-500 text-slate-950 font-semibold'
                         : 'text-slate-400 hover:text-slate-200'
@@ -5583,7 +6171,7 @@ export function FantasyEspnAssistantView({
             }}
             aria-hidden="true"
           />
-          <div className="relative z-10 w-full max-w-3xl bg-[#0F172A] border border-[#1E293B] rounded-xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+          <div className="relative z-10 w-full max-w-4xl bg-[#0F172A] border border-[#1E293B] rounded-xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
             <div className="px-5 py-4 border-b border-[#1E293B] flex items-center justify-between gap-3">
               <div>
                 <h3 className="text-base font-bold text-slate-100">
@@ -5629,7 +6217,32 @@ export function FantasyEspnAssistantView({
                     : 'bg-[#0B1120] text-slate-300 hover:text-white'
                 }`}
               >
-                2. Equipos Rivales ({activeRivalTeamsCount} equipos · {totalRivalPlayersCount} jug.)
+                2. Equipos Rivales ({activeRivalTeamsCount} eq. · {totalRivalPlayersCount} jug.)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setManagerTab('bulk_moves');
+                  setBulkFeedback(null);
+                }}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                  managerTab === 'bulk_moves'
+                    ? 'bg-orange-500 text-slate-950'
+                    : 'bg-[#0B1120] text-slate-300 hover:text-white'
+                }`}
+              >
+                <span>3. Movimientos Masivos / Trades</span>
+                {bulkQueue.length > 0 && (
+                  <span
+                    className={`px-1.5 py-0.5 text-[10px] font-mono rounded ${
+                      managerTab === 'bulk_moves'
+                        ? 'bg-slate-950 text-orange-400'
+                        : 'bg-orange-500 text-slate-950'
+                    }`}
+                  >
+                    {bulkQueue.length}
+                  </span>
+                )}
               </button>
               <button
                 type="button"
@@ -5643,7 +6256,7 @@ export function FantasyEspnAssistantView({
                     : 'bg-[#0B1120] text-slate-300 hover:text-white'
                 }`}
               >
-                3. Sincronización Nube y Copia (.json)
+                4. Sincronización Nube y Copia (.json)
               </button>
             </div>
 
@@ -6138,7 +6751,714 @@ export function FantasyEspnAssistantView({
                   );
                 })()}
 
-              {/* SUB-TAB 3: CLOUD SYNC, BACKUP EXPORT/IMPORT & STANDALONE OCCUPIED PLAYERS */}
+              {/* SUB-TAB 3: BULK ROSTER CHANGES & MULTI-TEAM TRADES */}
+              {managerTab === 'bulk_moves' && (
+                <div className="space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="inline-flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBulkSubMode('waiver');
+                          setBulkFeedback(null);
+                        }}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                          bulkSubMode === 'waiver'
+                            ? 'bg-orange-500 text-slate-950'
+                            : 'text-slate-300 hover:text-white'
+                        }`}
+                      >
+                        <UserPlus className="w-3.5 h-3.5" />
+                        <span>Altas, Cortes y Waivers en Serie</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBulkSubMode('trade');
+                          setBulkFeedback(null);
+                        }}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                          bulkSubMode === 'trade'
+                            ? 'bg-orange-500 text-slate-950'
+                            : 'text-slate-300 hover:text-white'
+                        }`}
+                      >
+                        <ArrowLeftRight className="w-3.5 h-3.5" />
+                        <span>Traspaso Directo (Rival ↔ Rival / Mío)</span>
+                      </button>
+                    </div>
+
+                    {bulkUndoSnapshot && (
+                      <button
+                        type="button"
+                        onClick={handleUndoLastBulkBatch}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-amber-500/15 border border-amber-500/40 hover:bg-amber-500/25 text-amber-200 rounded-lg transition-colors self-start sm:self-auto"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Deshacer último lote guardado</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {bulkFeedback && (
+                    <div className="px-3 py-2 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-xs text-emerald-300 flex items-center justify-between gap-2">
+                      <span>{bulkFeedback}</span>
+                      <button
+                        type="button"
+                        onClick={() => setBulkFeedback(null)}
+                        className="text-slate-400 hover:text-white shrink-0"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* MODE A: WAIVERS / ALTAS & CORTES EN SERIE */}
+                  {bulkSubMode === 'waiver' && (
+                    <div className="space-y-4">
+                      <div className="p-3.5 bg-[#0B1120] border border-[#1E293B] rounded-lg space-y-3">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <label className="text-[11px] text-slate-400 font-medium block">
+                              Equipo afectado
+                            </label>
+                            <select
+                              value={bulkTeamId}
+                              onChange={(e) => {
+                                setBulkTeamId(e.target.value);
+                                setBulkDropPlayerId('');
+                                setBulkFeedback(null);
+                              }}
+                              className="w-full px-3 py-2 text-xs bg-[#131C2E] border border-[#1E293B] rounded-lg text-slate-100 focus:outline-none focus:border-orange-500"
+                            >
+                              {bulkAllTeamOptions.map((opt) => (
+                                <option key={opt.id} value={opt.id}>
+                                  {opt.isMine ? `★ ${opt.label}` : opt.label} ({opt.count} jug.)
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[11px] text-slate-400 font-medium block">
+                              Tipo de movimiento
+                            </label>
+                            <div className="grid grid-cols-3 gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg">
+                              {(
+                                [
+                                  { id: 'swap', label: 'Ficho + Corto' },
+                                  { id: 'add', label: 'Solo Ficho (+)' },
+                                  { id: 'drop', label: 'Solo Corto (−)' },
+                                ] as const
+                              ).map((opt) => (
+                                <button
+                                  key={opt.id}
+                                  type="button"
+                                  onClick={() => setBulkWaiverAction(opt.id)}
+                                  className={`py-1.5 px-2 text-[11px] font-semibold rounded transition-colors ${
+                                    bulkWaiverAction === opt.id
+                                      ? 'bg-orange-500 text-slate-950'
+                                      : 'text-slate-300 hover:text-white'
+                                  }`}
+                                >
+                                  {opt.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div
+                          className={`grid grid-cols-1 ${
+                            bulkWaiverAction === 'swap' ? 'lg:grid-cols-2' : ''
+                          } gap-3`}
+                        >
+                          {/* DROP PICKER */}
+                          {bulkWaiverAction !== 'add' && (
+                            <div className="p-3 bg-[#131C2E] border border-[#1E293B] rounded-lg space-y-2">
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="font-semibold text-rose-300 flex items-center gap-1.5">
+                                  <UserMinus className="w-3.5 h-3.5" />
+                                  <span>Jugador a cortar de {getBulkTeamLabel(bulkTeamId)}</span>
+                                </span>
+                                <span className="font-mono text-[11px] text-slate-400">
+                                  {bulkSelectedTeamRosterItems.length} en plantilla
+                                </span>
+                              </div>
+                              {bulkSelectedTeamRosterItems.length === 0 ? (
+                                <p className="text-xs text-slate-500 py-3">
+                                  Este equipo aún no tiene jugadores cargados. Usa &quot;Solo Ficho (+)&quot; o cárgale jugadores en Equipos Rivales.
+                                </p>
+                              ) : (
+                                <div className="max-h-44 overflow-y-auto divide-y divide-[#1E293B]/60 border border-[#1E293B] rounded bg-[#0B1120]">
+                                  {bulkSelectedTeamRosterItems.map((item) => {
+                                    const selected = bulkDropPlayerId === item.player.id;
+                                    return (
+                                      <button
+                                        key={item.player.id}
+                                        type="button"
+                                        onClick={() =>
+                                          setBulkDropPlayerId(selected ? '' : item.player.id)
+                                        }
+                                        className={`w-full px-2.5 py-1.5 flex items-center justify-between text-xs text-left transition-colors ${
+                                          selected
+                                            ? 'bg-rose-500/20 text-rose-200'
+                                            : 'hover:bg-[#182338] text-slate-200'
+                                        }`}
+                                      >
+                                        <span className="truncate font-medium">
+                                          {item.player.name}{' '}
+                                          <span className="text-slate-400 font-mono text-[11px]">
+                                            ({item.player.teamAbbr})
+                                          </span>
+                                        </span>
+                                        <span className="font-mono tabular-nums text-[11px] text-slate-400 shrink-0 ml-2">
+                                          {item.stats.seasonAvgFpts.toFixed(1)}/PJ ·{' '}
+                                          {selected ? 'CORTAR ✓' : 'Elegir'}
+                                        </span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* ADD PICKER */}
+                          {bulkWaiverAction !== 'drop' && (
+                            <div className="p-3 bg-[#131C2E] border border-[#1E293B] rounded-lg space-y-2">
+                              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                                <span className="font-semibold text-emerald-300 flex items-center gap-1.5">
+                                  <UserPlus className="w-3.5 h-3.5" />
+                                  <span>Jugador que ficha {getBulkTeamLabel(bulkTeamId)}</span>
+                                </span>
+                                <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-400 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={bulkIncludeOwnedInSearch}
+                                    onChange={(e) =>
+                                      setBulkIncludeOwnedInSearch(e.target.checked)
+                                    }
+                                    className="rounded border-slate-600 bg-[#0B1120] text-orange-500"
+                                  />
+                                  <span>Incluir ya fichados</span>
+                                </label>
+                              </div>
+
+                              <div className="relative">
+                                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                <input
+                                  type="text"
+                                  value={bulkSearchQuery}
+                                  onChange={(e) => setBulkSearchQuery(e.target.value)}
+                                  placeholder="Buscar agente libre por nombre o equipo..."
+                                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500"
+                                />
+                              </div>
+
+                              <div className="max-h-36 overflow-y-auto divide-y divide-[#1E293B]/60 border border-[#1E293B] rounded bg-[#0B1120]">
+                                {bulkFilteredAddCandidates.map((item) => {
+                                  const selected = bulkAddPlayerId === item.player.id;
+                                  const owner = simOwnerByPlayerId.get(item.player.id);
+                                  return (
+                                    <button
+                                      key={item.player.id}
+                                      type="button"
+                                      onClick={() =>
+                                        setBulkAddPlayerId(selected ? '' : item.player.id)
+                                      }
+                                      className={`w-full px-2.5 py-1.5 flex items-center justify-between text-xs text-left transition-colors ${
+                                        selected
+                                          ? 'bg-emerald-500/20 text-emerald-200'
+                                          : 'hover:bg-[#182338] text-slate-200'
+                                      }`}
+                                    >
+                                      <span className="truncate font-medium">
+                                        {item.player.name}{' '}
+                                        <span className="text-slate-400 font-mono text-[11px]">
+                                          ({item.player.teamAbbr})
+                                        </span>
+                                        {owner && (
+                                          <span className="text-amber-300 text-[10px] ml-1.5">
+                                            [{owner.teamName}]
+                                          </span>
+                                        )}
+                                      </span>
+                                      <span className="font-mono tabular-nums text-[11px] text-slate-400 shrink-0 ml-2">
+                                        {item.stats.seasonAvgFpts.toFixed(1)}/PJ ·{' '}
+                                        {selected ? 'FICHA ✓' : 'Elegir'}
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Selected Preview & Action Buttons */}
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#1E293B]">
+                          <div className="text-xs text-slate-300">
+                            {bulkWaiverAction !== 'add' && (
+                              <span>
+                                Corta:{' '}
+                                <strong className="text-rose-300">
+                                  {bulkDropPlayerId
+                                    ? playersById.get(bulkDropPlayerId)?.name
+                                    : 'Pendiente'}
+                                </strong>
+                              </span>
+                            )}
+                            {bulkWaiverAction === 'swap' && <span className="mx-2 text-slate-500">→</span>}
+                            {bulkWaiverAction !== 'drop' && (
+                              <span>
+                                Ficha:{' '}
+                                <strong className="text-emerald-300">
+                                  {bulkAddPlayerId
+                                    ? playersById.get(bulkAddPlayerId)?.name
+                                    : 'Pendiente'}
+                                </strong>
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setBulkBatchTextOpen((v) => !v)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#131C2E] border border-[#1E293B] hover:border-slate-500 text-slate-200 rounded-lg transition-colors"
+                            >
+                              <ClipboardPaste className="w-3.5 h-3.5 text-orange-400" />
+                              <span>{bulkBatchTextOpen ? 'Ocultar pegado rápido' : 'Pegar lote por texto'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleEnqueueWaiverMove}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#131C2E] border border-orange-500/50 hover:bg-orange-500/15 text-orange-300 rounded-lg transition-colors"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>Añadir a la cola</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleApplySingleWaiverNow}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-orange-500 hover:bg-orange-400 text-slate-950 rounded-lg transition-colors"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              <span>Aplicar ahora</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {bulkBatchTextOpen && (
+                          <div className="p-3 bg-[#131C2E] border border-[#1E293B] rounded-lg space-y-2">
+                            <p className="text-xs text-slate-400">
+                              Escribe un movimiento por línea con el formato{' '}
+                              <code className="text-orange-300">Equipo: +Fichaje / -Corte</code> (si omites el equipo, se aplica a{' '}
+                              <strong className="text-slate-200">{getBulkTeamLabel(bulkTeamId)}</strong>):
+                            </p>
+                            <textarea
+                              rows={3}
+                              value={bulkBatchText}
+                              onChange={(e) => setBulkBatchText(e.target.value)}
+                              placeholder={`Rival 1: +Payton Pritchard / -Marcus Smart\nMi Equipo: +Trey Murphy III / -Cole Anthony`}
+                              className="w-full p-2.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 font-mono focus:outline-none focus:border-orange-500"
+                            />
+                            <div className="flex justify-end">
+                              <button
+                                type="button"
+                                onClick={handleParseBulkBatchText}
+                                className="px-3.5 py-1.5 text-xs font-semibold bg-orange-500 hover:bg-orange-400 text-slate-950 rounded-lg transition-colors"
+                              >
+                                Detectar y encolar movimientos
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* MODE B: DIRECT TEAM-TO-TEAM TRADE (RIVAL <-> RIVAL OR MY TEAM <-> RIVAL) */}
+                  {bulkSubMode === 'trade' && (
+                    <div className="space-y-4">
+                      <div className="p-3.5 bg-[#0B1120] border border-[#1E293B] rounded-lg space-y-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <label className="text-[11px] text-slate-400 font-medium block">
+                              Equipo A (entrega jugadores)
+                            </label>
+                            <select
+                              value={bulkTradeTeamA}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === bulkTradeTeamB) {
+                                  const alt = bulkAllTeamOptions.find((o) => o.id !== val);
+                                  if (alt) setBulkTradeTeamB(alt.id);
+                                }
+                                setBulkTradeTeamA(val);
+                                setBulkTradeFromAIds([]);
+                                setBulkTradeExtraDropAIds([]);
+                              }}
+                              className="w-full px-3 py-2 text-xs bg-[#131C2E] border border-[#1E293B] rounded-lg text-slate-100 focus:outline-none focus:border-orange-500"
+                            >
+                              {bulkAllTeamOptions.map((opt) => (
+                                <option key={opt.id} value={opt.id}>
+                                  {opt.isMine ? `★ ${opt.label}` : opt.label} ({opt.count} jug.)
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[11px] text-slate-400 font-medium block">
+                              Equipo B (entrega jugadores)
+                            </label>
+                            <select
+                              value={bulkTradeTeamB}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === bulkTradeTeamA) {
+                                  const alt = bulkAllTeamOptions.find((o) => o.id !== val);
+                                  if (alt) setBulkTradeTeamA(alt.id);
+                                }
+                                setBulkTradeTeamB(val);
+                                setBulkTradeFromBIds([]);
+                                setBulkTradeExtraDropBIds([]);
+                              }}
+                              className="w-full px-3 py-2 text-xs bg-[#131C2E] border border-[#1E293B] rounded-lg text-slate-100 focus:outline-none focus:border-orange-500"
+                            >
+                              {bulkAllTeamOptions.map((opt) => (
+                                <option key={opt.id} value={opt.id}>
+                                  {opt.isMine ? `★ ${opt.label}` : opt.label} ({opt.count} jug.)
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                          {/* Team A Roster Checklist */}
+                          <div className="p-3 bg-[#131C2E] border border-[#1E293B] rounded-lg space-y-2">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-semibold text-orange-300">
+                                {getBulkTeamLabel(bulkTradeTeamA)} entrega:
+                              </span>
+                              <span className="font-mono text-[11px] text-slate-400">
+                                {bulkTradeFromAIds.length} sel.
+                              </span>
+                            </div>
+                            {bulkTradeTeamAItems.length === 0 ? (
+                              <div className="text-xs text-slate-500 py-3 space-y-1.5">
+                                <p>Este equipo no tiene plantilla cargada todavía.</p>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (bulkTradeTeamA === MY_TEAM_BULK_ID) {
+                                      setManagerTab('my_team');
+                                    } else {
+                                      setSelectedRivalTeamId(bulkTradeTeamA);
+                                      setManagerTab('rivals_manager');
+                                    }
+                                  }}
+                                  className="text-orange-400 hover:underline font-medium"
+                                >
+                                  Ir a cargar plantilla →
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="max-h-48 overflow-y-auto divide-y divide-[#1E293B]/60 border border-[#1E293B] rounded bg-[#0B1120]">
+                                {bulkTradeTeamAItems.map((item) => {
+                                  const checked = bulkTradeFromAIds.includes(item.player.id);
+                                  const extraDropped = bulkTradeExtraDropAIds.includes(item.player.id);
+                                  return (
+                                    <div
+                                      key={item.player.id}
+                                      className={`px-2.5 py-1.5 flex items-center justify-between gap-2 text-xs ${
+                                        checked
+                                          ? 'bg-orange-500/15'
+                                          : extraDropped
+                                            ? 'bg-rose-500/15'
+                                            : 'hover:bg-[#182338]'
+                                      }`}
+                                    >
+                                      <label className="flex items-center gap-2 min-w-0 cursor-pointer flex-1">
+                                        <input
+                                          type="checkbox"
+                                          checked={checked}
+                                          onChange={(e) => {
+                                            if (e.target.checked) {
+                                              setBulkTradeFromAIds((prev) => [
+                                                ...prev,
+                                                item.player.id,
+                                              ]);
+                                              setBulkTradeExtraDropAIds((prev) =>
+                                                prev.filter((id) => id !== item.player.id)
+                                              );
+                                            } else {
+                                              setBulkTradeFromAIds((prev) =>
+                                                prev.filter((id) => id !== item.player.id)
+                                              );
+                                            }
+                                          }}
+                                          className="rounded border-slate-600 bg-[#0B1120] text-orange-500"
+                                        />
+                                        <span className="truncate text-slate-200 font-medium">
+                                          {item.player.name}{' '}
+                                          <span className="text-slate-400 font-mono text-[11px]">
+                                            ({item.player.teamAbbr} · {item.stats.seasonAvgFpts.toFixed(1)})
+                                          </span>
+                                        </span>
+                                      </label>
+                                      {!checked && (
+                                        <button
+                                          type="button"
+                                          title="Marcar corte sobrante tras el trade"
+                                          onClick={() =>
+                                            setBulkTradeExtraDropAIds((prev) =>
+                                              prev.includes(item.player.id)
+                                                ? prev.filter((id) => id !== item.player.id)
+                                                : [...prev, item.player.id]
+                                            )
+                                          }
+                                          className={`text-[10px] px-1.5 py-0.5 rounded border shrink-0 ${
+                                            extraDropped
+                                              ? 'bg-rose-500/30 border-rose-500/50 text-rose-200'
+                                              : 'border-[#1E293B] text-slate-400 hover:text-rose-300'
+                                          }`}
+                                        >
+                                          {extraDropped ? 'Corta ✓' : 'Cortar'}
+                                        </button>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Team B Roster Checklist */}
+                          <div className="p-3 bg-[#131C2E] border border-[#1E293B] rounded-lg space-y-2">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-semibold text-cyan-300">
+                                {getBulkTeamLabel(bulkTradeTeamB)} entrega:
+                              </span>
+                              <span className="font-mono text-[11px] text-slate-400">
+                                {bulkTradeFromBIds.length} sel.
+                              </span>
+                            </div>
+                            {bulkTradeTeamBItems.length === 0 ? (
+                              <div className="text-xs text-slate-500 py-3 space-y-1.5">
+                                <p>Este equipo no tiene plantilla cargada todavía.</p>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (bulkTradeTeamB === MY_TEAM_BULK_ID) {
+                                      setManagerTab('my_team');
+                                    } else {
+                                      setSelectedRivalTeamId(bulkTradeTeamB);
+                                      setManagerTab('rivals_manager');
+                                    }
+                                  }}
+                                  className="text-orange-400 hover:underline font-medium"
+                                >
+                                  Ir a cargar plantilla →
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="max-h-48 overflow-y-auto divide-y divide-[#1E293B]/60 border border-[#1E293B] rounded bg-[#0B1120]">
+                                {bulkTradeTeamBItems.map((item) => {
+                                  const checked = bulkTradeFromBIds.includes(item.player.id);
+                                  const extraDropped = bulkTradeExtraDropBIds.includes(item.player.id);
+                                  return (
+                                    <div
+                                      key={item.player.id}
+                                      className={`px-2.5 py-1.5 flex items-center justify-between gap-2 text-xs ${
+                                        checked
+                                          ? 'bg-cyan-500/15'
+                                          : extraDropped
+                                            ? 'bg-rose-500/15'
+                                            : 'hover:bg-[#182338]'
+                                      }`}
+                                    >
+                                      <label className="flex items-center gap-2 min-w-0 cursor-pointer flex-1">
+                                        <input
+                                          type="checkbox"
+                                          checked={checked}
+                                          onChange={(e) => {
+                                            if (e.target.checked) {
+                                              setBulkTradeFromBIds((prev) => [
+                                                ...prev,
+                                                item.player.id,
+                                              ]);
+                                              setBulkTradeExtraDropBIds((prev) =>
+                                                prev.filter((id) => id !== item.player.id)
+                                              );
+                                            } else {
+                                              setBulkTradeFromBIds((prev) =>
+                                                prev.filter((id) => id !== item.player.id)
+                                              );
+                                            }
+                                          }}
+                                          className="rounded border-slate-600 bg-[#0B1120] text-orange-500"
+                                        />
+                                        <span className="truncate text-slate-200 font-medium">
+                                          {item.player.name}{' '}
+                                          <span className="text-slate-400 font-mono text-[11px]">
+                                            ({item.player.teamAbbr} · {item.stats.seasonAvgFpts.toFixed(1)})
+                                          </span>
+                                        </span>
+                                      </label>
+                                      {!checked && (
+                                        <button
+                                          type="button"
+                                          title="Marcar corte sobrante tras el trade"
+                                          onClick={() =>
+                                            setBulkTradeExtraDropBIds((prev) =>
+                                              prev.includes(item.player.id)
+                                                ? prev.filter((id) => id !== item.player.id)
+                                                : [...prev, item.player.id]
+                                            )
+                                          }
+                                          className={`text-[10px] px-1.5 py-0.5 rounded border shrink-0 ${
+                                            extraDropped
+                                              ? 'bg-rose-500/30 border-rose-500/50 text-rose-200'
+                                              : 'border-[#1E293B] text-slate-400 hover:text-rose-300'
+                                          }`}
+                                        >
+                                          {extraDropped ? 'Corta ✓' : 'Cortar'}
+                                        </button>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Balance Preview & Trade Actions */}
+                        <div className="pt-2.5 border-t border-[#1E293B] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="text-xs text-slate-300 space-y-0.5 font-mono tabular-nums">
+                            <div>
+                              <span className="text-orange-300">{getBulkTeamLabel(bulkTradeTeamA)}</span> entrega{' '}
+                              <strong>{bulkTradeSummary.sumAvgA.toFixed(1)}</strong> FPTS/PJ (Δ{' '}
+                              <span
+                                className={
+                                  bulkTradeSummary.deltaA >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                                }
+                              >
+                                {bulkTradeSummary.deltaA >= 0 ? '+' : ''}
+                                {bulkTradeSummary.deltaA.toFixed(1)}
+                              </span>
+                              ) ·{' '}
+                              <span className="text-cyan-300">{getBulkTeamLabel(bulkTradeTeamB)}</span> entrega{' '}
+                              <strong>{bulkTradeSummary.sumAvgB.toFixed(1)}</strong> FPTS/PJ
+                            </div>
+                            <div className="text-[11px] text-slate-400 font-sans">
+                              Balance contratos: {getBulkTeamLabel(bulkTradeTeamA)} (
+                              {bulkTradeSummary.contractDeltaA >= 0 ? '+' : ''}
+                              {bulkTradeSummary.contractDeltaA}) · {getBulkTeamLabel(bulkTradeTeamB)} (
+                              {bulkTradeSummary.contractDeltaB >= 0 ? '+' : ''}
+                              {bulkTradeSummary.contractDeltaB})
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={handleEnqueueTeamTrade}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#131C2E] border border-orange-500/50 hover:bg-orange-500/15 text-orange-300 rounded-lg transition-colors"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>Añadir trade a la cola</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleApplyTeamTradeNow}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-orange-500 hover:bg-orange-400 text-slate-950 rounded-lg transition-colors"
+                            >
+                              <ArrowLeftRight className="w-3.5 h-3.5" />
+                              <span>Ejecutar traspaso ahora</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* QUEUE PREVIEW & ATOMIC COMMIT BAR */}
+                  <div className="p-3.5 bg-[#0B1120] border border-[#1E293B] rounded-lg space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-slate-200">
+                        Cola de cambios pendientes ({bulkQueue.length})
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {bulkQueue.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setBulkQueue([])}
+                            className="text-xs text-rose-400 hover:text-rose-300"
+                          >
+                            Vaciar cola
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={bulkQueue.length === 0}
+                          onClick={handleApplyBulkQueue}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-slate-950 rounded-lg transition-colors"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Aplicar Lote Completo ({bulkQueue.length})</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {bulkQueue.length === 0 ? (
+                      <p className="text-xs text-slate-500">
+                        No hay operaciones en cola. Puedes aplicar movimientos uno a uno con &quot;Aplicar ahora&quot; o apilar varios en la cola (waivers + traspasos) para confirmarlos todos de golpe.
+                      </p>
+                    ) : (
+                      <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                        {bulkQueue.map((op, idx) => (
+                          <div
+                            key={op.id}
+                            className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-[#131C2E] border border-[#1E293B] rounded text-xs"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-300 border border-orange-500/30 shrink-0">
+                                {op.kind === 'team_trade'
+                                  ? 'TRADE'
+                                  : op.action === 'swap'
+                                    ? 'SWAP'
+                                    : op.action === 'add'
+                                      ? 'ALTA'
+                                      : 'CORTE'}
+                              </span>
+                              <span className="text-slate-200 truncate">
+                                #{idx + 1} · {describeBulkOperation(op)}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setBulkQueue((prev) => prev.filter((item) => item.id !== op.id))
+                              }
+                              title="Quitar de la cola"
+                              className="text-slate-400 hover:text-rose-400 shrink-0"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* SUB-TAB 4: CLOUD SYNC, BACKUP EXPORT/IMPORT & STANDALONE OCCUPIED PLAYERS */}
               {managerTab === 'backup' && (
                 <div className="space-y-5">
                   <div className="p-4 bg-[#0B1120] border border-[#1E293B] rounded-lg space-y-3">

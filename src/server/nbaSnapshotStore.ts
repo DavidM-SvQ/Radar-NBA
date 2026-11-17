@@ -149,7 +149,7 @@ function readNbaSnapshotFromDisk() {
 }
 function writeNbaSnapshotToDisk(snapshot) {
   if (!isValidSnapshotPayload(snapshot)) {
-    throw new Error("Validaci\xF3n de seguridad abortada: el snapshot generado est\xE1 incompleto y NO sobrescribir\xE1 los datos existentes.");
+    throw new Error("Validación de seguridad abortada: el snapshot generado está incompleto y NO sobrescribirá los datos existentes.");
   }
   const targetPath = getPrimarySnapshotWritePath();
   const dir = path.dirname(targetPath);
@@ -162,6 +162,118 @@ function writeNbaSnapshotToDisk(snapshot) {
   const stat = fs.statSync(targetPath);
   memorySnapshotCache = { filePath: targetPath, mtimeMs: stat.mtimeMs, snapshot };
   return { filePath: targetPath, bytesCompressed: gzBuffer.byteLength, bytesUncompressed: jsonBuffer.byteLength };
+}
+
+export interface NbaAdvancedSnapshotPayload {
+  version: 1;
+  season: string;
+  generatedAt: string;
+  source: string;
+  shotZones: { player: any; team: any };
+  clutch: { player: any; team: any };
+  defenseHustle: { player: any; team: any };
+  tracking: { player: any; team: any };
+  playtypes: { player: any; team: any };
+  scoring: { player: any; team: any };
+  fourFactors: { player: any; team: any };
+  violations: { player: any; team: any };
+  lineups: { lineups5: any; lineups2: any };
+  onOffByTeam: Record<string, any[]>;
+  benchmarks: {
+    player: Record<string, { mean: number; sd: number }>;
+    team: Record<string, { mean: number; sd: number }>;
+  };
+}
+
+function getAdvancedSnapshotCandidatePaths(): string[] {
+  const candidates = [
+    path.resolve(process.cwd(), "data", "nba-advanced-snapshot.json.gz"),
+    path.resolve(__dirname, "data", "nba-advanced-snapshot.json.gz"),
+    path.resolve(__dirname, "..", "data", "nba-advanced-snapshot.json.gz"),
+    path.resolve(__dirname, "..", "..", "data", "nba-advanced-snapshot.json.gz"),
+    path.resolve(__dirname, "..", "..", "..", "data", "nba-advanced-snapshot.json.gz"),
+  ];
+  return Array.from(new Set(candidates));
+}
+
+function getPrimaryAdvancedSnapshotWritePath(): string {
+  const cwdData = path.resolve(process.cwd(), "data");
+  if (fs.existsSync(cwdData)) {
+    return path.join(cwdData, "nba-advanced-snapshot.json.gz");
+  }
+  return path.resolve(__dirname, "../../data/nba-advanced-snapshot.json.gz");
+}
+
+let memoryAdvancedSnapshotCache: { filePath: string; mtimeMs: number; snapshot: NbaAdvancedSnapshotPayload } | null = null;
+
+function isValidAdvancedSnapshotPayload(candidate: any): candidate is NbaAdvancedSnapshotPayload {
+  if (!candidate || typeof candidate !== "object") return false;
+  if (candidate.version !== 1) return false;
+  if (!candidate.shotZones?.player || !candidate.shotZones?.team) return false;
+  if (!candidate.clutch?.player || !candidate.clutch?.team) return false;
+  if (!candidate.defenseHustle?.player || !candidate.defenseHustle?.team) return false;
+  if (!candidate.tracking?.player || !candidate.tracking?.team) return false;
+  if (!candidate.playtypes?.player || !candidate.playtypes?.team) return false;
+  if (!candidate.scoring?.player || !candidate.scoring?.team) return false;
+  if (!candidate.fourFactors?.player || !candidate.fourFactors?.team) return false;
+  if (!candidate.violations?.player || !candidate.violations?.team) return false;
+  if (!candidate.lineups?.lineups5 || !candidate.lineups?.lineups2) return false;
+  if (!candidate.onOffByTeam || typeof candidate.onOffByTeam !== "object") return false;
+  if (!candidate.benchmarks?.player || !candidate.benchmarks?.team) return false;
+  return true;
+}
+
+function readNbaAdvancedSnapshotFromDisk(): NbaAdvancedSnapshotPayload | null {
+  for (const filePath of getAdvancedSnapshotCandidatePaths()) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const stat = fs.statSync(filePath);
+      if (
+        memoryAdvancedSnapshotCache &&
+        memoryAdvancedSnapshotCache.filePath === filePath &&
+        memoryAdvancedSnapshotCache.mtimeMs === stat.mtimeMs
+      ) {
+        return memoryAdvancedSnapshotCache.snapshot;
+      }
+      const compressed = fs.readFileSync(filePath);
+      const jsonStr = zlib.gunzipSync(compressed).toString("utf8");
+      const parsed = JSON.parse(jsonStr);
+      if (!isValidAdvancedSnapshotPayload(parsed)) {
+        console.warn(`[RadarNBA Advanced Snapshot] Archivo ignorado por validación incompleta: ${filePath}`);
+        continue;
+      }
+      memoryAdvancedSnapshotCache = { filePath, mtimeMs: stat.mtimeMs, snapshot: parsed };
+      return parsed;
+    } catch (err) {
+      console.warn(`[RadarNBA Advanced Snapshot] No se pudo leer ${filePath}:`, err);
+    }
+  }
+  return null;
+}
+
+function writeNbaAdvancedSnapshotToDisk(snapshot: NbaAdvancedSnapshotPayload) {
+  if (!isValidAdvancedSnapshotPayload(snapshot)) {
+    throw new Error(
+      "Validación de seguridad abortada: el snapshot avanzado generado está incompleto y NO sobrescribirá los datos existentes."
+    );
+  }
+  const targetPath = getPrimaryAdvancedSnapshotWritePath();
+  const dir = path.dirname(targetPath);
+  fs.mkdirSync(dir, { recursive: true });
+  const jsonBuffer = Buffer.from(JSON.stringify(snapshot), "utf8");
+  const gzBuffer = zlib.gzipSync(jsonBuffer, { level: 9 });
+  const tmpPath = `${targetPath}.tmp`;
+  fs.writeFileSync(tmpPath, gzBuffer);
+  fs.renameSync(tmpPath, targetPath);
+  const stat = fs.statSync(targetPath);
+  memoryAdvancedSnapshotCache = { filePath: targetPath, mtimeMs: stat.mtimeMs, snapshot };
+  return {
+    filePath: targetPath,
+    bytesCompressed: gzBuffer.byteLength,
+    bytesUncompressed: jsonBuffer.byteLength,
+    season: snapshot.season,
+    generatedAt: snapshot.generatedAt,
+  };
 }
 function serializeSeasonDatasetForSnapshot(ds) {
   return { seasonCode: ds.seasonCode, dataSource: ds.dataSource, teams: [...ds.teamsByAbbr.values()].map((t) => ({ ...t, advanced: t.advanced ? { ...t.advanced } : void 0, games: t.games.map((g) => ({ ...g })) })), players: [...ds.playersById.values()].map((p) => ({ ...p, advanced: p.advanced ? { ...p.advanced } : void 0, games: p.games.map((g) => ({ ...g })) })) };
@@ -535,7 +647,7 @@ async function applyCdnDeltaGamesTo2027(dataset, biosMap, options) {
         const bio = biosMap.get(pid);
         let pSummary = dataset.playersById.get(pid);
         if (!pSummary) {
-          pSummary = { id: pid, name: fullName || bio?.name || pid, teamId: teamMeta?.id || bio?.teamId || "", teamAbbr: sideInfo.teamAbbr, teamName: teamMeta?.name || sideInfo.teamAbbr, position: pos || bio?.position || "G-F", jersey: jersey || bio?.jersey || void 0, height: bio?.height || void 0, country: bio?.country || void 0, ...(bio?.birthYear ? { birthYear: bio.birthYear } : {}), games: [] };
+          pSummary = { id: pid, name: fullName || bio?.name || pid, teamId: teamMeta?.id || bio?.teamId || "", teamAbbr: sideInfo.teamAbbr, teamName: teamMeta?.name || sideInfo.teamAbbr, position: pos || bio?.position || "G-F", jersey: jersey || bio?.jersey || void 0, height: bio?.height || void 0, country: bio?.country || void 0, ...(bio?.birthYear ? { birthYear: bio.birthYear } : {}), ...(bio?.fromYear ? { fromYear: bio.fromYear } : {}), ...(bio?.draftYear ? { draftYear: bio.draftYear } : {}), ...(typeof bio?.experienceYears === "number" ? { experienceYears: bio.experienceYears } : {}), games: [] };
           dataset.playersById.set(pid, pSummary);
         } else {
           pSummary.teamAbbr = sideInfo.teamAbbr;
@@ -543,6 +655,11 @@ async function applyCdnDeltaGamesTo2027(dataset, biosMap, options) {
           pSummary.teamName = teamMeta?.name || pSummary.teamName;
           if (!pSummary.birthYear && bio?.birthYear) pSummary.birthYear = bio.birthYear;
           if (!pSummary.country && bio?.country) pSummary.country = bio.country;
+          if (!pSummary.fromYear && bio?.fromYear) pSummary.fromYear = bio.fromYear;
+          if (!pSummary.draftYear && bio?.draftYear) pSummary.draftYear = bio.draftYear;
+          if (typeof pSummary.experienceYears !== "number" && typeof bio?.experienceYears === "number") {
+            pSummary.experienceYears = bio.experienceYears;
+          }
         }
         if (pSummary.games.some((g) => g.eventId === ref.gameId)) continue;
         const st = cp.statistics || {};
@@ -656,11 +773,16 @@ async function applyCdnDeltaGamesTo2027(dataset, biosMap, options) {
 }
 export {
   applyCdnDeltaGamesTo2027,
+  getAdvancedSnapshotCandidatePaths,
+  getPrimaryAdvancedSnapshotWritePath,
   getPrimarySnapshotWritePath,
   getSnapshotCandidatePaths,
   hydrateSeasonDatasetFromSnapshot,
+  isValidAdvancedSnapshotPayload,
   isValidSnapshotPayload,
+  readNbaAdvancedSnapshotFromDisk,
   readNbaSnapshotFromDisk,
   serializeSeasonDatasetForSnapshot,
+  writeNbaAdvancedSnapshotToDisk,
   writeNbaSnapshotToDisk
 };

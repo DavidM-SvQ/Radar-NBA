@@ -543,6 +543,15 @@ export function GuidedHomeView({
                     )} · ${topPosBench.showValueLabel}`
                   : 'Sin subidas con filtro actual'}
               </p>
+              {radarPulse.topPositive?.windows && (() => {
+                const winVal = windowSize === 3 ? radarPulse.topPositive.windows.l3 : windowSize === 5 ? radarPulse.topPositive.windows.l5 : radarPulse.topPositive.windows.l10;
+                const unitStr = radarPulse.topPositive.unit === '%' ? '%' : '';
+                return (
+                  <p className="mt-0.5 text-[10px] font-mono tabular-nums text-slate-400 truncate">
+                    Temp {radarPulse.topPositive.windows.season.toFixed(1)}{unitStr} · {windowSize}P {winVal.toFixed(1)}{unitStr}
+                  </p>
+                );
+              })()}
             </div>
           </div>
         </div>
@@ -594,6 +603,15 @@ export function GuidedHomeView({
                     )} · ${topNegBench.showValueLabel}`
                   : 'Sin bajones con filtro actual'}
               </p>
+              {radarPulse.topNegative?.windows && (() => {
+                const winVal = windowSize === 3 ? radarPulse.topNegative.windows.l3 : windowSize === 5 ? radarPulse.topNegative.windows.l5 : radarPulse.topNegative.windows.l10;
+                const unitStr = radarPulse.topNegative.unit === '%' ? '%' : '';
+                return (
+                  <p className="mt-0.5 text-[10px] font-mono tabular-nums text-slate-400 truncate">
+                    Temp {radarPulse.topNegative.windows.season.toFixed(1)}{unitStr} · {windowSize}P {winVal.toFixed(1)}{unitStr}
+                  </p>
+                );
+              })()}
             </div>
           </div>
         </div>

@@ -38,6 +38,8 @@ const VALID_SECTIONS = new Set<ActiveSection>([
   'comparator',
   'teams',
   'players',
+  'lineups',
+  'scatter',
   'fantasy_espn',
   'glossary',
 ]);

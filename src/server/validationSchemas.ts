@@ -140,6 +140,23 @@ function validateRequest(schemas) {
     next();
   };
 }
+const advancedCategorySchema = z.enum(["zones", "clutch", "defense_hustle", "tracking", "playtypes", "scoring", "four_factors", "violations"]).optional().default("zones");
+const advancedLeagueQuerySchema = z.strictObject({
+  season: seasonModeSchema.optional(),
+  category: advancedCategorySchema,
+  refresh: booleanQueryFlagSchema,
+});
+const advancedLineupsQuerySchema = z.strictObject({
+  season: seasonModeSchema.optional(),
+  group: z.enum(["2", "3", "5"]).optional().default("5").transform(Number),
+  teamId: z.string().optional().default("0"),
+  refresh: booleanQueryFlagSchema,
+});
+const advancedEntityQuerySchema = z.strictObject({
+  season: seasonModeSchema.optional(),
+  teamId: z.string().optional(),
+  refresh: booleanQueryFlagSchema,
+});
 export {
   ADMIN_SECURITY_BOUNDS,
   adminLoginBodySchema,
@@ -162,5 +179,9 @@ export {
   seasonModeSchema,
   stripControlChars,
   teamParamsSchema,
-  validateRequest
+  validateRequest,
+  advancedLeagueQuerySchema,
+  advancedLineupsQuerySchema,
+  advancedEntityQuerySchema
 };
+

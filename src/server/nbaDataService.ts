@@ -11,8 +11,9 @@ import zlib from "zlib";
 import { packBootstrapWirePayload } from "../utils/bootstrapWireCodec.ts";
 import { applyCdnDeltaGamesTo2027, hydrateSeasonDatasetFromSnapshot, readNbaSnapshotFromDisk, serializeSeasonDatasetForSnapshot, writeNbaSnapshotToDisk } from "./nbaSnapshotStore.ts";
 import { buildSeasonAwardsPayload, enrichBiosWithEspnRosters } from "./seasonAwardsService.ts";
-import { executeWithCircuitBreaker, identifyProviderFromUrl } from "./circuitBreaker.ts";
+import { executeWithCircuitBreaker, identifyProviderFromUrl, isCircuitOpen } from "./circuitBreaker.ts";
 import { STATIC_SCHEDULE_2027 } from "../utils/staticSchedule.ts";
+import { syncNbaAdvancedSnapshotToDisk } from "./nbaAdvancedStatsService.ts";
 
 const GAMEDAY_THRESHOLDS_FILE = path.resolve(process.cwd(), "data", "gameday-thresholds-config.json");
 
@@ -191,7 +192,7 @@ async function cachedFetchJson(url, ttlMs = 5 * 60 * 1e3, headers = {}, timeoutM
     (err) => {
       const staleHit = jsonCache.get(url);
       if (staleHit) {
-        console.warn(`[CircuitBreaker Fallback] Sirviendo caché stale para ${url} debido a: ${err.message}`);
+        console.log(`[CircuitBreaker Fallback] Sirviendo caché stale para ${url} debido a: ${err.message}`);
         return staleHit.value;
       }
       throw err;
@@ -259,16 +260,17 @@ async function getPlayerBiosMap(forceRefresh = false, options) {
       }
     }
   }
-  if (isSnapshotOnlyRuntime() && !forceLive) {
+  if ((isSnapshotOnlyRuntime() || (!forceLive && map.size >= 250 && isCircuitOpen("nba_stats"))) && !forceLive) {
     cachedBios = { expiresAt: Date.now() + 60 * 60 * 1e3, map };
     return map;
   }
+  const bioTimeoutMs = map.size >= 250 && !forceLive ? 5500 : 12e3;
   const need2026Live = forceLive || map.size < 450;
   const requests = [];
   if (need2026Live) {
-    requests.push(cachedFetchJson("https://stats.nba.com/stats/playerindex?College=&Country=&DraftPick=&DraftRound=&DraftYear=&Height=&Historical=0&LeagueID=00&Season=2025-26&SeasonType=Regular%20Season&TeamID=0&Weight=", 6 * 60 * 60 * 1e3, NBA_STATS_HEADERS, 12e3, forceRefresh || forceLive));
+    requests.push(cachedFetchJson("https://stats.nba.com/stats/playerindex?College=&Country=&DraftPick=&DraftRound=&DraftYear=&Height=&Historical=0&LeagueID=00&Season=2025-26&SeasonType=Regular%20Season&TeamID=0&Weight=", 6 * 60 * 60 * 1e3, NBA_STATS_HEADERS, bioTimeoutMs, forceRefresh || forceLive));
   }
-  requests.push(cachedFetchJson("https://stats.nba.com/stats/playerindex?College=&Country=&DraftPick=&DraftRound=&DraftYear=&Height=&Historical=0&LeagueID=00&Season=2026-27&SeasonType=Regular%20Season&TeamID=0&Weight=", 60 * 60 * 1e3, NBA_STATS_HEADERS, 12e3, forceRefresh || forceLive));
+  requests.push(cachedFetchJson("https://stats.nba.com/stats/playerindex?College=&Country=&DraftPick=&DraftRound=&DraftYear=&Height=&Historical=0&LeagueID=00&Season=2026-27&SeasonType=Regular%20Season&TeamID=0&Weight=", 60 * 60 * 1e3, NBA_STATS_HEADERS, bioTimeoutMs, forceRefresh || forceLive));
   const settledList = await Promise.allSettled(requests);
   let statsRowsParsed = 0;
   for (const settled of settledList) {
@@ -346,7 +348,33 @@ async function buildSingleSeasonDataset(seasonCode, forceRefresh = false, option
       return hydrated27;
     }
     const encSeason = encodeURIComponent(seasonCode);
-    const [teamLogsRes, playerLogsRes, standingsRes, teamAdvRes, teamMiscRes, teamHustleRes, playerAdvRes, playerMiscRes, playerHustleRes] = await Promise.allSettled([cachedFetchJson(`https://stats.nba.com/stats/leaguegamelog?Counter=0&DateFrom=&DateTo=&Direction=DESC&LeagueID=00&PlayerOrTeam=T&Season=${encSeason}&SeasonType=Regular%20Season&Sorter=DATE`, ttlMs, NBA_STATS_HEADERS, 14e3, forceRefresh), cachedFetchJson(`https://stats.nba.com/stats/leaguegamelog?Counter=0&DateFrom=&DateTo=&Direction=DESC&LeagueID=00&PlayerOrTeam=P&Season=${encSeason}&SeasonType=Regular%20Season&Sorter=DATE`, ttlMs, NBA_STATS_HEADERS, 16e3, forceRefresh), cachedFetchJson(`https://stats.nba.com/stats/leaguestandingsv3?GroupBy=conf&LeagueID=00&Season=${encSeason}&SeasonType=Regular%20Season&Section=overall`, ttlMs, NBA_STATS_HEADERS, 11e3, forceRefresh), cachedFetchJson(`https://stats.nba.com/stats/leaguedashteamstats?Conference=&DateFrom=&DateTo=&Division=&GameScope=&GameSegment=&Height=&ISTRound=&LastNGames=0&LeagueID=00&Location=&MeasureType=Advanced&Month=0&OpponentTeamID=0&Outcome=&PORound=0&PaceAdjust=N&PerMode=PerGame&Period=0&PlayerExperience=&PlayerPosition=&PlusMinus=N&Rank=N&Season=${encSeason}&SeasonType=Regular%20Season&ShotClockRange=&StarterBench=&TeamID=0&TwoWay=0&VsConference=&VsDivision=`, ttlMs, NBA_STATS_HEADERS, 11e3, forceRefresh), cachedFetchJson(`https://stats.nba.com/stats/leaguedashteamstats?Conference=&DateFrom=&DateTo=&Division=&GameScope=&GameSegment=&Height=&ISTRound=&LastNGames=0&LeagueID=00&Location=&MeasureType=Misc&Month=0&OpponentTeamID=0&Outcome=&PORound=0&PaceAdjust=N&PerMode=PerGame&Period=0&PlayerExperience=&PlayerPosition=&PlusMinus=N&Rank=N&Season=${encSeason}&SeasonType=Regular%20Season&ShotClockRange=&StarterBench=&TeamID=0&TwoWay=0&VsConference=&VsDivision=`, ttlMs, NBA_STATS_HEADERS, 11e3, forceRefresh), cachedFetchJson(`https://stats.nba.com/stats/leaguehustlestatsteam?College=&Conference=&Country=&DateFrom=&DateTo=&Division=&DraftPick=&DraftYear=&GameScope=&Height=&ISTRound=&LastNGames=0&LeagueID=00&Location=&Month=0&OpponentTeamID=0&Outcome=&PORound=0&PaceAdjust=N&PerMode=PerGame&PlayerExperience=&PlayerPosition=&PlusMinus=N&Rank=N&Season=${encSeason}&SeasonType=Regular%20Season&TeamID=0&VsConference=&VsDivision=&Weight=`, ttlMs, NBA_STATS_HEADERS, 11e3, forceRefresh), cachedFetchJson(`https://stats.nba.com/stats/leaguedashplayerstats?College=&Conference=&Country=&DateFrom=&DateTo=&Division=&DraftPick=&DraftYear=&GameScope=&GameSegment=&Height=&ISTRound=&LastNGames=0&LeagueID=00&Location=&MeasureType=Advanced&Month=0&OpponentTeamID=0&Outcome=&PORound=0&PaceAdjust=N&PerMode=PerGame&Period=0&PlayerExperience=&PlayerPosition=&PlusMinus=N&Rank=N&Season=${encSeason}&SeasonType=Regular%20Season&ShotClockRange=&StarterBench=&TeamID=0&VsConference=&VsDivision=&Weight=`, ttlMs, NBA_STATS_HEADERS, 12e3, forceRefresh), cachedFetchJson(`https://stats.nba.com/stats/leaguedashplayerstats?College=&Conference=&Country=&DateFrom=&DateTo=&Division=&DraftPick=&DraftYear=&GameScope=&GameSegment=&Height=&ISTRound=&LastNGames=0&LeagueID=00&Location=&MeasureType=Misc&Month=0&OpponentTeamID=0&Outcome=&PORound=0&PaceAdjust=N&PerMode=PerGame&Period=0&PlayerExperience=&PlayerPosition=&PlusMinus=N&Rank=N&Season=${encSeason}&SeasonType=Regular%20Season&ShotClockRange=&StarterBench=&TeamID=0&VsConference=&VsDivision=&Weight=`, ttlMs, NBA_STATS_HEADERS, 12e3, forceRefresh), cachedFetchJson(`https://stats.nba.com/stats/leaguehustlestatsplayer?College=&Conference=&Country=&DateFrom=&DateTo=&Division=&DraftPick=&DraftYear=&GameScope=&Height=&ISTRound=&LastNGames=0&LeagueID=00&Location=&Month=0&OpponentTeamID=0&Outcome=&PORound=0&PaceAdjust=N&PerMode=PerGame&PlayerExperience=&PlayerPosition=&PlusMinus=N&Rank=N&Season=${encSeason}&SeasonType=Regular%20Season&TeamID=0&VsConference=&VsDivision=&Weight=`, ttlMs, NBA_STATS_HEADERS, 12e3, forceRefresh)]);
+    const standingsUrl = `https://stats.nba.com/stats/leaguestandingsv3?GroupBy=conf&LeagueID=00&Season=${encSeason}&SeasonType=Regular%20Season&Section=overall`;
+    let standingsRes: PromiseSettledResult<any>;
+    if (!forceLive && snap?.s2027 && seasonCode === "2026-27") {
+      if (isCircuitOpen("nba_stats")) {
+        const base27 = hydrateSeasonDatasetFromSnapshot(snap.s2027);
+        await applyCdnDeltaGamesTo2027(base27, biosMap, { maxGamesToFetch: options?.cdnMaxGames ?? 32, timeoutBudgetMs: options?.cdnTimeoutMs ?? 3800, forceRefresh });
+        seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: base27 });
+        return base27;
+      }
+      const [probeRes] = await Promise.allSettled([
+        cachedFetchJson(standingsUrl, ttlMs, NBA_STATS_HEADERS, 5500, forceRefresh),
+      ]);
+      const probeRows = probeRes.status === "fulfilled" ? parseNbaResultSet(probeRes.value) : [];
+      if (probeRows.length === 0) {
+        const base27 = hydrateSeasonDatasetFromSnapshot(snap.s2027);
+        await applyCdnDeltaGamesTo2027(base27, biosMap, { maxGamesToFetch: options?.cdnMaxGames ?? 32, timeoutBudgetMs: options?.cdnTimeoutMs ?? 3800, forceRefresh });
+        seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: base27 });
+        return base27;
+      }
+      standingsRes = probeRes;
+    } else {
+      const [sRes] = await Promise.allSettled([
+        cachedFetchJson(standingsUrl, ttlMs, NBA_STATS_HEADERS, 11e3, forceRefresh),
+      ]);
+      standingsRes = sRes;
+    }
+    const [teamLogsRes, playerLogsRes, teamAdvRes, teamMiscRes, teamHustleRes, playerAdvRes, playerMiscRes, playerHustleRes] = await Promise.allSettled([cachedFetchJson(`https://stats.nba.com/stats/leaguegamelog?Counter=0&DateFrom=&DateTo=&Direction=DESC&LeagueID=00&PlayerOrTeam=T&Season=${encSeason}&SeasonType=Regular%20Season&Sorter=DATE`, ttlMs, NBA_STATS_HEADERS, 14e3, forceRefresh), cachedFetchJson(`https://stats.nba.com/stats/leaguegamelog?Counter=0&DateFrom=&DateTo=&Direction=DESC&LeagueID=00&PlayerOrTeam=P&Season=${encSeason}&SeasonType=Regular%20Season&Sorter=DATE`, ttlMs, NBA_STATS_HEADERS, 16e3, forceRefresh), cachedFetchJson(`https://stats.nba.com/stats/leaguedashteamstats?Conference=&DateFrom=&DateTo=&Division=&GameScope=&GameSegment=&Height=&ISTRound=&LastNGames=0&LeagueID=00&Location=&MeasureType=Advanced&Month=0&OpponentTeamID=0&Outcome=&PORound=0&PaceAdjust=N&PerMode=PerGame&Period=0&PlayerExperience=&PlayerPosition=&PlusMinus=N&Rank=N&Season=${encSeason}&SeasonType=Regular%20Season&ShotClockRange=&StarterBench=&TeamID=0&TwoWay=0&VsConference=&VsDivision=`, ttlMs, NBA_STATS_HEADERS, 11e3, forceRefresh), cachedFetchJson(`https://stats.nba.com/stats/leaguedashteamstats?Conference=&DateFrom=&DateTo=&Division=&GameScope=&GameSegment=&Height=&ISTRound=&LastNGames=0&LeagueID=00&Location=&MeasureType=Misc&Month=0&OpponentTeamID=0&Outcome=&PORound=0&PaceAdjust=N&PerMode=PerGame&Period=0&PlayerExperience=&PlayerPosition=&PlusMinus=N&Rank=N&Season=${encSeason}&SeasonType=Regular%20Season&ShotClockRange=&StarterBench=&TeamID=0&TwoWay=0&VsConference=&VsDivision=`, ttlMs, NBA_STATS_HEADERS, 11e3, forceRefresh), cachedFetchJson(`https://stats.nba.com/stats/leaguehustlestatsteam?College=&Conference=&Country=&DateFrom=&DateTo=&Division=&DraftPick=&DraftYear=&GameScope=&Height=&ISTRound=&LastNGames=0&LeagueID=00&Location=&Month=0&OpponentTeamID=0&Outcome=&PORound=0&PaceAdjust=N&PerMode=PerGame&PlayerExperience=&PlayerPosition=&PlusMinus=N&Rank=N&Season=${encSeason}&SeasonType=Regular%20Season&TeamID=0&VsConference=&VsDivision=&Weight=`, ttlMs, NBA_STATS_HEADERS, 11e3, forceRefresh), cachedFetchJson(`https://stats.nba.com/stats/leaguedashplayerstats?College=&Conference=&Country=&DateFrom=&DateTo=&Division=&DraftPick=&DraftYear=&GameScope=&GameSegment=&Height=&ISTRound=&LastNGames=0&LeagueID=00&Location=&MeasureType=Advanced&Month=0&OpponentTeamID=0&Outcome=&PORound=0&PaceAdjust=N&PerMode=PerGame&Period=0&PlayerExperience=&PlayerPosition=&PlusMinus=N&Rank=N&Season=${encSeason}&SeasonType=Regular%20Season&ShotClockRange=&StarterBench=&TeamID=0&VsConference=&VsDivision=&Weight=`, ttlMs, NBA_STATS_HEADERS, 12e3, forceRefresh), cachedFetchJson(`https://stats.nba.com/stats/leaguedashplayerstats?College=&Conference=&Country=&DateFrom=&DateTo=&Division=&DraftPick=&DraftYear=&GameScope=&GameSegment=&Height=&ISTRound=&LastNGames=0&LeagueID=00&Location=&MeasureType=Misc&Month=0&OpponentTeamID=0&Outcome=&PORound=0&PaceAdjust=N&PerMode=PerGame&Period=0&PlayerExperience=&PlayerPosition=&PlusMinus=N&Rank=N&Season=${encSeason}&SeasonType=Regular%20Season&ShotClockRange=&StarterBench=&TeamID=0&VsConference=&VsDivision=&Weight=`, ttlMs, NBA_STATS_HEADERS, 12e3, forceRefresh), cachedFetchJson(`https://stats.nba.com/stats/leaguehustlestatsplayer?College=&Conference=&Country=&DateFrom=&DateTo=&Division=&DraftPick=&DraftYear=&GameScope=&Height=&ISTRound=&LastNGames=0&LeagueID=00&Location=&Month=0&OpponentTeamID=0&Outcome=&PORound=0&PaceAdjust=N&PerMode=PerGame&PlayerExperience=&PlayerPosition=&PlusMinus=N&Rank=N&Season=${encSeason}&SeasonType=Regular%20Season&TeamID=0&VsConference=&VsDivision=&Weight=`, ttlMs, NBA_STATS_HEADERS, 12e3, forceRefresh)]);
     const rawTeamLogs = teamLogsRes.status === "fulfilled" ? parseNbaResultSet(teamLogsRes.value) : [];
     const rawPlayerLogs = playerLogsRes.status === "fulfilled" ? parseNbaResultSet(playerLogsRes.value) : [];
     const rawStandings = standingsRes.status === "fulfilled" ? parseNbaResultSet(standingsRes.value) : [];
@@ -507,7 +535,7 @@ async function buildSingleSeasonDataset(seasonCode, forceRefresh = false, option
       if (!tm) continue;
       const misc = teamMiscById.get(tid) || {};
       const hus = teamHustleById.get(tid) || {};
-      const adv = { gp: Number(r.GP) || tm.games.length, offRtg: round1(Number(r.OFF_RATING) || 0), defRtg: round1(Number(r.DEF_RATING) || 0), netRtg: round1(Number(r.NET_RATING) || 0), pace: round1(Number(r.PACE) || 99.5), pie: toPct100(r.PIE), efgPct: toPct100(r.EFG_PCT), tsPct: toPct100(r.TS_PCT), astPct: toPct100(r.AST_PCT), astTo: round2(Number(r.AST_TO) || 0), astRatio: round1(Number(r.AST_RATIO) || 0), orebPct: toPct100(r.OREB_PCT), drebPct: toPct100(r.DREB_PCT), rebPct: toPct100(r.REB_PCT), tovPct: toPct100(r.TM_TOV_PCT), ptsPaint: round1(Number(misc.PTS_PAINT) || 0), oppPtsPaint: round1(Number(misc.OPP_PTS_PAINT) || 0), pts2ndChance: round1(Number(misc.PTS_2ND_CHANCE) || 0), oppPts2ndChance: round1(Number(misc.OPP_PTS_2ND_CHANCE) || 0), ptsFastBreak: round1(Number(misc.PTS_FB) || 0), ptsOffTov: round1(Number(misc.PTS_OFF_TOV) || 0), contestedShots: round1(Number(hus.CONTESTED_SHOTS) || 0), deflections: round1(Number(hus.DEFLECTIONS) || 0), screenAssists: round1(Number(hus.SCREEN_ASSISTS) || 0), looseBalls: round1(Number(hus.LOOSE_BALLS_RECOVERED) || 0), boxOuts: round1(Number(hus.BOX_OUTS) || 0) };
+      const adv = { gp: Number(r.GP) || tm.games.length, offRtg: round1(Number(r.OFF_RATING) || 0), defRtg: round1(Number(r.DEF_RATING) || 0), netRtg: round1(Number(r.NET_RATING) || 0), pace: round1(Number(r.PACE) || 99.5), pie: toPct100(r.PIE), efgPct: toPct100(r.EFG_PCT), tsPct: toPct100(r.TS_PCT), astPct: toPct100(r.AST_PCT), astTo: round2(Number(r.AST_TO) || 0), astRatio: round1(Number(r.AST_RATIO) || 0), orebPct: toPct100(r.OREB_PCT), drebPct: toPct100(r.DREB_PCT), rebPct: toPct100(r.REB_PCT), tovPct: toPct100(r.TM_TOV_PCT), ptsPaint: round1(Number(misc.PTS_PAINT) || 0), oppPtsPaint: round1(Number(misc.OPP_PTS_PAINT) || 0), pts2ndChance: round1(Number(misc.PTS_2ND_CHANCE) || 0), oppPts2ndChance: round1(Number(misc.OPP_PTS_2ND_CHANCE) || 0), ptsFastBreak: round1(Number(misc.PTS_FB) || 0), oppPtsFb: round1(Number(misc.OPP_PTS_FB) || 0), ptsOffTov: round1(Number(misc.PTS_OFF_TOV) || 0), oppPtsOffTov: round1(Number(misc.OPP_PTS_OFF_TOV) || 0), blka: round1(Number(misc.BLKA) || 0), pf: round1(Number(misc.PF) || 0), pfd: round1(Number(misc.PFD) || 0), contestedShots: round1(Number(hus.CONTESTED_SHOTS) || 0), contestedShots2pt: round1(Number(hus.CONTESTED_SHOTS_2PT) || 0), contestedShots3pt: round1(Number(hus.CONTESTED_SHOTS_3PT) || 0), deflections: round1(Number(hus.DEFLECTIONS) || 0), chargesDrawn: round2(Number(hus.CHARGES_DRAWN) || 0), screenAssists: round1(Number(hus.SCREEN_ASSISTS) || 0), screenAstPts: round1(Number(hus.SCREEN_AST_PTS) || 0), looseBalls: round1(Number(hus.LOOSE_BALLS_RECOVERED) || 0), offLooseBalls: round1(Number(hus.OFF_LOOSE_BALLS_RECOVERED) || 0), defLooseBalls: round1(Number(hus.DEF_LOOSE_BALLS_RECOVERED) || 0), boxOuts: round1(Number(hus.BOX_OUTS) || 0), offBoxOuts: round1(Number(hus.OFF_BOXOUTS) || 0), defBoxOuts: round1(Number(hus.DEF_BOXOUTS) || 0), boxOutTeamRebs: round1(Number(hus.BOX_OUT_PLAYER_TEAM_REBS ?? hus.BOX_OUT_TEAM_REBS) || 0), boxOutPlayerRebs: round1(Number(hus.BOX_OUT_PLAYER_REBS) || 0) };
       tm.advanced = adv;
     }
     const playerAdvById = /* @__PURE__ */ new Map();
@@ -528,7 +556,7 @@ async function buildSingleSeasonDataset(seasonCode, forceRefresh = false, option
       if (!pSummary) {
         const activeTeamAbbr = seasonCode === "2025-26" ? tAbbr || bio?.teamAbbr || "NBA" : bio?.teamAbbr && NBA_TEAMS_MAP[bio.teamAbbr] ? bio.teamAbbr : tAbbr || "NBA";
         const activeTeamMeta = NBA_TEAMS_MAP[activeTeamAbbr] || tMeta;
-        pSummary = { id: pid, name: String(row.PLAYER_NAME || bio?.name || pid).trim(), teamId: activeTeamMeta?.id || String(row.TEAM_ID || bio?.teamId || ""), teamAbbr: activeTeamAbbr, teamName: activeTeamMeta?.name || String(row.TEAM_NAME || activeTeamAbbr), position: bio?.position || "G-F", jersey: bio?.jersey || void 0, height: bio?.height || void 0, country: bio?.country || void 0, ...(bio?.birthYear ? { birthYear: bio.birthYear } : {}), games: [] };
+        pSummary = { id: pid, name: String(row.PLAYER_NAME || bio?.name || pid).trim(), teamId: activeTeamMeta?.id || String(row.TEAM_ID || bio?.teamId || ""), teamAbbr: activeTeamAbbr, teamName: activeTeamMeta?.name || String(row.TEAM_NAME || activeTeamAbbr), position: bio?.position || "G-F", jersey: bio?.jersey || void 0, height: bio?.height || void 0, country: bio?.country || void 0, ...(bio?.birthYear ? { birthYear: bio.birthYear } : {}), ...(bio?.fromYear ? { fromYear: bio.fromYear } : {}), ...(bio?.draftYear ? { draftYear: bio.draftYear } : {}), ...(typeof bio?.experienceYears === "number" ? { experienceYears: bio.experienceYears } : {}), games: [] };
         playersById.set(pid, pSummary);
       }
       const ctx = teamGameContextMap.get(`${gid}:${tAbbr}`);
@@ -591,7 +619,7 @@ async function buildSingleSeasonDataset(seasonCode, forceRefresh = false, option
       if (advR) {
         const miscR = playerMiscById.get(pid) || {};
         const husR = playerHustleById.get(pid) || {};
-        const pAdv = { gp: Number(advR.GP) || p.games.length, usgPct: toPct100(advR.USG_PCT), tsPct: toPct100(advR.TS_PCT), efgPct: toPct100(advR.EFG_PCT), offRtg: round1(Number(advR.OFF_RATING) || 0), defRtg: round1(Number(advR.DEF_RATING) || 0), netRtg: round1(Number(advR.NET_RATING) || 0), pie: toPct100(advR.PIE), pace: round1(Number(advR.PACE) || 99.5), astPct: toPct100(advR.AST_PCT), astTo: round2(Number(advR.AST_TO) || 0), astRatio: round1(Number(advR.AST_RATIO) || 0), orebPct: toPct100(advR.OREB_PCT), drebPct: toPct100(advR.DREB_PCT), rebPct: toPct100(advR.REB_PCT), tovPct: toPct100(advR.TM_TOV_PCT ?? advR.E_TOV_PCT), ptsPaint: round1(Number(miscR.PTS_PAINT) || 0), pts2ndChance: round1(Number(miscR.PTS_2ND_CHANCE) || 0), ptsFastBreak: round1(Number(miscR.PTS_FB) || 0), ptsOffTov: round1(Number(miscR.PTS_OFF_TOV) || 0), foulsDrawn: round1(Number(miscR.PFD) || 0), contestedShots: round1(Number(husR.CONTESTED_SHOTS) || 0), deflections: round1(Number(husR.DEFLECTIONS) || 0), screenAssists: round1(Number(husR.SCREEN_ASSISTS) || 0), looseBalls: round1(Number(husR.LOOSE_BALLS_RECOVERED) || 0), boxOuts: round1(Number(husR.BOX_OUTS) || 0) };
+        const pAdv = { gp: Number(advR.GP) || p.games.length, usgPct: toPct100(advR.USG_PCT), tsPct: toPct100(advR.TS_PCT), efgPct: toPct100(advR.EFG_PCT), offRtg: round1(Number(advR.OFF_RATING) || 0), defRtg: round1(Number(advR.DEF_RATING) || 0), netRtg: round1(Number(advR.NET_RATING) || 0), pie: toPct100(advR.PIE), pace: round1(Number(advR.PACE) || 99.5), astPct: toPct100(advR.AST_PCT), astTo: round2(Number(advR.AST_TO) || 0), astRatio: round1(Number(advR.AST_RATIO) || 0), orebPct: toPct100(advR.OREB_PCT), drebPct: toPct100(advR.DREB_PCT), rebPct: toPct100(advR.REB_PCT), tovPct: toPct100(advR.TM_TOV_PCT ?? advR.E_TOV_PCT), ptsPaint: round1(Number(miscR.PTS_PAINT) || 0), pts2ndChance: round1(Number(miscR.PTS_2ND_CHANCE) || 0), ptsFastBreak: round1(Number(miscR.PTS_FB) || 0), ptsOffTov: round1(Number(miscR.PTS_OFF_TOV) || 0), oppPtsPaint: round1(Number(miscR.OPP_PTS_PAINT) || 0), oppPts2ndChance: round1(Number(miscR.OPP_PTS_2ND_CHANCE) || 0), oppPtsFb: round1(Number(miscR.OPP_PTS_FB) || 0), oppPtsOffTov: round1(Number(miscR.OPP_PTS_OFF_TOV) || 0), foulsDrawn: round1(Number(miscR.PFD) || 0), blka: round1(Number(miscR.BLKA) || 0), pf: round1(Number(miscR.PF) || 0), contestedShots: round1(Number(husR.CONTESTED_SHOTS) || 0), contestedShots2pt: round1(Number(husR.CONTESTED_SHOTS_2PT) || 0), contestedShots3pt: round1(Number(husR.CONTESTED_SHOTS_3PT) || 0), deflections: round1(Number(husR.DEFLECTIONS) || 0), chargesDrawn: round2(Number(husR.CHARGES_DRAWN) || 0), screenAssists: round1(Number(husR.SCREEN_ASSISTS) || 0), screenAstPts: round1(Number(husR.SCREEN_AST_PTS) || 0), looseBalls: round1(Number(husR.LOOSE_BALLS_RECOVERED) || 0), offLooseBalls: round1(Number(husR.OFF_LOOSE_BALLS_RECOVERED) || 0), defLooseBalls: round1(Number(husR.DEF_LOOSE_BALLS_RECOVERED) || 0), boxOuts: round1(Number(husR.BOX_OUTS) || 0), offBoxOuts: round1(Number(husR.OFF_BOXOUTS) || 0), defBoxOuts: round1(Number(husR.DEF_BOXOUTS) || 0), boxOutTeamRebs: round1(Number(husR.BOX_OUT_PLAYER_TEAM_REBS ?? husR.BOX_OUT_TEAM_REBS) || 0), boxOutPlayerRebs: round1(Number(husR.BOX_OUT_PLAYER_REBS) || 0) };
         p.advanced = pAdv;
       }
     }
@@ -652,7 +680,7 @@ async function getFullLeagueMemory(forceRefresh = false) {
     const primary = p27 || p26;
     const mergedGames = [...p27?.games || [], ...p26?.games || []].sort((a, b) => b.date.localeCompare(a.date));
     if (mergedGames.length === 0) continue;
-    allPlayers.push({ ...primary, jersey: p27?.jersey || p26?.jersey, height: p27?.height || p26?.height, country: p27?.country || p26?.country, birthYear: p27?.birthYear ?? p26?.birthYear, advanced: p27?.advanced || p26?.advanced, games: mergedGames });
+    allPlayers.push({ ...primary, jersey: p27?.jersey || p26?.jersey, height: p27?.height || p26?.height, country: p27?.country || p26?.country, birthYear: p27?.birthYear ?? p26?.birthYear, fromYear: p27?.fromYear ?? p26?.fromYear, draftYear: p27?.draftYear ?? p26?.draftYear, experienceYears: p27?.experienceYears ?? p26?.experienceYears, advanced: p27?.advanced || p26?.advanced, games: mergedGames });
   }
   allPlayers.sort((a, b) => {
     const aRecent = meanNums(a.games.slice(0, 10).map((g) => g.points));
@@ -715,32 +743,47 @@ async function getScoreboardDeltaPayload(clientSinceHash?: string, forceRefresh 
     changedGames,
   };
 }
+function enrichPlayersWithBiosMeta(playersList, biosMap) {
+  for (const p of playersList) {
+    const bio = biosMap.get(p.id);
+    if (!bio) continue;
+    if (!p.country && bio.country) p.country = bio.country;
+    if (!p.birthYear && bio.birthYear) p.birthYear = bio.birthYear;
+    if (!p.fromYear && bio.fromYear) p.fromYear = bio.fromYear;
+    if (!p.draftYear && bio.draftYear) p.draftYear = bio.draftYear;
+    if (typeof p.experienceYears !== "number" && typeof bio.experienceYears === "number") {
+      p.experienceYears = bio.experienceYears;
+    }
+  }
+  return playersList;
+}
 async function getBootstrapPayload(seasonMode = "continuous", forceRefresh = false) {
   if (seasonMode === "2027") {
     const [s2027, biosMap2, scoreboard2] = await Promise.all([buildSingleSeasonDataset("2026-27", forceRefresh), getPlayerBiosMap(false), fetchLiveScoreboardGames(void 0, forceRefresh)]);
     const teams = [...s2027.teamsByAbbr.values()].sort((a, b) => b.winPct - a.winPct || b.wins - a.wins || b.differential - a.differential);
-    const players = [...s2027.playersById.values()].sort((a, b) => meanNums(b.games.map((g) => g.points)) - meanNums(a.games.map((g) => g.points)));
+    const players = enrichPlayersWithBiosMeta([...s2027.playersById.values()].sort((a, b) => meanNums(b.games.map((g) => g.points)) - meanNums(a.games.map((g) => g.points))), biosMap2);
     return { seasonMode, dataSource: s2027.dataSource, totalLeaguePlayersAvailable: Math.max(biosMap2.size, players.length), allPlayersLoaded: true, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), teams, players, scoreboard: scoreboard2 };
   }
   if (seasonMode === "2026") {
     const [s2026, biosMap2, scoreboard2] = await Promise.all([buildSingleSeasonDataset("2025-26", false), getPlayerBiosMap(false), fetchLiveScoreboardGames(void 0, false)]);
     const teams = [...s2026.teamsByAbbr.values()].sort((a, b) => b.winPct - a.winPct || b.wins - a.wins || b.differential - a.differential);
-    const players = [...s2026.playersById.values()].sort((a, b) => meanNums(b.games.map((g) => g.points)) - meanNums(a.games.map((g) => g.points)));
+    const players = enrichPlayersWithBiosMeta([...s2026.playersById.values()].sort((a, b) => meanNums(b.games.map((g) => g.points)) - meanNums(a.games.map((g) => g.points))), biosMap2);
     return { seasonMode, dataSource: s2026.dataSource, totalLeaguePlayersAvailable: Math.max(biosMap2.size, players.length), allPlayersLoaded: true, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), teams, players, scoreboard: scoreboard2 };
   }
   if (seasonMode === "2025") {
     const [s2025, biosMap2, scoreboard2] = await Promise.all([buildSingleSeasonDataset("2024-25", false), getPlayerBiosMap(false), fetchLiveScoreboardGames(void 0, false)]);
     const teams = [...s2025.teamsByAbbr.values()].sort((a, b) => b.winPct - a.winPct || b.wins - a.wins || b.differential - a.differential);
-    const players = [...s2025.playersById.values()].sort((a, b) => meanNums(b.games.map((g) => g.points)) - meanNums(a.games.map((g) => g.points)));
+    const players = enrichPlayersWithBiosMeta([...s2025.playersById.values()].sort((a, b) => meanNums(b.games.map((g) => g.points)) - meanNums(a.games.map((g) => g.points))), biosMap2);
     return { seasonMode, dataSource: s2025.dataSource, totalLeaguePlayersAvailable: Math.max(biosMap2.size, players.length), allPlayersLoaded: true, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), teams, players, scoreboard: scoreboard2 };
   }
   if (seasonMode === "2024") {
     const [s2024, biosMap2, scoreboard2] = await Promise.all([buildSingleSeasonDataset("2023-24", false), getPlayerBiosMap(false), fetchLiveScoreboardGames(void 0, false)]);
     const teams = [...s2024.teamsByAbbr.values()].sort((a, b) => b.winPct - a.winPct || b.wins - a.wins || b.differential - a.differential);
-    const players = [...s2024.playersById.values()].sort((a, b) => meanNums(b.games.map((g) => g.points)) - meanNums(a.games.map((g) => g.points)));
+    const players = enrichPlayersWithBiosMeta([...s2024.playersById.values()].sort((a, b) => meanNums(b.games.map((g) => g.points)) - meanNums(a.games.map((g) => g.points))), biosMap2);
     return { seasonMode, dataSource: s2024.dataSource, totalLeaguePlayersAvailable: Math.max(biosMap2.size, players.length), allPlayersLoaded: true, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), teams, players, scoreboard: scoreboard2 };
   }
   const [full, biosMap, scoreboard] = await Promise.all([getFullLeagueMemory(forceRefresh), getPlayerBiosMap(false), fetchLiveScoreboardGames(void 0, forceRefresh)]);
+  enrichPlayersWithBiosMeta(full.allPlayers, biosMap);
   return { seasonMode, dataSource: full.s2027.dataSource, totalLeaguePlayersAvailable: Math.max(biosMap.size, full.allPlayers.length), allPlayersLoaded: true, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), teams: full.teams, players: full.allPlayers, scoreboard };
 }
 const bootstrapWireBuffersCache = /* @__PURE__ */ new Map();
@@ -835,7 +878,7 @@ async function getSinglePlayerSummary(playerId, seasonMode = "continuous") {
   const bio = biosMap.get(playerId);
   if (!bio) return null;
   const tMeta = NBA_TEAMS_MAP[bio.teamAbbr];
-  return { id: bio.id, name: bio.name, teamId: bio.teamId || tMeta?.id || "", teamAbbr: bio.teamAbbr || "NBA", teamName: tMeta?.name || bio.teamAbbr || "NBA", position: bio.position || "G-F", jersey: bio.jersey || void 0, height: bio.height || void 0, country: bio.country || void 0, ...(bio.birthYear ? { birthYear: bio.birthYear } : {}), games: [] };
+  return { id: bio.id, name: bio.name, teamId: bio.teamId || tMeta?.id || "", teamAbbr: bio.teamAbbr || "NBA", teamName: tMeta?.name || bio.teamAbbr || "NBA", position: bio.position || "G-F", jersey: bio.jersey || void 0, height: bio.height || void 0, country: bio.country || void 0, ...(bio.birthYear ? { birthYear: bio.birthYear } : {}), ...(bio.fromYear ? { fromYear: bio.fromYear } : {}), ...(bio.draftYear ? { draftYear: bio.draftYear } : {}), ...(typeof bio.experienceYears === "number" ? { experienceYears: bio.experienceYears } : {}), games: [] };
 }
 let cachedInspectorBenchmarks = null;
 async function getPlayerInspectorDossier(playerId) {
@@ -848,7 +891,7 @@ async function getPlayerInspectorDossier(playerId) {
     const bio = biosMap.get(playerId);
     if (!bio) return null;
     const tMeta = NBA_TEAMS_MAP[bio.teamAbbr];
-    player = { id: bio.id, name: bio.name, teamId: bio.teamId || tMeta?.id || "", teamAbbr: bio.teamAbbr || "NBA", teamName: tMeta?.name || bio.teamAbbr || "NBA", position: bio.position || "G-F", jersey: bio.jersey || void 0, height: bio.height || void 0, country: bio.country || void 0, ...(bio.birthYear ? { birthYear: bio.birthYear } : {}), games: [] };
+    player = { id: bio.id, name: bio.name, teamId: bio.teamId || tMeta?.id || "", teamAbbr: bio.teamAbbr || "NBA", teamName: tMeta?.name || bio.teamAbbr || "NBA", position: bio.position || "G-F", jersey: bio.jersey || void 0, height: bio.height || void 0, country: bio.country || void 0, ...(bio.birthYear ? { birthYear: bio.birthYear } : {}), ...(bio.fromYear ? { fromYear: bio.fromYear } : {}), ...(bio.draftYear ? { draftYear: bio.draftYear } : {}), ...(typeof bio.experienceYears === "number" ? { experienceYears: bio.experienceYears } : {}), games: [] };
   }
   const now = Date.now();
   if (!cachedInspectorBenchmarks || cachedInspectorBenchmarks.expiresAt <= now) {
@@ -1912,7 +1955,23 @@ async function syncNbaSnapshotToDisk(options) {
     throw new Error(`Guardia de no-regresi\xF3n activada: el nuevo snapshot ten\xEDa ${teamGames2027} partidos 2026-27 frente a ${prevGames2027} previos.`);
   }
   const written = writeNbaSnapshotToDisk(snapshot);
-  return { ...written, lastSyncedSource, biosCount: snapshot.bios.length, players2026: snapshot.s2026.players.length, players2027: snapshot.s2027.players.length, teamGames2026, teamGames2027 };
+  let advancedSnapshotMeta = null;
+  try {
+    advancedSnapshotMeta = await syncNbaAdvancedSnapshotToDisk({ forceLive: statsLiveSucceeded });
+  } catch (advErr) {
+    console.warn("[RadarNBA] Fallo secundario generando snapshot avanzado:", advErr);
+  }
+
+  return {
+    ...written,
+    lastSyncedSource,
+    biosCount: snapshot.bios.length,
+    players2026: snapshot.s2026.players.length,
+    players2027: snapshot.s2027.players.length,
+    teamGames2026,
+    teamGames2027,
+    advancedSnapshot: advancedSnapshotMeta,
+  };
 }
 export {
   buildSingleSeasonDataset,
@@ -1936,5 +1995,6 @@ export {
   getTeamRoster,
   scoutingEngine,
   searchLeaguePlayers,
+  syncNbaAdvancedSnapshotToDisk,
   syncNbaSnapshotToDisk
 };

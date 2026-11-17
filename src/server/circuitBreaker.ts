@@ -78,6 +78,7 @@ class ProviderCircuit {
   lastSuccessTime: number | null = null;
   openUntil: number | null = null;
   halfOpenCanaryRemaining = 0;
+  halfOpenProbesDispatched = 0;
   config: CircuitConfig;
 
   constructor(provider: ExternalProvider) {
@@ -99,27 +100,38 @@ class ProviderCircuit {
       if (this.halfOpenCanaryRemaining <= 0) {
         this.state = "CLOSED";
         this.consecutiveFailures = 0;
+        this.trippedCount = 0;
         this.openUntil = null;
+        this.halfOpenProbesDispatched = 0;
         console.log(`[CircuitBreaker] ${this.provider} recuperado -> CLOSED`);
       }
     } else if (this.state === "CLOSED") {
       this.consecutiveFailures = 0;
+      this.trippedCount = 0;
     }
   }
 
   recordFailure(reason: string) {
     this.totalFailures++;
-    this.consecutiveFailures++;
     this.lastFailureTime = Date.now();
     this.lastFailureReason = reason.slice(0, 160);
+
+    // Ignore trailing failures from concurrent in-flight calls after circuit already tripped OPEN
+    if (this.state === "OPEN") {
+      return;
+    }
+
+    this.consecutiveFailures++;
 
     if (this.state === "HALF_OPEN" || this.consecutiveFailures >= this.config.failureThreshold) {
       this.trippedCount++;
       const cooldown = this.getCurrentCooldownMs();
       this.state = "OPEN";
       this.openUntil = Date.now() + cooldown;
-      console.warn(
-        `[CircuitBreaker] ${this.provider} ha disparado OPEN por ${Math.round(cooldown / 1e3)}s tras error: ${reason}`
+      this.halfOpenCanaryRemaining = 0;
+      this.halfOpenProbesDispatched = 0;
+      console.log(
+        `[CircuitBreaker] ${this.provider} -> OPEN (${Math.round(cooldown / 1e3)}s cooldown; fallback activo)`
       );
     }
   }
@@ -133,6 +145,7 @@ class ProviderCircuit {
       if (this.openUntil && now >= this.openUntil) {
         this.state = "HALF_OPEN";
         this.halfOpenCanaryRemaining = this.config.canaryTarget;
+        this.halfOpenProbesDispatched = 1;
         console.log(`[CircuitBreaker] ${this.provider} cooldown cumplido -> HALF_OPEN (enviando canario)`);
         return true;
       }
@@ -140,9 +153,18 @@ class ProviderCircuit {
       return false;
     }
     if (this.state === "HALF_OPEN") {
-      return true;
+      if (this.halfOpenProbesDispatched < this.config.canaryTarget) {
+        this.halfOpenProbesDispatched++;
+        return true;
+      }
+      this.totalShortCircuits++;
+      return false;
     }
     return true;
+  }
+
+  isOpen(): boolean {
+    return this.state === "OPEN" && Boolean(this.openUntil && Date.now() < this.openUntil);
   }
 
   reset() {
@@ -150,6 +172,7 @@ class ProviderCircuit {
     this.consecutiveFailures = 0;
     this.openUntil = null;
     this.halfOpenCanaryRemaining = 0;
+    this.halfOpenProbesDispatched = 0;
     this.trippedCount = 0;
   }
 
@@ -181,6 +204,11 @@ const circuits: Record<ExternalProvider, ProviderCircuit> = {
   espn_api: new ProviderCircuit("espn_api"),
   general: new ProviderCircuit("general"),
 };
+
+export function isCircuitOpen(provider: ExternalProvider): boolean {
+  const circuit = circuits[provider];
+  return circuit ? circuit.isOpen() : false;
+}
 
 export function identifyProviderFromUrl(url: string): ExternalProvider {
   if (url.includes("stats.nba.com")) return "nba_stats";

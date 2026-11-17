@@ -3,6 +3,7 @@ import type {
   PlayerGameLog,
   PlayerInspectorBenchmarkItem,
   PlayerSummary,
+  TeamGameLog,
 } from '../types/nba.ts';
 
 export type PlayerSamplePreset =
@@ -1256,8 +1257,103 @@ export const PLAYER_GAME_LOG_COLUMNS: PlayerGameLogColumnDef[] = [
     renderCell: (g) => `${g.pra}`,
     renderAverage: (gs) => r1(avgNums(gs.map((g) => g.pra))).toFixed(1),
   },
+  {
+    key: 'nbaFantasyPts',
+    label: 'NBA FPTS',
+    helpKey: 'nbaFantasyPts',
+    family: 'basic',
+    highlightTone: 'orange',
+    renderCell: (g) =>
+      r1(
+        g.points +
+          1.2 * g.rebounds +
+          1.5 * g.assists +
+          3 * g.steals +
+          3 * g.blocks -
+          g.turnovers
+      ).toFixed(1),
+    renderAverage: (gs) =>
+      r1(
+        avgNums(
+          gs.map(
+            (g) =>
+              g.points +
+              1.2 * g.rebounds +
+              1.5 * g.assists +
+              3 * g.steals +
+              3 * g.blocks -
+              g.turnovers
+          )
+        )
+      ).toFixed(1),
+  },
+  {
+    key: 'dd2',
+    label: 'DD2',
+    helpKey: 'doubleDoubles',
+    family: 'basic',
+    renderCell: (g) =>
+      [g.points, g.rebounds, g.assists, g.steals, g.blocks].filter((x) => x >= 10)
+        .length >= 2
+        ? 'Sí'
+        : '—',
+    renderAverage: (gs) =>
+      `${gs.filter(
+        (g) =>
+          [g.points, g.rebounds, g.assists, g.steals, g.blocks].filter(
+            (x) => x >= 10
+          ).length >= 2
+      ).length} tot.`,
+  },
+  {
+    key: 'td3',
+    label: 'TD3',
+    helpKey: 'tripleDoubles',
+    family: 'basic',
+    renderCell: (g) =>
+      [g.points, g.rebounds, g.assists, g.steals, g.blocks].filter((x) => x >= 10)
+        .length >= 3
+        ? 'Sí'
+        : '—',
+    renderAverage: (gs) =>
+      `${gs.filter(
+        (g) =>
+          [g.points, g.rebounds, g.assists, g.steals, g.blocks].filter(
+            (x) => x >= 10
+          ).length >= 3
+      ).length} tot.`,
+  },
+  {
+    key: 'isStarter',
+    label: 'Titular',
+    helpKey: 'gp',
+    family: 'basic',
+    renderCell: (g) =>
+      g.isStarter === true ? 'Tit.' : g.isStarter === false ? 'Sup.' : '—',
+    renderAverage: (gs) => {
+      const known = gs.filter((g) => typeof g.isStarter === 'boolean');
+      if (known.length === 0) return '—';
+      const starts = known.filter((g) => g.isStarter).length;
+      return `${starts}/${known.length}`;
+    },
+  },
+  {
+    key: 'restDays',
+    label: 'Desc.',
+    helpKey: 'splitContext',
+    family: 'basic',
+    renderCell: (g) =>
+      g.restDays !== null && g.restDays !== undefined ? `${g.restDays}d` : '—',
+    renderAverage: (gs) => {
+      const valid = gs.filter(
+        (g) => g.restDays !== null && g.restDays !== undefined
+      );
+      if (valid.length === 0) return '—';
+      return `${r1(avgNums(valid.map((g) => Number(g.restDays) || 0))).toFixed(1)}d`;
+    },
+  },
 
-  // Tiro (series A-I y porcentajes)
+  // Tiro (series A-I, desglose individual y porcentajes)
   {
     key: 'fg_split',
     label: 'TC',
@@ -1269,6 +1365,22 @@ export const PLAYER_GAME_LOG_COLUMNS: PlayerGameLogColumnDef[] = [
       `${r1(avgNums(gs.map((g) => g.fgm))).toFixed(1)}-${r1(
         avgNums(gs.map((g) => g.fga))
       ).toFixed(1)}`,
+  },
+  {
+    key: 'fgm',
+    label: 'TCA',
+    helpKey: 'fgmMade',
+    family: 'shooting',
+    renderCell: (g) => `${g.fgm}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.fgm))).toFixed(1),
+  },
+  {
+    key: 'fga',
+    label: 'TCI',
+    helpKey: 'fga',
+    family: 'shooting',
+    renderCell: (g) => `${g.fga}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.fga))).toFixed(1),
   },
   {
     key: 'fgPct',
@@ -1290,6 +1402,22 @@ export const PLAYER_GAME_LOG_COLUMNS: PlayerGameLogColumnDef[] = [
       `${PLAYER_METRICS_MAP.fg2m.sliceValue(gs).toFixed(1)}-${PLAYER_METRICS_MAP.fg2a
         .sliceValue(gs)
         .toFixed(1)}`,
+  },
+  {
+    key: 'fg2m',
+    label: 'T2A',
+    helpKey: 'fg2m',
+    family: 'shooting',
+    renderCell: (g) => `${Math.max(0, g.fgm - g.fg3m)}`,
+    renderAverage: (gs) => PLAYER_METRICS_MAP.fg2m.sliceValue(gs).toFixed(1),
+  },
+  {
+    key: 'fg2a',
+    label: 'T2I',
+    helpKey: 'fg2a',
+    family: 'shooting',
+    renderCell: (g) => `${Math.max(0, g.fga - g.fg3a)}`,
+    renderAverage: (gs) => PLAYER_METRICS_MAP.fg2a.sliceValue(gs).toFixed(1),
   },
   {
     key: 'fg2Pct',
@@ -1318,6 +1446,22 @@ export const PLAYER_GAME_LOG_COLUMNS: PlayerGameLogColumnDef[] = [
       ).toFixed(1)}`,
   },
   {
+    key: 'fg3m',
+    label: '3PM',
+    helpKey: 'fg3m',
+    family: 'shooting',
+    renderCell: (g) => `${g.fg3m}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.fg3m))).toFixed(1),
+  },
+  {
+    key: 'fg3a',
+    label: '3PI',
+    helpKey: 'fg3a',
+    family: 'shooting',
+    renderCell: (g) => `${g.fg3a}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.fg3a))).toFixed(1),
+  },
+  {
     key: 'fg3Pct',
     label: '3P%',
     helpKey: 'fg3Pct',
@@ -1337,6 +1481,22 @@ export const PLAYER_GAME_LOG_COLUMNS: PlayerGameLogColumnDef[] = [
       `${r1(avgNums(gs.map((g) => g.ftm))).toFixed(1)}-${r1(
         avgNums(gs.map((g) => g.fta))
       ).toFixed(1)}`,
+  },
+  {
+    key: 'ftm',
+    label: 'TLA',
+    helpKey: 'ftmMade',
+    family: 'shooting',
+    renderCell: (g) => `${g.ftm}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.ftm))).toFixed(1),
+  },
+  {
+    key: 'fta',
+    label: 'TLI',
+    helpKey: 'fta',
+    family: 'shooting',
+    renderCell: (g) => `${g.fta}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.fta))).toFixed(1),
   },
   {
     key: 'ftPct',
@@ -1360,7 +1520,7 @@ export const PLAYER_GAME_LOG_COLUMNS: PlayerGameLogColumnDef[] = [
       formatMetricNumber(PLAYER_METRICS_MAP.plusMinus.sliceValue(gs), 1, '', true),
   },
 
-  // Ratios y eficiencia avanzada
+  // Ratios, splits de origen y eficiencia avanzada
   {
     key: 'usgEst',
     label: 'USG%',
@@ -1480,10 +1640,632 @@ export const PLAYER_GAME_LOG_COLUMNS: PlayerGameLogColumnDef[] = [
     renderCell: (g) => PLAYER_METRICS_MAP.astPer36.gameValue(g).toFixed(1),
     renderAverage: (gs) => PLAYER_METRICS_MAP.astPer36.sliceValue(gs).toFixed(1),
   },
+  {
+    key: 'praPer36',
+    label: 'PRA/36',
+    helpKey: 'praPer36',
+    family: 'ratios',
+    renderCell: (g) => PLAYER_METRICS_MAP.praPer36.gameValue(g).toFixed(1),
+    renderAverage: (gs) => PLAYER_METRICS_MAP.praPer36.sliceValue(gs).toFixed(1),
+  },
+  {
+    key: 'stocksPer36',
+    label: 'STK/36',
+    helpKey: 'stocksPer36',
+    family: 'ratios',
+    renderCell: (g) => PLAYER_METRICS_MAP.stocksPer36.gameValue(g).toFixed(1),
+    renderAverage: (gs) => PLAYER_METRICS_MAP.stocksPer36.sliceValue(gs).toFixed(1),
+  },
+  {
+    key: 'tovPer36',
+    label: 'PER/36',
+    helpKey: 'tov',
+    family: 'ratios',
+    renderCell: (g) =>
+      g.minutes > 0 ? r1((g.turnovers / g.minutes) * 36).toFixed(1) : '—',
+    renderAverage: (gs) => {
+      const t = sumBy(gs, (g) => g.turnovers);
+      const m = sumBy(gs, (g) => g.minutes);
+      return m > 0 ? r1((t / m) * 36).toFixed(1) : '0.0';
+    },
+  },
+  {
+    key: 'pfPer36',
+    label: 'FP/36',
+    helpKey: 'personalFouls',
+    family: 'ratios',
+    renderCell: (g) =>
+      g.minutes > 0 ? r1((g.fouls / g.minutes) * 36).toFixed(1) : '—',
+    renderAverage: (gs) => {
+      const f = sumBy(gs, (g) => g.fouls);
+      const m = sumBy(gs, (g) => g.minutes);
+      return m > 0 ? r1((f / m) * 36).toFixed(1) : '0.0';
+    },
+  },
+  {
+    key: 'pctFga2pt',
+    label: '%FGA 2P',
+    helpKey: 'pctFga2pt',
+    family: 'ratios',
+    renderCell: (g) =>
+      g.fga > 0 ? `${r1(((g.fga - g.fg3a) / g.fga) * 100).toFixed(1)}%` : '—',
+    renderAverage: (gs) => {
+      const a = sumBy(gs, (g) => g.fga);
+      const a2 = sumBy(gs, (g) => Math.max(0, g.fga - g.fg3a));
+      return a > 0 ? `${r1((a2 / a) * 100).toFixed(1)}%` : '0.0%';
+    },
+  },
+  {
+    key: 'pctFga3pt',
+    label: '%FGA 3P',
+    helpKey: 'pctFga3pt',
+    family: 'ratios',
+    renderCell: (g) =>
+      g.fga > 0 ? `${r1((g.fg3a / g.fga) * 100).toFixed(1)}%` : '—',
+    renderAverage: (gs) => {
+      const a = sumBy(gs, (g) => g.fga);
+      const a3 = sumBy(gs, (g) => g.fg3a);
+      return a > 0 ? `${r1((a3 / a) * 100).toFixed(1)}%` : '0.0%';
+    },
+  },
+  {
+    key: 'pctPts2pt',
+    label: '%PTS 2P',
+    helpKey: 'pctPts2pt',
+    family: 'ratios',
+    renderCell: (g) =>
+      g.points > 0
+        ? `${r1(((Math.max(0, g.fgm - g.fg3m) * 2) / g.points) * 100).toFixed(1)}%`
+        : '—',
+    renderAverage: (gs) => {
+      const pts = sumBy(gs, (g) => g.points);
+      const p2 = sumBy(gs, (g) => Math.max(0, g.fgm - g.fg3m) * 2);
+      return pts > 0 ? `${r1((p2 / pts) * 100).toFixed(1)}%` : '0.0%';
+    },
+  },
+  {
+    key: 'pctPts3pt',
+    label: '%PTS 3P',
+    helpKey: 'pctPts3pt',
+    family: 'ratios',
+    renderCell: (g) =>
+      g.points > 0 ? `${r1(((g.fg3m * 3) / g.points) * 100).toFixed(1)}%` : '—',
+    renderAverage: (gs) => {
+      const pts = sumBy(gs, (g) => g.points);
+      const p3 = sumBy(gs, (g) => g.fg3m * 3);
+      return pts > 0 ? `${r1((p3 / pts) * 100).toFixed(1)}%` : '0.0%';
+    },
+  },
+  {
+    key: 'pctPtsFt',
+    label: '%PTS TL',
+    helpKey: 'pctPtsFt',
+    family: 'ratios',
+    renderCell: (g) =>
+      g.points > 0 ? `${r1((g.ftm / g.points) * 100).toFixed(1)}%` : '—',
+    renderAverage: (gs) => {
+      const pts = sumBy(gs, (g) => g.points);
+      const ft = sumBy(gs, (g) => g.ftm);
+      return pts > 0 ? `${r1((ft / pts) * 100).toFixed(1)}%` : '0.0%';
+    },
+  },
 ];
 
 export const PLAYER_LOG_COLUMNS_MAP: Record<string, PlayerGameLogColumnDef> =
   Object.fromEntries(PLAYER_GAME_LOG_COLUMNS.map((c) => [c.key, c]));
+
+// =========================================================================
+// TEAM GAME LOG COLUMNS (Customizable, max 10 columns)
+// =========================================================================
+export interface TeamGameLogColumnDef {
+  key: string;
+  label: string;
+  helpKey: string;
+  family: 'basic' | 'shooting' | 'ratios';
+  isDefault?: boolean;
+  lowerIsBetter?: boolean;
+  highlightTone?: 'primary' | 'orange' | 'emerald' | 'signed';
+  numericForTone?: (g: TeamGameLog) => number;
+  sortValue: (g: TeamGameLog) => number;
+  renderCell: (g: TeamGameLog) => string;
+  renderAverage: (games: TeamGameLog[]) => string;
+}
+
+export const DEFAULT_TEAM_LOG_COLUMNS = [
+  'score',
+  'differential',
+  'reb',
+  'ast',
+  'fg_split',
+  'fg3_split',
+  'offRtg',
+  'defRtg',
+  'netRtg',
+  'efgPct',
+] as const;
+
+export const MAX_TEAM_LOG_COLUMNS = 10;
+
+export const TEAM_GAME_LOG_COLUMNS: TeamGameLogColumnDef[] = [
+  // Básicas
+  {
+    key: 'score',
+    label: 'Marcador',
+    helpKey: 'avgPointsFor',
+    family: 'basic',
+    isDefault: true,
+    highlightTone: 'primary',
+    sortValue: (g) => g.pointsFor,
+    renderCell: (g) => `${g.pointsFor}-${g.pointsAgainst}`,
+    renderAverage: (gs) =>
+      `${r1(avgNums(gs.map((g) => g.pointsFor))).toFixed(1)}-${r1(
+        avgNums(gs.map((g) => g.pointsAgainst))
+      ).toFixed(1)}`,
+  },
+  {
+    key: 'pointsFor',
+    label: 'PTS Fav',
+    helpKey: 'avgPointsFor',
+    family: 'basic',
+    sortValue: (g) => g.pointsFor,
+    renderCell: (g) => `${g.pointsFor}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.pointsFor))).toFixed(1),
+  },
+  {
+    key: 'pointsAgainst',
+    label: 'PTS Con',
+    helpKey: 'avgPointsAgainst',
+    family: 'basic',
+    lowerIsBetter: true,
+    sortValue: (g) => g.pointsAgainst,
+    renderCell: (g) => `${g.pointsAgainst}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.pointsAgainst))).toFixed(1),
+  },
+  {
+    key: 'differential',
+    label: 'Dif.',
+    helpKey: 'differential',
+    family: 'basic',
+    isDefault: true,
+    highlightTone: 'signed',
+    numericForTone: (g) => g.differential,
+    sortValue: (g) => g.differential,
+    renderCell: (g) => formatMetricNumber(g.differential, 0, '', true),
+    renderAverage: (gs) =>
+      formatMetricNumber(r1(avgNums(gs.map((g) => g.differential))), 1, '', true),
+  },
+  {
+    key: 'totalPoints',
+    label: 'PTS Tot',
+    helpKey: 'ptsBase',
+    family: 'basic',
+    sortValue: (g) => g.totalPoints ?? g.pointsFor + g.pointsAgainst,
+    renderCell: (g) => `${g.totalPoints ?? g.pointsFor + g.pointsAgainst}`,
+    renderAverage: (gs) =>
+      r1(avgNums(gs.map((g) => g.totalPoints ?? g.pointsFor + g.pointsAgainst))).toFixed(1),
+  },
+  {
+    key: 'reb',
+    label: 'REB',
+    helpKey: 'rebBase',
+    family: 'basic',
+    isDefault: true,
+    sortValue: (g) => g.reb,
+    renderCell: (g) => `${g.reb}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.reb))).toFixed(1),
+  },
+  {
+    key: 'oreb',
+    label: 'OREB',
+    helpKey: 'orebBase',
+    family: 'basic',
+    sortValue: (g) => g.oreb,
+    renderCell: (g) => `${g.oreb}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.oreb))).toFixed(1),
+  },
+  {
+    key: 'dreb',
+    label: 'DREB',
+    helpKey: 'drebBase',
+    family: 'basic',
+    sortValue: (g) => g.dreb,
+    renderCell: (g) => `${g.dreb}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.dreb))).toFixed(1),
+  },
+  {
+    key: 'oreb_reb',
+    label: 'OR/REB',
+    helpKey: 'orebBase',
+    family: 'basic',
+    sortValue: (g) => g.oreb * 100 + g.reb,
+    renderCell: (g) => `${g.oreb}/${g.reb}`,
+    renderAverage: (gs) =>
+      `${r1(avgNums(gs.map((g) => g.oreb))).toFixed(1)}/${r1(
+        avgNums(gs.map((g) => g.reb))
+      ).toFixed(1)}`,
+  },
+  {
+    key: 'ast',
+    label: 'AST',
+    helpKey: 'astBase',
+    family: 'basic',
+    isDefault: true,
+    sortValue: (g) => g.ast,
+    renderCell: (g) => `${g.ast}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.ast))).toFixed(1),
+  },
+  {
+    key: 'stl',
+    label: 'ROB',
+    helpKey: 'steals',
+    family: 'basic',
+    sortValue: (g) => g.stl,
+    renderCell: (g) => `${g.stl}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.stl))).toFixed(1),
+  },
+  {
+    key: 'blk',
+    label: 'TAP',
+    helpKey: 'blocks',
+    family: 'basic',
+    sortValue: (g) => g.blk,
+    renderCell: (g) => `${g.blk}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.blk))).toFixed(1),
+  },
+  {
+    key: 'stocks',
+    label: 'STK',
+    helpKey: 'stocksBase',
+    family: 'basic',
+    sortValue: (g) => (g.stl || 0) + (g.blk || 0),
+    renderCell: (g) => `${(g.stl || 0) + (g.blk || 0)}`,
+    renderAverage: (gs) =>
+      r1(avgNums(gs.map((g) => (g.stl || 0) + (g.blk || 0)))).toFixed(1),
+  },
+  {
+    key: 'tov',
+    label: 'PER',
+    helpKey: 'tov',
+    family: 'basic',
+    lowerIsBetter: true,
+    sortValue: (g) => g.tov,
+    renderCell: (g) => `${g.tov}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.tov))).toFixed(1),
+  },
+  {
+    key: 'restDays',
+    label: 'Desc.',
+    helpKey: 'splitContext',
+    family: 'basic',
+    sortValue: (g) => (g.restDays !== null && g.restDays !== undefined ? g.restDays : -1),
+    renderCell: (g) =>
+      g.restDays !== null && g.restDays !== undefined ? `${g.restDays}d` : '—',
+    renderAverage: (gs) => {
+      const valid = gs.filter((g) => g.restDays !== null && g.restDays !== undefined);
+      return valid.length
+        ? `${r1(avgNums(valid.map((g) => Number(g.restDays) || 0))).toFixed(1)}d`
+        : '—';
+    },
+  },
+
+  // Tiro y splits
+  {
+    key: 'fg_split',
+    label: 'TC',
+    helpKey: 'fgPct',
+    family: 'shooting',
+    isDefault: true,
+    sortValue: (g) => g.fgm * 100 + g.fga,
+    renderCell: (g) => `${g.fgm}-${g.fga}`,
+    renderAverage: (gs) =>
+      `${r1(avgNums(gs.map((g) => g.fgm))).toFixed(1)}-${r1(
+        avgNums(gs.map((g) => g.fga))
+      ).toFixed(1)}`,
+  },
+  {
+    key: 'fgm',
+    label: 'TCA',
+    helpKey: 'fgmMade',
+    family: 'shooting',
+    sortValue: (g) => g.fgm,
+    renderCell: (g) => `${g.fgm}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.fgm))).toFixed(1),
+  },
+  {
+    key: 'fga',
+    label: 'TCI',
+    helpKey: 'fga',
+    family: 'shooting',
+    sortValue: (g) => g.fga,
+    renderCell: (g) => `${g.fga}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.fga))).toFixed(1),
+  },
+  {
+    key: 'fgPct',
+    label: 'TC%',
+    helpKey: 'fgPct',
+    family: 'shooting',
+    sortValue: (g) => (g.fga > 0 ? (g.fgm / g.fga) * 100 : g.fgPct ?? 0),
+    renderCell: (g) =>
+      g.fga > 0 ? `${r1((g.fgm / g.fga) * 100).toFixed(1)}%` : '—',
+    renderAverage: (gs) => {
+      const m = gs.reduce((s, x) => s + x.fgm, 0);
+      const a = gs.reduce((s, x) => s + x.fga, 0);
+      return a > 0 ? `${r1((m / a) * 100).toFixed(1)}%` : '0.0%';
+    },
+  },
+  {
+    key: 'fg2_split',
+    label: 'T2',
+    helpKey: 'fg2Pct',
+    family: 'shooting',
+    sortValue: (g) =>
+      Math.max(0, g.fgm - g.fg3m) * 100 + Math.max(0, g.fga - g.fg3a),
+    renderCell: (g) =>
+      `${Math.max(0, g.fgm - g.fg3m)}-${Math.max(0, g.fga - g.fg3a)}`,
+    renderAverage: (gs) =>
+      `${r1(avgNums(gs.map((g) => Math.max(0, g.fgm - g.fg3m)))).toFixed(1)}-${r1(
+        avgNums(gs.map((g) => Math.max(0, g.fga - g.fg3a)))
+      ).toFixed(1)}`,
+  },
+  {
+    key: 'fg2Pct',
+    label: 'T2%',
+    helpKey: 'fg2Pct',
+    family: 'shooting',
+    sortValue: (g) => {
+      const a2 = Math.max(0, g.fga - g.fg3a);
+      return a2 > 0 ? (Math.max(0, g.fgm - g.fg3m) / a2) * 100 : 0;
+    },
+    renderCell: (g) => {
+      const a2 = Math.max(0, g.fga - g.fg3a);
+      return a2 > 0
+        ? `${r1((Math.max(0, g.fgm - g.fg3m) / a2) * 100).toFixed(1)}%`
+        : '—';
+    },
+    renderAverage: (gs) => {
+      const m2 = gs.reduce((s, x) => s + Math.max(0, x.fgm - x.fg3m), 0);
+      const a2 = gs.reduce((s, x) => s + Math.max(0, x.fga - x.fg3a), 0);
+      return a2 > 0 ? `${r1((m2 / a2) * 100).toFixed(1)}%` : '0.0%';
+    },
+  },
+  {
+    key: 'fg3_split',
+    label: '3P',
+    helpKey: 'fg3Pct',
+    family: 'shooting',
+    isDefault: true,
+    sortValue: (g) => g.fg3m * 100 + g.fg3a,
+    renderCell: (g) => `${g.fg3m}-${g.fg3a}`,
+    renderAverage: (gs) =>
+      `${r1(avgNums(gs.map((g) => g.fg3m))).toFixed(1)}-${r1(
+        avgNums(gs.map((g) => g.fg3a))
+      ).toFixed(1)}`,
+  },
+  {
+    key: 'fg3m',
+    label: '3PM',
+    helpKey: 'fg3m',
+    family: 'shooting',
+    sortValue: (g) => g.fg3m,
+    renderCell: (g) => `${g.fg3m}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.fg3m))).toFixed(1),
+  },
+  {
+    key: 'fg3a',
+    label: '3PA',
+    helpKey: 'fg3a',
+    family: 'shooting',
+    sortValue: (g) => g.fg3a,
+    renderCell: (g) => `${g.fg3a}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.fg3a))).toFixed(1),
+  },
+  {
+    key: 'fg3Pct',
+    label: '3P%',
+    helpKey: 'fg3Pct',
+    family: 'shooting',
+    sortValue: (g) => (g.fg3a > 0 ? (g.fg3m / g.fg3a) * 100 : g.fg3Pct ?? 0),
+    renderCell: (g) =>
+      g.fg3a > 0 ? `${r1((g.fg3m / g.fg3a) * 100).toFixed(1)}%` : '—',
+    renderAverage: (gs) => {
+      const m = gs.reduce((s, x) => s + x.fg3m, 0);
+      const a = gs.reduce((s, x) => s + x.fg3a, 0);
+      return a > 0 ? `${r1((m / a) * 100).toFixed(1)}%` : '0.0%';
+    },
+  },
+  {
+    key: 'ft_split',
+    label: 'TL',
+    helpKey: 'ftPct',
+    family: 'shooting',
+    sortValue: (g) => g.ftm * 100 + g.fta,
+    renderCell: (g) => `${g.ftm}-${g.fta}`,
+    renderAverage: (gs) =>
+      `${r1(avgNums(gs.map((g) => g.ftm))).toFixed(1)}-${r1(
+        avgNums(gs.map((g) => g.fta))
+      ).toFixed(1)}`,
+  },
+  {
+    key: 'ftm',
+    label: 'TLA',
+    helpKey: 'ftmMade',
+    family: 'shooting',
+    sortValue: (g) => g.ftm,
+    renderCell: (g) => `${g.ftm}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.ftm))).toFixed(1),
+  },
+  {
+    key: 'fta',
+    label: 'TLI',
+    helpKey: 'fta',
+    family: 'shooting',
+    sortValue: (g) => g.fta,
+    renderCell: (g) => `${g.fta}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.fta))).toFixed(1),
+  },
+  {
+    key: 'ftPct',
+    label: 'TL%',
+    helpKey: 'ftPct',
+    family: 'shooting',
+    sortValue: (g) => (g.fta > 0 ? (g.ftm / g.fta) * 100 : g.ftPct ?? 0),
+    renderCell: (g) =>
+      g.fta > 0 ? `${r1((g.ftm / g.fta) * 100).toFixed(1)}%` : '—',
+    renderAverage: (gs) => {
+      const m = gs.reduce((s, x) => s + x.ftm, 0);
+      const a = gs.reduce((s, x) => s + x.fta, 0);
+      return a > 0 ? `${r1((m / a) * 100).toFixed(1)}%` : '0.0%';
+    },
+  },
+
+  // Avanzadas y eficiencia colectiva
+  {
+    key: 'offRtg',
+    label: 'OffRtg',
+    helpKey: 'offRtg',
+    family: 'ratios',
+    isDefault: true,
+    sortValue: (g) => g.offRtg,
+    renderCell: (g) => g.offRtg.toFixed(1),
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.offRtg))).toFixed(1),
+  },
+  {
+    key: 'defRtg',
+    label: 'DefRtg',
+    helpKey: 'defRtg',
+    family: 'ratios',
+    isDefault: true,
+    lowerIsBetter: true,
+    sortValue: (g) => g.defRtg,
+    renderCell: (g) => g.defRtg.toFixed(1),
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.defRtg))).toFixed(1),
+  },
+  {
+    key: 'netRtg',
+    label: 'NetRtg',
+    helpKey: 'netRtg',
+    family: 'ratios',
+    isDefault: true,
+    highlightTone: 'signed',
+    numericForTone: (g) => g.netRtg,
+    sortValue: (g) => g.netRtg,
+    renderCell: (g) => formatMetricNumber(g.netRtg, 1, '', true),
+    renderAverage: (gs) =>
+      formatMetricNumber(r1(avgNums(gs.map((g) => g.netRtg))), 1, '', true),
+  },
+  {
+    key: 'pace',
+    label: 'Pace',
+    helpKey: 'paceSimple',
+    family: 'ratios',
+    sortValue: (g) => g.pace,
+    renderCell: (g) => g.pace.toFixed(1),
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.pace))).toFixed(1),
+  },
+  {
+    key: 'poss',
+    label: 'Poses.',
+    helpKey: 'paceSimple',
+    family: 'ratios',
+    sortValue: (g) => g.poss,
+    renderCell: (g) => `${Math.round(g.poss)}`,
+    renderAverage: (gs) => r1(avgNums(gs.map((g) => g.poss))).toFixed(1),
+  },
+  {
+    key: 'efgPct',
+    label: 'eFG%',
+    helpKey: 'efgPct',
+    family: 'ratios',
+    isDefault: true,
+    highlightTone: 'orange',
+    sortValue: (g) => g.efgPct,
+    renderCell: (g) => `${g.efgPct.toFixed(1)}%`,
+    renderAverage: (gs) => {
+      const fgm = gs.reduce((s, x) => s + x.fgm, 0);
+      const fg3m = gs.reduce((s, x) => s + x.fg3m, 0);
+      const fga = gs.reduce((s, x) => s + x.fga, 0);
+      return fga > 0 ? `${r1(((fgm + 0.5 * fg3m) / fga) * 100).toFixed(1)}%` : '0.0%';
+    },
+  },
+  {
+    key: 'tsPct',
+    label: 'TS%',
+    helpKey: 'tsPct',
+    family: 'ratios',
+    highlightTone: 'emerald',
+    sortValue: (g) => g.tsPct,
+    renderCell: (g) => `${g.tsPct.toFixed(1)}%`,
+    renderAverage: (gs) => {
+      const pts = gs.reduce((s, x) => s + x.pointsFor, 0);
+      const fga = gs.reduce((s, x) => s + x.fga, 0);
+      const fta = gs.reduce((s, x) => s + x.fta, 0);
+      const denom = 2 * (fga + 0.44 * fta);
+      return denom > 0 ? `${r1((pts / denom) * 100).toFixed(1)}%` : '0.0%';
+    },
+  },
+  {
+    key: 'orebPct',
+    label: 'OREB%',
+    helpKey: 'orebPct',
+    family: 'ratios',
+    sortValue: (g) => g.orebPct,
+    renderCell: (g) => `${g.orebPct.toFixed(1)}%`,
+    renderAverage: (gs) => `${r1(avgNums(gs.map((g) => g.orebPct))).toFixed(1)}%`,
+  },
+  {
+    key: 'tovPct',
+    label: 'TOV%',
+    helpKey: 'tovPct',
+    family: 'ratios',
+    lowerIsBetter: true,
+    sortValue: (g) => g.tovPct,
+    renderCell: (g) => `${g.tovPct.toFixed(1)}%`,
+    renderAverage: (gs) => `${r1(avgNums(gs.map((g) => g.tovPct))).toFixed(1)}%`,
+  },
+  {
+    key: 'astTo',
+    label: 'AST/PER',
+    helpKey: 'astTo',
+    family: 'ratios',
+    sortValue: (g) => (g.tov > 0 ? g.ast / g.tov : g.ast),
+    renderCell: (g) => (g.tov > 0 ? (g.ast / g.tov).toFixed(2) : `${g.ast.toFixed(2)}`),
+    renderAverage: (gs) => {
+      const a = gs.reduce((s, x) => s + x.ast, 0);
+      const t = gs.reduce((s, x) => s + x.tov, 0);
+      return t > 0 ? r2(a / t).toFixed(2) : '0.00';
+    },
+  },
+  {
+    key: 'threePar',
+    label: '3PAr',
+    helpKey: 'threeRatio',
+    family: 'ratios',
+    sortValue: (g) => (g.fga > 0 ? (g.fg3a / g.fga) * 100 : 0),
+    renderCell: (g) => (g.fga > 0 ? `${r1((g.fg3a / g.fga) * 100).toFixed(1)}%` : '—'),
+    renderAverage: (gs) => {
+      const a3 = gs.reduce((s, x) => s + x.fg3a, 0);
+      const a = gs.reduce((s, x) => s + x.fga, 0);
+      return a > 0 ? `${r1((a3 / a) * 100).toFixed(1)}%` : '0.0%';
+    },
+  },
+  {
+    key: 'ftr',
+    label: 'FTr',
+    helpKey: 'ftr',
+    family: 'ratios',
+    sortValue: (g) => (g.fga > 0 ? (g.fta / g.fga) * 100 : 0),
+    renderCell: (g) => (g.fga > 0 ? `${r1((g.fta / g.fga) * 100).toFixed(1)}%` : '—'),
+    renderAverage: (gs) => {
+      const ft = gs.reduce((s, x) => s + x.fta, 0);
+      const a = gs.reduce((s, x) => s + x.fga, 0);
+      return a > 0 ? `${r1((ft / a) * 100).toFixed(1)}%` : '0.0%';
+    },
+  },
+];
+
+export const TEAM_LOG_COLUMNS_MAP: Record<string, TeamGameLogColumnDef> =
+  Object.fromEntries(TEAM_GAME_LOG_COLUMNS.map((c) => [c.key, c]));
 
 export function buildExtendedPlayerBenchmarks(
   players: PlayerSummary[],
@@ -1787,7 +2569,11 @@ export function evaluateReferenceComparison(
 
   const rawDiff = value - refMean;
   const favorableDiff = opts.lowerIsBetter ? refMean - value : value - refMean;
-  const safeSd = Math.max(opts.decimals === 2 ? 0.06 : 0.3, refSd || 1);
+  const minFloor = opts.decimals >= 3 ? 0.005 : opts.decimals === 2 ? 0.025 : 0.15;
+  const safeSd = Math.max(
+    minFloor,
+    refSd > 0 ? refSd : Math.max(minFloor, Math.abs(refMean) * 0.2 || 1)
+  );
   const z = favorableDiff / safeSd;
   const pct = Math.max(5, Math.min(97, Math.round(50 + z * 22)));
 

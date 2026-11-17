@@ -535,6 +535,9 @@ export function mergeBootstrapSeasonsClient(
       height: p27?.height || p26?.height,
       country: p27?.country || p26?.country,
       birthYear: p27?.birthYear ?? p26?.birthYear,
+      fromYear: p27?.fromYear ?? p26?.fromYear,
+      draftYear: p27?.draftYear ?? p26?.draftYear,
+      experienceYears: p27?.experienceYears ?? p26?.experienceYears,
       advanced: p27?.advanced || p26?.advanced,
       games: mergedGames,
     });
@@ -797,9 +800,15 @@ export function mergeMultipleBootstrapSeasonsClient(
     if (mergedGames.length === 0) continue;
 
     const withBirth = matchingPlayers.find((pl) => typeof pl.birthYear === 'number');
+    const withFrom = matchingPlayers.find((pl) => typeof pl.fromYear === 'number');
+    const withDraft = matchingPlayers.find((pl) => typeof pl.draftYear === 'number');
+    const withExp = matchingPlayers.find((pl) => typeof pl.experienceYears === 'number');
     mergedPlayers.push({
       ...primary,
       birthYear: primary.birthYear ?? withBirth?.birthYear,
+      fromYear: primary.fromYear ?? withFrom?.fromYear,
+      draftYear: primary.draftYear ?? withDraft?.draftYear,
+      experienceYears: primary.experienceYears ?? withExp?.experienceYears,
       games: mergedGames,
     });
   }

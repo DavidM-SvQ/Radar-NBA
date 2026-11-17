@@ -2526,6 +2526,258 @@ export const COLUMN_HELP: Record<string, ColumnHelpEntry> = {
     calculation: 'Tiros de Campo Intentados (FGA) + 0.44 × Tiros Libres Intentados (FTA).',
     benchmarkText: '18+ TSA refleja volumen ofensivo propio de primera opción anotadora.',
   },
+  clutch: {
+    title: 'Rendimiento en Clutch (Últ. 5 min · ±5 PTS)',
+    simpleDesc:
+      'Estadísticas oficiales NBA.com cuando quedan 5 minutos o menos del último cuarto o prórroga y la diferencia en el marcador es de 5 puntos o menos.',
+    calculation: 'Acumulado y promedios filtrados exclusivamente en posesiones de cierre cerrado.',
+    benchmarkText: 'Un NetRtg positivo en Clutch y TS% > 58% distinguen a los cerradores de élite.',
+  },
+  dFgPct: {
+    title: 'Acierto Defendido (DFG%) y Diferencial (Diff%)',
+    simpleDesc:
+      'Porcentaje real de tiro que consiguen los atacantes cuando este jugador o equipo es el defensor más cercano al lanzador. Diff% compara ese acierto frente al promedio normal del atacante.',
+    calculation: 'Diff% = DFG% permitido − FG% esperado habitual de los atacantes defendidos.',
+    benchmarkText: 'Un Diff% negativo (ej. −4.5%) significa que empeora claramente el tiro del rival.',
+  },
+  offBoxOuts: {
+    title: 'Box-Outs (Ofensivos y Defensivos)',
+    simpleDesc:
+      'Bloqueos físicos de rebote para ganar la posición interior y cerrar el cristal tras un tiro fallado, asegurando que el equipo capture el balón.',
+    calculation: 'Conteo oficial de cierres de rebote de Tracking NBA.com por partido.',
+    benchmarkText: 'Clave oculta de pívots y aleros físicos que eleva el DREB% colectivo.',
+  },
+  chargesDrawn: {
+    title: 'Faltas en Ataque Provocadas (Charges Drawn)',
+    simpleDesc:
+      'Veces que el defensor gana la posición con los pies quietos y fuerza falta en ataque por carga del rival, recuperando la posesión al instante.',
+    calculation: 'Faltas ofensivas provocadas registradas oficialmente por NBA Hustle.',
+    benchmarkText: 'Equivale a un robo limpio que además suma falta personal a la estrella rival.',
+  },
+  screenAstPts: {
+    title: 'Puntos tras Bloqueo Directo (Screen Ast PTS)',
+    simpleDesc:
+      'Puntos directos generados por compañeros inmediatamente después de un bloqueo sólido puesto por el jugador.',
+    calculation: 'Puntos anotados por el equipo tras pantalla directa oficial (NBA Hustle).',
+    benchmarkText: '8+ Screen Ast PTS por partido define a bloqueadores de élite como Sabonis o Gobert.',
+  },
+  drives: {
+    title: 'Penetraciones a Canasta (Drives)',
+    simpleDesc:
+      'Veces por partido que un jugador ataca la zona botando desde al menos 6 metros tras el perímetro hacia el aro.',
+    calculation: 'Tracking NBA.com: Drives totales, % de tiro en drive, % de pase y % de pérdida.',
+    benchmarkText: '12+ Drives por noche identifica a motores primarios que rompen defensas.',
+  },
+  catchShoot: {
+    title: 'Tiro en Recepción (Catch & Shoot)',
+    simpleDesc:
+      'Lanzamientos realizados en menos de 2 segundos tras recibir un pase y sin botar más de una vez. Mide la amenaza como tirador abierto.',
+    calculation: 'Volumen, puntos y acierto eFG% / 3P% en situaciones de Catch & Shoot.',
+    benchmarkText: 'Un 3P% > 39% en Catch & Shoot abre la pista para todo el ataque.',
+  },
+  pullUp: {
+    title: 'Tiro tras Bote (Pull-Up Shooting)',
+    simpleDesc:
+      'Lanzamientos creados por el propio jugador tras botar el balón frente a su defensor (suspensiones medias y triples tras paso atrás).',
+    calculation: 'Volumen, puntos y acierto eFG% / 3P% tras bote (Tracking NBA.com).',
+    benchmarkText: '36%+ en triples Pull-Up diferencia a los anotadores autosuficientes de élite.',
+  },
+  potentialAst: {
+    title: 'Asistencias Potenciales (Potential AST)',
+    simpleDesc:
+      'Pases directos que terminan en tiro a canasta del compañero, acaben o no entrando. Mide la creación pura eliminando la puntería ajena.',
+    calculation: 'Pases que generan lanzamiento en los siguientes segundos + asistencias secundarias.',
+    benchmarkText: '12+ Potential AST/PJ sitúa al creador entre los mejores pasadores de la NBA.',
+  },
+  ppp: {
+    title: 'Puntos por Posesión (PPP · Synergy Playtypes)',
+    simpleDesc:
+      'Cuántos puntos produce de media cada jugada finalizada mediante un tipo concreto de acción táctica (Aislamiento, Pick & Roll, Spot-Up, Corte, Poste, etc.).',
+    calculation: 'Puntos Totales en el Playtype / Posesiones Finalizadas en ese Playtype.',
+    benchmarkText: '1.05+ PPP en ataque es excelente; por debajo de 0.88 PPP en defensa es élite.',
+  },
+  onOffSwing: {
+    title: 'Diferencial On/Off Court (Net Swing)',
+    simpleDesc:
+      'Diferencia en el Net Rating (puntos netos por 100 posesiones) del equipo cuando el jugador está EN pista comparado con cuando descansa EN EL BANQUILLO.',
+    calculation: 'Net Swing = NetRtg (Con jugador ON) − NetRtg (Sin jugador OFF).',
+    benchmarkText: 'Un Net Swing superior a +6.0 confirma impacto transformador en el rendimiento colectivo.',
+  },
+  lineupNetRtg: {
+    title: 'Net Rating de Quintetos / Alineaciones',
+    simpleDesc:
+      'Rendimiento neto real por cada 100 posesiones cuando exactamente esos jugadores coinciden juntos en cancha.',
+    calculation: 'OffRtg del quinteto − DefRtg del quinteto (NBA.com Lineups).',
+    benchmarkText: 'Permite detectar los quintetos cerradores reales de cada franquicia.',
+  },
+  restrictedArea: {
+    title: 'Zona Restringida (Bajo el Aro)',
+    simpleDesc:
+      'Tiros ejecutados en el semicírculo inmediato bajo canasta (< 1.2 metros): bandejas, mates y ganchos cortos.',
+    calculation: 'Tiros anotados, intentados y % de acierto en Restricted Area (NBA.com Shot Locations).',
+    benchmarkText: 'Media NBA ~65-67% · Superar el 70% denota finalización de élite.',
+  },
+  corner3: {
+    title: 'Triples de Esquina (Corner 3)',
+    simpleDesc:
+      'Lanzamientos exteriores desde ambas esquinas, ligeramente más cortos (6.70m) que el triple frontal (7.24m).',
+    calculation: 'Suma de Left Corner 3 + Right Corner 3 (NBA.com Shot Locations).',
+    benchmarkText: '39%+ en triples de esquina es el arma básica del juego 3&D moderno.',
+  },
+  blka: {
+    title: 'Tapones Recibidos (BLKA)',
+    simpleDesc:
+      'Número de tiros de campo del jugador o equipo que fueron taponados por un defensor rival. Menor valor indica mejor selección y elevación.',
+    calculation: 'Blocked Field Goal Attempts por partido (NBA.com Base Oficial).',
+    benchmarkText: 'Menos de 0.6 BLKA/PJ en exteriores refleja gran capacidad para evitar ayudas interiores.',
+  },
+  nbaFantasyPts: {
+    title: 'Puntos Fantasy Oficiales NBA.com',
+    simpleDesc:
+      'Puntuación estándar oficial de NBA.com que pondera en una sola cifra puntos, rebotes, asistencias, robos, tapones y pérdidas.',
+    calculation: 'PTS + 1.2×REB + 1.5×AST + 3×STL + 3×BLK − TOV (fórmula oficial NBA Fantasy).',
+    benchmarkText: '40+ FPTS/PJ = nivel All-Star · 50+ FPTS/PJ = calibre candidato MVP.',
+  },
+  pctFga2pt: {
+    title: '% de Tiros de 2 Puntos (Scoring Splits)',
+    simpleDesc:
+      'Proporción de todos los lanzamientos de campo que se ejecutan dentro de la línea de tres puntos.',
+    calculation: '(FGA de 2 puntos / FGA totales) × 100 (NBA.com Scoring Splits).',
+    benchmarkText: 'Complementario a %FGA 3PT: refleja si ataca más la zona o el perímetro.',
+  },
+  pctFga3pt: {
+    title: '% de Tiros de 3 Puntos (3PAr · Scoring Splits)',
+    simpleDesc:
+      'Proporción de los lanzamientos de campo ejecutados más allá de la línea de tres puntos.',
+    calculation: '(FGA de 3 puntos / FGA totales) × 100 (NBA.com Scoring Splits).',
+    benchmarkText: 'Equipo: ~41% media NBA · Tiradores especialistas superan el 65%.',
+  },
+  pctPts2pt: {
+    title: '% de Puntos en Tiros de 2 Puntos',
+    simpleDesc:
+      'Qué porcentaje de la anotación total procede de canastas de 2 puntos (pintura + media distancia).',
+    calculation: '(Puntos anotados de 2P / Puntos Totales) × 100.',
+    benchmarkText: 'Útil para detectar anotadores dependientes del juego interior vs tiradores exteriores.',
+  },
+  pctPts2ptMr: {
+    title: '% de Puntos en Media Distancia (Mid-Range)',
+    simpleDesc:
+      'Proporción de la anotación total conseguida mediante tiros en suspensión de media distancia (fuera de la pintura y dentro del arco de 3P).',
+    calculation: '(Puntos de Mid-Range / Puntos Totales) × 100 (NBA.com Scoring).',
+    benchmarkText: 'Solo especialistas élite (DeRozan, Booker, Durant) superan el 22% con alta eficacia.',
+  },
+  pctPts3pt: {
+    title: '% de Puntos desde el Triple',
+    simpleDesc:
+      'Qué parte de la producción anotadora total procede directamente de lanzamientos de 3 puntos.',
+    calculation: '(Puntos anotados de 3P / Puntos Totales) × 100.',
+    benchmarkText: 'Equipo: ~37% media NBA · Especialistas 3&D superan el 55%.',
+  },
+  pctPtsFb: {
+    title: '% de Puntos al Contraataque',
+    simpleDesc:
+      'Peso porcentual de los puntos en transición rápida sobre el total de puntos del jugador o franquicia.',
+    calculation: '(Puntos Fast Break / Puntos Totales) × 100.',
+    benchmarkText: '16%+ indica gran amenaza corriendo la pista tras rebote o robo.',
+  },
+  pctPtsFt: {
+    title: '% de Puntos en Tiros Libres',
+    simpleDesc:
+      'Porcentaje de todos los puntos anotados que llegan desde la línea de 4.57 metros sin oposición.',
+    calculation: '(FTM / Puntos Totales) × 100.',
+    benchmarkText: '22%+ distingue a jugadores que castigan constantemente sacando faltas.',
+  },
+  pctPtsOffTov: {
+    title: '% de Puntos tras Pérdida Rival',
+    simpleDesc:
+      'Porcentaje de los puntos totales que nacen inmediatamente tras recuperar o forzar una pérdida del rival.',
+    calculation: '(Puntos Off Turnovers / Puntos Totales) × 100.',
+    benchmarkText: 'Equipo: 15%+ refleja defensa muy agresiva que convierte robos en canastas fáciles.',
+  },
+  pctPtsPaint: {
+    title: '% de Puntos en la Pintura',
+    simpleDesc:
+      'Proporción de los puntos totales anotados dentro de la zona pintada cercana al aro.',
+    calculation: '(Puntos en Pintura / Puntos Totales) × 100.',
+    benchmarkText: 'Equipo: ~43% media NBA · Pívots y penetradores puros superan el 60%.',
+  },
+  pctAstFgm: {
+    title: '% de Canastas Asistidas (Assisted FGM%)',
+    simpleDesc:
+      'Porcentaje de tiros de campo anotados que llegaron tras pase directo de asistencia de un compañero.',
+    calculation: '(Canastas asistidas / FGM Totales) × 100 (NBA.com Scoring).',
+    benchmarkText: 'Equipo: ~62% juego coral · Tiradores off-ball >75% · Creadores 1v1 <35%.',
+  },
+  pctUastFgm: {
+    title: '% de Canastas Autogeneradas (Unassisted FGM%)',
+    simpleDesc:
+      'Porcentaje de canastas anotadas sin asistencia previa, tras bote, aclarado o rebote ofensivo propio.',
+    calculation: '(Canastas sin asistencia / FGM Totales) × 100 (NBA.com Scoring).',
+    benchmarkText: '45%+ identifica a generadores primarios autosuficientes capaces de crearse su propio tiro.',
+  },
+  touches: {
+    title: 'Toques de Balón y Zonas (Tracking Touches)',
+    simpleDesc:
+      'Veces por partido que el jugador entra en contacto con el balón (incluyendo desglose en FrontCourt, Pintura, Poste Bajo y Codo/Elbow).',
+    calculation: 'Tracking óptico Second Spectrum / NBA.com (leaguedashptstats MeasureType=Possessions).',
+    benchmarkText: '75+ toques/PJ identifica al director primario del ataque · 8+ en Pintura a pívots referencia.',
+  },
+  timeOfPoss: {
+    title: 'Tiempo con el Balón en Manos (Time of Poss)',
+    simpleDesc:
+      'Minutos reales por partido en los que el jugador mantiene la posesión activa del balón botando o sosteniéndolo en ataque.',
+    calculation: 'Medición óptica oficial en minutos por encuentro (NBA.com Possessions Tracking).',
+    benchmarkText: 'Bases dominantes de balón superan los 6.0 min/PJ con balón.',
+  },
+  distMiles: {
+    title: 'Distancia Recorrida por Partido (Millas)',
+    simpleDesc:
+      'Kilometraje total recorrido por el jugador o el conjunto de los cinco en pista durante el encuentro (en millas).',
+    calculation: 'Tracking óptico oficial NBA.com Speed & Distance (1 milla ≈ 1.609 km).',
+    benchmarkText: 'Titulares activos recorren entre 2.3 y 2.7 millas (~3.7–4.3 km) por noche.',
+  },
+  avgSpeed: {
+    title: 'Velocidad Media de Desplazamiento (MPH)',
+    simpleDesc:
+      'Velocidad promedio de movimiento sobre la cancha (en millas por hora), desglosada en fases ofensivas y defensivas.',
+    calculation: 'Distancia total recorrida / Tiempo activo en cancha (NBA.com Speed & Distance).',
+    benchmarkText: 'Especialistas sin balón (tiradores en movimiento) superan las 4.4–4.6 mph.',
+  },
+  rebChances: {
+    title: 'Oportunidades de Rebote y % Contestado (Tracking)',
+    simpleDesc:
+      'Veces que el jugador está en zona cercana a un rebote disponible (Reb Chances) y % de sus capturas logradas peleando cuerpo a cuerpo con un rival (Contested Reb%).',
+    calculation: 'Tracking NBA.com Rebounding: Reb Chances, Reb% sobre oportunidad y Contested Reb%.',
+    benchmarkText: 'Superar el 58% de conversión de oportunidades indica élite posicional y olfato reboteador.',
+  },
+  defWs: {
+    title: 'Defensive Win Shares (DEF WS)',
+    simpleDesc:
+      'Estimación oficial de NBA.com Defense sobre las victorias aportadas o impacto defensivo acumulado por partido/temporada.',
+    calculation: 'Modelo NBA.com basado en posesiones defendidas, DefRtg y paradas individuales.',
+    benchmarkText: 'Valores más altos indican mayor contribución sostenida a una defensa ganadora.',
+  },
+  oppFourFactors: {
+    title: 'Cuatro Factores Permitidos al Rival (Defensa 4F)',
+    simpleDesc:
+      'Mide los 4 pilares de Dean Oliver en el aro propio: qué eFG%, qué % de pérdidas provocadas (Opp TOV%), qué OREB% concede y cuántos tiros libres regala (Opp FTA Rate).',
+    calculation: 'Datos oficiales NBA.com Four Factors (Opp eFG%, Opp TOV%, Opp OREB%, Opp FTA Rate).',
+    benchmarkText: 'Mantener Opp eFG% <52% y forzar Opp TOV% >14.5% sostiene defensas top-5.',
+  },
+  oppStats: {
+    title: 'Estadísticas Totales Permitidas al Rival (Opponent)',
+    simpleDesc:
+      'Producción concedida a los equipos o jugadores rivales defendidos: puntos, porcentaje TC%/3P% permitido, rebotes, asistencias, pérdidas provocadas y puntos en pintura o transición.',
+    calculation: 'MeasureType=Opponent oficial de NBA.com (por partido).',
+    benchmarkText: 'Dejar al rival en <45.5% TC y <109 PTS/PJ marca una defensa de Playoffs.',
+  },
+  violationsTotal: {
+    title: 'Infracciones Oficiales y Disciplina (NBA.com Violations)',
+    simpleDesc:
+      'Registro exhaustivo oficial de NBA.com con todas las violaciones reglamentarias: Pasos, Dobles, Acompañamiento, 3s Ofensivos/Defensivos, 5s, 8s, Reloj 24s, Campo Atrás, Kick Ball, Goaltending e Invasiones.',
+    calculation: 'Suma y desglose oficial acumulado del módulo NBA.com Violations + Faltas (PF/PFD) y BLKA.',
+    benchmarkText: 'Permite auditar pérdidas no forzadas por errores técnicos frente a robos del rival.',
+  },
 };
 
 const METRIC_KEY_ALIASES: Record<string, string> = {
@@ -2730,6 +2982,29 @@ const METRIC_KEY_ALIASES: Record<string, string> = {
   'sl-team-tov-low': 'tov',
   'sl-team-paint': 'ptsPaint',
   'sl-team-fb': 'ptsFastBreak',
+  // NBA.com Full Suite Aliases
+  dFgPct: 'dFgPct',
+  pctPlusMinus: 'dFgPct',
+  pctPlusMinusDef: 'dFgPct',
+  boxOuts: 'offBoxOuts',
+  defBoxOuts: 'offBoxOuts',
+  chargesDrawn: 'chargesDrawn',
+  screenAstPts: 'screenAstPts',
+  drives: 'drives',
+  catchShoot: 'catchShoot',
+  pullUp: 'pullUp',
+  potentialAst: 'potentialAst',
+  ppp: 'ppp',
+  possPct: 'ppp',
+  onOffSwing: 'onOffSwing',
+  netDiff: 'onOffSwing',
+  lineupNetRtg: 'lineupNetRtg',
+  restrictedArea: 'restrictedArea',
+  aboveBreak3: 'corner3',
+  corner3: 'corner3',
+  team_kpi_overview: 'netRtg',
+  four_factors: 'efgPct',
+  pointsAgainst: 'avgPointsAgainst',
 };
 
 export function resolveMetricHelp(

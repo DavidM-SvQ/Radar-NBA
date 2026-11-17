@@ -9,6 +9,7 @@ export type ActiveSection =
   | 'comparator'
   | 'teams'
   | 'players'
+  | 'lineups'
   | 'scatter'
   | 'fantasy_espn'
   | 'glossary';
@@ -138,6 +139,7 @@ export interface TeamGameLog {
 }
 
 export interface TeamAdvancedProfile {
+  gp?: number;
   offRtg: number;
   defRtg: number;
   netRtg: number;
@@ -149,18 +151,35 @@ export interface TeamAdvancedProfile {
   rebPct: number;
   astPct: number;
   astTo?: number;
+  astRatio?: number;
   tovPct: number;
   pie: number;
   ptsPaint: number;
   oppPtsPaint: number;
   ptsFastBreak: number;
+  oppPtsFb?: number;
   pts2ndChance: number;
+  oppPts2ndChance?: number;
   ptsOffTov: number;
+  oppPtsOffTov?: number;
   contestedShots: number;
+  contestedShots2pt?: number;
+  contestedShots3pt?: number;
   deflections: number;
+  chargesDrawn?: number;
   boxOuts: number;
+  offBoxOuts?: number;
+  defBoxOuts?: number;
+  boxOutTeamRebs?: number;
+  boxOutPlayerRebs?: number;
   looseBalls?: number;
+  offLooseBalls?: number;
+  defLooseBalls?: number;
   screenAssists: number;
+  screenAstPts?: number;
+  blka?: number;
+  pf?: number;
+  pfd?: number;
 }
 
 export interface TeamSummary {
@@ -254,25 +273,44 @@ export interface PlayerAdvancedProfile {
   offRtg: number;
   defRtg: number;
   netRtg: number;
+  pace?: number;
   pie: number;
   usgPct?: number;
   tsPct?: number;
   efgPct?: number;
   astTo?: number;
+  astRatio?: number;
   astPct: number;
   orebPct: number;
   drebPct: number;
   rebPct: number;
+  tovPct?: number;
   ptsPaint: number;
   pts2ndChance: number;
   ptsFastBreak: number;
   ptsOffTov: number;
+  oppPtsPaint?: number;
+  oppPts2ndChance?: number;
+  oppPtsFb?: number;
+  oppPtsOffTov?: number;
   contestedShots: number;
+  contestedShots2pt?: number;
+  contestedShots3pt?: number;
   deflections: number;
+  chargesDrawn?: number;
   screenAssists: number;
+  screenAstPts?: number;
   boxOuts: number;
+  offBoxOuts?: number;
+  defBoxOuts?: number;
+  boxOutTeamRebs?: number;
+  boxOutPlayerRebs?: number;
   looseBalls: number;
+  offLooseBalls?: number;
+  defLooseBalls?: number;
   foulsDrawn: number;
+  blka?: number;
+  pf?: number;
 }
 
 export interface PlayerSummary {
@@ -1138,5 +1176,469 @@ export interface SeasonAwardsPayload {
   categories: Record<AwardIndividualCategoryId, AwardCandidateEntry[]>;
   allNbaPool: AwardCandidateEntry[];
 }
+
+export type NbaAdvancedCategory =
+  | 'zones'
+  | 'clutch'
+  | 'defense_hustle'
+  | 'tracking'
+  | 'playtypes'
+  | 'scoring'
+  | 'four_factors'
+  | 'violations';
+
+export interface ShotZoneMetric {
+  fgm: number;
+  fga: number;
+  fgPct: number;
+  fgmTotal?: number;
+  fgaTotal?: number;
+}
+
+export interface NbaShotZonesEntry {
+  entityId: string;
+  entityName: string;
+  teamId: string;
+  teamAbbr: string;
+  restrictedArea: ShotZoneMetric;
+  paintNonRa: ShotZoneMetric;
+  midRange: ShotZoneMetric;
+  leftCorner3: ShotZoneMetric;
+  rightCorner3: ShotZoneMetric;
+  aboveBreak3: ShotZoneMetric;
+  corner3: ShotZoneMetric;
+  backcourt: ShotZoneMetric;
+  totalRimFga: number;
+  rimFgPct: number;
+  totalThreeFga: number;
+  threeFgPct: number;
+  totalRimFgaTotal?: number;
+  totalThreeFgaTotal?: number;
+}
+
+export interface NbaClutchEntry {
+  entityId: string;
+  entityName: string;
+  teamId: string;
+  teamAbbr: string;
+  gp: number;
+  w: number;
+  l: number;
+  wPct: number;
+  min: number;
+  pts: number;
+  fgm: number;
+  fga: number;
+  fgPct: number;
+  fg3m: number;
+  fg3a: number;
+  fg3Pct: number;
+  ftm: number;
+  fta: number;
+  ftPct: number;
+  reb: number;
+  ast: number;
+  stl: number;
+  blk: number;
+  tov: number;
+  plusMinus: number;
+  offRtg: number;
+  defRtg: number;
+  netRtg: number;
+  tsPct: number;
+  efgPct: number;
+  usgPct: number;
+  pie: number;
+}
+
+export interface NbaDefenseHustleEntry {
+  entityId: string;
+  entityName: string;
+  teamId: string;
+  teamAbbr: string;
+  gp: number;
+  min: number;
+  defRating: number;
+  stl: number;
+  blk: number;
+  dreb: number;
+  drebPct: number;
+  pctDreb?: number;
+  pctStl?: number;
+  pctBlk?: number;
+  oppPtsOffTov: number;
+  oppPts2ndChance: number;
+  oppPtsFb: number;
+  oppPtsPaint: number;
+  ptsPaint?: number;
+  pts2ndChance?: number;
+  ptsFb?: number;
+  ptsOffTov?: number;
+  blka?: number;
+  pf?: number;
+  pfd?: number;
+  defWs: number;
+  dFgm: number;
+  dFga: number;
+  dFgPct: number;
+  normalFgPct: number;
+  pctPlusMinus: number;
+  defFreq: number;
+  oppFgm?: number;
+  oppFga?: number;
+  oppFgPct?: number;
+  oppFg3m?: number;
+  oppFg3a?: number;
+  oppFg3Pct?: number;
+  oppFtm?: number;
+  oppFta?: number;
+  oppFtPct?: number;
+  oppOreb?: number;
+  oppDreb?: number;
+  oppReb?: number;
+  oppAst?: number;
+  oppTov?: number;
+  oppStl?: number;
+  oppBlk?: number;
+  oppBlka?: number;
+  oppPf?: number;
+  oppPfd?: number;
+  oppPts?: number;
+  contestedShots: number;
+  contestedShots2pt: number;
+  contestedShots3pt: number;
+  deflections: number;
+  chargesDrawn: number;
+  screenAssists: number;
+  screenAstPts: number;
+  offLooseBalls: number;
+  defLooseBalls: number;
+  looseBalls: number;
+  pctLooseBallsOff?: number;
+  pctLooseBallsDef?: number;
+  offBoxOuts: number;
+  defBoxOuts: number;
+  boxOuts: number;
+  boxOutTeamRebs: number;
+  boxOutPlayerRebs: number;
+  pctBoxOutsOff: number;
+  pctBoxOutsDef: number;
+  pctBoxOutsTeamReb?: number;
+  pctBoxOutsReb?: number;
+}
+
+export interface NbaTrackingEntry {
+  entityId: string;
+  entityName: string;
+  teamId: string;
+  teamAbbr: string;
+  gp: number;
+  min: number;
+  drives: number;
+  driveFgm?: number;
+  driveFga?: number;
+  drivePts: number;
+  driveFgPct: number;
+  driveAstPct: number;
+  driveTovPct: number;
+  drivePassesPct?: number;
+  catchShootFgm: number;
+  catchShootFga: number;
+  catchShootPts: number;
+  catchShootFgPct?: number;
+  catchShootFg3Pct: number;
+  catchShootEfgPct: number;
+  pullUpFgm: number;
+  pullUpFga: number;
+  pullUpPts: number;
+  pullUpFgPct?: number;
+  pullUpFg3Pct: number;
+  pullUpEfgPct: number;
+  passesMade: number;
+  passesReceived: number;
+  secondaryAst: number;
+  potentialAst: number;
+  astPtsCreated: number;
+  astToPassPctAdj: number;
+  orebContestPct: number;
+  orebChances?: number;
+  orebChancePctAdj?: number;
+  avgOrebDist?: number;
+  drebContestPct: number;
+  drebChances?: number;
+  drebChancePctAdj?: number;
+  avgDrebDist?: number;
+  rebContestPct?: number;
+  rebChances: number;
+  rebChancePctAdj: number;
+  avgRebDist: number;
+  distMiles: number;
+  distMilesOff: number;
+  distMilesDef: number;
+  avgSpeed: number;
+  avgSpeedOff: number;
+  avgSpeedDef: number;
+  touches: number;
+  frontCtTouches?: number;
+  timeOfPoss?: number;
+  avgSecPerTouch?: number;
+  avgDribPerTouch?: number;
+  ptsPerTouch?: number;
+  paintTouches: number;
+  paintTouchFgPct: number;
+  paintTouchPts: number;
+  ptsPerPaintTouch?: number;
+  postTouches: number;
+  postTouchFgPct: number;
+  postTouchPts: number;
+  ptsPerPostTouch?: number;
+  elbowTouches: number;
+  ptsPerElbowTouch?: number;
+}
+
+export interface NbaScoringSplitsEntry {
+  entityId: string;
+  entityName: string;
+  teamId: string;
+  teamAbbr: string;
+  gp: number;
+  min: number;
+  pctFga2pt: number;
+  pctFga3pt: number;
+  pctPts2pt: number;
+  pctPts2ptMr: number;
+  pctPts3pt: number;
+  pctPtsFb: number;
+  pctPtsFt: number;
+  pctPtsOffTov: number;
+  pctPtsPaint: number;
+  pctAst2pm: number;
+  pctUast2pm: number;
+  pctAst3pm: number;
+  pctUast3pm: number;
+  pctAstFgm: number;
+  pctUastFgm: number;
+}
+
+export interface NbaFourFactorsEntry {
+  entityId: string;
+  entityName: string;
+  teamId: string;
+  teamAbbr: string;
+  gp: number;
+  min: number;
+  offRtg: number;
+  defRtg: number;
+  netRtg: number;
+  pace: number;
+  efgPct: number;
+  ftaRate: number;
+  tmTovPct: number;
+  orebPct: number;
+  oppEfgPct: number;
+  oppFtaRate: number;
+  oppTovPct: number;
+  oppOrebPct: number;
+  tsPct?: number;
+  drebPct?: number;
+  rebPct?: number;
+  astPct?: number;
+  astTo?: number;
+  astRatio?: number;
+  usgPct?: number;
+  pie?: number;
+}
+
+export interface NbaViolationsEntry {
+  entityId: string;
+  entityName: string;
+  teamId: string;
+  teamAbbr: string;
+  gp: number;
+  min: number;
+  travel: number;
+  doubleDribble: number;
+  discontinuedDribble: number;
+  offThreeSec: number;
+  fiveSec: number;
+  eightSec: number;
+  shotClock: number;
+  inbound: number;
+  backcourt: number;
+  offGoaltending: number;
+  palming: number;
+  offFoul: number;
+  defThreeSec: number;
+  charge: number;
+  delayOfGame: number;
+  defGoaltending: number;
+  lane: number;
+  jumpBall: number;
+  kickedBall: number;
+  totalViolations: number;
+  pf: number;
+  pfd: number;
+  blka: number;
+  tov: number;
+  dd2: number;
+  td3: number;
+  nbaFantasyPts: number;
+  ptsPaint?: number;
+  pts2ndChance?: number;
+  ptsFb?: number;
+  ptsOffTov?: number;
+  oppPtsPaint?: number;
+  oppPts2ndChance?: number;
+  oppPtsFb?: number;
+  oppPtsOffTov?: number;
+}
+
+export interface NbaPlaytypeRow {
+  playType: string;
+  playTypeLabelEs: string;
+  typeGrouping: 'offensive' | 'defensive';
+  percentile: number;
+  gp: number;
+  possPct: number;
+  ppp: number;
+  fgPct: number;
+  efgPct: number;
+  ftPossPct: number;
+  tovPossPct: number;
+  sfPossPct: number;
+  scorePossPct: number;
+  poss: number;
+  pts: number;
+}
+
+export interface NbaPlaytypeEntitySummary {
+  entityId: string;
+  entityName: string;
+  teamId: string;
+  teamAbbr: string;
+  gp: number;
+  totalPossOff: number;
+  topPlayTypeOff: NbaPlaytypeRow | null;
+  topPlayTypeDef: NbaPlaytypeRow | null;
+  offensive: NbaPlaytypeRow[];
+  defensive: NbaPlaytypeRow[];
+}
+
+export interface NbaOnOffSplitEntry {
+  playerId: string;
+  playerName: string;
+  gp: number;
+  minOn: number;
+  offRtgOn: number;
+  defRtgOn: number;
+  netRtgOn: number;
+  paceOn: number;
+  efgOn: number;
+  tsOn: number;
+  minOff: number;
+  offRtgOff: number;
+  defRtgOff: number;
+  netRtgOff: number;
+  paceOff: number;
+  efgOff: number;
+  tsOff: number;
+  netDiff: number;
+  offDiff: number;
+  defDiff: number;
+}
+
+export interface NbaLineupEntry {
+  groupId: string;
+  groupName: string;
+  teamId: string;
+  teamAbbr: string;
+  groupQuantity: 2 | 3 | 5;
+  gp: number;
+  w: number;
+  l: number;
+  wPct: number;
+  min: number;
+  offRtg: number;
+  defRtg: number;
+  netRtg: number;
+  pace: number;
+  efgPct: number;
+  tsPct: number;
+  orebPct: number;
+  drebPct: number;
+  rebPct: number;
+  astPct: number;
+  astTo: number;
+  tovPct: number;
+  poss: number;
+  pie: number;
+}
+
+export interface NbaAdvancedLeagueResponse<T = any> {
+  season: string;
+  seasonLabel: string;
+  category: NbaAdvancedCategory;
+  scope: 'team' | 'player';
+  generatedAt: string;
+  unavailable?: boolean;
+  items: T[];
+}
+
+export interface NbaLineupsResponse {
+  season: string;
+  seasonLabel: string;
+  groupQuantity: 2 | 3 | 5;
+  teamId: string;
+  generatedAt: string;
+  unavailable?: boolean;
+  items: NbaLineupEntry[];
+}
+
+export interface NbaAdvancedBenchmarkStat {
+  mean: number;
+  sd: number;
+}
+
+export interface NbaTeamDossierAdvancedResponse {
+  teamId: string;
+  season: string;
+  seasonLabel: string;
+  generatedAt: string;
+  unavailable?: boolean;
+  shotZones: NbaShotZonesEntry | null;
+  clutch: NbaClutchEntry | null;
+  defenseHustle: NbaDefenseHustleEntry | null;
+  tracking: NbaTrackingEntry | null;
+  scoring?: NbaScoringSplitsEntry | null;
+  fourFactors?: NbaFourFactorsEntry | null;
+  violations?: NbaViolationsEntry | null;
+  playtypesOff: NbaPlaytypeRow[];
+  playtypesDef: NbaPlaytypeRow[];
+  onOffSplits: NbaOnOffSplitEntry[];
+  lineups5: NbaLineupEntry[];
+  lineups2: NbaLineupEntry[];
+  leagueBenchmarks?: Record<string, NbaAdvancedBenchmarkStat>;
+}
+
+export interface NbaPlayerDossierAdvancedResponse {
+  playerId: string;
+  teamId: string;
+  season: string;
+  seasonLabel: string;
+  generatedAt: string;
+  unavailable?: boolean;
+  shotZones: NbaShotZonesEntry | null;
+  clutch: NbaClutchEntry | null;
+  defenseHustle: NbaDefenseHustleEntry | null;
+  tracking: NbaTrackingEntry | null;
+  scoring?: NbaScoringSplitsEntry | null;
+  fourFactors?: NbaFourFactorsEntry | null;
+  violations?: NbaViolationsEntry | null;
+  playtypesOff: NbaPlaytypeRow[];
+  playtypesDef: NbaPlaytypeRow[];
+  onOffSplit: NbaOnOffSplitEntry | null;
+  leagueBenchmarks?: Record<string, NbaAdvancedBenchmarkStat>;
+}
+
 
 

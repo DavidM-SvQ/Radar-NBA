@@ -15,12 +15,15 @@ import {
   RotateCcw,
   Sliders,
   Star,
+  Target,
   TrendingUp,
   Users,
   X,
 } from 'lucide-react';
 import type {
   ExperienceMode,
+  NbaPlayerDossierAdvancedResponse,
+  NbaTeamDossierAdvancedResponse,
   PlayerGameLog,
   PlayerInspectorBenchmarkItem,
   PlayerInspectorDossier,
@@ -47,9 +50,11 @@ import {
   buildExtendedPlayerBenchmarks,
   computeOwnMetricSpread,
   DEFAULT_PLAYER_LOG_COLUMNS,
+  DEFAULT_TEAM_LOG_COLUMNS,
   evaluateReferenceComparison,
   formatMetricNumber,
   MAX_PLAYER_LOG_COLUMNS,
+  MAX_TEAM_LOG_COLUMNS,
   PLAYER_ADVANCED_RADIOGRAPHY_MAP,
   PLAYER_ADVANCED_RADIOGRAPHY_METRICS,
   PLAYER_ANNUAL_TRACKING_MAP,
@@ -59,6 +64,8 @@ import {
   PLAYER_PER_GAME_METRICS,
   resolveOwnBaselineSelection,
   resolveSampleSelection,
+  TEAM_GAME_LOG_COLUMNS,
+  TEAM_LOG_COLUMNS_MAP,
   type InspectorReferenceMode,
   type OwnBaselineMode,
   type PlayerSamplePreset,
@@ -75,19 +82,36 @@ import {
   SortableTh,
 } from './MetricUiHelpers';
 import { PlayerAvatar, TeamLogo } from './NbaVisuals';
+import {
+  ClutchAndDefensePanel,
+  FourFactorsFullPanel,
+  OnOffSplitsPanel,
+  PlaytypesPanel,
+  ScoringSplitsPanel,
+  ShotZonesCourtPanel,
+  ViolationsPanel,
+} from './NbaAdvancedModules';
+import { InspectorAllNbaKpisPanel } from './InspectorAllNbaKpisPanel';
+import { NbaAggregateDistributionChart } from './InspectorAllLayerChartHelpers';
+import {
+  computeClientLeagueBenchmarks,
+  buildInstantPlayerAdvancedDossier,
+  buildInstantTeamAdvancedDossier,
+  DEFAULT_PLAYER_NBA_KPI_KEYS,
+  DEFAULT_TEAM_NBA_KPI_KEYS,
+  getKpiMeta,
+  NBA_ALL_KPIS_CATALOG,
+  NBA_ALL_KPIS_MAP,
+  NBA_KPI_LAYERS,
+  resolveKpiGameSeries,
+  type InspectorKpiContext,
+  type InspectorNbaKpiDef,
+  type InspectorStatScale,
+  type NbaKpiLayerId,
+} from '../utils/nbaInspectorAllKpis';
 
-type TeamLogSortKey =
-  | 'date'
-  | 'matchup'
-  | 'pointsFor'
-  | 'differential'
-  | 'oreb'
-  | 'fg3m'
-  | 'offRtg'
-  | 'defRtg'
-  | 'netRtg'
-  | 'pace'
-  | 'efgPct';
+const teamAdvDossierCache = new Map<string, NbaTeamDossierAdvancedResponse>();
+const playerAdvDossierCache = new Map<string, NbaPlayerDossierAdvancedResponse>();
 
 function resolvePlayerLogGameSortValue(
   g: PlayerGameLog,
@@ -108,6 +132,47 @@ function resolvePlayerLogGameSortValue(
       return g.fg3m * 100 + g.fg3a;
     case 'ft_split':
       return g.ftm * 100 + g.fta;
+    case 'nbaFantasyPts':
+      return (
+        g.points +
+        1.2 * g.rebounds +
+        1.5 * g.assists +
+        3 * g.steals +
+        3 * g.blocks -
+        g.turnovers
+      );
+    case 'dd2':
+      return [g.points, g.rebounds, g.assists, g.steals, g.blocks].filter(
+        (x) => x >= 10
+      ).length >= 2
+        ? 1
+        : 0;
+    case 'td3':
+      return [g.points, g.rebounds, g.assists, g.steals, g.blocks].filter(
+        (x) => x >= 10
+      ).length >= 3
+        ? 1
+        : 0;
+    case 'isStarter':
+      return g.isStarter === true ? 2 : g.isStarter === false ? 1 : 0;
+    case 'restDays':
+      return g.restDays !== null && g.restDays !== undefined ? g.restDays : -1;
+    case 'tovPer36':
+      return g.minutes > 0 ? (g.turnovers / g.minutes) * 36 : 0;
+    case 'pfPer36':
+      return g.minutes > 0 ? (g.fouls / g.minutes) * 36 : 0;
+    case 'pctFga2pt':
+      return g.fga > 0 ? ((g.fga - g.fg3a) / g.fga) * 100 : 0;
+    case 'pctFga3pt':
+      return g.fga > 0 ? (g.fg3a / g.fga) * 100 : 0;
+    case 'pctPts2pt':
+      return g.points > 0
+        ? ((Math.max(0, g.fgm - g.fg3m) * 2) / g.points) * 100
+        : 0;
+    case 'pctPts3pt':
+      return g.points > 0 ? ((g.fg3m * 3) / g.points) * 100 : 0;
+    case 'pctPtsFt':
+      return g.points > 0 ? (g.ftm / g.points) * 100 : 0;
     default: {
       const mDef = PLAYER_METRICS_MAP[key];
       if (mDef) return mDef.gameValue(g);
@@ -126,6 +191,26 @@ function resolvePlayerLogGameSortValue(
 const STORAGE_EXTRA_KPIS_KEY = 'radarnba_inspector_extra_kpis_v1';
 const STORAGE_EXTRA_ADV_KPIS_KEY = 'radarnba_inspector_extra_adv_kpis_v1';
 const STORAGE_LOG_COLS_KEY = 'radarnba_inspector_log_cols_v1';
+const STORAGE_TEAM_LOG_COLS_KEY = 'radarnba_inspector_team_log_cols_v2';
+const STORAGE_INSPECTOR_SCALE_KEY = 'radarnba_inspector_stat_scale_v1';
+const STORAGE_PLAYER_ALL_NBA_KPIS_KEY = 'radarnba_inspector_player_nba_kpis_v2';
+const STORAGE_TEAM_ALL_NBA_KPIS_KEY = 'radarnba_inspector_team_nba_kpis_v2';
+
+function loadSavedTeamLogColumns(): string[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_TEAM_LOG_COLS_KEY);
+    if (!raw) return [...DEFAULT_TEAM_LOG_COLUMNS];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [...DEFAULT_TEAM_LOG_COLUMNS];
+    const valid = parsed
+      .map(String)
+      .filter((k) => Boolean(TEAM_LOG_COLUMNS_MAP[k]))
+      .slice(0, MAX_TEAM_LOG_COLUMNS);
+    return valid.length > 0 ? valid : [...DEFAULT_TEAM_LOG_COLUMNS];
+  } catch {
+    return [...DEFAULT_TEAM_LOG_COLUMNS];
+  }
+}
 
 function loadSavedExtraKpis(): string[] {
   try {
@@ -179,6 +264,28 @@ function loadSavedLogColumns(): string[] {
   }
 }
 
+function loadSavedAllNbaKpiKeys(
+  storageKey: string,
+  defaults: string[],
+  scope: 'player' | 'team'
+): string[] {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return [...defaults];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [...defaults];
+    const valid = parsed
+      .map(String)
+      .filter((k) => {
+        const def = NBA_ALL_KPIS_MAP[k];
+        return Boolean(def && (def.scope === 'both' || def.scope === scope));
+      });
+    return valid.length > 0 ? valid : [...defaults];
+  } catch {
+    return [...defaults];
+  }
+}
+
 interface EntityInspectorDrawerProps {
   entityType: 'player' | 'team' | null;
   entityId: string | null;
@@ -195,13 +302,6 @@ interface EntityInspectorDrawerProps {
   onOpenInComparator: (entityType: 'player' | 'team', entityId: string) => void;
   onSelectRosterPlayer: (item: SearchPlayerResult) => Promise<void>;
 }
-
-type TeamChartMetric =
-  | 'netRtg'
-  | 'offRtg'
-  | 'defRtg'
-  | 'pace'
-  | 'differential';
 
 interface ReferenceSelectorBarProps {
   mode: InspectorReferenceMode;
@@ -561,7 +661,6 @@ export function EntityInspectorDrawer({
   teams,
   experienceMode,
   benchmarks,
-  onSwitchToAdvanced,
   windowSize,
   defaultPlayerMatchWindow = 18,
   watchlistIds,
@@ -576,7 +675,7 @@ export function EntityInspectorDrawer({
 
   // Top Tab Navigation state
   const [activeInspectorTab, setActiveInspectorTab] = useState<
-    'overview' | 'charts' | 'gamelog' | 'roster'
+    'overview' | 'charts' | 'gamelog' | 'roster' | 'nba_lab'
   >('overview');
 
   useEffect(() => {
@@ -619,10 +718,8 @@ export function EntityInspectorDrawer({
   );
   const [showAdvKpiSelector, setShowAdvKpiSelector] = useState(false);
 
-  const [pChartMetricKey, setPChartMetricKey] = useState<string>('points');
-  const [chartMetricCategory, setChartMetricCategory] = useState<
-    'basic' | 'advanced' | 'all'
-  >('basic');
+  const [pChartKpiKey, setPChartKpiKey] = useState<string>('basic_pts');
+  const [chartLayerId, setChartLayerId] = useState<NbaKpiLayerId>('basic');
   const [chartLayoutMode, setChartLayoutMode] = useState<
     'timeline' | 'parallel'
   >('timeline');
@@ -640,25 +737,79 @@ export function EntityInspectorDrawer({
   const [loadingDossier, setLoadingDossier] = useState(false);
 
   // Team Inspector state
-  const [tMetric, setTMetric] = useState<TeamChartMetric>(
-    experienceMode === 'simple' ? 'differential' : 'netRtg'
+  const [tChartKpiKey, setTChartKpiKey] = useState<string>(
+    experienceMode === 'simple' ? 'basic_diff' : 'adv_netRtg'
   );
-  const [teamLogMode, setTeamLogMode] = useState<'basic' | 'advanced'>('basic');
+  const [selectedTeamLogCols, setSelectedTeamLogCols] = useState<string[]>(
+    loadSavedTeamLogColumns
+  );
+  const [showTeamColSelector, setShowTeamColSelector] = useState(false);
+  const [showAllTeamLogRows, setShowAllTeamLogRows] = useState(false);
   const [roster, setRoster] = useState<RosterPlayerItem[]>([]);
   const [loadingRoster, setLoadingRoster] = useState(false);
   const [loadingPlayerId, setLoadingPlayerId] = useState<string | null>(null);
+
+  const [statScale, setStatScale] = useState<InspectorStatScale>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_INSPECTOR_SCALE_KEY);
+      return raw === 'totals' ? 'totals' : 'per_game';
+    } catch {
+      return 'per_game';
+    }
+  });
+
+  const [playerNbaKpiKeys, setPlayerNbaKpiKeys] = useState<string[]>(() =>
+    loadSavedAllNbaKpiKeys(
+      STORAGE_PLAYER_ALL_NBA_KPIS_KEY,
+      DEFAULT_PLAYER_NBA_KPI_KEYS,
+      'player'
+    )
+  );
+  const [teamNbaKpiKeys, setTeamNbaKpiKeys] = useState<string[]>(() =>
+    loadSavedAllNbaKpiKeys(
+      STORAGE_TEAM_ALL_NBA_KPIS_KEY,
+      DEFAULT_TEAM_NBA_KPI_KEYS,
+      'team'
+    )
+  );
+  const [playerAllKpisOpen, setPlayerAllKpisOpen] = useState(false);
+  const [teamAllKpisOpen, setTeamAllKpisOpen] = useState(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_INSPECTOR_SCALE_KEY, statScale);
+    } catch {
+      // ignore
+    }
+  }, [statScale]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_PLAYER_ALL_NBA_KPIS_KEY, JSON.stringify(playerNbaKpiKeys));
+    } catch {
+      // ignore
+    }
+  }, [playerNbaKpiKeys]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_TEAM_ALL_NBA_KPIS_KEY, JSON.stringify(teamNbaKpiKeys));
+    } catch {
+      // ignore
+    }
+  }, [teamNbaKpiKeys]);
 
   const {
     sortKey: pLogSortKey,
     sortAsc: pLogSortAsc,
     toggleSort: togglePLogSort,
-  } = useTableSort<string>('date', false, ['opponent', 'turnovers', 'fouls', 'tovRatioEst']);
+  } = useTableSort<string>('date', false, ['opponent', 'turnovers', 'fouls', 'tovRatioEst', 'tovPer36', 'pfPer36']);
 
   const {
     sortKey: tLogSortKey,
     sortAsc: tLogSortAsc,
     toggleSort: toggleTLogSort,
-  } = useTableSort<TeamLogSortKey>('date', false, ['matchup', 'defRtg']);
+  } = useTableSort<string>('date', false, ['matchup', 'defRtg', 'pointsAgainst', 'tov', 'tovPct']);
 
   useEffect(() => {
     try {
@@ -691,13 +842,25 @@ export function EntityInspectorDrawer({
   }, [selectedLogCols]);
 
   useEffect(() => {
-    if (experienceMode === 'simple') {
-      setTeamLogMode('basic');
-      if (tMetric === 'netRtg') {
-        setTMetric('differential');
-      }
+    try {
+      localStorage.setItem(
+        STORAGE_TEAM_LOG_COLS_KEY,
+        JSON.stringify(selectedTeamLogCols)
+      );
+    } catch {
+      // ignore storage errors
     }
-  }, [experienceMode]);
+  }, [selectedTeamLogCols]);
+
+  useEffect(() => {
+    setChartLayerId(entityType === 'team' ? (experienceMode === 'simple' ? 'basic' : 'advanced') : 'basic');
+  }, [entityType, entityId]);
+
+  useEffect(() => {
+    if (experienceMode === 'simple' && tChartKpiKey === 'adv_netRtg') {
+      setTChartKpiKey('basic_diff');
+    }
+  }, [experienceMode, tChartKpiKey]);
 
   const basePlayer = useMemo(
     () =>
@@ -779,6 +942,87 @@ export function EntityInspectorDrawer({
     }
     return basePlayer;
   }, [entityType, entityId, dossier, basePlayer]);
+
+  // Advanced NBA.com Dossier state (shot zones, tracking, clutch, defense/hustle, playtypes, on/off, scoring, violations)
+  const [teamAdvancedDossier, setTeamAdvancedDossier] =
+    useState<NbaTeamDossierAdvancedResponse | null>(null);
+  const [playerAdvancedDossier, setPlayerAdvancedDossier] =
+    useState<NbaPlayerDossierAdvancedResponse | null>(null);
+  const [loadingAdvanced, setLoadingAdvanced] = useState<boolean>(false);
+
+  useEffect(() => {
+    setPlayerAllKpisOpen(false);
+    setTeamAllKpisOpen(false);
+
+    if (!entityType || !entityId) {
+      setTeamAdvancedDossier(null);
+      setPlayerAdvancedDossier(null);
+      setLoadingAdvanced(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    if (entityType === 'team' && team) {
+      const cached = teamAdvDossierCache.get(team.id);
+      const instant = cached || buildInstantTeamAdvancedDossier(team, players, teams);
+      setTeamAdvancedDossier(instant);
+      setPlayerAdvancedDossier(null);
+      if (cached) {
+        setLoadingAdvanced(false);
+        return;
+      }
+      setLoadingAdvanced(true);
+      void (async () => {
+        try {
+          const res = await fetch(`/api/nba/advanced/team/${team.id}?season=2027`);
+          if (res.ok && !cancelled) {
+            const data: NbaTeamDossierAdvancedResponse = await res.json();
+            teamAdvDossierCache.set(team.id, data);
+            setTeamAdvancedDossier(data);
+          }
+        } catch (err) {
+          console.error('Error fetching advanced team dossier:', err);
+        } finally {
+          if (!cancelled) setLoadingAdvanced(false);
+        }
+      })();
+    } else if (entityType === 'player') {
+      const p = player || basePlayer;
+      const targetId = p?.id || entityId;
+      const cached = playerAdvDossierCache.get(targetId);
+      const instant = cached || buildInstantPlayerAdvancedDossier(p, players, teams);
+      setPlayerAdvancedDossier(instant);
+      setTeamAdvancedDossier(null);
+      if (cached) {
+        setLoadingAdvanced(false);
+        return;
+      }
+      setLoadingAdvanced(true);
+      void (async () => {
+        try {
+          const targetTeamId = p?.teamId || '';
+          const teamParam = targetTeamId ? `&teamId=${targetTeamId}` : '';
+          const res = await fetch(
+            `/api/nba/advanced/player/${targetId}?season=2027${teamParam}`
+          );
+          if (res.ok && !cancelled) {
+            const data: NbaPlayerDossierAdvancedResponse = await res.json();
+            playerAdvDossierCache.set(targetId, data);
+            setPlayerAdvancedDossier(data);
+          }
+        } catch (err) {
+          console.error('Error fetching advanced player dossier:', err);
+        } finally {
+          if (!cancelled) setLoadingAdvanced(false);
+        }
+      })();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [entityType, entityId, team?.id, player?.id, basePlayer?.id]);
 
   const clientExtendedBenchmarks = useMemo(
     () => buildExtendedPlayerBenchmarks(players),
@@ -977,25 +1221,78 @@ export function EntityInspectorDrawer({
     };
   })();
 
-  // Active Chart Metric Definition & Series
-  const activePlayerChartMetric =
-    PLAYER_METRICS_MAP[pChartMetricKey] || PLAYER_METRICS_MAP.points;
+  // 10-Layer Chart Kpis & Series Resolution (for both Player and Team)
+  const scopedChartCatalog = useMemo<InspectorNbaKpiDef[]>(
+    () =>
+      NBA_ALL_KPIS_CATALOG.filter(
+        (k) => k.scope === 'both' || k.scope === (player ? 'player' : 'team')
+      ),
+    [player]
+  );
+
+  const chartLayerKpis = useMemo(
+    () => scopedChartCatalog.filter((k) => k.layer === chartLayerId),
+    [scopedChartCatalog, chartLayerId]
+  );
+
+  const activeChartKpiKey = player ? pChartKpiKey : tChartKpiKey;
+  const setActiveChartKpiKey = (k: string) => {
+    if (player) setPChartKpiKey(k);
+    else setTChartKpiKey(k);
+  };
+
+  const activeChartKpiDef = useMemo<InspectorNbaKpiDef>(() => {
+    const found = NBA_ALL_KPIS_MAP[activeChartKpiKey];
+    if (found && (found.scope === 'both' || found.scope === (player ? 'player' : 'team'))) {
+      return found;
+    }
+    return scopedChartCatalog[0];
+  }, [activeChartKpiKey, player, scopedChartCatalog]);
+
+  const activeChartKpiMeta = useMemo(
+    () => getKpiMeta(activeChartKpiDef, 'per_game'),
+    [activeChartKpiDef]
+  );
+
+  const activeChartSeries = useMemo(
+    () => resolveKpiGameSeries(activeChartKpiDef.key, player ? 'player' : 'team'),
+    [activeChartKpiDef.key, player]
+  );
+
+  const chartLeagueBenchmarks = useMemo(
+    () =>
+      computeClientLeagueBenchmarks(
+        player ? 'player' : 'team',
+        players,
+        teams,
+        player
+          ? playerAdvancedDossier?.leagueBenchmarks
+          : teamAdvancedDossier?.leagueBenchmarks
+      ),
+    [
+      player,
+      players,
+      teams,
+      playerAdvancedDossier?.leagueBenchmarks,
+      teamAdvancedDossier?.leagueBenchmarks,
+    ]
+  );
 
   const chartData = (() => {
-    if (player) {
+    if (player && activeChartSeries?.playerGameValue && activeChartSeries?.playerSliceValue) {
       const chrono = [...sampleGames].reverse();
-      const values = chrono.map((g) => activePlayerChartMetric.gameValue(g));
+      const values = chrono.map((g) => activeChartSeries.playerGameValue!(g));
 
       let base = 0;
       let baseLabel = '';
       if (chartRefMode === 'nba') {
-        const nb = activeScopeBenchmarks[activePlayerChartMetric.key];
-        base = nb ? nb.mean : activePlayerChartMetric.fallbackMean;
+        const nb = chartLeagueBenchmarks[activeChartKpiDef.key];
+        base = nb ? nb.mean : 0;
         baseLabel = `Media NBA (${formatMetricNumber(
           base,
-          activePlayerChartMetric.decimals,
-          activePlayerChartMetric.suffix,
-          activePlayerChartMetric.signed
+          activeChartKpiMeta.decimals,
+          activeChartKpiMeta.suffix,
+          activeChartKpiMeta.signed
         )})`;
       } else {
         const refGames =
@@ -1004,15 +1301,15 @@ export function EntityInspectorDrawer({
             : allPlayerGames;
         base =
           refGames.length > 0
-            ? activePlayerChartMetric.sliceValue(refGames)
+            ? activeChartSeries.playerSliceValue!(refGames)
             : 0;
         baseLabel = `Su media habitual · ${
           ownBaselineSelection.shortLabel
         } (${formatMetricNumber(
           base,
-          activePlayerChartMetric.decimals,
-          activePlayerChartMetric.suffix,
-          activePlayerChartMetric.signed
+          activeChartKpiMeta.decimals,
+          activeChartKpiMeta.suffix,
+          activeChartKpiMeta.signed
         )})`;
       }
 
@@ -1027,14 +1324,14 @@ export function EntityInspectorDrawer({
         value: values[idx],
         formattedValue: formatMetricNumber(
           values[idx],
-          activePlayerChartMetric.decimals,
-          activePlayerChartMetric.suffix,
-          activePlayerChartMetric.signed
+          activeChartKpiMeta.decimals,
+          activeChartKpiMeta.suffix,
+          activeChartKpiMeta.signed
         ),
         deltaFormatted: formatMetricNumber(
           values[idx] - base,
-          activePlayerChartMetric.decimals,
-          activePlayerChartMetric.suffix,
+          activeChartKpiMeta.decimals,
+          activeChartKpiMeta.suffix,
           true
         ),
       }));
@@ -1042,10 +1339,26 @@ export function EntityInspectorDrawer({
       return { values, base, baseLabel, pointsMeta };
     }
 
-    if (team) {
-      const recentChrono = [...team.games.slice(0, 18)].reverse();
-      const values = recentChrono.map((g) => round1(g[tMetric]));
-      const base = round1(mean(team.games.map((g) => g[tMetric])));
+    if (team && activeChartSeries?.teamGameValue && activeChartSeries?.teamSliceValue) {
+      const recentChrono = [...team.games.slice(0, 28)].reverse();
+      const values = recentChrono.map((g) => activeChartSeries.teamGameValue!(g));
+      const nb = chartLeagueBenchmarks[activeChartKpiDef.key];
+      const ownBase = activeChartSeries.teamSliceValue(team.games);
+      const base = chartRefMode === 'nba' && nb ? nb.mean : ownBase;
+      const baseLabel =
+        chartRefMode === 'nba' && nb
+          ? `Media NBA (${formatMetricNumber(
+              base,
+              activeChartKpiMeta.decimals,
+              activeChartKpiMeta.suffix,
+              activeChartKpiMeta.signed
+            )})`
+          : `Su media habitual (${formatMetricNumber(
+              base,
+              activeChartKpiMeta.decimals,
+              activeChartKpiMeta.suffix,
+              activeChartKpiMeta.signed
+            )})`;
       const pointsMeta = recentChrono.map((g, idx) => ({
         idx,
         dateLabel: formatShortDate(g.date),
@@ -1055,13 +1368,23 @@ export function EntityInspectorDrawer({
         result: g.result,
         minutes: 48,
         value: values[idx],
-        formattedValue: `${values[idx]}`,
-        deltaFormatted: formatSigned(values[idx] - base),
+        formattedValue: formatMetricNumber(
+          values[idx],
+          activeChartKpiMeta.decimals,
+          activeChartKpiMeta.suffix,
+          activeChartKpiMeta.signed
+        ),
+        deltaFormatted: formatMetricNumber(
+          values[idx] - base,
+          activeChartKpiMeta.decimals,
+          activeChartKpiMeta.suffix,
+          true
+        ),
       }));
       return {
         values,
         base,
-        baseLabel: `Su media habitual (${base.toFixed(1)})`,
+        baseLabel,
         pointsMeta,
       };
     }
@@ -1081,7 +1404,7 @@ export function EntityInspectorDrawer({
       minutes: number;
     };
 
-    if (!player) {
+    if (!player || !activeChartSeries?.playerGameValue || !activeChartSeries?.playerSliceValue) {
       return {
         slotCount: 0,
         series27: [] as ParallelSeriesPoint[],
@@ -1143,16 +1466,16 @@ export function EntityInspectorDrawer({
           ? Math.max(0, fullSeasonLen - subset.length)
           : 0;
       return subset.map((g, idx) => {
-        const val = activePlayerChartMetric.gameValue(g);
+        const val = activeChartSeries.playerGameValue!(g);
         return {
           slot: slotOffset + idx,
           seasonGameNum: gameNumOffset + idx + 1,
           value: val,
           formattedValue: formatMetricNumber(
             val,
-            activePlayerChartMetric.decimals,
-            activePlayerChartMetric.suffix,
-            activePlayerChartMetric.signed
+            activeChartKpiMeta.decimals,
+            activeChartKpiMeta.suffix,
+            activeChartKpiMeta.signed
           ),
           dateLabel: formatShortDate(g.date),
           matchupLabel: `${g.isHome ? 'vs' : '@'} ${g.opponentAbbr}`,
@@ -1171,9 +1494,9 @@ export function EntityInspectorDrawer({
     series26.forEach((p) => bySlot26.set(p.slot, p));
 
     const mean27 =
-      sub27.length > 0 ? activePlayerChartMetric.sliceValue(sub27) : null;
+      sub27.length > 0 ? activeChartSeries.playerSliceValue!(sub27) : null;
     const mean26 =
-      sub26.length > 0 ? activePlayerChartMetric.sliceValue(sub26) : null;
+      sub26.length > 0 ? activeChartSeries.playerSliceValue!(sub26) : null;
 
     return {
       slotCount,
@@ -1228,15 +1551,17 @@ export function EntityInspectorDrawer({
     };
   }, [leaguePlayerStats]);
 
-  const filteredChartSelectorMetrics = useMemo(() => {
-    if (chartMetricCategory === 'all') return PLAYER_PER_GAME_METRICS;
-    if (chartMetricCategory === 'advanced') {
-      return PLAYER_PER_GAME_METRICS.filter((m) => m.family === 'ratios');
-    }
-    return PLAYER_PER_GAME_METRICS.filter(
-      (m) => m.family === 'basic' || m.family === 'shooting'
-    );
-  }, [chartMetricCategory]);
+  const inspectorKpiCtx: InspectorKpiContext = useMemo(
+    () => ({
+      entityType: player ? 'player' : 'team',
+      statScale,
+      player,
+      team,
+      playerDossier: playerAdvancedDossier,
+      teamDossier: teamAdvancedDossier,
+    }),
+    [player, team, statScale, playerAdvancedDossier, teamAdvancedDossier]
+  );
 
   // Dynamic Situational Splits (governed by sampleGames for player)
   const playerContextualSplits = useMemo(() => {
@@ -1403,73 +1728,6 @@ export function EntityInspectorDrawer({
       },
     ];
   }, [team, experienceMode, benchmarks]);
-
-  const teamProfileCells = useMemo(() => {
-    if (!team) return [];
-    const g = team.games;
-    const adv = team.advanced;
-    const off = adv?.offRtg ?? round1(mean(g.map((x) => x.offRtg)));
-    const def = adv?.defRtg ?? round1(mean(g.map((x) => x.defRtg)));
-    const net = adv?.netRtg ?? round1(off - def);
-    const pace = adv?.pace ?? round1(mean(g.map((x) => x.pace)));
-    const efg = adv?.efgPct ?? round1(mean(g.map((x) => x.efgPct)));
-    const ts = adv?.tsPct ?? round1(mean(g.map((x) => x.tsPct)));
-    const orebP = adv?.orebPct ?? round1(mean(g.map((x) => x.orebPct)));
-    const tovP = adv?.tovPct ?? round1(mean(g.map((x) => x.tovPct)));
-
-    return [
-      { label: 'Offensive Rating', helpKey: 'offRtg', val: `${off.toFixed(1)}` },
-      { label: 'Defensive Rating', helpKey: 'defRtg', val: `${def.toFixed(1)}` },
-      { label: 'Net Rating', helpKey: 'netRtg', val: formatSigned(net) },
-      { label: 'Pace (Pos/48m)', helpKey: 'paceSimple', val: `${pace.toFixed(1)}` },
-      {
-        label: '4F: eFG% / TS%',
-        helpKey: 'efgPct',
-        val: `${efg.toFixed(1)}% / ${ts.toFixed(1)}%`,
-      },
-      {
-        label: '4F: OREB% / TOV%',
-        helpKey: 'orebPct',
-        val: `${orebP.toFixed(1)}% / ${tovP.toFixed(1)}%`,
-      },
-      {
-        label: 'PTS Pintura (Fav/Riv)',
-        helpKey: 'ptsPaint',
-        val: adv
-          ? `${adv.ptsPaint.toFixed(1)} / ${adv.oppPtsPaint.toFixed(1)}`
-          : '—',
-      },
-      {
-        label: 'PTS 2ª Oportunidad',
-        helpKey: 'pts2ndChance',
-        val: adv ? `${adv.pts2ndChance.toFixed(1)} PTS/PJ` : '—',
-      },
-      {
-        label: 'Contraataque / Tras Pérd.',
-        helpKey: 'ptsFastBreak',
-        val: adv
-          ? `${adv.ptsFastBreak.toFixed(1)} / ${adv.ptsOffTov.toFixed(1)}`
-          : '—',
-      },
-      {
-        label: 'Tiros Punteados / PJ',
-        helpKey: 'contestedShots',
-        val: adv ? `${adv.contestedShots.toFixed(1)}` : '—',
-      },
-      {
-        label: 'Desvíos (Deflections)',
-        helpKey: 'deflections',
-        val: adv ? `${adv.deflections.toFixed(1)}` : '—',
-      },
-      {
-        label: 'Screen AST / Box-Outs',
-        helpKey: 'screenAssists',
-        val: adv
-          ? `${adv.screenAssists.toFixed(1)} / ${adv.boxOuts.toFixed(1)}`
-          : '—',
-      },
-    ];
-  }, [team]);
 
   const teamSplits = useMemo(() => {
     if (!team) return [];
@@ -1684,7 +1942,11 @@ export function EntityInspectorDrawer({
     ? sortedPlayerLogGames
     : sortedPlayerLogGames.slice(0, 35);
 
-  const baseTeamGames = team ? team.games.slice(0, 28) : [];
+  const activeTeamColumnDefs = selectedTeamLogCols
+    .map((k) => TEAM_LOG_COLUMNS_MAP[k])
+    .filter(Boolean);
+
+  const baseTeamGames = team ? team.games : [];
   const recentTeamEventIdSet = new Set(
     baseTeamGames.slice(0, windowSize).map((g) => g.eventId)
   );
@@ -1692,36 +1954,18 @@ export function EntityInspectorDrawer({
     ? sortRows(
         baseTeamGames,
         (g) => {
-          switch (tLogSortKey) {
-            case 'date':
-              return g.date;
-            case 'matchup':
-              return `${g.opponentAbbr} ${g.result}`;
-            case 'pointsFor':
-              return g.pointsFor;
-            case 'differential':
-              return g.differential;
-            case 'oreb':
-              return g.oreb * 100 + g.reb;
-            case 'fg3m':
-              return g.fg3m * 100 + g.fg3a;
-            case 'offRtg':
-              return g.offRtg;
-            case 'defRtg':
-              return g.defRtg;
-            case 'netRtg':
-              return g.netRtg;
-            case 'pace':
-              return g.pace;
-            case 'efgPct':
-              return g.efgPct;
-            default:
-              return g.date;
-          }
+          if (tLogSortKey === 'date') return g.date;
+          if (tLogSortKey === 'matchup') return `${g.opponentAbbr} ${g.result}`;
+          const colDef = TEAM_LOG_COLUMNS_MAP[tLogSortKey];
+          return colDef ? colDef.sortValue(g) : g.date;
         },
         tLogSortAsc
       )
     : baseTeamGames;
+
+  const visibleTeamLogGames = showAllTeamLogRows
+    ? sortedTeamLogGames
+    : sortedTeamLogGames.slice(0, 35);
 
   const handleToggleLogColumn = (colKey: string) => {
     setSelectedLogCols((prev) => {
@@ -1733,6 +1977,20 @@ export function EntityInspectorDrawer({
       // Preserve logical catalog order
       const nextSet = new Set([...prev, colKey]);
       return PLAYER_GAME_LOG_COLUMNS.filter((c) => nextSet.has(c.key)).map(
+        (c) => c.key
+      );
+    });
+  };
+
+  const handleToggleTeamLogColumn = (colKey: string) => {
+    setSelectedTeamLogCols((prev) => {
+      if (prev.includes(colKey)) {
+        if (prev.length <= 1) return prev;
+        return prev.filter((k) => k !== colKey);
+      }
+      if (prev.length >= MAX_TEAM_LOG_COLUMNS) return prev;
+      const nextSet = new Set([...prev, colKey]);
+      return TEAM_GAME_LOG_COLUMNS.filter((c) => nextSet.has(c.key)).map(
         (c) => c.key
       );
     });
@@ -1915,7 +2173,7 @@ export function EntityInspectorDrawer({
           </div>
 
           {/* TOP TAB NAVIGATION BAR */}
-          <div className="flex items-center gap-1 bg-[#0B1120] px-4 sm:px-6 pt-1 overflow-x-auto scrollbar-none border-t border-[#1E293B]">
+          <div className="flex items-center gap-1 bg-[#0B1120] px-4 sm:px-6 pt-1 overflow-x-auto no-scrollbar border-t border-[#1E293B]">
             <button
               type="button"
               onClick={() => setActiveInspectorTab('overview')}
@@ -1968,6 +2226,19 @@ export function EntityInspectorDrawer({
             >
               <Users className="w-3.5 h-3.5" />
               <span>{player ? 'Perfil & Trayectoria' : 'Plantilla / Roster'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveInspectorTab('nba_lab')}
+              className={`px-3.5 py-2 text-xs font-medium border-b-2 transition-all flex items-center gap-2 whitespace-nowrap shrink-0 ${
+                activeInspectorTab === 'nba_lab'
+                  ? 'border-orange-500 text-orange-400 font-bold'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Target className="w-3.5 h-3.5" />
+              <span>NBA.com Pro & Zonas</span>
             </button>
           </div>
 
@@ -2094,23 +2365,30 @@ export function EntityInspectorDrawer({
                       })}
                     </div>
                   </div>
-              {/* SECTION 1 (FIRST): Evolución temporal interactiva (Secuencia continua o 2 líneas paralelas) */}
+              {/* SECTION 1 (FIRST): Evolución temporal o distribución NBA en 10 Capas */}
               <section className="space-y-3">
                 <div className="flex flex-wrap items-start justify-between gap-2.5">
                   <div>
                     <h3 className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-100">
                       <span>
-                        {chartLayoutMode === 'timeline'
+                        {!activeChartSeries
+                          ? `Distribución NBA y comparativa: ${activeChartKpiDef.label}`
+                          : chartLayoutMode === 'timeline'
                           ? `Evolución en ${sampleSelection.titleShort.toLowerCase()}`
                           : `Evolución comparada 26/27 vs 25/26 (${parallelChartData.slotCount} PJ)`}
                       </span>
                       <MetricInfoTooltip
-                        helpKey={activePlayerChartMetric.helpKey}
+                        helpKey={activeChartKpiDef.helpKey}
+                        fallbackTitle={activeChartKpiDef.label}
                         align="left"
                       />
                     </h3>
                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-400">
-                      {chartLayoutMode === 'timeline' ? (
+                      {!activeChartSeries ? (
+                        <span>
+                          Métrica oficial agregada de temporada NBA.com (con media NBA y desviación estándar)
+                        </span>
+                      ) : chartLayoutMode === 'timeline' ? (
                         <>
                           {sampleCount26 > 0 && (
                             <span className="inline-flex items-center gap-1.5">
@@ -2155,9 +2433,9 @@ export function EntityInspectorDrawer({
                                 · Media{' '}
                                 {formatMetricNumber(
                                   parallelChartData.mean27,
-                                  activePlayerChartMetric.decimals,
-                                  activePlayerChartMetric.suffix,
-                                  activePlayerChartMetric.signed
+                                  activeChartKpiMeta.decimals,
+                                  activeChartKpiMeta.suffix,
+                                  activeChartKpiMeta.signed
                                 )}
                               </span>
                             )}
@@ -2172,9 +2450,9 @@ export function EntityInspectorDrawer({
                                 · Media{' '}
                                 {formatMetricNumber(
                                   parallelChartData.mean26,
-                                  activePlayerChartMetric.decimals,
-                                  activePlayerChartMetric.suffix,
-                                  activePlayerChartMetric.signed
+                                  activeChartKpiMeta.decimals,
+                                  activeChartKpiMeta.suffix,
+                                  activeChartKpiMeta.signed
                                 )}
                               </span>
                             )}
@@ -2184,660 +2462,697 @@ export function EntityInspectorDrawer({
                     </div>
                   </div>
 
-                  {/* Chart Disposition Switch: Secuencia continua vs 2 líneas en paralelo */}
-                  <div className="inline-flex items-center gap-0.5 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setChartLayoutMode('timeline');
-                        setHoveredChartIdx(null);
-                      }}
-                      className={`px-2.5 py-1.5 text-xs rounded-md transition-colors whitespace-nowrap ${
-                        chartLayoutMode === 'timeline'
-                          ? 'bg-[#1E293B] text-slate-100 font-semibold'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      Secuencia continua
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setChartLayoutMode('parallel');
-                        setHoveredChartIdx(null);
-                      }}
-                      className={`px-2.5 py-1.5 text-xs rounded-md transition-colors whitespace-nowrap ${
-                        chartLayoutMode === 'parallel'
-                          ? 'bg-orange-500 text-slate-950 font-semibold'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      2 líneas (26/27 vs 25/26)
-                    </button>
-                  </div>
+                  {/* Chart Disposition Switch when per-game series is available */}
+                  {activeChartSeries && (
+                    <div className="inline-flex items-center gap-0.5 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setChartLayoutMode('timeline');
+                          setHoveredChartIdx(null);
+                        }}
+                        className={`px-2.5 py-1.5 text-xs rounded-md transition-colors whitespace-nowrap ${
+                          chartLayoutMode === 'timeline'
+                            ? 'bg-[#1E293B] text-slate-100 font-semibold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        Secuencia continua
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setChartLayoutMode('parallel');
+                          setHoveredChartIdx(null);
+                        }}
+                        className={`px-2.5 py-1.5 text-xs rounded-md transition-colors whitespace-nowrap ${
+                          chartLayoutMode === 'parallel'
+                            ? 'bg-orange-500 text-slate-950 font-semibold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        2 líneas (26/27 vs 25/26)
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Secondary Reference / Alignment Controls */}
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  {chartLayoutMode === 'timeline' ? (
-                    <>
-                      <span className="text-[11px] text-slate-400">
-                        Línea punteada: {chartData.baseLabel}
-                      </span>
-                      <ReferenceSelectorBar
-                        mode={chartRefMode}
-                        onChangeMode={setChartRefMode}
-                        ownMode={ownBaselineMode}
-                        onChangeOwnMode={setOwnBaselineMode}
-                        ownCustomK={ownCustomK}
-                        maxGames={totalAvailableGames}
-                        onChangeOwnCustomK={setOwnCustomK}
-                        ownShortLabel={ownBaselineSelection.shortLabel}
-                        ownLabelOverride="Su media habitual"
-                      />
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-[11px] text-slate-400">
-                        Ambas temporadas comparten el mismo eje horizontal de
-                        partidos
-                      </span>
-                      <div className="inline-flex items-center gap-0.5 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-md">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setParallelAlign('opening');
-                            setHoveredChartIdx(null);
-                          }}
-                          className={`px-2 py-1 text-[11px] rounded transition-colors whitespace-nowrap ${
-                            parallelAlign === 'opening'
-                              ? 'bg-[#1E293B] text-orange-300 font-semibold'
-                              : 'text-slate-400 hover:text-slate-200'
-                          }`}
-                        >
-                          Mismo inicio (PJ 1→N)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setParallelAlign('recent');
-                            setHoveredChartIdx(null);
-                          }}
-                          className={`px-2 py-1 text-[11px] rounded transition-colors whitespace-nowrap ${
-                            parallelAlign === 'recent'
-                              ? 'bg-[#1E293B] text-orange-300 font-semibold'
-                              : 'text-slate-400 hover:text-slate-200'
-                          }`}
-                        >
-                          Últimos PJ de cada curso
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3.5 space-y-2.5">
-                  {/* Live Point / Dual-Season Readout Header */}
-                  {chartLayoutMode === 'timeline' ? (
-                    activePointMeta &&
-                    vals.length > 0 && (
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs pb-2 border-b border-[#1E293B]">
-                        <div className="flex items-center gap-1.5 text-slate-300">
-                          <span
-                            className={`font-mono font-semibold ${
-                              activePointMeta.isCurrentSeason
-                                ? 'text-orange-300'
-                                : 'text-sky-300'
-                            }`}
-                          >
-                            {activePointMeta.seasonShort}
-                          </span>
-                          <span className="text-slate-600">·</span>
-                          <span className="font-mono text-slate-400">
-                            {activePointMeta.dateLabel}
-                          </span>
-                          <span className="text-slate-600">·</span>
-                          <span
-                            className={
-                              activePointMeta.result === 'W'
-                                ? 'text-emerald-400 font-semibold'
-                                : 'text-rose-400 font-semibold'
-                            }
-                          >
-                            {activePointMeta.result}
-                          </span>
-                          <span>{activePointMeta.matchupLabel}</span>
-                          <span className="text-slate-600">·</span>
-                          <span className="font-mono text-slate-400">
-                            {activePointMeta.minutes} MIN
-                          </span>
-                        </div>
-
-                        <div className="flex items-center gap-2 font-mono tabular-nums">
-                          <span className="font-semibold text-slate-100">
-                            {activePlayerChartMetric.shortLabel}:{' '}
-                            {activePointMeta.formattedValue}
-                          </span>
-                          <span className="text-slate-400">
-                            ({activePointMeta.deltaFormatted} vs línea)
-                          </span>
-                        </div>
-                      </div>
-                    )
-                  ) : (
-                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs pb-2 border-b border-[#1E293B]">
-                      <div className="flex items-center gap-2 font-mono tabular-nums text-slate-300">
-                        <span className="font-semibold text-slate-200">
-                          Tramo #{activeParallelSlot + 1}
+                {activeChartSeries && (
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    {chartLayoutMode === 'timeline' ? (
+                      <>
+                        <span className="text-[11px] text-slate-400">
+                          Línea punteada: {chartData.baseLabel}
                         </span>
-                        <span className="text-slate-600">·</span>
-                        <span className="text-orange-300">
-                          26/27:{' '}
-                          {activeParallel27
-                            ? `${activeParallel27.formattedValue} (${activeParallel27.dateLabel} ${activeParallel27.matchupLabel})`
-                            : 'Sin disputar'}
-                        </span>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2 font-mono tabular-nums">
-                        <span className="text-sky-300">
-                          25/26:{' '}
-                          {activeParallel26
-                            ? `${activeParallel26.formattedValue} (${activeParallel26.dateLabel} ${activeParallel26.matchupLabel})`
-                            : '—'}
-                        </span>
-                        {activeParallel27 && activeParallel26 && (
-                          <>
-                            <span className="text-slate-600">·</span>
-                            {(() => {
-                              const rawDiff =
-                                activeParallel27.value - activeParallel26.value;
-                              const improved =
-                                rawDiff === 0
-                                  ? null
-                                  : !activePlayerChartMetric.lowerIsBetter
-                                  ? rawDiff > 0
-                                  : rawDiff < 0;
-                              return (
-                                <span
-                                  className={
-                                    improved === null
-                                      ? 'text-slate-400'
-                                      : improved
-                                      ? 'text-emerald-400 font-semibold'
-                                      : 'text-rose-400 font-semibold'
-                                  }
-                                >
-                                  Dif:{' '}
-                                  {formatMetricNumber(
-                                    rawDiff,
-                                    activePlayerChartMetric.decimals,
-                                    activePlayerChartMetric.suffix,
-                                    true
-                                  )}
-                                </span>
-                              );
-                            })()}
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* SVG Canvas */}
-                  {chartLayoutMode === 'timeline' ? (
-                    vals.length > 1 ? (
-                      <svg
-                        viewBox={`0 0 ${svgW} ${svgH}`}
-                        className="w-full h-44 overflow-visible select-none"
-                        onMouseLeave={() => setHoveredChartIdx(null)}
-                      >
-                        {/* Axis Labels */}
-                        <text
-                          transform={`rotate(-90, 15, ${svgH / 2})`}
-                          x={15}
-                          y={svgH / 2}
-                          textAnchor="middle"
-                          className="fill-slate-500 text-[10px] font-bold uppercase tracking-wider"
-                        >
-                          {activePlayerChartMetric.shortLabel}
-                        </text>
-
-                        <text
-                          x={svgW / 2}
-                          y={svgH - 4}
-                          textAnchor="middle"
-                          className="fill-slate-500 text-[10px] font-semibold"
-                        >
-                          Secuencia temporal de partidos (Muestra: {sampleSelection.titleShort})
-                        </text>
-
-                        {/* Dotted Reference Line */}
-                        <line
-                          x1={padX}
-                          y1={baseLineY}
-                          x2={svgW - padX}
-                          y2={baseLineY}
-                          stroke="#94A3B8"
-                          strokeDasharray="4 4"
-                          strokeWidth="1.2"
+                        <ReferenceSelectorBar
+                          mode={chartRefMode}
+                          onChangeMode={setChartRefMode}
+                          ownMode={ownBaselineMode}
+                          onChangeOwnMode={setOwnBaselineMode}
+                          ownCustomK={ownCustomK}
+                          maxGames={totalAvailableGames}
+                          onChangeOwnCustomK={setOwnCustomK}
+                          ownShortLabel={ownBaselineSelection.shortLabel}
+                          ownLabelOverride="Su media habitual"
                         />
-                        <text
-                          x={svgW - padX}
-                          y={Math.max(12, baseLineY - 5)}
-                          textAnchor="end"
-                          className="fill-slate-400 text-[10px] font-mono"
-                        >
-                          Ref:{' '}
-                          {formatMetricNumber(
-                            chartData.base,
-                            activePlayerChartMetric.decimals,
-                            activePlayerChartMetric.suffix,
-                            activePlayerChartMetric.signed
-                          )}
-                        </text>
-
-                        {/* Vertical Season Separator Lines (25/26 | 26/27) */}
-                        {seasonTransitions.map((tr, tIdx) => (
-                          <g key={`tr-${tIdx}`} className="pointer-events-none">
-                            <line
-                              x1={tr.x}
-                              y1={8}
-                              x2={tr.x}
-                              y2={svgH - 8}
-                              stroke="#64748B"
-                              strokeDasharray="3 3"
-                              strokeWidth="1.3"
-                            />
-                            <text
-                              x={tr.x - 5}
-                              y={13}
-                              textAnchor="end"
-                              fill={tr.leftCurrent ? '#FB923C' : '#38BDF8'}
-                              className="text-[9.5px] font-mono font-semibold"
-                            >
-                              {tr.leftLabel}
-                            </text>
-                            <text
-                              x={tr.x + 5}
-                              y={13}
-                              textAnchor="start"
-                              fill={tr.rightCurrent ? '#FB923C' : '#38BDF8'}
-                              className="text-[9.5px] font-mono font-semibold"
-                            >
-                              {tr.rightLabel}
-                            </text>
-                          </g>
-                        ))}
-
-                        {/* Contiguous Same-Season Trend Polylines */}
-                        {seasonSegments.map((seg, sIdx) =>
-                          seg.count > 1 ? (
-                            <polyline
-                              key={`seg-${sIdx}`}
-                              fill="none"
-                              stroke={
-                                seg.isCurrentSeason ? '#F97316' : '#38BDF8'
-                              }
-                              strokeWidth={vals.length > 45 ? '1.6' : '2.2'}
-                              points={seg.pointsAttr}
-                            />
-                          ) : null
-                        )}
-
-                        {/* Season-Colored Data Points */}
-                        {vals.map((v, i) => {
-                          const meta = chartData.pointsMeta[i];
-                          const isCurrSeason = Boolean(meta?.isCurrentSeason);
-                          const isHovered = hoveredChartIdx === i;
-                          const dense = vals.length > 40;
-                          const r = isHovered
-                            ? 5.5
-                            : isCurrSeason
-                            ? dense
-                              ? 3.3
-                              : 4.3
-                            : dense
-                            ? 2.4
-                            : 3.4;
-
-                          const isSeasonBoundary =
-                            (i > 0 &&
-                              chartData.pointsMeta[i - 1]?.isCurrentSeason !==
-                                isCurrSeason) ||
-                            (i < vals.length - 1 &&
-                              chartData.pointsMeta[i + 1]?.isCurrentSeason !==
-                                isCurrSeason);
-
-                          const showValueTag =
-                            isHovered ||
-                            (!dense &&
-                              (i === vals.length - 1 ||
-                                i === 0 ||
-                                isSeasonBoundary));
-
-                          return (
-                            <g
-                              key={i}
-                              className="cursor-pointer"
-                              onMouseEnter={() => setHoveredChartIdx(i)}
-                              onClick={() => setHoveredChartIdx(i)}
-                            >
-                              <circle
-                                cx={toX(i)}
-                                cy={toY(v)}
-                                r={10}
-                                fill="transparent"
-                              />
-                              <circle
-                                cx={toX(i)}
-                                cy={toY(v)}
-                                r={r}
-                                fill={
-                                  isHovered
-                                    ? isCurrSeason
-                                      ? '#FDBA74'
-                                      : '#7DD3FC'
-                                    : isCurrSeason
-                                    ? '#F97316'
-                                    : '#082F49'
-                                }
-                                stroke={
-                                  isHovered
-                                    ? '#FFFFFF'
-                                    : isCurrSeason
-                                    ? '#FDBA74'
-                                    : '#38BDF8'
-                                }
-                                strokeWidth="1.5"
-                              />
-                              {showValueTag && (
-                                <text
-                                  x={toX(i)}
-                                  y={Math.max(14, toY(v) - 8)}
-                                  textAnchor="middle"
-                                  className="fill-slate-200 text-[10px] font-mono pointer-events-none"
-                                >
-                                  {formatMetricNumber(
-                                    v,
-                                    activePlayerChartMetric.decimals,
-                                    '',
-                                    activePlayerChartMetric.signed
-                                  )}
-                                </text>
-                              )}
-                            </g>
-                          );
-                        })}
-                      </svg>
+                      </>
                     ) : (
-                      <p className="text-xs text-slate-400 py-8 text-center">
-                        Se necesitan al menos 2 partidos en la muestra para
-                        trazar la evolución temporal.
-                      </p>
-                    )
-                  ) : parallelChartData.slotCount > 1 ? (
-                    <svg
-                      viewBox={`0 0 ${svgW} ${svgH}`}
-                      className="w-full h-44 overflow-visible select-none"
-                      onMouseLeave={() => setHoveredChartIdx(null)}
-                    >
-                      {/* Axis Labels */}
-                      <text
-                        transform={`rotate(-90, 15, ${svgH / 2})`}
-                        x={15}
-                        y={svgH / 2}
-                        textAnchor="middle"
-                        className="fill-slate-500 text-[10px] font-bold uppercase tracking-wider"
-                      >
-                        {activePlayerChartMetric.shortLabel}
-                      </text>
-
-                      <text
-                        x={svgW / 2}
-                        y={svgH - 4}
-                        textAnchor="middle"
-                        className="fill-slate-500 text-[10px] font-semibold"
-                      >
-                        Comparativa por Tramo de Partidos (26/27 vs 25/26)
-                      </text>
-
-                      {/* Dual Season Dashed Mean Lines */}
-                      {parallelChartData.mean26 !== null && (
-                        <line
-                          x1={padX}
-                          y1={pToY(parallelChartData.mean26)}
-                          x2={svgW - padX}
-                          y2={pToY(parallelChartData.mean26)}
-                          stroke="#38BDF8"
-                          strokeOpacity="0.4"
-                          strokeDasharray="4 4"
-                          strokeWidth="1.1"
-                        />
-                      )}
-                      {parallelChartData.mean27 !== null && (
-                        <line
-                          x1={padX}
-                          y1={pToY(parallelChartData.mean27)}
-                          x2={svgW - padX}
-                          y2={pToY(parallelChartData.mean27)}
-                          stroke="#F97316"
-                          strokeOpacity="0.45"
-                          strokeDasharray="4 4"
-                          strokeWidth="1.1"
-                        />
-                      )}
-
-                      {/* Active Slot Vertical Guide */}
-                      <line
-                        x1={pToX(activeParallelSlot)}
-                        y1={10}
-                        x2={pToX(activeParallelSlot)}
-                        y2={svgH - 16}
-                        stroke="#475569"
-                        strokeDasharray="2 3"
-                        strokeWidth="1"
-                      />
-
-                      {/* X-Axis Slot Labels */}
-                      <text
-                        x={padX}
-                        y={svgH - 3}
-                        textAnchor="start"
-                        className="fill-slate-500 text-[9.5px] font-mono"
-                      >
-                        PJ 1
-                      </text>
-                      {parallelChartData.slotCount >= 5 && (
-                        <text
-                          x={pToX(Math.floor(parallelChartData.slotCount / 2))}
-                          y={svgH - 3}
-                          textAnchor="middle"
-                          className="fill-slate-500 text-[9.5px] font-mono"
-                        >
-                          PJ {Math.floor(parallelChartData.slotCount / 2) + 1}
-                        </text>
-                      )}
-                      <text
-                        x={svgW - padX}
-                        y={svgH - 3}
-                        textAnchor="end"
-                        className="fill-slate-500 text-[9.5px] font-mono"
-                      >
-                        PJ {parallelChartData.slotCount}
-                      </text>
-
-                      {/* 2025/26 Polyline (Sky Blue) */}
-                      {parallelChartData.series26.length > 1 && (
-                        <polyline
-                          fill="none"
-                          stroke="#38BDF8"
-                          strokeOpacity="0.88"
-                          strokeWidth={
-                            parallelChartData.slotCount > 45 ? '1.5' : '2'
-                          }
-                          points={parallelPoints26}
-                        />
-                      )}
-
-                      {/* 2026/27 Polyline (Amber-Orange, foreground) */}
-                      {parallelChartData.series27.length > 1 && (
-                        <polyline
-                          fill="none"
-                          stroke="#F97316"
-                          strokeWidth={
-                            parallelChartData.slotCount > 45 ? '1.8' : '2.4'
-                          }
-                          points={parallelPoints27}
-                        />
-                      )}
-
-                      {/* 2025/26 Points */}
-                      {parallelChartData.series26.map((pt) => {
-                        const isActive = pt.slot === activeParallelSlot;
-                        const dense = parallelChartData.slotCount > 40;
-                        return (
-                          <circle
-                            key={`p26-${pt.slot}`}
-                            cx={pToX(pt.slot)}
-                            cy={pToY(pt.value)}
-                            r={isActive ? 4.8 : dense ? 2.1 : 3.1}
-                            fill={isActive ? '#7DD3FC' : '#082F49'}
-                            stroke={isActive ? '#FFFFFF' : '#38BDF8'}
-                            strokeWidth="1.4"
-                          />
-                        );
-                      })}
-
-                      {/* 2026/27 Points */}
-                      {parallelChartData.series27.map((pt) => {
-                        const isActive = pt.slot === activeParallelSlot;
-                        const dense = parallelChartData.slotCount > 40;
-                        const showLabel =
-                          isActive ||
-                          (!dense &&
-                            pt.slot ===
-                              parallelChartData.series27[
-                                parallelChartData.series27.length - 1
-                              ]?.slot);
-                        return (
-                          <g key={`p27-${pt.slot}`}>
-                            <circle
-                              cx={pToX(pt.slot)}
-                              cy={pToY(pt.value)}
-                              r={isActive ? 5.4 : dense ? 3 : 4}
-                              fill={isActive ? '#FDBA74' : '#F97316'}
-                              stroke={isActive ? '#FFFFFF' : '#FDBA74'}
-                              strokeWidth="1.5"
-                            />
-                            {showLabel && (
-                              <text
-                                x={pToX(pt.slot)}
-                                y={Math.max(13, pToY(pt.value) - 8)}
-                                textAnchor="middle"
-                                className="fill-orange-200 text-[10px] font-mono font-semibold pointer-events-none"
-                              >
-                                {formatMetricNumber(
-                                  pt.value,
-                                  activePlayerChartMetric.decimals,
-                                  '',
-                                  activePlayerChartMetric.signed
-                                )}
-                              </text>
-                            )}
-                          </g>
-                        );
-                      })}
-
-                      {/* Interactive Hit Columns across all X-Axis Slots */}
-                      {Array.from({ length: parallelChartData.slotCount }).map(
-                        (_, sIdx) => {
-                          const colW =
-                            parallelChartData.slotCount <= 1
-                              ? svgW
-                              : (svgW - padX * 2) /
-                                (parallelChartData.slotCount - 1);
-                          return (
-                            <rect
-                              key={`hit-${sIdx}`}
-                              x={pToX(sIdx) - colW / 2}
-                              y={0}
-                              width={Math.max(12, colW)}
-                              height={svgH}
-                              fill="transparent"
-                              className="cursor-pointer"
-                              onMouseEnter={() => setHoveredChartIdx(sIdx)}
-                              onClick={() => setHoveredChartIdx(sIdx)}
-                            />
-                          );
-                        }
-                      )}
-                    </svg>
-                  ) : (
-                    <p className="text-xs text-slate-400 py-8 text-center">
-                      Se necesitan al menos 2 partidos para comparar la
-                      evolución en paralelo.
-                    </p>
-                  )}
-
-                  {/* Bottom Selectors: Básicas (default) | Avanzadas | Todas */}
-                  <div className="pt-2.5 border-t border-[#1E293B] space-y-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-[11px] font-medium text-slate-400">
-                        Estadística o ratio representado:
-                      </span>
-                      <div className="inline-flex items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-md">
-                        {(
-                          [
-                            { id: 'basic', label: 'Básicas' },
-                            { id: 'advanced', label: 'Avanzadas' },
-                            { id: 'all', label: 'Todas' },
-                          ] as const
-                        ).map((tab) => (
+                      <>
+                        <span className="text-[11px] text-slate-400">
+                          Ambas temporadas comparten el mismo eje horizontal de
+                          partidos
+                        </span>
+                        <div className="inline-flex items-center gap-0.5 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-md">
                           <button
-                            key={tab.id}
                             type="button"
-                            onClick={() => setChartMetricCategory(tab.id)}
-                            className={`px-2.5 py-0.5 text-[11px] rounded transition-colors whitespace-nowrap shrink-0 ${
-                              chartMetricCategory === tab.id
+                            onClick={() => {
+                              setParallelAlign('opening');
+                              setHoveredChartIdx(null);
+                            }}
+                            className={`px-2 py-1 text-[11px] rounded transition-colors whitespace-nowrap ${
+                              parallelAlign === 'opening'
                                 ? 'bg-[#1E293B] text-orange-300 font-semibold'
                                 : 'text-slate-400 hover:text-slate-200'
                             }`}
                           >
-                            {tab.label}
+                            Mismo inicio (PJ 1→N)
                           </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap gap-1">
-                      {filteredChartSelectorMetrics.map((m) => {
-                        const active = pChartMetricKey === m.key;
-                        return (
                           <button
-                            key={m.key}
                             type="button"
-                            title={m.label}
                             onClick={() => {
-                              setPChartMetricKey(m.key);
+                              setParallelAlign('recent');
                               setHoveredChartIdx(null);
                             }}
-                            className={`px-2 py-1 text-xs font-mono rounded border transition-colors whitespace-nowrap shrink-0 ${
+                            className={`px-2 py-1 text-[11px] rounded transition-colors whitespace-nowrap ${
+                              parallelAlign === 'recent'
+                                ? 'bg-[#1E293B] text-orange-300 font-semibold'
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            Últimos PJ de cada curso
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3.5 space-y-3">
+                  {!activeChartSeries ? (
+                    <NbaAggregateDistributionChart
+                      activeKpi={activeChartKpiDef}
+                      layerKpis={chartLayerKpis}
+                      ctx={inspectorKpiCtx}
+                      statScale={statScale}
+                      leagueBenchmarks={chartLeagueBenchmarks}
+                      onSelectKpiKey={(k) => {
+                        setActiveChartKpiKey(k);
+                        setHoveredChartIdx(null);
+                      }}
+                      entityName={player.name}
+                    />
+                  ) : (
+                    <>
+                      {/* Live Point / Dual-Season Readout Header */}
+                      {chartLayoutMode === 'timeline' ? (
+                        activePointMeta &&
+                        vals.length > 0 && (
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-xs pb-2 border-b border-[#1E293B]">
+                            <div className="flex items-center gap-1.5 text-slate-300">
+                              <span
+                                className={`font-mono font-semibold ${
+                                  activePointMeta.isCurrentSeason
+                                    ? 'text-orange-300'
+                                    : 'text-sky-300'
+                                }`}
+                              >
+                                {activePointMeta.seasonShort}
+                              </span>
+                              <span className="text-slate-600">·</span>
+                              <span className="font-mono text-slate-400">
+                                {activePointMeta.dateLabel}
+                              </span>
+                              <span className="text-slate-600">·</span>
+                              <span
+                                className={
+                                  activePointMeta.result === 'W'
+                                    ? 'text-emerald-400 font-semibold'
+                                    : 'text-rose-400 font-semibold'
+                                }
+                              >
+                                {activePointMeta.result}
+                              </span>
+                              <span>{activePointMeta.matchupLabel}</span>
+                              <span className="text-slate-600">·</span>
+                              <span className="font-mono text-slate-400">
+                                {activePointMeta.minutes} MIN
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-2 font-mono tabular-nums">
+                              <span className="font-semibold text-slate-100">
+                                {activeChartKpiDef.shortLabel}:{' '}
+                                {activePointMeta.formattedValue}
+                              </span>
+                              <span className="text-slate-400">
+                                ({activePointMeta.deltaFormatted} vs línea)
+                              </span>
+                            </div>
+                          </div>
+                        )
+                      ) : (
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-xs pb-2 border-b border-[#1E293B]">
+                          <div className="flex items-center gap-2 font-mono tabular-nums text-slate-300">
+                            <span className="font-semibold text-slate-200">
+                              Tramo #{activeParallelSlot + 1}
+                            </span>
+                            <span className="text-slate-600">·</span>
+                            <span className="text-orange-300">
+                              26/27:{' '}
+                              {activeParallel27
+                                ? `${activeParallel27.formattedValue} (${activeParallel27.dateLabel} ${activeParallel27.matchupLabel})`
+                                : 'Sin disputar'}
+                            </span>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2 font-mono tabular-nums">
+                            <span className="text-sky-300">
+                              25/26:{' '}
+                              {activeParallel26
+                                ? `${activeParallel26.formattedValue} (${activeParallel26.dateLabel} ${activeParallel26.matchupLabel})`
+                                : '—'}
+                            </span>
+                            {activeParallel27 && activeParallel26 && (
+                              <>
+                                <span className="text-slate-600">·</span>
+                                {(() => {
+                                  const rawDiff =
+                                    activeParallel27.value - activeParallel26.value;
+                                  const improved =
+                                    rawDiff === 0
+                                      ? null
+                                      : !activeChartKpiMeta.lowerIsBetter
+                                      ? rawDiff > 0
+                                      : rawDiff < 0;
+                                  return (
+                                    <span
+                                      className={
+                                        improved === null
+                                          ? 'text-slate-400'
+                                          : improved
+                                          ? 'text-emerald-400 font-semibold'
+                                          : 'text-rose-400 font-semibold'
+                                      }
+                                    >
+                                      Dif:{' '}
+                                      {formatMetricNumber(
+                                        rawDiff,
+                                        activeChartKpiMeta.decimals,
+                                        activeChartKpiMeta.suffix,
+                                        true
+                                      )}
+                                    </span>
+                                  );
+                                })()}
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* SVG Canvas */}
+                      {chartLayoutMode === 'timeline' ? (
+                        vals.length > 1 ? (
+                          <svg
+                            viewBox={`0 0 ${svgW} ${svgH}`}
+                            className="w-full h-44 overflow-visible select-none"
+                            onMouseLeave={() => setHoveredChartIdx(null)}
+                          >
+                            {/* Axis Labels */}
+                            <text
+                              transform={`rotate(-90, 15, ${svgH / 2})`}
+                              x={15}
+                              y={svgH / 2}
+                              textAnchor="middle"
+                              className="fill-slate-500 text-[10px] font-bold uppercase tracking-wider"
+                            >
+                              {activeChartKpiDef.shortLabel}
+                            </text>
+
+                            <text
+                              x={svgW / 2}
+                              y={svgH - 4}
+                              textAnchor="middle"
+                              className="fill-slate-500 text-[10px] font-semibold"
+                            >
+                              Secuencia temporal de partidos (Muestra: {sampleSelection.titleShort})
+                            </text>
+
+                            {/* Dotted Reference Line */}
+                            <line
+                              x1={padX}
+                              y1={baseLineY}
+                              x2={svgW - padX}
+                              y2={baseLineY}
+                              stroke="#94A3B8"
+                              strokeDasharray="4 4"
+                              strokeWidth="1.2"
+                            />
+                            <text
+                              x={svgW - padX}
+                              y={Math.max(12, baseLineY - 5)}
+                              textAnchor="end"
+                              className="fill-slate-400 text-[10px] font-mono"
+                            >
+                              Ref:{' '}
+                              {formatMetricNumber(
+                                chartData.base,
+                                activeChartKpiMeta.decimals,
+                                activeChartKpiMeta.suffix,
+                                activeChartKpiMeta.signed
+                              )}
+                            </text>
+
+                            {/* Vertical Season Separator Lines (25/26 | 26/27) */}
+                            {seasonTransitions.map((tr, tIdx) => (
+                              <g key={`tr-${tIdx}`} className="pointer-events-none">
+                                <line
+                                  x1={tr.x}
+                                  y1={8}
+                                  x2={tr.x}
+                                  y2={svgH - 8}
+                                  stroke="#64748B"
+                                  strokeDasharray="3 3"
+                                  strokeWidth="1.3"
+                                />
+                                <text
+                                  x={tr.x - 5}
+                                  y={13}
+                                  textAnchor="end"
+                                  fill={tr.leftCurrent ? '#FB923C' : '#38BDF8'}
+                                  className="text-[9.5px] font-mono font-semibold"
+                                >
+                                  {tr.leftLabel}
+                                </text>
+                                <text
+                                  x={tr.x + 5}
+                                  y={13}
+                                  textAnchor="start"
+                                  fill={tr.rightCurrent ? '#FB923C' : '#38BDF8'}
+                                  className="text-[9.5px] font-mono font-semibold"
+                                >
+                                  {tr.rightLabel}
+                                </text>
+                              </g>
+                            ))}
+
+                            {/* Contiguous Same-Season Trend Polylines */}
+                            {seasonSegments.map((seg, sIdx) =>
+                              seg.count > 1 ? (
+                                <polyline
+                                  key={`seg-${sIdx}`}
+                                  fill="none"
+                                  stroke={
+                                    seg.isCurrentSeason ? '#F97316' : '#38BDF8'
+                                  }
+                                  strokeWidth={vals.length > 45 ? '1.6' : '2.2'}
+                                  points={seg.pointsAttr}
+                                />
+                              ) : null
+                            )}
+
+                            {/* Season-Colored Data Points */}
+                            {vals.map((v, i) => {
+                              const meta = chartData.pointsMeta[i];
+                              const isCurrSeason = Boolean(meta?.isCurrentSeason);
+                              const isHovered = hoveredChartIdx === i;
+                              const dense = vals.length > 40;
+                              const r = isHovered
+                                ? 5.5
+                                : isCurrSeason
+                                ? dense
+                                  ? 3.3
+                                  : 4.3
+                                : dense
+                                ? 2.4
+                                : 3.4;
+
+                              const isSeasonBoundary =
+                                (i > 0 &&
+                                  chartData.pointsMeta[i - 1]?.isCurrentSeason !==
+                                    isCurrSeason) ||
+                                (i < vals.length - 1 &&
+                                  chartData.pointsMeta[i + 1]?.isCurrentSeason !==
+                                    isCurrSeason);
+
+                              const showValueTag =
+                                isHovered ||
+                                (!dense &&
+                                  (i === vals.length - 1 ||
+                                    i === 0 ||
+                                    isSeasonBoundary));
+
+                              return (
+                                <g
+                                  key={i}
+                                  className="cursor-pointer"
+                                  onMouseEnter={() => setHoveredChartIdx(i)}
+                                  onClick={() => setHoveredChartIdx(i)}
+                                >
+                                  <circle
+                                    cx={toX(i)}
+                                    cy={toY(v)}
+                                    r={10}
+                                    fill="transparent"
+                                  />
+                                  <circle
+                                    cx={toX(i)}
+                                    cy={toY(v)}
+                                    r={r}
+                                    fill={
+                                      isHovered
+                                        ? isCurrSeason
+                                          ? '#FDBA74'
+                                          : '#7DD3FC'
+                                        : isCurrSeason
+                                        ? '#F97316'
+                                        : '#082F49'
+                                    }
+                                    stroke={
+                                      isHovered
+                                        ? '#FFFFFF'
+                                        : isCurrSeason
+                                        ? '#FDBA74'
+                                        : '#38BDF8'
+                                    }
+                                    strokeWidth="1.5"
+                                  />
+                                  {showValueTag && (
+                                    <text
+                                      x={toX(i)}
+                                      y={Math.max(14, toY(v) - 8)}
+                                      textAnchor="middle"
+                                      className="fill-slate-200 text-[10px] font-mono pointer-events-none"
+                                    >
+                                      {formatMetricNumber(
+                                        v,
+                                        activeChartKpiMeta.decimals,
+                                        '',
+                                        activeChartKpiMeta.signed
+                                      )}
+                                    </text>
+                                  )}
+                                </g>
+                              );
+                            })}
+                          </svg>
+                        ) : (
+                          <p className="text-xs text-slate-400 py-8 text-center">
+                            Se necesitan al menos 2 partidos en la muestra para
+                            trazar la evolución temporal.
+                          </p>
+                        )
+                      ) : parallelChartData.slotCount > 1 ? (
+                        <svg
+                          viewBox={`0 0 ${svgW} ${svgH}`}
+                          className="w-full h-44 overflow-visible select-none"
+                          onMouseLeave={() => setHoveredChartIdx(null)}
+                        >
+                          {/* Axis Labels */}
+                          <text
+                            transform={`rotate(-90, 15, ${svgH / 2})`}
+                            x={15}
+                            y={svgH / 2}
+                            textAnchor="middle"
+                            className="fill-slate-500 text-[10px] font-bold uppercase tracking-wider"
+                          >
+                            {activeChartKpiDef.shortLabel}
+                          </text>
+
+                          <text
+                            x={svgW / 2}
+                            y={svgH - 4}
+                            textAnchor="middle"
+                            className="fill-slate-500 text-[10px] font-semibold"
+                          >
+                            Comparativa por Tramo de Partidos (26/27 vs 25/26)
+                          </text>
+
+                          {/* Dual Season Dashed Mean Lines */}
+                          {parallelChartData.mean26 !== null && (
+                            <line
+                              x1={padX}
+                              y1={pToY(parallelChartData.mean26)}
+                              x2={svgW - padX}
+                              y2={pToY(parallelChartData.mean26)}
+                              stroke="#38BDF8"
+                              strokeOpacity="0.4"
+                              strokeDasharray="4 4"
+                              strokeWidth="1.1"
+                            />
+                          )}
+                          {parallelChartData.mean27 !== null && (
+                            <line
+                              x1={padX}
+                              y1={pToY(parallelChartData.mean27)}
+                              x2={svgW - padX}
+                              y2={pToY(parallelChartData.mean27)}
+                              stroke="#F97316"
+                              strokeOpacity="0.45"
+                              strokeDasharray="4 4"
+                              strokeWidth="1.1"
+                            />
+                          )}
+
+                          {/* Active Slot Vertical Guide */}
+                          <line
+                            x1={pToX(activeParallelSlot)}
+                            y1={10}
+                            x2={pToX(activeParallelSlot)}
+                            y2={svgH - 16}
+                            stroke="#475569"
+                            strokeDasharray="2 3"
+                            strokeWidth="1"
+                          />
+
+                          {/* X-Axis Slot Labels */}
+                          <text
+                            x={padX}
+                            y={svgH - 3}
+                            textAnchor="start"
+                            className="fill-slate-500 text-[9.5px] font-mono"
+                          >
+                            PJ 1
+                          </text>
+                          {parallelChartData.slotCount >= 5 && (
+                            <text
+                              x={pToX(Math.floor(parallelChartData.slotCount / 2))}
+                              y={svgH - 3}
+                              textAnchor="middle"
+                              className="fill-slate-500 text-[9.5px] font-mono"
+                            >
+                              PJ {Math.floor(parallelChartData.slotCount / 2) + 1}
+                            </text>
+                          )}
+                          <text
+                            x={svgW - padX}
+                            y={svgH - 3}
+                            textAnchor="end"
+                            className="fill-slate-500 text-[9.5px] font-mono"
+                          >
+                            PJ {parallelChartData.slotCount}
+                          </text>
+
+                          {/* 2025/26 Polyline (Sky Blue) */}
+                          {parallelChartData.series26.length > 1 && (
+                            <polyline
+                              fill="none"
+                              stroke="#38BDF8"
+                              strokeOpacity="0.88"
+                              strokeWidth={
+                                parallelChartData.slotCount > 45 ? '1.5' : '2'
+                              }
+                              points={parallelPoints26}
+                            />
+                          )}
+
+                          {/* 2026/27 Polyline (Amber-Orange, foreground) */}
+                          {parallelChartData.series27.length > 1 && (
+                            <polyline
+                              fill="none"
+                              stroke="#F97316"
+                              strokeWidth={
+                                parallelChartData.slotCount > 45 ? '1.8' : '2.4'
+                              }
+                              points={parallelPoints27}
+                            />
+                          )}
+
+                          {/* 2025/26 Points */}
+                          {parallelChartData.series26.map((pt) => {
+                            const isActive = pt.slot === activeParallelSlot;
+                            const dense = parallelChartData.slotCount > 40;
+                            return (
+                              <circle
+                                key={`p26-${pt.slot}`}
+                                cx={pToX(pt.slot)}
+                                cy={pToY(pt.value)}
+                                r={isActive ? 4.8 : dense ? 2.1 : 3.1}
+                                fill={isActive ? '#7DD3FC' : '#082F49'}
+                                stroke={isActive ? '#FFFFFF' : '#38BDF8'}
+                                strokeWidth="1.4"
+                              />
+                            );
+                          })}
+
+                          {/* 2026/27 Points */}
+                          {parallelChartData.series27.map((pt) => {
+                            const isActive = pt.slot === activeParallelSlot;
+                            const dense = parallelChartData.slotCount > 40;
+                            const showLabel =
+                              isActive ||
+                              (!dense &&
+                                pt.slot ===
+                                  parallelChartData.series27[
+                                    parallelChartData.series27.length - 1
+                                  ]?.slot);
+                            return (
+                              <g key={`p27-${pt.slot}`}>
+                                <circle
+                                  cx={pToX(pt.slot)}
+                                  cy={pToY(pt.value)}
+                                  r={isActive ? 5.4 : dense ? 3 : 4}
+                                  fill={isActive ? '#FDBA74' : '#F97316'}
+                                  stroke={isActive ? '#FFFFFF' : '#FDBA74'}
+                                  strokeWidth="1.5"
+                                />
+                                {showLabel && (
+                                  <text
+                                    x={pToX(pt.slot)}
+                                    y={Math.max(13, pToY(pt.value) - 8)}
+                                    textAnchor="middle"
+                                    className="fill-orange-200 text-[10px] font-mono font-semibold pointer-events-none"
+                                  >
+                                    {formatMetricNumber(
+                                      pt.value,
+                                      activeChartKpiMeta.decimals,
+                                      '',
+                                      activeChartKpiMeta.signed
+                                    )}
+                                  </text>
+                                )}
+                              </g>
+                            );
+                          })}
+
+                          {/* Interactive Hit Columns across all X-Axis Slots */}
+                          {Array.from({ length: parallelChartData.slotCount }).map(
+                            (_, sIdx) => {
+                              const colW =
+                                parallelChartData.slotCount <= 1
+                                  ? svgW
+                                  : (svgW - padX * 2) /
+                                    (parallelChartData.slotCount - 1);
+                              return (
+                                <rect
+                                  key={`hit-${sIdx}`}
+                                  x={pToX(sIdx) - colW / 2}
+                                  y={0}
+                                  width={Math.max(12, colW)}
+                                  height={svgH}
+                                  fill="transparent"
+                                  className="cursor-pointer"
+                                  onMouseEnter={() => setHoveredChartIdx(sIdx)}
+                                  onClick={() => setHoveredChartIdx(sIdx)}
+                                />
+                              );
+                            }
+                          )}
+                        </svg>
+                      ) : (
+                        <p className="text-xs text-slate-400 py-8 text-center">
+                          Se necesitan al menos 2 partidos para comparar la
+                          evolución en paralelo.
+                        </p>
+                      )}
+                    </>
+                  )}
+
+                  {/* Bottom Selectors: Organized across ALL 10 NBA.com KPI Layers */}
+                  <div className="pt-3 border-t border-[#1E293B] space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-slate-300">
+                        Estadística o KPI representado (10 Capas NBA.com · {scopedChartCatalog.length} métricas):
+                      </span>
+                      <span className="text-[10.5px] font-mono text-slate-400">
+                        {activeChartSeries ? 'Serie partido a partido' : 'Distribución NBA + Peer Layer'}
+                      </span>
+                    </div>
+
+                    {/* 10 Layer Tabs */}
+                    <div className="flex flex-wrap gap-1.5">
+                      {NBA_KPI_LAYERS.map((layer) => {
+                        const layerItems = scopedChartCatalog.filter((k) => k.layer === layer.id);
+                        if (layerItems.length === 0) return null;
+                        const active = chartLayerId === layer.id;
+                        return (
+                          <button
+                            key={layer.id}
+                            type="button"
+                            onClick={() => {
+                              setChartLayerId(layer.id);
+                              if (!layerItems.some((k) => k.key === activeChartKpiDef.key)) {
+                                const firstSeries = layerItems.find((k) => Boolean(resolveKpiGameSeries(k.key, 'player'))) || layerItems[0];
+                                setActiveChartKpiKey(firstSeries.key);
+                              }
+                              setHoveredChartIdx(null);
+                            }}
+                            className={`px-2 py-1 text-[11px] rounded-md border transition-colors whitespace-nowrap ${
+                              active
+                                ? 'bg-orange-500 text-slate-950 border-orange-500 font-semibold'
+                                : 'bg-[#0B1120] border-[#1E293B] text-slate-300 hover:text-white'
+                            }`}
+                          >
+                            {layer.shortLabel}{' '}
+                            <span className={active ? 'text-slate-900/80' : 'text-slate-500'}>
+                              ({layerItems.length})
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* KPI Chips inside Active Layer */}
+                    <div className="max-h-40 overflow-y-auto pr-1 flex flex-wrap gap-1.5">
+                      {chartLayerKpis.map((kDef) => {
+                        const active = activeChartKpiDef.key === kDef.key;
+                        const hasSeries = Boolean(resolveKpiGameSeries(kDef.key, 'player'));
+                        return (
+                          <button
+                            key={kDef.key}
+                            type="button"
+                            title={`${kDef.label}${hasSeries ? ' · Serie partido a partido' : ' · Comparativa liga NBA'}`}
+                            onClick={() => {
+                              setActiveChartKpiKey(kDef.key);
+                              setHoveredChartIdx(null);
+                            }}
+                            className={`px-2 py-1 text-[11px] font-mono rounded border transition-colors whitespace-nowrap shrink-0 ${
                               active
                                 ? 'bg-orange-500 text-slate-950 border-orange-500 font-semibold'
                                 : 'bg-[#0B1120] border-[#1E293B] text-slate-300 hover:text-white hover:border-slate-600'
                             }`}
                           >
-                            {m.shortLabel}
+                            {kDef.shortLabel}
                           </button>
                         );
                       })}
                     </div>
-                    </div>
                   </div>
-                </section>
+                </div>
               </section>
-            )}
+            </section>
+          )}
 
               {/* TAB 1: RESUMEN & KPIS (Jugador) */}
               {activeInspectorTab === 'overview' && (
@@ -3092,6 +3407,27 @@ export function EntityInspectorDrawer({
                         </div>
                       </div>
                     ))}
+
+                    <div className="pt-2.5 border-t border-[#1E293B] flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[11px] text-slate-400">
+                        ¿Buscas Zonas de Tiro, Tracking Óptico, Hustle, Defensa/DFG%, Clutch, Playtypes o Infracciones (Pasos, Dobles, 3s)?
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPlayerAllKpisOpen(true);
+                          setTimeout(() => {
+                            document
+                              .getElementById('inspector-player-all-nba-kpis')
+                              ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                          }, 50);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold bg-orange-500/15 border border-orange-500/40 text-orange-300 hover:bg-orange-500/25 rounded-md transition-colors whitespace-nowrap"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>Abrir selector de las 10 capas NBA.com</span>
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -3186,6 +3522,26 @@ export function EntityInspectorDrawer({
                   </div>
                 )}
               </section>
+
+              {/* SECTION 2B: TODOS LOS KPIS OFICIALES NBA.COM (10 CAPAS PERSONALIZABLES) */}
+              <InspectorAllNbaKpisPanel
+                sectionId="inspector-player-all-nba-kpis"
+                entityType="player"
+                statScale={statScale}
+                onChangeStatScale={setStatScale}
+                player={player}
+                players={players}
+                teams={teams}
+                playerDossier={playerAdvancedDossier}
+                loadingAdvanced={loadingAdvanced}
+                activeKeys={playerNbaKpiKeys}
+                onChangeActiveKeys={setPlayerNbaKpiKeys}
+                defaultKeys={DEFAULT_PLAYER_NBA_KPI_KEYS}
+                externalOpen={playerAllKpisOpen}
+                onExternalOpenChange={setPlayerAllKpisOpen}
+                title="KPIs Oficiales NBA.com (Todas las Capas · Personalizable)"
+                subtitle="Pulsa una capa para ver todas sus estadísticas exclusivas con Media NBA y desviación, o combina libremente las que quieras."
+              />
 
 
 
@@ -3571,7 +3927,7 @@ export function EntityInspectorDrawer({
                 <section className="space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {/* Bio Card */}
-                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-2xl p-5 space-y-4 shadow-sm">
+                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4 shadow-sm">
                       <h3 className="text-sm font-bold text-slate-100 border-b border-[#1E293B] pb-2 flex items-center gap-2">
                         <Users className="w-4 h-4 text-orange-400" />
                         <span>Información Biográfica</span>
@@ -3587,7 +3943,7 @@ export function EntityInspectorDrawer({
                     </div>
 
                     {/* Quick Stats Card */}
-                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-2xl p-5 space-y-4 shadow-sm">
+                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4 shadow-sm">
                       <h3 className="text-sm font-bold text-slate-100 border-b border-[#1E293B] pb-2 flex items-center gap-2">
                         <TrendingUp className="w-4 h-4 text-orange-400" />
                         <span>Resumen Temporada 26/27</span>
@@ -3610,7 +3966,7 @@ export function EntityInspectorDrawer({
                   </div>
 
                   {/* Watchlist Status */}
-                  <div className="bg-[#131C2E] border border-[#1E293B] rounded-2xl p-5 space-y-4 shadow-sm">
+                  <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4 shadow-sm">
                     <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
                       <Star className={`w-4 h-4 ${isWatched ? 'text-orange-400 fill-orange-400' : 'text-slate-400'}`} />
                       <span>Estado en Seguimiento</span>
@@ -3636,6 +3992,174 @@ export function EntityInspectorDrawer({
                   </div>
                 </section>
               )}
+
+              {/* TAB 5: NBA.COM PRO & ZONAS (Jugador) */}
+              {activeInspectorTab === 'nba_lab' && (
+                <section className="space-y-6">
+                  {loadingAdvanced && !playerAdvancedDossier ? (
+                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-8 text-center text-xs text-slate-400">
+                      Cargando estadísticas avanzadas oficiales de NBA.com...
+                    </div>
+                  ) : (
+                    <>
+                      {playerAdvancedDossier?.shotZones && (
+                        <ShotZonesCourtPanel
+                          zones={playerAdvancedDossier.shotZones}
+                          title={`Mapa de Tiro por Zonas: ${player.name}`}
+                          subtitle={`Temporada 2026-27 · ${player.teamName || player.teamAbbr}`}
+                        />
+                      )}
+
+                      {Boolean(playerAdvancedDossier?.playtypesOff?.length || playerAdvancedDossier?.playtypesDef?.length) && (
+                        <PlaytypesPanel
+                          playtypes={{
+                            entityId: player.id,
+                            entityName: player.name,
+                            teamId: player.teamId || '',
+                            teamAbbr: player.teamAbbr,
+                            gp: player.gamesPlayed || 0,
+                            totalPossOff: 0,
+                            topPlayTypeOff: playerAdvancedDossier?.playtypesOff?.[0] || null,
+                            topPlayTypeDef: playerAdvancedDossier?.playtypesDef?.[0] || null,
+                            offensive: playerAdvancedDossier?.playtypesOff || [],
+                            defensive: playerAdvancedDossier?.playtypesDef || [],
+                          }}
+                          entityName={player.name}
+                          entityType="player"
+                        />
+                      )}
+
+                      <ClutchAndDefensePanel
+                        clutch={playerAdvancedDossier?.clutch}
+                        defenseHustle={playerAdvancedDossier?.defenseHustle}
+                        tracking={playerAdvancedDossier?.tracking}
+                        entityName={player.name}
+                        leagueBenchmarks={chartLeagueBenchmarks}
+                      />
+
+                      {playerAdvancedDossier?.scoring && (
+                        <ScoringSplitsPanel
+                          scoring={playerAdvancedDossier.scoring}
+                          entityName={player.name}
+                          leagueBenchmarks={chartLeagueBenchmarks}
+                        />
+                      )}
+
+                      {playerAdvancedDossier?.fourFactors && (
+                        <FourFactorsFullPanel
+                          fourFactors={playerAdvancedDossier.fourFactors}
+                          entityName={player.name}
+                          leagueBenchmarks={chartLeagueBenchmarks}
+                        />
+                      )}
+
+                      {playerAdvancedDossier?.violations && (
+                        <ViolationsPanel
+                          violations={playerAdvancedDossier.violations}
+                          entityName={player.name}
+                          leagueBenchmarks={chartLeagueBenchmarks}
+                        />
+                      )}
+
+                      {playerAdvancedDossier?.onOffSplit && (
+                        <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-3">
+                          <div className="border-b border-[#1E293B] pb-2.5">
+                            <h4 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                              <span>Impacto Individual On / Off Court</span>
+                              <MetricInfoTooltip helpKey="onOffSwing" />
+                            </h4>
+                            <p className="text-xs text-slate-400">
+                              Diferencial colectivo con {player.name} en pista (ON) vs banquillo (OFF) comparado con la Media NBA
+                            </p>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs font-mono tabular-nums">
+                            {([
+                              {
+                                label: 'Minutos ON',
+                                value: playerAdvancedDossier.onOffSplit.minOn,
+                                display: playerAdvancedDossier.onOffSplit.minOn.toFixed(1),
+                                tone: 'text-slate-100',
+                                bench: chartLeagueBenchmarks.basic_min,
+                                signed: false,
+                                lowerIsBetter: false,
+                              },
+                              {
+                                label: 'NetRtg ON',
+                                value: playerAdvancedDossier.onOffSplit.netRtgOn,
+                                display: formatSigned(playerAdvancedDossier.onOffSplit.netRtgOn),
+                                tone: playerAdvancedDossier.onOffSplit.netRtgOn >= 0 ? 'text-emerald-400' : 'text-rose-400',
+                                bench: chartLeagueBenchmarks.adv_onOffNetOn || { mean: 0.0, sd: 5.5 },
+                                signed: true,
+                                lowerIsBetter: false,
+                              },
+                              {
+                                label: 'NetRtg OFF',
+                                value: playerAdvancedDossier.onOffSplit.netRtgOff,
+                                display: formatSigned(playerAdvancedDossier.onOffSplit.netRtgOff),
+                                tone: playerAdvancedDossier.onOffSplit.netRtgOff >= 0 ? 'text-emerald-400' : 'text-rose-400',
+                                bench: chartLeagueBenchmarks.adv_onOffNetOff || { mean: 0.0, sd: 5.5 },
+                                signed: true,
+                                lowerIsBetter: false,
+                              },
+                              {
+                                label: 'Diferencial Net (+/-)',
+                                value: playerAdvancedDossier.onOffSplit.netDiff,
+                                display: formatSigned(playerAdvancedDossier.onOffSplit.netDiff),
+                                tone: playerAdvancedDossier.onOffSplit.netDiff >= 0 ? 'text-emerald-400' : 'text-rose-400',
+                                bench: chartLeagueBenchmarks.adv_onOffNetDiff || { mean: 0.0, sd: 6.2 },
+                                signed: true,
+                                lowerIsBetter: false,
+                              },
+                            ]).map((card) => {
+                              const ev = evaluateReferenceComparison(
+                                card.value,
+                                card.bench ? card.bench.mean : NaN,
+                                card.bench ? card.bench.sd : NaN,
+                                'nba',
+                                {
+                                  decimals: 1,
+                                  suffix: '',
+                                  signed: card.signed,
+                                  lowerIsBetter: card.lowerIsBetter,
+                                  hasRefData: Boolean(card.bench),
+                                }
+                              );
+                              return (
+                                <div key={card.label} className="p-3 rounded-lg bg-[#0B1120] border border-[#1E293B] space-y-2">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="text-[10px] text-slate-400 font-sans uppercase font-bold truncate">
+                                      {card.label}
+                                    </span>
+                                    <span className={`text-base font-bold ${card.tone}`}>{card.display}</span>
+                                  </div>
+                                  <div className="w-full">
+                                    <div className="flex items-center justify-between gap-1 text-[10px] font-sans mb-1 whitespace-nowrap">
+                                      <span className={`font-medium truncate ${ev.textClass}`}>
+                                        {ev.statusLabel}
+                                        {ev.hasRef ? ` (${ev.deltaFormatted})` : ''}
+                                      </span>
+                                      <span className="font-mono text-slate-400 shrink-0">
+                                        {ev.hasRef ? `Media NBA: ${ev.refFormatted}` : ev.refFormatted}
+                                      </span>
+                                    </div>
+                                    <div className="relative h-1.5 bg-[#131C2E] border border-[#1E293B] rounded overflow-hidden">
+                                      <div
+                                        className={`h-full rounded-l ${ev.barClass}`}
+                                        style={{ width: `${ev.pct}%` }}
+                                      />
+                                      <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-slate-100/80" />
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </section>
+              )}
             </>
           )}
 
@@ -3659,9 +4183,26 @@ export function EntityInspectorDrawer({
                           Estadísticas colectivas comparadas contra las 30 franquicias de la liga
                         </p>
                       </div>
-                      <span className="text-xs font-mono text-orange-400 font-semibold px-2.5 py-1 bg-orange-500/10 border border-orange-500/30 rounded-lg">
-                        Balance {team.wins}-{team.losses} (Win% {(team.winPct * 100).toFixed(1)}%)
-                      </span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs font-mono text-orange-400 font-semibold px-2.5 py-1 bg-orange-500/10 border border-orange-500/30 rounded-lg">
+                          Balance {team.wins}-{team.losses} (Win% {(team.winPct * 100).toFixed(1)}%)
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTeamAllKpisOpen(true);
+                            setTimeout(() => {
+                              document
+                                .getElementById('inspector-team-all-nba-kpis')
+                                ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            }, 50);
+                          }}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold bg-orange-500/15 border border-orange-500/40 text-orange-300 hover:bg-orange-500/25 rounded-lg transition-colors whitespace-nowrap"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Añadir KPIs NBA.com ({teamNbaKpiKeys.length})</span>
+                        </button>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
@@ -3746,7 +4287,7 @@ export function EntityInspectorDrawer({
                   </section>
 
                   {/* DEAN OLIVER 4 FACTORS & POSSESSION EFFICIENCY BLOCK */}
-                  <section className="bg-[#131C2E] border border-[#1E293B] rounded-2xl p-4 sm:p-5 space-y-4 shadow-sm">
+                  <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4 shadow-sm">
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1E293B] pb-3">
                       <div>
                         <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
@@ -3899,190 +4440,358 @@ export function EntityInspectorDrawer({
                     </div>
                   </section>
 
-                  <section className="space-y-2.5">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <h3 className="text-sm font-semibold text-slate-100">
-                        {experienceMode === 'simple'
-                          ? 'Resumen de su rendimiento colectivo'
-                          : 'Radiografía Avanzada, Pintura y Hustle (NBA.com)'}
-                      </h3>
-                      {experienceMode === 'simple' && (
-                        <button
-                          type="button"
-                          onClick={onSwitchToAdvanced}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-[#131C2E] hover:bg-[#182338] border border-[#1E293B] rounded-md text-orange-400 transition-colors whitespace-nowrap shrink-0"
-                        >
-                          <Sliders className="w-3 h-3" />
-                          <span>Ver 12 métricas avanzadas NBA.com</span>
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y divide-x divide-[#1E293B]">
-                      {teamProfileCells.map((cell, idx) => (
-                        <div key={idx} className="p-3">
-                          <div className="flex items-center justify-between gap-1 text-[11px] text-slate-400">
-                            <span className="truncate">{cell.label}</span>
-                            <MetricInfoTooltip
-                              helpKey={cell.helpKey}
-                              iconClassName="w-3 h-3"
-                            />
-                          </div>
-                          <p className="mt-0.5 text-sm font-semibold font-mono tabular-nums text-slate-100 truncate">
-                            {cell.val}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
+                  <InspectorAllNbaKpisPanel
+                    sectionId="inspector-team-all-nba-kpis"
+                    entityType="team"
+                    statScale={statScale}
+                    onChangeStatScale={setStatScale}
+                    team={team}
+                    players={players}
+                    teams={teams}
+                    teamDossier={teamAdvancedDossier}
+                    loadingAdvanced={loadingAdvanced}
+                    activeKeys={teamNbaKpiKeys}
+                    onChangeActiveKeys={setTeamNbaKpiKeys}
+                    defaultKeys={DEFAULT_TEAM_NBA_KPI_KEYS}
+                    externalOpen={teamAllKpisOpen}
+                    onExternalOpenChange={setTeamAllKpisOpen}
+                    title="KPIs Colectivos Oficiales NBA.com (Todas las Capas · Personalizable)"
+                    subtitle="Pulsa cualquier capa para cargar sus estadísticas exclusivas con Media NBA y desviación, o combina libremente tus KPIs favoritos."
+                  />
                 </>
               )}
 
-              {/* TAB 2: GRÁFICOS & EVOLUCIÓN */}
+              {/* TAB 2: GRÁFICOS & EVOLUCIÓN (Equipo - 10 Capas Completas) */}
               {activeInspectorTab === 'charts' && (
                 <>
                   <section className="space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <h3 className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-100">
-                          <span>Evolución en sus últimos {vals.length} partidos</span>
-                          <MetricInfoTooltip helpKey={tMetric} align="left" />
+                          <span>
+                            {!activeChartSeries
+                              ? `Distribución NBA y comparativa: ${activeChartKpiDef.label}`
+                              : `Evolución en sus últimos ${vals.length} partidos`}
+                          </span>
+                          <MetricInfoTooltip
+                            helpKey={activeChartKpiDef.helpKey}
+                            fallbackTitle={activeChartKpiDef.label}
+                            align="left"
+                          />
                         </h3>
                         <p className="text-xs text-slate-400">
-                          Línea punteada: su media habitual ({chartData.base.toFixed(1)})
-                          {' · '}
-                          <span className="text-sky-300">25/26</span>
-                          {' | '}
-                          <span className="text-orange-300">26/27</span>
+                          {!activeChartSeries
+                            ? 'Agregado oficial de temporada NBA.com (con media de la liga y desviación estándar)'
+                            : `Línea punteada: ${chartData.baseLabel} · 25/26 | 26/27`}
                         </p>
                       </div>
 
-                      <div className="flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg">
-                        {(
-                          [
-                            { id: 'netRtg', label: 'NetRtg' },
-                            { id: 'offRtg', label: 'OffRtg' },
-                            { id: 'defRtg', label: 'DefRtg' },
-                            { id: 'pace', label: 'Pace' },
-                            { id: 'differential', label: 'DIF' },
-                          ] as const
-                        ).map((m) => (
+                      {activeChartSeries && (
+                        <div className="inline-flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg">
                           <button
-                            key={m.id}
                             type="button"
-                            onClick={() => setTMetric(m.id)}
-                            className={`px-2 py-1 text-xs font-mono rounded transition-colors whitespace-nowrap shrink-0 ${
-                              tMetric === m.id
+                            onClick={() => setChartRefMode('own')}
+                            className={`px-2.5 py-1 text-xs rounded transition-colors whitespace-nowrap ${
+                              chartRefMode === 'own'
                                 ? 'bg-orange-500 text-slate-950 font-semibold'
                                 : 'text-slate-400 hover:text-white'
                             }`}
                           >
-                            {m.label}
+                            Su media
                           </button>
-                        ))}
-                      </div>
+                          <button
+                            type="button"
+                            onClick={() => setChartRefMode('nba')}
+                            className={`px-2.5 py-1 text-xs rounded transition-colors whitespace-nowrap ${
+                              chartRefMode === 'nba'
+                                ? 'bg-orange-500 text-slate-950 font-semibold'
+                                : 'text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            Media NBA
+                          </button>
+                        </div>
+                      )}
                     </div>
 
-                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3">
-                      {vals.length > 1 ? (
-                        <svg
-                          viewBox={`0 0 ${svgW} ${svgH}`}
-                          className="w-full h-44 overflow-visible select-none"
-                        >
-                          {/* Axis Labels */}
-                          <text
-                            transform={`rotate(-90, 15, ${svgH / 2})`}
-                            x={15}
-                            y={svgH / 2}
-                            textAnchor="middle"
-                            className="fill-slate-500 text-[10px] font-bold uppercase tracking-wider"
-                          >
-                            {tMetric === 'differential' ? 'DIF' : tMetric.toUpperCase()}
-                          </text>
-
-                          <text
-                            x={svgW / 2}
-                            y={svgH - 4}
-                            textAnchor="middle"
-                            className="fill-slate-500 text-[10px] font-semibold"
-                          >
-                            Historial reciente de partidos
-                          </text>
-
-                          <line
-                            x1={padX}
-                            y1={baseLineY}
-                            x2={svgW - padX}
-                            y2={baseLineY}
-                            stroke="#64748B"
-                            strokeDasharray="4 4"
-                            strokeWidth="1"
-                          />
-                          {seasonTransitions.map((tr, tIdx) => (
-                            <g key={`t-tr-${tIdx}`}>
-                              <line
-                                x1={tr.x}
-                                y1={8}
-                                x2={tr.x}
-                                y2={svgH - 8}
-                                stroke="#64748B"
-                                strokeDasharray="3 3"
-                                strokeWidth="1.2"
-                              />
-                              <text
-                                x={tr.x - 5}
-                                y={13}
-                                textAnchor="end"
-                                fill={tr.leftCurrent ? '#FB923C' : '#38BDF8'}
-                                className="text-[9.5px] font-mono font-semibold"
-                              >
-                                {tr.leftLabel}
-                              </text>
-                              <text
-                                x={tr.x + 5}
-                                y={13}
-                                textAnchor="start"
-                                fill={tr.rightCurrent ? '#FB923C' : '#38BDF8'}
-                                className="text-[9.5px] font-mono font-semibold"
-                              >
-                                {tr.rightLabel}
-                              </text>
-                            </g>
-                          ))}
-                          {seasonSegments.map((seg, sIdx) =>
-                            seg.count > 1 ? (
-                              <polyline
-                                key={`t-seg-${sIdx}`}
-                                fill="none"
-                                stroke={seg.isCurrentSeason ? '#F97316' : '#38BDF8'}
-                                strokeWidth="2.1"
-                                points={seg.pointsAttr}
-                              />
-                            ) : null
+                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3.5 space-y-3">
+                      {!activeChartSeries ? (
+                        <NbaAggregateDistributionChart
+                          activeKpi={activeChartKpiDef}
+                          layerKpis={chartLayerKpis}
+                          ctx={inspectorKpiCtx}
+                          statScale={statScale}
+                          leagueBenchmarks={chartLeagueBenchmarks}
+                          onSelectKpiKey={(k) => {
+                            setActiveChartKpiKey(k);
+                            setHoveredChartIdx(null);
+                          }}
+                          entityName={team.name}
+                        />
+                      ) : vals.length > 1 ? (
+                        <>
+                          {activePointMeta && (
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-xs pb-2 border-b border-[#1E293B]">
+                              <div className="flex items-center gap-1.5 text-slate-300">
+                                <span
+                                  className={`font-mono font-semibold ${
+                                    activePointMeta.isCurrentSeason
+                                      ? 'text-orange-300'
+                                      : 'text-sky-300'
+                                  }`}
+                                >
+                                  {activePointMeta.seasonShort}
+                                </span>
+                                <span className="text-slate-600">·</span>
+                                <span className="font-mono text-slate-400">
+                                  {activePointMeta.dateLabel}
+                                </span>
+                                <span className="text-slate-600">·</span>
+                                <span
+                                  className={
+                                    activePointMeta.result === 'W'
+                                      ? 'text-emerald-400 font-semibold'
+                                      : 'text-rose-400 font-semibold'
+                                  }
+                                >
+                                  {activePointMeta.result}
+                                </span>
+                                <span>{activePointMeta.matchupLabel}</span>
+                              </div>
+                              <div className="flex items-center gap-2 font-mono tabular-nums">
+                                <span className="font-semibold text-slate-100">
+                                  {activeChartKpiDef.shortLabel}:{' '}
+                                  {activePointMeta.formattedValue}
+                                </span>
+                                <span className="text-slate-400">
+                                  ({activePointMeta.deltaFormatted} vs línea)
+                                </span>
+                              </div>
+                            </div>
                           )}
-                          {vals.map((v, i) => {
-                            const isCurrSeason = Boolean(
-                              chartData.pointsMeta[i]?.isCurrentSeason
-                            );
-                            return (
-                              <g key={i}>
-                                <circle
-                                  cx={toX(i)}
-                                  cy={toY(v)}
-                                  r={isCurrSeason ? 4.2 : 3.2}
-                                  fill={isCurrSeason ? '#F97316' : '#082F49'}
-                                  stroke={isCurrSeason ? '#FDBA74' : '#38BDF8'}
-                                  strokeWidth="1.5"
+
+                          <svg
+                            viewBox={`0 0 ${svgW} ${svgH}`}
+                            className="w-full h-44 overflow-visible select-none"
+                            onMouseLeave={() => setHoveredChartIdx(null)}
+                          >
+                            <text
+                              transform={`rotate(-90, 15, ${svgH / 2})`}
+                              x={15}
+                              y={svgH / 2}
+                              textAnchor="middle"
+                              className="fill-slate-500 text-[10px] font-bold uppercase tracking-wider"
+                            >
+                              {activeChartKpiDef.shortLabel}
+                            </text>
+
+                            <text
+                              x={svgW / 2}
+                              y={svgH - 4}
+                              textAnchor="middle"
+                              className="fill-slate-500 text-[10px] font-semibold"
+                            >
+                              Historial reciente de partidos ({vals.length} PJ)
+                            </text>
+
+                            <line
+                              x1={padX}
+                              y1={baseLineY}
+                              x2={svgW - padX}
+                              y2={baseLineY}
+                              stroke="#94A3B8"
+                              strokeDasharray="4 4"
+                              strokeWidth="1.2"
+                            />
+                            <text
+                              x={svgW - padX}
+                              y={Math.max(12, baseLineY - 5)}
+                              textAnchor="end"
+                              className="fill-slate-400 text-[10px] font-mono"
+                            >
+                              Ref:{' '}
+                              {formatMetricNumber(
+                                chartData.base,
+                                activeChartKpiMeta.decimals,
+                                activeChartKpiMeta.suffix,
+                                activeChartKpiMeta.signed
+                              )}
+                            </text>
+
+                            {seasonTransitions.map((tr, tIdx) => (
+                              <g key={`t-tr-${tIdx}`} className="pointer-events-none">
+                                <line
+                                  x1={tr.x}
+                                  y1={8}
+                                  x2={tr.x}
+                                  y2={svgH - 8}
+                                  stroke="#64748B"
+                                  strokeDasharray="3 3"
+                                  strokeWidth="1.2"
                                 />
+                                <text
+                                  x={tr.x - 5}
+                                  y={13}
+                                  textAnchor="end"
+                                  fill={tr.leftCurrent ? '#FB923C' : '#38BDF8'}
+                                  className="text-[9.5px] font-mono font-semibold"
+                                >
+                                  {tr.leftLabel}
+                                </text>
+                                <text
+                                  x={tr.x + 5}
+                                  y={13}
+                                  textAnchor="start"
+                                  fill={tr.rightCurrent ? '#FB923C' : '#38BDF8'}
+                                  className="text-[9.5px] font-mono font-semibold"
+                                >
+                                  {tr.rightLabel}
+                                </text>
                               </g>
-                            );
-                          })}
-                        </svg>
+                            ))}
+
+                            {seasonSegments.map((seg, sIdx) =>
+                              seg.count > 1 ? (
+                                <polyline
+                                  key={`t-seg-${sIdx}`}
+                                  fill="none"
+                                  stroke={seg.isCurrentSeason ? '#F97316' : '#38BDF8'}
+                                  strokeWidth="2.1"
+                                  points={seg.pointsAttr}
+                                />
+                              ) : null
+                            )}
+
+                            {vals.map((v, i) => {
+                              const isCurrSeason = Boolean(
+                                chartData.pointsMeta[i]?.isCurrentSeason
+                              );
+                              const isHovered = hoveredChartIdx === i;
+                              return (
+                                <g
+                                  key={i}
+                                  className="cursor-pointer"
+                                  onMouseEnter={() => setHoveredChartIdx(i)}
+                                  onClick={() => setHoveredChartIdx(i)}
+                                >
+                                  <circle cx={toX(i)} cy={toY(v)} r={10} fill="transparent" />
+                                  <circle
+                                    cx={toX(i)}
+                                    cy={toY(v)}
+                                    r={isHovered ? 5.5 : isCurrSeason ? 4.2 : 3.2}
+                                    fill={
+                                      isHovered
+                                        ? isCurrSeason
+                                          ? '#FDBA74'
+                                          : '#7DD3FC'
+                                        : isCurrSeason
+                                        ? '#F97316'
+                                        : '#082F49'
+                                    }
+                                    stroke={
+                                      isHovered
+                                        ? '#FFFFFF'
+                                        : isCurrSeason
+                                        ? '#FDBA74'
+                                        : '#38BDF8'
+                                    }
+                                    strokeWidth="1.5"
+                                  />
+                                  {(isHovered || i === vals.length - 1 || i === 0) && (
+                                    <text
+                                      x={toX(i)}
+                                      y={Math.max(14, toY(v) - 8)}
+                                      textAnchor="middle"
+                                      className="fill-slate-200 text-[10px] font-mono pointer-events-none"
+                                    >
+                                      {formatMetricNumber(
+                                        v,
+                                        activeChartKpiMeta.decimals,
+                                        '',
+                                        activeChartKpiMeta.signed
+                                      )}
+                                    </text>
+                                  )}
+                                </g>
+                              );
+                            })}
+                          </svg>
+                        </>
                       ) : (
                         <p className="text-xs text-slate-400 py-8 text-center">
                           Muestra insuficiente para trazar serie temporal.
                         </p>
                       )}
+
+                      {/* 10 Layer Selector Inside Team Charts */}
+                      <div className="pt-3 border-t border-[#1E293B] space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-[11px] font-semibold text-slate-300">
+                            Estadística o KPI representado (10 Capas NBA.com · {scopedChartCatalog.length} métricas):
+                          </span>
+                          <span className="text-[10.5px] font-mono text-slate-400">
+                            {activeChartSeries ? 'Serie partido a partido' : 'Distribución NBA + Peer Layer'}
+                          </span>
+                        </div>
+
+                        <div className="flex flex-wrap gap-1.5">
+                          {NBA_KPI_LAYERS.map((layer) => {
+                            const layerItems = scopedChartCatalog.filter((k) => k.layer === layer.id);
+                            if (layerItems.length === 0) return null;
+                            const active = chartLayerId === layer.id;
+                            return (
+                              <button
+                                key={layer.id}
+                                type="button"
+                                onClick={() => {
+                                  setChartLayerId(layer.id);
+                                  if (!layerItems.some((k) => k.key === activeChartKpiDef.key)) {
+                                    const firstSeries =
+                                      layerItems.find((k) => Boolean(resolveKpiGameSeries(k.key, 'team'))) ||
+                                      layerItems[0];
+                                    setActiveChartKpiKey(firstSeries.key);
+                                  }
+                                  setHoveredChartIdx(null);
+                                }}
+                                className={`px-2 py-1 text-[11px] rounded-md border transition-colors whitespace-nowrap ${
+                                  active
+                                    ? 'bg-orange-500 text-slate-950 border-orange-500 font-semibold'
+                                    : 'bg-[#0B1120] border-[#1E293B] text-slate-300 hover:text-white'
+                                }`}
+                              >
+                                {layer.shortLabel}{' '}
+                                <span className={active ? 'text-slate-900/80' : 'text-slate-500'}>
+                                  ({layerItems.length})
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <div className="max-h-40 overflow-y-auto pr-1 flex flex-wrap gap-1.5">
+                          {chartLayerKpis.map((kDef) => {
+                            const active = activeChartKpiDef.key === kDef.key;
+                            return (
+                              <button
+                                key={kDef.key}
+                                type="button"
+                                title={kDef.label}
+                                onClick={() => {
+                                  setActiveChartKpiKey(kDef.key);
+                                  setHoveredChartIdx(null);
+                                }}
+                                className={`px-2 py-1 text-[11px] font-mono rounded border transition-colors whitespace-nowrap shrink-0 ${
+                                  active
+                                    ? 'bg-orange-500 text-slate-950 border-orange-500 font-semibold'
+                                    : 'bg-[#0B1120] border-[#1E293B] text-slate-300 hover:text-white hover:border-slate-600'
+                                }`}
+                              >
+                                {kDef.shortLabel}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
                     </div>
                   </section>
 
@@ -4127,36 +4836,147 @@ export function EntityInspectorDrawer({
                 </>
               )}
 
-              {/* TAB 3: HISTORIAL DE PARTIDOS (Equipo) */}
+              {/* TAB 3: HISTORIAL DE PARTIDOS (Equipo - Columnas Personalizables Max 10) */}
               {activeInspectorTab === 'gamelog' && (
                 <section className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h3 className="text-sm font-semibold text-slate-100">
-                      Historial completo de partidos
-                    </h3>
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-100">
+                        Historial completo de partidos
+                      </h3>
+                      <p className="text-[11px] text-slate-400">
+                        {baseTeamGames.length} PJ · Elige hasta{' '}
+                        {MAX_TEAM_LOG_COLUMNS} columnas estadísticas simultáneas
+                      </p>
+                    </div>
 
-                    <div className="flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg">
+                    <button
+                      type="button"
+                      onClick={() => setShowTeamColSelector((prev) => !prev)}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                        showTeamColSelector
+                          ? 'bg-orange-500 text-slate-950 border-orange-500 font-semibold'
+                          : 'bg-[#131C2E] border-[#1E293B] text-slate-200 hover:text-white'
+                      }`}
+                    >
+                      <Columns3 className="w-3.5 h-3.5" />
+                      <span>
+                        Columnas ({selectedTeamLogCols.length}/{MAX_TEAM_LOG_COLUMNS})
+                      </span>
+                    </button>
+                  </div>
+
+                  {showTeamColSelector && (
+                    <div className="bg-[#131C2E] border border-[#283548] rounded-lg p-3.5 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs text-slate-200 font-medium">
+                          Activa o cambia estadísticas ({selectedTeamLogCols.length} de{' '}
+                          {MAX_TEAM_LOG_COLUMNS} columnas activas):
+                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSelectedTeamLogCols([...DEFAULT_TEAM_LOG_COLUMNS])
+                            }
+                            className="px-2 py-1 text-[11px] bg-[#0B1120] hover:bg-[#1E293B] border border-[#1E293B] rounded text-slate-300 transition-colors whitespace-nowrap"
+                          >
+                            Equilibrado (10)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSelectedTeamLogCols([
+                                'score',
+                                'differential',
+                                'reb',
+                                'oreb',
+                                'ast',
+                                'stl',
+                                'blk',
+                                'tov',
+                                'fg_split',
+                                'fg3_split',
+                              ])
+                            }
+                            className="px-2 py-1 text-[11px] bg-[#0B1120] hover:bg-[#1E293B] border border-[#1E293B] rounded text-slate-300 transition-colors whitespace-nowrap"
+                          >
+                            Caja Básica (10)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSelectedTeamLogCols([
+                                'pointsFor',
+                                'pointsAgainst',
+                                'offRtg',
+                                'defRtg',
+                                'netRtg',
+                                'pace',
+                                'efgPct',
+                                'tsPct',
+                                'orebPct',
+                                'tovPct',
+                              ])
+                            }
+                            className="px-2 py-1 text-[11px] bg-[#0B1120] hover:bg-[#1E293B] border border-[#1E293B] rounded text-slate-300 transition-colors whitespace-nowrap"
+                          >
+                            4F y Eficiencia (10)
+                          </button>
+                        </div>
+                      </div>
+
+                      {selectedTeamLogCols.length >= MAX_TEAM_LOG_COLUMNS && (
+                        <p className="text-[11px] text-amber-300">
+                          Has alcanzado el máximo de {MAX_TEAM_LOG_COLUMNS}{' '}
+                          columnas para conservar una lectura cómoda. Desmarca una
+                          columna activa si deseas añadir otra distinta.
+                        </p>
+                      )}
+
                       {(
                         [
-                          { id: 'basic', label: 'Básicas' },
-                          { id: 'advanced', label: 'Avanzadas' },
+                          { family: 'basic' as const, title: 'Estadísticas básicas y ritmo' },
+                          { family: 'shooting' as const, title: 'Series y porcentajes de tiro' },
+                          { family: 'ratios' as const, title: '4 Factores, Ratings y eficiencia colectiva' },
                         ] as const
-                      ).map((lm) => (
-                        <button
-                          key={lm.id}
-                          type="button"
-                          onClick={() => setTeamLogMode(lm.id)}
-                          className={`px-2.5 py-1 text-xs font-medium rounded ${
-                            teamLogMode === lm.id
-                              ? 'bg-[#1E293B] text-orange-400 font-semibold'
-                              : 'text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          {lm.label}
-                        </button>
+                      ).map((grp) => (
+                        <div key={grp.family} className="space-y-1.5">
+                          <p className="text-[11px] font-medium text-slate-400">
+                            {grp.title}
+                          </p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {TEAM_GAME_LOG_COLUMNS.filter(
+                              (c) => c.family === grp.family
+                            ).map((col) => {
+                              const active = selectedTeamLogCols.includes(col.key);
+                              const blocked =
+                                !active &&
+                                selectedTeamLogCols.length >= MAX_TEAM_LOG_COLUMNS;
+                              return (
+                                <button
+                                  key={col.key}
+                                  type="button"
+                                  disabled={blocked}
+                                  onClick={() => handleToggleTeamLogColumn(col.key)}
+                                  className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-mono rounded border transition-colors whitespace-nowrap shrink-0 ${
+                                    active
+                                      ? 'bg-orange-500 text-slate-950 border-orange-500 font-semibold'
+                                      : blocked
+                                      ? 'bg-[#0B1120]/50 border-[#1E293B] text-slate-600 cursor-not-allowed'
+                                      : 'bg-[#0B1120] border-[#1E293B] text-slate-300 hover:text-white hover:border-slate-600'
+                                  }`}
+                                >
+                                  {active && <Check className="w-3 h-3" />}
+                                  <span>{col.label}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
                       ))}
                     </div>
-                  </div>
+                  )}
 
                   <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-auto max-h-[56vh]">
                     <table className="w-full text-left border-collapse text-xs">
@@ -4180,113 +5000,56 @@ export function EntityInspectorDrawer({
                             onSort={() => toggleTLogSort('matchup')}
                             className="py-2.5 px-2"
                           />
-                          {teamLogMode === 'basic' ? (
-                            <>
-                              <SortableTh
-                                label="Marcador"
-                                helpKey="avgPointsFor"
-                                align="right"
-                                compact
-                                active={tLogSortKey === 'pointsFor'}
-                                asc={tLogSortAsc}
-                                onSort={() => toggleTLogSort('pointsFor')}
-                                className="py-2.5 px-2"
-                              />
-                              <SortableTh
-                                label="Dif."
-                                helpKey="differential"
-                                align="right"
-                                compact
-                                active={tLogSortKey === 'differential'}
-                                asc={tLogSortAsc}
-                                onSort={() => toggleTLogSort('differential')}
-                                className="py-2.5 px-2"
-                              />
-                              <SortableTh
-                                label="OR/REB"
-                                helpKey="orebBase"
-                                align="right"
-                                compact
-                                active={tLogSortKey === 'oreb'}
-                                asc={tLogSortAsc}
-                                onSort={() => toggleTLogSort('oreb')}
-                                className="py-2.5 px-2"
-                              />
-                              <SortableTh
-                                label="3PM"
-                                helpKey="fg3m"
-                                align="right"
-                                compact
-                                active={tLogSortKey === 'fg3m'}
-                                asc={tLogSortAsc}
-                                onSort={() => toggleTLogSort('fg3m')}
-                                className="py-2.5 pr-3 pl-2"
-                              />
-                            </>
-                          ) : (
-                            <>
-                              <SortableTh
-                                label="OffRtg"
-                                helpKey="offRtg"
-                                align="right"
-                                compact
-                                active={tLogSortKey === 'offRtg'}
-                                asc={tLogSortAsc}
-                                onSort={() => toggleTLogSort('offRtg')}
-                                className="py-2.5 px-2"
-                              />
-                              <SortableTh
-                                label="DefRtg"
-                                helpKey="defRtg"
-                                align="right"
-                                compact
-                                active={tLogSortKey === 'defRtg'}
-                                asc={tLogSortAsc}
-                                onSort={() => toggleTLogSort('defRtg')}
-                                className="py-2.5 px-2"
-                              />
-                              <SortableTh
-                                label="NetRtg"
-                                helpKey="netRtg"
-                                align="right"
-                                compact
-                                active={tLogSortKey === 'netRtg'}
-                                asc={tLogSortAsc}
-                                onSort={() => toggleTLogSort('netRtg')}
-                                className="py-2.5 px-2"
-                              />
-                              <SortableTh
-                                label="Pace"
-                                helpKey="paceSimple"
-                                align="right"
-                                compact
-                                active={tLogSortKey === 'pace'}
-                                asc={tLogSortAsc}
-                                onSort={() => toggleTLogSort('pace')}
-                                className="py-2.5 px-2"
-                              />
-                              <SortableTh
-                                label="eFG%"
-                                helpKey="efgPct"
-                                align="right"
-                                compact
-                                active={tLogSortKey === 'efgPct'}
-                                asc={tLogSortAsc}
-                                onSort={() => toggleTLogSort('efgPct')}
-                                className="py-2.5 pr-3 pl-2"
-                              />
-                            </>
-                          )}
+                          {activeTeamColumnDefs.map((col, idx) => (
+                            <SortableTh
+                              key={col.key}
+                              label={col.label}
+                              helpKey={col.helpKey}
+                              align="right"
+                              compact
+                              active={tLogSortKey === col.key}
+                              asc={tLogSortAsc}
+                              onSort={() => toggleTLogSort(col.key)}
+                              className={`py-2.5 ${
+                                idx === activeTeamColumnDefs.length - 1
+                                  ? 'pl-2 pr-3'
+                                  : 'px-2'
+                              }`}
+                            />
+                          ))}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#1E293B] font-mono tabular-nums">
-                        {sortedTeamLogGames.map((g) => (
+                        {baseTeamGames.length > 0 && (
+                          <tr className="bg-[#0B1120]/85 text-slate-200 font-semibold">
+                            <td
+                              colSpan={2}
+                              className="py-2 pl-3 pr-2 font-sans text-xs text-orange-300 whitespace-nowrap"
+                            >
+                              Media muestra ({baseTeamGames.length} PJ)
+                            </td>
+                            {activeTeamColumnDefs.map((col, idx) => (
+                              <td
+                                key={col.key}
+                                className={`py-2 text-right whitespace-nowrap ${
+                                  idx === activeTeamColumnDefs.length - 1
+                                    ? 'pl-2 pr-3'
+                                    : 'px-2'
+                                }`}
+                              >
+                                {col.renderAverage(baseTeamGames)}
+                              </td>
+                            ))}
+                          </tr>
+                        )}
+
+                        {visibleTeamLogGames.map((g) => (
                           <tr
                             key={g.eventId}
                             className={
                               recentTeamEventIdSet.has(g.eventId)
-                                ? 'bg-orange-500/[0.04]'
-                                : undefined
+                                ? 'bg-orange-500/[0.04] hover:bg-[#182338]/70'
+                                : 'hover:bg-[#182338]/70'
                             }
                           >
                             <td className="py-2 pl-3 pr-2 text-slate-300 whitespace-nowrap">
@@ -4297,8 +5060,8 @@ export function EntityInspectorDrawer({
                                 <span
                                   className={
                                     g.result === 'W'
-                                      ? 'text-emerald-400'
-                                      : 'text-rose-400'
+                                      ? 'text-emerald-400 font-medium'
+                                      : 'text-rose-400 font-medium'
                                   }
                                 >
                                   {g.result}
@@ -4310,61 +5073,62 @@ export function EntityInspectorDrawer({
                                 <TeamLogo abbr={g.opponentAbbr} size="xs" />
                                 <span>{g.opponentAbbr}</span>
                                 {g.isBackToBack && (
-                                  <span className="text-amber-400">· B2B</span>
+                                  <span className="text-amber-400 text-[11px]">· B2B</span>
                                 )}
                               </span>
                             </td>
-                            {teamLogMode === 'basic' ? (
-                              <>
-                                <td className="py-2 px-2 text-right text-slate-100 whitespace-nowrap">
-                                  {g.pointsFor}-{g.pointsAgainst}
-                                </td>
+                            {activeTeamColumnDefs.map((col, cIdx) => {
+                              let toneClass = 'text-slate-300';
+                              if (col.highlightTone === 'primary') {
+                                toneClass = 'font-semibold text-slate-100';
+                              } else if (col.highlightTone === 'orange') {
+                                toneClass = 'text-orange-300 font-medium';
+                              } else if (col.highlightTone === 'emerald') {
+                                toneClass = 'text-emerald-300';
+                              } else if (
+                                col.highlightTone === 'signed' &&
+                                col.numericForTone
+                              ) {
+                                const nv = col.numericForTone(g);
+                                toneClass =
+                                  nv > 0
+                                    ? 'text-emerald-400 font-medium'
+                                    : nv < 0
+                                    ? 'text-rose-400 font-medium'
+                                    : 'text-slate-400';
+                              }
+                              return (
                                 <td
-                                  className={`py-2 px-2 text-right font-semibold ${
-                                    g.differential >= 0
-                                      ? 'text-emerald-400'
-                                      : 'text-rose-400'
-                                  }`}
+                                  key={col.key}
+                                  className={`py-2 text-right whitespace-nowrap ${
+                                    cIdx === activeTeamColumnDefs.length - 1
+                                      ? 'pl-2 pr-3'
+                                      : 'px-2'
+                                  } ${toneClass}`}
                                 >
-                                  {formatSigned(g.differential, 0)}
+                                  {col.renderCell(g)}
                                 </td>
-                                <td className="py-2 px-2 text-right text-slate-300 whitespace-nowrap">
-                                  {g.oreb}/{g.reb}
-                                </td>
-                                <td className="py-2 pr-3 pl-2 text-right text-slate-400 whitespace-nowrap">
-                                  {g.fg3m}-{g.fg3a}
-                                </td>
-                              </>
-                            ) : (
-                              <>
-                                <td className="py-2 px-2 text-right text-slate-200">
-                                  {g.offRtg.toFixed(1)}
-                                </td>
-                                <td className="py-2 px-2 text-right text-slate-300">
-                                  {g.defRtg.toFixed(1)}
-                                </td>
-                                <td
-                                  className={`py-2 px-2 text-right font-semibold ${
-                                    g.netRtg >= 0
-                                      ? 'text-emerald-400'
-                                      : 'text-rose-400'
-                                  }`}
-                                >
-                                  {formatSigned(g.netRtg, 1)}
-                                </td>
-                                <td className="py-2 px-2 text-right text-slate-300">
-                                  {g.pace.toFixed(1)}
-                                </td>
-                                <td className="py-2 pr-3 pl-2 text-right text-orange-300">
-                                  {g.efgPct.toFixed(1)}%
-                                </td>
-                              </>
-                            )}
+                              );
+                            })}
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
+
+                  {baseTeamGames.length > 35 && (
+                    <div className="flex justify-center">
+                      <button
+                        type="button"
+                        onClick={() => setShowAllTeamLogRows((prev) => !prev)}
+                        className="px-4 py-1.5 text-xs font-medium bg-[#131C2E] hover:bg-[#182338] border border-[#1E293B] rounded-lg text-slate-200 transition-colors"
+                      >
+                        {showAllTeamLogRows
+                          ? 'Contraer a los 35 partidos más recientes'
+                          : `Mostrar los ${baseTeamGames.length} partidos completos de la franquicia`}
+                      </button>
+                    </div>
+                  )}
                 </section>
               )}
 
@@ -4435,6 +5199,86 @@ export function EntityInspectorDrawer({
                       </div>
                     )}
                   </div>
+                </section>
+              )}
+
+              {/* TAB 5: NBA.COM PRO & ZONAS (Equipo) */}
+              {activeInspectorTab === 'nba_lab' && (
+                <section className="space-y-6">
+                  {loadingAdvanced && !teamAdvancedDossier ? (
+                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-8 text-center text-xs text-slate-400">
+                      Cargando estadísticas avanzadas oficiales de NBA.com...
+                    </div>
+                  ) : (
+                    <>
+                      {teamAdvancedDossier?.shotZones && (
+                        <ShotZonesCourtPanel
+                          zones={teamAdvancedDossier.shotZones}
+                          title={`Mapa Colectivo de Tiro por Zonas: ${team.name}`}
+                          subtitle={`Temporada 2026-27 · Promedios Oficiales de Franquicia`}
+                        />
+                      )}
+
+                      {Boolean(teamAdvancedDossier?.playtypesOff?.length || teamAdvancedDossier?.playtypesDef?.length) && (
+                        <PlaytypesPanel
+                          playtypes={{
+                            entityId: team.id,
+                            entityName: team.name,
+                            teamId: team.id,
+                            teamAbbr: team.abbreviation,
+                            gp: (team.wins + team.losses) || team.games?.length || 0,
+                            totalPossOff: 0,
+                            topPlayTypeOff: teamAdvancedDossier?.playtypesOff?.[0] || null,
+                            topPlayTypeDef: teamAdvancedDossier?.playtypesDef?.[0] || null,
+                            offensive: teamAdvancedDossier?.playtypesOff || [],
+                            defensive: teamAdvancedDossier?.playtypesDef || [],
+                          }}
+                          entityName={team.name}
+                          entityType="team"
+                        />
+                      )}
+
+                      <ClutchAndDefensePanel
+                        clutch={teamAdvancedDossier?.clutch}
+                        defenseHustle={teamAdvancedDossier?.defenseHustle}
+                        tracking={teamAdvancedDossier?.tracking}
+                        entityName={team.name}
+                        leagueBenchmarks={chartLeagueBenchmarks}
+                      />
+
+                      {teamAdvancedDossier?.fourFactors && (
+                        <FourFactorsFullPanel
+                          fourFactors={teamAdvancedDossier.fourFactors}
+                          entityName={team.name}
+                          leagueBenchmarks={chartLeagueBenchmarks}
+                        />
+                      )}
+
+                      {teamAdvancedDossier?.scoring && (
+                        <ScoringSplitsPanel
+                          scoring={teamAdvancedDossier.scoring}
+                          entityName={team.name}
+                          leagueBenchmarks={chartLeagueBenchmarks}
+                        />
+                      )}
+
+                      {teamAdvancedDossier?.violations && (
+                        <ViolationsPanel
+                          violations={teamAdvancedDossier.violations}
+                          entityName={team.name}
+                          leagueBenchmarks={chartLeagueBenchmarks}
+                        />
+                      )}
+
+                      {teamAdvancedDossier?.onOffSplits && teamAdvancedDossier.onOffSplits.length > 0 && (
+                        <OnOffSplitsPanel
+                          splits={teamAdvancedDossier.onOffSplits}
+                          title={`Impacto On / Off Court de la Plantilla (${team.abbreviation})`}
+                          leagueBenchmarks={chartLeagueBenchmarks}
+                        />
+                      )}
+                    </>
+                  )}
                 </section>
               )}
             </>

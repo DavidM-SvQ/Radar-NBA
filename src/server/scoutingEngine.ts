@@ -2917,6 +2917,36 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
   }
   async function buildGameDayChroniclePayload(requestedDate, forceRefresh = false) {
     const gd = await deps.getGameDayPayload(requestedDate, forceRefresh);
+
+    const hasFinishedOrLiveGames = Array.isArray(gd.liveOrScheduledToday) && gd.liveOrScheduledToday.length > 0
+      ? gd.liveOrScheduledToday.some((g) => g.gameStatus === 3 || g.status === 3 || g.gameStatus === 2 || g.status === 2 || (Number(g.homeScore) > 0 && g.gameStatus !== 1))
+      : gd.matchups.length > 0 && gd.matchups.some((m) => m.away.score > 0 || m.home.score > 0);
+
+    if (!hasFinishedOrLiveGames) {
+      return {
+        date: gd.selectedDate,
+        seasonLabel: gd.seasonLabel,
+        gamesCount: gd.pulse.gamesCount || gd.liveOrScheduledToday.length || 0,
+        generatedAt: new Date().toISOString(),
+        engineMode: "upcoming_not_played",
+        missingApiKey: !getGeminiClient(),
+        headline: sanitizeEditorialSpanishGrammar(`Jornada NBA del ${gd.selectedDate} · Partidos programados`),
+        lead: sanitizeEditorialSpanishGrammar(`Los ${gd.pulse.gamesCount || gd.liveOrScheduledToday.length || 0} encuentros correspondientes a la jornada del ${gd.selectedDate} aún no se han disputado. La crónica editorial y el análisis de scouting detallado estarán disponibles una vez finalicen los partidos y se procesen las actas oficiales.`),
+        dynamicSections: [],
+        pizarrasSection: sanitizeEditorialSpanishGrammar("Los análisis tácticos, comparativas de pizarras y métricas de posesión se activarán en tiempo real conforme concluyan los encuentros de la fecha."),
+        hitosSection: sanitizeEditorialSpanishGrammar("Las actuaciones estelares, triples-dobles y récords de la noche se registrarán y contrastarán con las medias de la temporada tras el cierre oficial de la jornada."),
+        espanolesSection: sanitizeEditorialSpanishGrammar("La participación de los jugadores españoles se actualizará al término de sus respectivos partidos."),
+        clavesList: [
+          { title: sanitizeEditorialSpanishGrammar("Estado de la cartelera ::"), detail: sanitizeEditorialSpanishGrammar(`Hay ${gd.pulse.gamesCount || gd.liveOrScheduledToday.length || 0} partidos programados para la fecha ${gd.selectedDate} que se encuentran pendientes de disputa.`) },
+          { title: sanitizeEditorialSpanishGrammar("Previa táctica ::"), detail: sanitizeEditorialSpanishGrammar("Los cuerpos técnicos ultiman las rotaciones y los planteamientos de scouting antes de saltar a pista.") },
+          { title: sanitizeEditorialSpanishGrammar("Seguimiento en vivo ::"), detail: sanitizeEditorialSpanishGrammar("Utiliza el marcador en tiempo real y el analizador de partidos para seguir cada enfrentamiento segundo a segundo.") },
+          { title: sanitizeEditorialSpanishGrammar("Informes oficiales ::"), detail: sanitizeEditorialSpanishGrammar("El motor generará la revista automática con todas las estadísticas avanzadas y de PBP al completarse las actas.") }
+        ],
+        spanishPlayersSummary: sanitizeEditorialSpanishGrammar("La participación de los jugadores españoles se actualizará al término de los partidos de la jornada."),
+        sources: [],
+      };
+    }
+
     const cacheKey = `gameday_chronicle_v14:${gd.selectedDate}`;
     if (!forceRefresh) {
       const persisted = await readSharedPersistedNarrative(cacheKey);

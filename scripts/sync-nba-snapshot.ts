@@ -26,6 +26,24 @@ async function main() {
   console.log(
     `  - Temporada 2026-27: ${result.players2027} jugadores · ${result.teamGames2027} partidos`
   );
+  if (result.advancedSnapshot) {
+    const advKbGz = Math.round(result.advancedSnapshot.bytesCompressed / 1024);
+    const advKbJson = Math.round(result.advancedSnapshot.bytesUncompressed / 1024);
+    console.log(`[RadarNBA Sync] Snapshot Avanzado Diario (100% Offline-Safe) guardado con éxito:`);
+    console.log(`  - Archivo: ${result.advancedSnapshot.filePath}`);
+    console.log(`  - Tamaño: ${advKbGz} KB gzip (${advKbJson} KB JSON)`);
+    console.log(`  - Jugadores / Equipos Zonas: ${result.advancedSnapshot.itemsCount.playerShotZones} / ${result.advancedSnapshot.itemsCount.teamShotZones}`);
+    console.log(`  - Jugadores / Equipos Clutch: ${result.advancedSnapshot.itemsCount.playerClutch} / ${result.advancedSnapshot.itemsCount.teamClutch}`);
+    console.log(`  - Jugadores / Equipos Defensa & Hustle: ${result.advancedSnapshot.itemsCount.playerDefenseHustle} / ${result.advancedSnapshot.itemsCount.teamDefenseHustle}`);
+    console.log(`  - Jugadores / Equipos Tracking Óptico: ${result.advancedSnapshot.itemsCount.playerTracking} / ${result.advancedSnapshot.itemsCount.teamTracking}`);
+    console.log(`  - Jugadores / Equipos Synergy Playtypes: ${result.advancedSnapshot.itemsCount.playerPlaytypes} / ${result.advancedSnapshot.itemsCount.teamPlaytypes}`);
+    console.log(`  - Jugadores / Equipos Scoring Splits: ${result.advancedSnapshot.itemsCount.playerScoring} / ${result.advancedSnapshot.itemsCount.teamScoring}`);
+    console.log(`  - Jugadores / Equipos 4 Factores: ${result.advancedSnapshot.itemsCount.playerFourFactors} / ${result.advancedSnapshot.itemsCount.teamFourFactors}`);
+    console.log(`  - Jugadores / Equipos Infracciones & Violations: ${result.advancedSnapshot.itemsCount.playerViolations} / ${result.advancedSnapshot.itemsCount.teamViolations}`);
+    console.log(`  - Alineaciones 5-Man / 2-Man: ${result.advancedSnapshot.itemsCount.lineups5} / ${result.advancedSnapshot.itemsCount.lineups2}`);
+    console.log(`  - Equipos con On/Off Court Splits: ${result.advancedSnapshot.itemsCount.teamsWithOnOff}`);
+    console.log(`  - Benchmarks NBA (Jugador / Equipo): ${result.advancedSnapshot.itemsCount.playerBenchmarks} / ${result.advancedSnapshot.itemsCount.teamBenchmarks}`);
+  }
 }
 
 main().catch((err) => {

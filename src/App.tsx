@@ -137,6 +137,11 @@ const PlayersExplorerView = lazyWithPreload(() =>
     default: m.PlayersExplorerView,
   }))
 );
+const LineupsExplorerView = lazyWithPreload(() =>
+  import('./components/LineupsExplorerView').then((m) => ({
+    default: m.LineupsExplorerView,
+  }))
+);
 const SeasonMilestonesView = lazyWithPreload(() =>
   import('./components/SeasonMilestonesView').then((m) => ({
     default: m.SeasonMilestonesView,
@@ -207,6 +212,9 @@ function preloadSectionChunk(section: ActiveSection): void {
       break;
     case 'players':
       void PlayersExplorerView.preload();
+      break;
+    case 'lineups':
+      void LineupsExplorerView.preload();
       break;
     case 'milestones':
       void SeasonMilestonesView.preload();
@@ -306,6 +314,7 @@ import {
 import {
   fetchBootstrapClient,
   getCachedSeasonSlicesClient,
+  loadSingleSeasonSliceClient,
   peekCachedBootstrapClient,
   subscribeBootstrapSlicesClient,
 } from './utils/bootstrapWireCodec';
@@ -963,6 +972,16 @@ export default function App() {
     void fetchAwards(awardsSeasonScope, false);
   }, [activeSection, awardsSeasonScope, awardsByScope, fetchAwards]);
 
+  useEffect(() => {
+    if (activeSection !== 'scatter' || loading) return;
+    const { s2027 } = getCachedSeasonSlicesClient();
+    if (!s2027) {
+      void loadSingleSeasonSliceClient('2027', false).catch(() => {
+        // Non-blocking fallback while 2026-27 reference slice loads
+      });
+    }
+  }, [activeSection, loading]);
+
   const handleManualRefresh = useCallback(() => {
     void fetchBootstrap(seasonMode, true, allPlayersLoaded);
     if (activeSection === 'milestones' || milestonesData) {
@@ -1070,18 +1089,13 @@ export default function App() {
   );
 
   const handleCloseInspector = useCallback(() => {
-    const meta = readRadarHistoryMeta();
-    if (meta.depth > 0 && meta.openedOverlay === 'inspector') {
-      window.history.back();
-      return;
-    }
     commitRoute(
       (prev) => ({
         ...prev,
         inspectedType: null,
         inspectedId: null,
       }),
-      meta.depth > 0 ? 'push' : 'replace',
+      'replace',
       null
     );
   }, [commitRoute]);
@@ -1411,8 +1425,12 @@ export default function App() {
       activeSection === 'teams' ||
       activeSection === 'players');
 
+  const needsSeasonSlices =
+    needsStreaks ||
+    (!loading && (players.length > 0 || teams.length > 0) && activeSection === 'scatter');
+
   const seasonSlicesMemo = useOnDemandMemo(
-    needsStreaks,
+    needsSeasonSlices,
     EMPTY_SLICE_REFS,
     () => {
       const { s2027, s2026 } = getCachedSeasonSlicesClient();
@@ -1550,6 +1568,11 @@ export default function App() {
       id: 'players',
       label: 'Jugadores NBA',
       count: players.length,
+      icon: Users,
+    },
+    {
+      id: 'lineups',
+      label: 'Alineaciones',
       icon: Users,
     },
     {
@@ -1965,7 +1988,7 @@ export default function App() {
         </header>
 
         {/* Workspace Body */}
-        <main className="flex-1 px-3 sm:px-6 pt-3.5 sm:pt-5 pb-24 lg:pb-6 max-w-[1440px] w-full mx-auto space-y-4 sm:space-y-5">
+        <main className="flex-1 min-w-0 overflow-x-clip px-3 sm:px-6 pt-3.5 sm:pt-5 pb-24 lg:pb-6 max-w-[1440px] w-full mx-auto space-y-4 sm:space-y-5">
           {/* Top Live Gameday Banner (shown only when NBA games are live; zero background polling) */}
           <LiveGamedayBanner
             scoreboard={scoreboard}
@@ -2480,18 +2503,18 @@ export default function App() {
                   </form>
                 </div>
               ) : (
-                <div className="space-y-6">
+                <div className="space-y-6 min-w-0 max-w-full">
                   {/* Admin Top-Level Section Switcher */}
-                  <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 shadow-lg">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-semibold uppercase tracking-wider text-orange-400 px-2">
+                  <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3 flex flex-col lg:flex-row lg:items-center justify-between gap-3 shadow-lg min-w-0 max-w-full">
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-2 min-w-0 max-w-full">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-orange-400 px-1 sm:px-2 shrink-0">
                         Zona Privada Admin:
                       </span>
-                      <div className="inline-flex items-center gap-1 bg-[#0B1120] border border-[#1E293B] p-1 rounded-lg">
+                      <div className="flex flex-wrap items-center gap-1 bg-[#0B1120] border border-[#1E293B] p-1 rounded-lg w-full sm:w-auto max-w-full min-w-0">
                         <button
                           type="button"
                           onClick={() => setAdminZoneSection('fantasy')}
-                          className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-2 whitespace-nowrap ${
+                          className={`px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-1.5 ${
                             adminZoneSection === 'fantasy'
                               ? 'bg-orange-500 text-slate-950 shadow-sm'
                               : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
@@ -2503,7 +2526,7 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => setAdminZoneSection('thresholds')}
-                          className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-2 whitespace-nowrap ${
+                          className={`px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-1.5 ${
                             adminZoneSection === 'thresholds'
                               ? 'bg-orange-500 text-slate-950 shadow-sm'
                               : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
@@ -2515,7 +2538,7 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => setAdminZoneSection('web_config')}
-                          className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-2 whitespace-nowrap ${
+                          className={`px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-1.5 ${
                             adminZoneSection === 'web_config'
                               ? 'bg-orange-500 text-slate-950 shadow-sm'
                               : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
@@ -2530,7 +2553,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={handleLockAdminSession}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#0B1120] hover:bg-rose-500/10 border border-[#1E293B] hover:border-rose-500/40 text-rose-400 text-xs font-medium rounded-lg transition-colors"
+                      className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-[#0B1120] hover:bg-rose-500/10 border border-[#1E293B] hover:border-rose-500/40 text-rose-400 text-xs font-medium rounded-lg transition-colors self-start lg:self-auto shrink-0"
                     >
                       <Lock className="w-3.5 h-3.5" />
                       <span>Bloquear sesión</span>
@@ -2664,6 +2687,8 @@ export default function App() {
                   <ScatterAnalyticsView
                     players={players}
                     teams={teams}
+                    currentSeasonTeams={seasonReferenceSlices.teams2027}
+                    currentSeasonPlayers={seasonReferenceSlices.players2027}
                     benchmarks={benchmarks}
                     experienceMode={experienceMode}
                     watchlistIds={watchlistIds}
@@ -2743,6 +2768,7 @@ export default function App() {
                     teams={teams}
                     experienceMode={experienceMode}
                     benchmarks={benchmarks}
+                    seasonToken={selectedSeasonTokens[0] || '2027'}
                     onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
                     windowSize={settings.windowSize}
                     watchlistIds={watchlistIds}
@@ -2758,6 +2784,7 @@ export default function App() {
                     teams={teams}
                     experienceMode={experienceMode}
                     benchmarks={benchmarks}
+                    seasonToken={selectedSeasonTokens[0] || '2027'}
                     onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
                     totalLeaguePlayersAvailable={totalLeaguePlayersAvailable}
                     allPlayersLoaded={allPlayersLoaded}
@@ -2770,6 +2797,14 @@ export default function App() {
                     onInspectEntity={handleInspectEntity}
                     onAddExternalPlayer={handleAddExternalPlayer}
                     addingPlayerId={addingPlayerId}
+                  />
+                )}
+
+                {activeSection === 'lineups' && (
+                  <LineupsExplorerView
+                    teams={teams}
+                    seasonToken={selectedSeasonTokens[0] || '2027'}
+                    onInspectEntity={handleInspectEntity}
                   />
                 )}
               </>
