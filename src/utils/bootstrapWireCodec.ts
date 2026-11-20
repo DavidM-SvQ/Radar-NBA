@@ -21,6 +21,153 @@ function meanNums(arr: number[]): number {
   return sum / arr.length;
 }
 
+export function populateTeamComputedFields(team: TeamSummary): TeamSummary {
+  const games = Array.isArray(team.games) ? team.games : [];
+  const adv = team.advanced;
+  const n = games.length;
+
+  let sumFgm = 0;
+  let sumFga = 0;
+  let sumFg3m = 0;
+  let sumFg3a = 0;
+  let sumFtm = 0;
+  let sumFta = 0;
+  let sumPts = 0;
+  let sumReb = 0;
+  let sumAst = 0;
+  let sumTov = 0;
+
+  for (let i = 0; i < n; i++) {
+    const g = games[i];
+    sumFgm += Number(g.fgm) || 0;
+    sumFga += Number(g.fga) || 0;
+    sumFg3m += Number(g.fg3m) || 0;
+    sumFg3a += Number(g.fg3a) || 0;
+    sumFtm += Number(g.ftm) || 0;
+    sumFta += Number(g.fta) || 0;
+    sumPts += Number(g.pointsFor) || 0;
+    sumReb += Number(g.reb) || 0;
+    sumAst += Number(g.ast) || 0;
+    sumTov += Number(g.tov) || 0;
+  }
+
+  const normPct = (v: number | undefined): number | undefined => {
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return undefined;
+    return round1(v > 1 ? v : v * 100);
+  };
+
+  const avgLog = (fn: (g: TeamGameLog) => number): number | undefined => {
+    if (n === 0) return undefined;
+    const vals: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const v = fn(games[i]);
+      if (typeof v === 'number' && Number.isFinite(v)) vals.push(v);
+    }
+    return vals.length > 0 ? round1(meanNums(vals)) : undefined;
+  };
+
+  const efgPct =
+    (sumFga > 0 ? round1(((sumFgm + 0.5 * sumFg3m) / sumFga) * 100) : undefined) ??
+    normPct(adv?.efgPct) ??
+    (typeof team.efgPct === 'number' && team.efgPct > 0 ? round1(team.efgPct) : undefined) ??
+    avgLog((g) => g.efgPct);
+
+  const tsDen = 2 * (sumFga + 0.44 * sumFta);
+  const tsPct =
+    (tsDen > 0 ? round1((sumPts / tsDen) * 100) : undefined) ??
+    normPct(adv?.tsPct) ??
+    (typeof team.tsPct === 'number' && team.tsPct > 0 ? round1(team.tsPct) : undefined) ??
+    avgLog((g) => g.tsPct);
+
+  const tovDen = sumFga + 0.44 * sumFta + sumTov;
+  const tovPct =
+    normPct(adv?.tovPct) ??
+    (tovDen > 0 && sumTov > 0 ? round1((sumTov / tovDen) * 100) : undefined) ??
+    (typeof team.tovPct === 'number' && team.tovPct > 0 ? round1(team.tovPct) : undefined) ??
+    avgLog((g) => g.tovPct);
+
+  const orebPct =
+    normPct(adv?.orebPct) ??
+    avgLog((g) => g.orebPct) ??
+    (typeof team.orebPct === 'number' && team.orebPct > 0 ? round1(team.orebPct) : undefined);
+
+  const ftRate =
+    sumFga > 0
+      ? Math.round((sumFta / sumFga) * 1000) / 1000
+      : typeof team.ftRate === 'number' && Number.isFinite(team.ftRate)
+      ? team.ftRate
+      : undefined;
+
+  const fg3Pct =
+    sumFg3a > 0
+      ? round1((sumFg3m / sumFg3a) * 100)
+      : typeof team.fg3Pct === 'number' && team.fg3Pct > 0
+      ? round1(team.fg3Pct)
+      : undefined;
+
+  const ftPct =
+    sumFta > 0
+      ? round1((sumFtm / sumFta) * 100)
+      : typeof team.ftPct === 'number' && team.ftPct > 0
+      ? round1(team.ftPct)
+      : undefined;
+
+  const rebPerGame =
+    n > 0 && sumReb > 0
+      ? round1(sumReb / n)
+      : typeof team.rebPerGame === 'number'
+      ? round1(team.rebPerGame)
+      : undefined;
+
+  const astPerGame =
+    n > 0 && sumAst > 0
+      ? round1(sumAst / n)
+      : typeof team.astPerGame === 'number'
+      ? round1(team.astPerGame)
+      : undefined;
+
+  const offRtg =
+    (typeof adv?.offRtg === 'number' && adv.offRtg > 0 ? round1(adv.offRtg) : undefined) ??
+    avgLog((g) => g.offRtg) ??
+    (typeof team.offRtg === 'number' && team.offRtg > 0 ? round1(team.offRtg) : undefined);
+
+  const defRtg =
+    (typeof adv?.defRtg === 'number' && adv.defRtg > 0 ? round1(adv.defRtg) : undefined) ??
+    avgLog((g) => g.defRtg) ??
+    (typeof team.defRtg === 'number' && team.defRtg > 0 ? round1(team.defRtg) : undefined);
+
+  const netRtg =
+    (typeof adv?.netRtg === 'number' && Number.isFinite(adv.netRtg) ? round1(adv.netRtg) : undefined) ??
+    avgLog((g) => g.netRtg) ??
+    (typeof offRtg === 'number' && typeof defRtg === 'number'
+      ? round1(offRtg - defRtg)
+      : typeof team.netRtg === 'number'
+      ? round1(team.netRtg)
+      : undefined);
+
+  const pace =
+    (typeof adv?.pace === 'number' && adv.pace > 0 ? round1(adv.pace) : undefined) ??
+    avgLog((g) => g.pace) ??
+    (typeof team.pace === 'number' && team.pace > 0 ? round1(team.pace) : undefined);
+
+  return {
+    ...team,
+    ...(typeof offRtg === 'number' ? { offRtg } : {}),
+    ...(typeof defRtg === 'number' ? { defRtg } : {}),
+    ...(typeof netRtg === 'number' ? { netRtg } : {}),
+    ...(typeof pace === 'number' ? { pace } : {}),
+    ...(typeof efgPct === 'number' ? { efgPct } : {}),
+    ...(typeof tsPct === 'number' ? { tsPct } : {}),
+    ...(typeof orebPct === 'number' ? { orebPct } : {}),
+    ...(typeof tovPct === 'number' ? { tovPct } : {}),
+    ...(typeof ftRate === 'number' ? { ftRate } : {}),
+    ...(typeof fg3Pct === 'number' ? { fg3Pct } : {}),
+    ...(typeof ftPct === 'number' ? { ftPct } : {}),
+    ...(typeof rebPerGame === 'number' ? { rebPerGame } : {}),
+    ...(typeof astPerGame === 'number' ? { astPerGame } : {}),
+  };
+}
+
 /**
  * Shared game header dictionary entry:
  * [eventId, date, seasonIdx, scoreDisplay]
@@ -190,7 +337,8 @@ export function packBootstrapWirePayload(
     return idx;
   };
 
-  const packedTeams: CompactTeamSummary[] = payload.teams.map((tm) => {
+  const packedTeams: CompactTeamSummary[] = payload.teams.map((rawTm) => {
+    const tm = populateTeamComputedFields(rawTm);
     const { games: tmGames, ...meta } = tm;
     const g: CompactTeamGameTuple[] = tmGames.map((log) => {
       const awayPts = log.isHome ? log.pointsAgainst : log.pointsFor;
@@ -321,7 +469,10 @@ export function unpackBootstrapWirePayload(
   raw: CompactBootstrapWirePayload | BootstrapPayload
 ): BootstrapPayload {
   if (!isCompactBootstrapWirePayload(raw)) {
-    return raw;
+    return {
+      ...raw,
+      teams: Array.isArray(raw.teams) ? raw.teams.map(populateTeamComputedFields) : [],
+    };
   }
 
   const { seasons, strings, games: gameDict } = raw.dicts;
@@ -382,10 +533,10 @@ export function unpackBootstrapWirePayload(
       };
     });
 
-    return {
+    return populateTeamComputedFields({
       ...meta,
       games,
-    };
+    });
   });
 
   const players: PlayerSummary[] = raw.players.map((pl) => {
@@ -494,11 +645,13 @@ export function mergeBootstrapSeasonsClient(
       ...(t26?.games || []),
     ].sort((a, b) => b.date.localeCompare(a.date));
 
-    mergedTeams.push({
-      ...base,
-      advanced: t27?.advanced || t26?.advanced,
-      games: combinedGames,
-    });
+    mergedTeams.push(
+      populateTeamComputedFields({
+        ...base,
+        advanced: t27?.advanced || t26?.advanced,
+        games: combinedGames,
+      })
+    );
   }
 
   mergedTeams.sort(
@@ -761,16 +914,18 @@ export function mergeMultipleBootstrapSeasonsClient(
     const avgPtsAgainst = ptsAgainst.length > 0 ? Math.round(meanNums(ptsAgainst) * 10) / 10 : base.avgPointsAgainst;
     const differential = Math.round((avgPtsFor - avgPtsAgainst) * 10) / 10;
 
-    mergedTeams.push({
-      ...base,
-      wins,
-      losses,
-      winPct,
-      avgPointsFor: avgPtsFor,
-      avgPointsAgainst: avgPtsAgainst,
-      differential,
-      games: combinedGames,
-    });
+    mergedTeams.push(
+      populateTeamComputedFields({
+        ...base,
+        wins,
+        losses,
+        winPct,
+        avgPointsFor: avgPtsFor,
+        avgPointsAgainst: avgPtsAgainst,
+        differential,
+        games: combinedGames,
+      })
+    );
   }
 
   mergedTeams.sort(

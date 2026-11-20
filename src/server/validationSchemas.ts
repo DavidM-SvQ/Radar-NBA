@@ -62,6 +62,14 @@ const gamedayThresholdsBodySchema = z.strictObject({
   slumpRebDropDelta: z.coerce.number().min(1).max(12),
   slumpMinutesCutDelta: z.coerce.number().min(2).max(25),
 });
+const webFeatureFlagsBodySchema = z.strictObject({
+  showHeroicBadges: z.boolean({ error: "El estado de insignias debe ser booleano." }),
+});
+const kpiKeyStringSchema = z.string().trim().min(1, "La clave del KPI no puede estar vacía.").max(60, "Clave de KPI demasiado larga.").regex(/^[a-zA-Z0-9_]+$/, "Clave de KPI con formato no válido.");
+const inspectorKpiDefaultsBodySchema = z.strictObject({
+  playerDefaultKpiKeys: z.array(kpiKeyStringSchema).min(1, "Debe haber al menos 1 KPI para jugador.").max(80, "Máximo 80 KPIs por defecto."),
+  teamDefaultKpiKeys: z.array(kpiKeyStringSchema).min(1, "Debe haber al menos 1 KPI para equipo.").max(80, "Máximo 80 KPIs por defecto."),
+});
 const safeRivalKeySchema = z.string().trim().min(1).max(40).regex(/^[a-zA-Z0-9_-]+$/, "Clave de equipo rival no válida.").refine((k) => !FORBIDDEN_PROTOTYPE_KEYS.has(k.toLowerCase()), "Clave reservada.");
 const safeGameCorrectionKeySchema = z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_:-]+$/, "Clave de corrección no válida.").refine((k) => !FORBIDDEN_PROTOTYPE_KEYS.has(k.toLowerCase()), "Clave reservada.");
 const gameCorrectionItemSchema = z.object({
@@ -145,17 +153,25 @@ const advancedLeagueQuerySchema = z.strictObject({
   season: seasonModeSchema.optional(),
   category: advancedCategorySchema,
   refresh: booleanQueryFlagSchema,
+  v: z.string().max(32).optional(),
 });
 const advancedLineupsQuerySchema = z.strictObject({
   season: seasonModeSchema.optional(),
   group: z.enum(["2", "3", "5"]).optional().default("5").transform(Number),
   teamId: z.string().optional().default("0"),
   refresh: booleanQueryFlagSchema,
+  v: z.string().max(32).optional(),
 });
 const advancedEntityQuerySchema = z.strictObject({
   season: seasonModeSchema.optional(),
   teamId: z.string().optional(),
   refresh: booleanQueryFlagSchema,
+  v: z.string().max(32).optional(),
+});
+const advancedHeroicShotsQuerySchema = z.strictObject({
+  season: z.enum(["all", "continuous", "2027", "2026", "2025", "2024"]).optional(),
+  refresh: booleanQueryFlagSchema,
+  v: z.string().max(32).optional(),
 });
 export {
   ADMIN_SECURITY_BOUNDS,
@@ -182,6 +198,9 @@ export {
   validateRequest,
   advancedLeagueQuerySchema,
   advancedLineupsQuerySchema,
-  advancedEntityQuerySchema
+  advancedEntityQuerySchema,
+  advancedHeroicShotsQuerySchema,
+  webFeatureFlagsBodySchema,
+  inspectorKpiDefaultsBodySchema
 };
 

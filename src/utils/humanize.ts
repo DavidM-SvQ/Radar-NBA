@@ -2186,22 +2186,22 @@ export const COLUMN_HELP: Record<string, ColumnHelpEntry> = {
       'Combina siempre dos dimensiones complementarias del partido · Pulsa la tarjeta para abrir el informe completo.',
   },
   gamedayExplosions: {
-    title: 'Noches de Explosión vs Media 2026-27 (▲)',
+    title: '03A. Noches de Explosión vs Media Previa 25 PJ (▲)',
     simpleDesc:
-      'Jugadores con actuación extraordinaria frente a su media de la temporada 2026-27. Clasifica la causa mediante 8 etiquetas especializadas: Explosión de puntería (TS%), Explosión desde el triple (3PM), Dominio en el rebote (REB), Recital en la dirección (AST), Muralla defensiva e impacto en stocks (STL+BLK), Expansión de minutos y rol, Reaparición / Debut y Despliegue estadístico sobresaliente. Todas documentadas y calibrables en Glosario y Admin.',
+      'Jugadores con actuación extraordinaria frente a su referencia comparativa habitual. Clasifica la causa mediante 8 etiquetas especializadas: Explosión de puntería (TS%), Explosión desde el triple (3PM), Dominio en el rebote (REB), Recital en la dirección (AST), Muralla defensiva e impacto en stocks (STL+BLK), Expansión de minutos y rol, Reaparición / Debut y Despliegue estadístico sobresaliente.',
     calculation:
-      'Filtra jugadores con ≥4 PJ previos en 2026-27, ≥16 MIN en pista y Z-Score puntual ≥ +1.8σ (o +10 PTS sobre su media). Asigna la etiqueta y métrica detonante en función de qué faceta registró la mayor anomalía estadística.',
+      'Referencia comparativa: media móvil de los últimos hasta 25 partidos previos del jugador (excluyendo el partido de esta jornada). Si acumula <25 PJ previos en 2026-27, completa la ventana con sus partidos más recientes de 2025-26 (y si suma <15 PJ totales, completa con 2024-25 o estándar NBA de su posición). Filtra ≥16 MIN en pista y Z-Score puntual ≥ +1.8σ (o +10 PTS / hitos por faceta).',
     benchmarkText:
-      'Las explosiones impulsadas por minutos y rol suelen sostenerse mejor; las de puntería extrema (TS%) tienden a normalizarse en los siguientes partidos.',
+      'Al excluir el partido evaluado (ej. hoy) coincide en la ventana del jugador con "25 PJ previos (sin último)" en "Su media habitual". Las explosiones por rol suelen sostenerse mejor que las de TS%.',
   },
   gamedaySlumps: {
-    title: 'Batacazos de Titulares vs Media 2026-27 (▼)',
+    title: '03B. Batacazos de Titulares vs Media Previa 25 PJ (▼)',
     simpleDesc:
-      'Titulares habituales (media ≥24 MIN y ≥14 PTS, ≥8 REB o ≥5.5 AST en 2026-27) que sufrieron un frenazo estadístico severo en la noche. Clasifica el origen entre 8 etiquetas especializadas: "Atasco en el tiro", "Pólvora mojada desde el triple", "Sangría de pérdidas", "Lastrado por faltas", "Apagón en la dirección", "Superado en el cristal", "Minutos recortados en rotación" y "Frenado por la defensa". Consulta el Glosario y Guía para los criterios completos.',
+      'Titulares habituales (media previa ≥24 MIN y ≥14 PTS, ≥8 REB o ≥5.5 AST) que sufrieron un frenazo estadístico severo en la noche. Clasifica el origen entre 8 etiquetas especializadas: "Atasco en el tiro", "Pólvora mojada desde el triple", "Sangría de pérdidas", "Lastrado por faltas", "Apagón en la dirección", "Superado en el cristal", "Minutos recortados en rotación" y "Frenado por la defensa".',
     calculation:
-      'Evalúa titulares que jugaron ≥16 minutos en la noche (descartando lesiones prematuras) con caídas marcadas en anotación (ptsDelta ≤ −7.5), eficiencia (TS% < 42%), pérdidas masivas (≥5 TOV), faltas (≥5) o cortes drásticos en creación o rebote.',
+      'Referencia comparativa: media móvil de los últimos hasta 25 partidos previos del jugador (sin incluir la jornada evaluada; completa con cierre 2025-26 si lleva <25 PJ previos en 2026-27). Evalúa titulares que jugaron ≥16 MIN en la noche con caídas marcadas en anotación (ptsDelta ≤ −7.5), TS% (<42%), pérdidas (≥5 TOV), faltas (≥5), dirección o rebote.',
     benchmarkText:
-      'Si el batacazo se debió a "Atasco en el tiro" o "Pólvora mojada", suele experimentar una regresión positiva inmediata en el siguiente encuentro. Si fue por "Minutos recortados" o "Frenado por la defensa", conviene vigilar la rotación del técnico.',
+      'Al excluir la noche evaluada evita que un partido extremo altere su propia línea base. Si el batacazo fue por "Atasco en el tiro" o "Pólvora mojada", suele experimentar regresión positiva inmediata.',
   },
   gamedayRoleShift: {
     title: 'Radar de Minutos Inusuales y Cambios de Rol',
@@ -2600,8 +2600,26 @@ export const COLUMN_HELP: Record<string, ColumnHelpEntry> = {
     title: 'Diferencial On/Off Court (Net Swing)',
     simpleDesc:
       'Diferencia en el Net Rating (puntos netos por 100 posesiones) del equipo cuando el jugador está EN pista comparado con cuando descansa EN EL BANQUILLO.',
-    calculation: 'Net Swing = NetRtg (Con jugador ON) − NetRtg (Sin jugador OFF).',
+    calculation: 'Net Swing = NetRtg (Con jugador ON) − NetRtg (Sin jugador OFF). La columna "Net Swing vs NBA" compara este valor contra la Media NBA Swing de jugadores de rotación.',
     benchmarkText: 'Un Net Swing superior a +6.0 confirma impacto transformador en el rendimiento colectivo.',
+  },
+  nbaSwingMean: {
+    title: 'Media NBA Swing (Referencia Liga On/Off)',
+    simpleDesc:
+      'Promedio real en toda la NBA del Net Swing (diferencia de Net Rating por cada 100 posesiones entre estar el jugador en pista ON y descansar en el banquillo OFF). Sirve de referencia para evaluar si el impacto de cada jugador está por encima o por debajo del jugador medio de rotación NBA.',
+    calculation:
+      'Calculado con los splits oficiales On/Off de las 30 franquicias NBA (NetRtg ON − NetRtg OFF). Como en cada equipo el swing positivo de los titulares se compensa parcialmente con el de los suplentes, la media global de la liga ronda +0.1 (con desviación típica ±5.9).',
+    benchmarkText:
+      'Por encima de +3.0 ya supera claramente la Media NBA Swing; por debajo de −3.0 indica desajuste del equipo cuando coincide en pista.',
+  },
+  chartOwnBaseline: {
+    title: 'Su Media Habitual (Línea Punteada)',
+    simpleDesc:
+      'Marca el promedio propio del jugador para detectar de un vistazo qué noches estuvieron por encima o por debajo de su nivel habitual. Por defecto usa los 25 partidos previos sin contar el último disputado, exactamente igual que 03A. Noches de Explosión y 03B. Batacazos.',
+    calculation:
+      'Si eliges "Últimos K partidos propios" e incluyes el último partido (p. ej. hoy), esa actuación entra dentro del promedio y lo desplaza ligeramente. Usa "Base 03A/03B (25 PJ previos)" o activa "Sin último PJ" para replicar el cálculo previo exacto.',
+    benchmarkText:
+      'Pulsa sobre los selectores de la derecha para alternar entre esta base previa, toda la temporada o la Media NBA.',
   },
   lineupNetRtg: {
     title: 'Net Rating de Quintetos / Alineaciones',
@@ -2777,6 +2795,34 @@ export const COLUMN_HELP: Record<string, ColumnHelpEntry> = {
       'Registro exhaustivo oficial de NBA.com con todas las violaciones reglamentarias: Pasos, Dobles, Acompañamiento, 3s Ofensivos/Defensivos, 5s, 8s, Reloj 24s, Campo Atrás, Kick Ball, Goaltending e Invasiones.',
     calculation: 'Suma y desglose oficial acumulado del módulo NBA.com Violations + Faltas (PF/PFD) y BLKA.',
     benchmarkText: 'Permite auditar pérdidas no forzadas por errores técnicos frente a robos del rival.',
+  },
+  buzzerBeater: {
+    title: 'Buzzer Beaters (Canastas Ganadoras sobre la Bocina)',
+    simpleDesc:
+      'Lanzamiento encestado con el reloj exactamente en 0.0s (≤ 0.4s) del 4º cuarto o prórroga que otorga la victoria definitiva sin margen de réplica.',
+    calculation: 'Verificado en Play-by-Play oficial de la NBA en partidos decididos sobre la bocina.',
+    benchmarkText: 'Acontecimiento excepcional: solo ~10–18 por temporada en toda la NBA.',
+  },
+  gameWinner: {
+    title: 'Game Winners (Tiros Decisivos en Segundos Finales)',
+    simpleDesc:
+      'Canasta o tiro libre anotado en los últimos ≤ 10.0 segundos del 4º cuarto o prórroga que pone por delante al equipo ganador hasta el final del partido.',
+    calculation: 'Incluye todos los Buzzer Beaters ganadores más canastas definitivas con ≤ 10.0s en el reloj.',
+    benchmarkText: 'Mide la sangre fría de los cerradores en posesiones de todo o nada.',
+  },
+  otTyingBuzzer: {
+    title: 'Empates sobre la Bocina (OT-Tying Buzzers · 0.0s)',
+    simpleDesc:
+      'Canasta milagrosa encestada con el reloj a 0.0s (o ≤ 0.4s) cuando el equipo iba por debajo, igualando el marcador para forzar la prórroga.',
+    calculation: 'Verificado en Play-by-Play oficial al cierre del 4º cuarto o de una prórroga.',
+    benchmarkText: 'Aún más raro que un Game Winner: salva una derrota segura sobre la bocina.',
+  },
+  heroicBalance: {
+    title: 'Balance Neto Heroico (Anotados − Encajados)',
+    simpleDesc:
+      'Diferencia entre los tiros decisivos (Buzzer Beaters, Game Winners y Empates OT) que ha anotado una franquicia y los que ha sufrido en contra en los últimos segundos.',
+    calculation: 'Total Tiros Decisivos Anotados − Total Tiros Decisivos Recibidos en contra.',
+    benchmarkText: 'Un balance positivo refleja temple y buena defensa en cierres apretados.',
   },
 };
 

@@ -5,6 +5,8 @@ import type {
   NbaAdvancedCategory,
   NbaClutchEntry,
   NbaDefenseHustleEntry,
+  NbaHeroicShotCountSummary,
+  NbaHeroicShotsResponse,
   NbaPlaytypeEntitySummary,
   NbaScoringSplitsEntry,
   NbaShotZonesEntry,
@@ -67,6 +69,7 @@ interface PlayersExplorerViewProps {
   onInspectEntity: (entityType: 'player' | 'team', entityId: string) => void;
   onAddExternalPlayer: (item: SearchPlayerResult) => Promise<void>;
   addingPlayerId: string | null;
+  showHeroicBadges?: boolean;
 }
 
 type TableViewMode =
@@ -171,7 +174,7 @@ const PLAYER_LAYERS: PlayerLayerDef[] = [
     label: '8. Clutch (<5m, ±5)',
     categoryToFetch: 'clutch',
     defaultSortKey: 'clPts',
-    defaultCols: ['clGp', 'clW', 'clWPct', 'clMin', 'clPts', 'clFgPct', 'clFg3Pct', 'clFtPct', 'clNetRtg', 'clTsPct', 'clUsgPct', 'clPlusMinus'],
+    defaultCols: ['clGp', 'clW', 'clWPct', 'clMin', 'clPts', 'clFgPct', 'clFg3Pct', 'clFtPct', 'clNetRtg', 'clTsPct', 'clUsgPct', 'clPlusMinus', 'buzzerBeaters', 'gameWinners'],
   },
   {
     id: 'playtypes',
@@ -288,6 +291,8 @@ interface EnrichedPlayerRow extends PlayerSummary {
   advClutch?: NbaClutchEntry;
   advPlaytypes?: NbaPlaytypeEntitySummary;
   advViolations?: NbaViolationsEntry;
+  buzzerBeaters: number;
+  gameWinners: number;
 }
 
 const PLAYER_COLUMNS_BY_LAYER: Record<TableViewMode, PlayerColDef[]> = {
@@ -485,6 +490,8 @@ const PLAYER_COLUMNS_BY_LAYER: Record<TableViewMode, PlayerColDef[]> = {
     { key: 'clEfgPct', label: 'eFG% Cl.', helpKey: 'clutch', getValue: (r) => numOrNull(r.advClutch?.efgPct), format: (r) => fmtNum(numOrNull(r.advClutch?.efgPct), 1, '%') },
     { key: 'clUsgPct', label: 'USG% Cl.', helpKey: 'clutch', getValue: (r) => numOrNull(r.advClutch?.usgPct), format: (r) => fmtNum(numOrNull(r.advClutch?.usgPct), 1, '%') },
     { key: 'clPie', label: 'PIE% Cl.', helpKey: 'clutch', getValue: (r) => numOrNull(r.advClutch?.pie), format: (r) => fmtNum(numOrNull(r.advClutch?.pie), 1, '%') },
+    { key: 'buzzerBeaters', label: 'Buzzer B. (0.0s)', helpKey: 'buzzerBeater', getValue: (r) => r.buzzerBeaters, format: (r) => `${r.buzzerBeaters}`, tone: (r) => (r.buzzerBeaters > 0 ? 'accent' : 'neutral') },
+    { key: 'gameWinners', label: 'Game Win. (≤10s)', helpKey: 'gameWinner', getValue: (r) => r.gameWinners, format: (r) => `${r.gameWinners}`, tone: (r) => (r.gameWinners > 0 ? 'positive' : 'neutral') },
   ],
   playtypes: [
     { key: 'ptTotalPoss', label: 'Pos. Ofens./PJ', helpKey: 'ppp', getValue: (r) => numOrNull(r.advPlaytypes?.totalPossOff), format: (r) => fmtNum(numOrNull(r.advPlaytypes?.totalPossOff), r.statMode === 'totals' ? 0 : 1) },
@@ -586,6 +593,7 @@ export function PlayersExplorerView({
   onInspectEntity,
   onAddExternalPlayer,
   addingPlayerId,
+  showHeroicBadges = false,
 }: PlayersExplorerViewProps) {
   const [viewMode, setViewMode] = useState<TableViewMode>('basic');
   const [statMode, setStatMode] = useState<StatScaleMode>(loadPlayerStatMode);
@@ -597,6 +605,7 @@ export function PlayersExplorerView({
 
   // Lazy cache for NBA.com advanced categories: key = `${seasonToken}:${category}` -> Record<playerId, entry>
   const [advCache, setAdvCache] = useState<Record<string, Record<string, any>>>({});
+  const [heroicCache, setHeroicCache] = useState<Record<string, Record<string, NbaHeroicShotCountSummary>>>({});
   const [loadingCategory, setLoadingCategory] = useState<NbaAdvancedCategory | null>(null);
   const [categoryError, setCategoryError] = useState<string | null>(null);
 
@@ -694,6 +703,30 @@ export function PlayersExplorerView({
     };
   }, [experienceMode, activeLayerMeta, seasonToken, advCache]);
 
+  // Fetch Buzzer Beaters & Game Winners counts from offline-safe snapshot
+  useEffect(() => {
+    if (!showHeroicBadges || heroicCache[seasonToken]) return;
+    let cancelled = false;
+    fetch(`/api/nba/advanced/heroic-shots?season=${encodeURIComponent(seasonToken)}`)
+      .then(async (res) => {
+        if (!res.ok) return null;
+        return (await res.json()) as NbaHeroicShotsResponse;
+      })
+      .then((json) => {
+        if (cancelled || !json) return;
+        setHeroicCache((prev) => ({
+          ...prev,
+          [seasonToken]: json.playerCounts || {},
+        }));
+      })
+      .catch(() => {
+        // Ignore transient heroic fetch failure
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [seasonToken, heroicCache, showHeroicBadges]);
+
   const handleQueryChange = async (val: string) => {
     setQuery(val);
     const trimmed = val.trim();
@@ -724,6 +757,7 @@ export function PlayersExplorerView({
     const playtypesMap = advCache[`${seasonToken}:playtypes`] || {};
     const violationsMap = advCache[`${seasonToken}:violations`] || {};
     const fourFactorsMap = advCache[`${seasonToken}:four_factors`] || {};
+    const heroicMap = heroicCache[seasonToken] || {};
 
     return players.map((p) => {
       const games = p.games;
@@ -1078,9 +1112,11 @@ export function PlayersExplorerView({
         advClutch,
         advPlaytypes,
         advViolations,
+        buzzerBeaters: heroicMap[p.id]?.buzzerBeaters ?? 0,
+        gameWinners: heroicMap[p.id]?.gameWinners ?? 0,
       };
     });
-  }, [players, windowSize, advCache, seasonToken, statMode]);
+  }, [players, windowSize, advCache, heroicCache, seasonToken, statMode]);
 
   const activePtsBenchmark: MetricBenchmark = useMemo(() => {
     if (statMode === 'per_game' || rows.length === 0) return benchmarks.player.pts;
@@ -1096,11 +1132,13 @@ export function PlayersExplorerView({
   }, [statMode, rows, benchmarks.player.pts]);
 
   const activeLayerColumns = useMemo(() => {
-    const allDefs = PLAYER_COLUMNS_BY_LAYER[viewMode];
+    const allDefs = PLAYER_COLUMNS_BY_LAYER[viewMode].filter(
+      (c) => showHeroicBadges || (c.key !== 'buzzerBeaters' && c.key !== 'gameWinners')
+    );
     const visibleSet = new Set(visibleColsByLayer[viewMode] || activeLayerMeta.defaultCols);
     const active = allDefs.filter((c) => visibleSet.has(c.key));
     return active.length > 0 ? active : allDefs.slice(0, 6);
-  }, [viewMode, visibleColsByLayer, activeLayerMeta]);
+  }, [viewMode, visibleColsByLayer, activeLayerMeta, showHeroicBadges]);
 
   const activeSortColDef = useMemo(
     () => PLAYER_COLUMNS_BY_LAYER[viewMode].find((c) => c.key === sortKey),
@@ -1527,9 +1565,15 @@ export function PlayersExplorerView({
         {experienceMode === 'advanced' && (
           <div className="pt-2 border-t border-[#1E293B]">
             <LayerColumnCustomizer
-              columns={PLAYER_COLUMNS_BY_LAYER[viewMode].map((c) => ({ key: c.key, label: c.label }))}
-              visibleKeys={visibleColsByLayer[viewMode] || activeLayerMeta.defaultCols}
-              defaultKeys={activeLayerMeta.defaultCols}
+              columns={PLAYER_COLUMNS_BY_LAYER[viewMode]
+                .filter((c) => showHeroicBadges || (c.key !== 'buzzerBeaters' && c.key !== 'gameWinners'))
+                .map((c) => ({ key: c.key, label: c.label }))}
+              visibleKeys={(visibleColsByLayer[viewMode] || activeLayerMeta.defaultCols).filter(
+                (k) => showHeroicBadges || (k !== 'buzzerBeaters' && k !== 'gameWinners')
+              )}
+              defaultKeys={activeLayerMeta.defaultCols.filter(
+                (k) => showHeroicBadges || (k !== 'buzzerBeaters' && k !== 'gameWinners')
+              )}
               onChangeVisibleKeys={(next) =>
                 setVisibleColsByLayer((prev) => ({ ...prev, [viewMode]: next }))
               }
@@ -1724,8 +1768,24 @@ export function PlayersExplorerView({
                             size="sm"
                           />
                           <div className="min-w-0">
-                            <div className="font-semibold text-sm text-slate-100 truncate">
-                              {p.name}
+                            <div className="font-semibold text-sm text-slate-100 truncate flex items-center gap-1.5">
+                              <span className="truncate">{p.name}</span>
+                              {showHeroicBadges && p.buzzerBeaters > 0 && (
+                                <span
+                                  title={`${p.buzzerBeaters} Buzzer Beater(s) oficiales (0.0s)`}
+                                  className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-orange-500/15 text-orange-300 border border-orange-500/30 shrink-0"
+                                >
+                                  ⚡ {p.buzzerBeaters} BB
+                                </span>
+                              )}
+                              {showHeroicBadges && p.gameWinners > 0 && (
+                                <span
+                                  title={`${p.gameWinners} Game Winner(s) oficiales (≤10s)`}
+                                  className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0"
+                                >
+                                  🎯 {p.gameWinners} GW
+                                </span>
+                              )}
                             </div>
                             <div className="text-xs text-slate-400 truncate">
                               <span>
@@ -1919,8 +1979,24 @@ export function PlayersExplorerView({
                               size="sm"
                             />
                             <div>
-                              <div className="font-medium text-slate-100 whitespace-nowrap">
-                                {p.name}
+                              <div className="font-medium text-slate-100 whitespace-nowrap flex items-center gap-1.5">
+                                <span>{p.name}</span>
+                                {showHeroicBadges && p.buzzerBeaters > 0 && (
+                                  <span
+                                    title={`${p.buzzerBeaters} Buzzer Beater(s) oficiales (0.0s)`}
+                                    className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-orange-500/15 text-orange-300 border border-orange-500/30"
+                                  >
+                                    ⚡ {p.buzzerBeaters} BB
+                                  </span>
+                                )}
+                                {showHeroicBadges && p.gameWinners > 0 && (
+                                  <span
+                                    title={`${p.gameWinners} Game Winner(s) oficiales (≤10s)`}
+                                    className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                                  >
+                                    🎯 {p.gameWinners} GW
+                                  </span>
+                                )}
                               </div>
                               <div className="text-xs text-slate-400 whitespace-nowrap">
                                 <span>

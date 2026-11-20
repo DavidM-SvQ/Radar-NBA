@@ -3,7 +3,13 @@ import type {
   AdminSecurityConfigValues,
   GamedayThresholdsConfig,
   GamedayThresholdsConfigValues,
+  InspectorDefaultKpisConfig,
+  WebFeatureFlags,
 } from '../types/nba';
+import {
+  DEFAULT_PLAYER_NBA_KPI_KEYS,
+  DEFAULT_TEAM_NBA_KPI_KEYS,
+} from './nbaInspectorAllKpis';
 
 const LEGACY_TOKEN_V2_STORAGE_KEY = 'radarnba_admin_token_v2';
 const LEGACY_TOKEN_V1_STORAGE_KEY = 'radarnba_admin_token_v1';
@@ -1000,4 +1006,317 @@ export async function resetAdminGamedayThresholdsDefaults(): Promise<AdminGameda
     defaults: DEFAULT_GAMEDAY_THRESHOLDS_VALUES,
   };
 }
+
+const WEB_FEATURE_FLAGS_BACKUP_KEY = 'radarnba_web_feature_flags_v1';
+
+export const DEFAULT_WEB_FEATURE_FLAGS: WebFeatureFlags = {
+  showHeroicBadges: false,
+  updatedAt: 0,
+};
+
+function readLocalWebFeatureFlags(): WebFeatureFlags | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(WEB_FEATURE_FLAGS_BACKUP_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.showHeroicBadges === 'boolean') {
+      return {
+        showHeroicBadges: parsed.showHeroicBadges,
+        updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
+      };
+    }
+  } catch {
+    // Ignore parse error
+  }
+  return null;
+}
+
+function writeLocalWebFeatureFlags(flags: WebFeatureFlags): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(WEB_FEATURE_FLAGS_BACKUP_KEY, JSON.stringify(flags));
+  } catch {
+    // Ignore storage error
+  }
+}
+
+export async function fetchPublicWebFeatureFlags(): Promise<WebFeatureFlags> {
+  try {
+    const res = await fetch('/api/nba/web-feature-flags', {
+      method: 'GET',
+      cache: 'no-store',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.flags && typeof data.flags.showHeroicBadges === 'boolean') {
+      writeLocalWebFeatureFlags(data.flags);
+      return data.flags as WebFeatureFlags;
+    }
+  } catch {
+    // Network fallback
+  }
+  return readLocalWebFeatureFlags() ?? { ...DEFAULT_WEB_FEATURE_FLAGS };
+}
+
+export interface AdminWebFeatureFlagsResponse {
+  ok: boolean;
+  unauthorized?: boolean;
+  flags?: WebFeatureFlags;
+  error?: string;
+}
+
+export async function fetchAdminWebFeatureFlags(): Promise<AdminWebFeatureFlagsResponse> {
+  try {
+    const res = await fetch('/api/admin/web-feature-flags', {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: buildAdminAuthHeaders(),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.flags && typeof data.flags.showHeroicBadges === 'boolean') {
+      writeLocalWebFeatureFlags(data.flags);
+      return { ok: true, flags: data.flags as WebFeatureFlags };
+    }
+  } catch {
+    // Network fallback
+  }
+  return {
+    ok: true,
+    flags: readLocalWebFeatureFlags() ?? { ...DEFAULT_WEB_FEATURE_FLAGS },
+  };
+}
+
+export async function updateAdminWebFeatureFlags(values: {
+  showHeroicBadges: boolean;
+}): Promise<AdminWebFeatureFlagsResponse> {
+  try {
+    const res = await fetch('/api/admin/web-feature-flags', {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(values),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.flags && typeof data.flags.showHeroicBadges === 'boolean') {
+      writeLocalWebFeatureFlags(data.flags);
+      return { ok: true, flags: data.flags as WebFeatureFlags };
+    }
+    return {
+      ok: false,
+      error: data?.error || 'No se pudo actualizar la configuración de insignias.',
+    };
+  } catch {
+    const fallbackFlags: WebFeatureFlags = {
+      showHeroicBadges: Boolean(values.showHeroicBadges),
+      updatedAt: Date.now(),
+    };
+    writeLocalWebFeatureFlags(fallbackFlags);
+    return { ok: true, flags: fallbackFlags };
+  }
+}
+
+const INSPECTOR_KPI_DEFAULTS_BACKUP_KEY = 'radarnba_inspector_kpi_defaults_v1';
+
+export const CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG: InspectorDefaultKpisConfig = {
+  playerDefaultKpiKeys: [...DEFAULT_PLAYER_NBA_KPI_KEYS],
+  teamDefaultKpiKeys: [...DEFAULT_TEAM_NBA_KPI_KEYS],
+  updatedAt: 0,
+};
+
+function sanitizeClientKpiKeys(raw: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(raw)) return [...fallback];
+  const seen = new Set<string>();
+  const clean: string[] = [];
+  for (const item of raw) {
+    const k = String(item || '').trim();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    clean.push(k);
+    if (clean.length >= 80) break;
+  }
+  return clean.length > 0 ? clean : [...fallback];
+}
+
+function normalizeClientKpiConfig(raw: unknown): InspectorDefaultKpisConfig {
+  const obj = (raw && typeof raw === 'object' ? raw : {}) as Partial<InspectorDefaultKpisConfig>;
+  return {
+    playerDefaultKpiKeys: sanitizeClientKpiKeys(
+      obj.playerDefaultKpiKeys,
+      CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG.playerDefaultKpiKeys
+    ),
+    teamDefaultKpiKeys: sanitizeClientKpiKeys(
+      obj.teamDefaultKpiKeys,
+      CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG.teamDefaultKpiKeys
+    ),
+    updatedAt: typeof obj.updatedAt === 'number' ? obj.updatedAt : 0,
+  };
+}
+
+function readLocalInspectorKpiDefaults(): InspectorDefaultKpisConfig | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(INSPECTOR_KPI_DEFAULTS_BACKUP_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && (Array.isArray(parsed.playerDefaultKpiKeys) || Array.isArray(parsed.teamDefaultKpiKeys))) {
+      return normalizeClientKpiConfig(parsed);
+    }
+  } catch {
+    // Ignore storage error
+  }
+  return null;
+}
+
+function writeLocalInspectorKpiDefaults(cfg: InspectorDefaultKpisConfig): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(INSPECTOR_KPI_DEFAULTS_BACKUP_KEY, JSON.stringify(cfg));
+  } catch {
+    // Ignore storage error
+  }
+}
+
+export async function fetchPublicInspectorKpiDefaults(): Promise<InspectorDefaultKpisConfig> {
+  try {
+    const res = await fetch('/api/nba/inspector-kpi-defaults', {
+      method: 'GET',
+      cache: 'no-store',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = normalizeClientKpiConfig(data.config);
+      writeLocalInspectorKpiDefaults(normalized);
+      return normalized;
+    }
+  } catch {
+    // Network fallback
+  }
+  return readLocalInspectorKpiDefaults() ?? {
+    playerDefaultKpiKeys: [...CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG.playerDefaultKpiKeys],
+    teamDefaultKpiKeys: [...CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG.teamDefaultKpiKeys],
+    updatedAt: 0,
+  };
+}
+
+export interface AdminInspectorKpiDefaultsResponse {
+  ok: boolean;
+  unauthorized?: boolean;
+  config?: InspectorDefaultKpisConfig;
+  defaults?: { playerDefaultKpiKeys: string[]; teamDefaultKpiKeys: string[] };
+  error?: string;
+}
+
+export async function fetchAdminInspectorKpiDefaults(): Promise<AdminInspectorKpiDefaultsResponse> {
+  try {
+    const res = await fetch('/api/admin/inspector-kpi-defaults', {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: buildAdminAuthHeaders(),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = normalizeClientKpiConfig(data.config);
+      writeLocalInspectorKpiDefaults(normalized);
+      return { ok: true, config: normalized, defaults: data.defaults };
+    }
+  } catch {
+    // Network fallback
+  }
+  return {
+    ok: true,
+    config: readLocalInspectorKpiDefaults() ?? {
+      playerDefaultKpiKeys: [...CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG.playerDefaultKpiKeys],
+      teamDefaultKpiKeys: [...CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG.teamDefaultKpiKeys],
+      updatedAt: 0,
+    },
+    defaults: {
+      playerDefaultKpiKeys: [...CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG.playerDefaultKpiKeys],
+      teamDefaultKpiKeys: [...CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG.teamDefaultKpiKeys],
+    },
+  };
+}
+
+export async function updateAdminInspectorKpiDefaults(values: {
+  playerDefaultKpiKeys: string[];
+  teamDefaultKpiKeys: string[];
+}): Promise<AdminInspectorKpiDefaultsResponse> {
+  try {
+    const res = await fetch('/api/admin/inspector-kpi-defaults', {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(values),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = normalizeClientKpiConfig(data.config);
+      writeLocalInspectorKpiDefaults(normalized);
+      return { ok: true, config: normalized, defaults: data.defaults };
+    }
+    return {
+      ok: false,
+      error: data?.error || 'No se pudieron guardar los KPIs por defecto.',
+    };
+  } catch {
+    const fallbackCfg: InspectorDefaultKpisConfig = {
+      playerDefaultKpiKeys: sanitizeClientKpiKeys(
+        values.playerDefaultKpiKeys,
+        CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG.playerDefaultKpiKeys
+      ),
+      teamDefaultKpiKeys: sanitizeClientKpiKeys(
+        values.teamDefaultKpiKeys,
+        CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG.teamDefaultKpiKeys
+      ),
+      updatedAt: Date.now(),
+    };
+    writeLocalInspectorKpiDefaults(fallbackCfg);
+    return { ok: true, config: fallbackCfg };
+  }
+}
+
+export async function resetAdminInspectorKpiDefaults(): Promise<AdminInspectorKpiDefaultsResponse> {
+  try {
+    const res = await fetch('/api/admin/inspector-kpi-defaults/reset-defaults', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = normalizeClientKpiConfig(data.config);
+      writeLocalInspectorKpiDefaults(normalized);
+      return { ok: true, config: normalized, defaults: data.defaults };
+    }
+    return {
+      ok: false,
+      error: data?.error || 'No se pudieron restablecer los KPIs por defecto.',
+    };
+  } catch {
+    const fallbackCfg: InspectorDefaultKpisConfig = {
+      playerDefaultKpiKeys: [...CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG.playerDefaultKpiKeys],
+      teamDefaultKpiKeys: [...CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG.teamDefaultKpiKeys],
+      updatedAt: Date.now(),
+    };
+    writeLocalInspectorKpiDefaults(fallbackCfg);
+    return { ok: true, config: fallbackCfg };
+  }
+}
+
 

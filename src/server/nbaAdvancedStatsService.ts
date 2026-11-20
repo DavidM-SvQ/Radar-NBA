@@ -1170,7 +1170,7 @@ export async function getLeagueTrackingAdvanced(seasonToken?: string, scope: "te
         entry.passesReceived = round1(Number(o.PASSES_RECEIVED) || 0);
         entry.secondaryAst = round1(Number(o.SECONDARY_AST) || 0);
         entry.potentialAst = round1(Number(o.POTENTIAL_AST) || 0);
-        entry.astPtsCreated = round1(Number(o.AST_PTS_CREATED) || 0);
+        entry.astPtsCreated = round1(Number(o.AST_POINTS_CREATED ?? o.AST_PTS_CREATED) || 0);
         entry.astToPassPctAdj = toPct100(o.AST_TO_PASS_PCT_ADJ ?? o.AST_TO_PASS_PCT);
       } else if (mType === "SpeedDistance") {
         entry.distMiles = round2(Number(o.DIST_MILES) || 0);
@@ -1607,69 +1607,1210 @@ export async function getLeagueViolationsAdvanced(seasonToken?: string, scope: "
 }
 
 // =========================================================================
-// 9. LINEUPS (2, 3, 5 Man Lineups)
+// 9. LINEUPS (2, 3, 5 Man Lineups — TODAS las 10 capas estadísticas)
 // =========================================================================
-export async function getLeagueLineups(seasonToken?: string, groupQuantity: 2 | 3 | 5 = 5, teamId = "0", forceRefresh = false): Promise<any> {
+function parseLineupPlayerIds(groupId: string): string[] {
+  return String(groupId || "")
+    .split("-")
+    .map((s) => s.trim())
+    .filter((s) => /^\d+$/.test(s));
+}
+
+function buildEntityIdMap(items: any[]): Map<string, any> {
+  const m = new Map<string, any>();
+  for (const item of items || []) {
+    const id = String(item?.entityId || item?.playerId || "").trim();
+    if (id) m.set(id, item);
+  }
+  return m;
+}
+
+function enrichSingleLineupWithAllLayers(
+  item: any,
+  maps: {
+    zones: Map<string, any>;
+    tracking: Map<string, any>;
+    hustle: Map<string, any>;
+    clutch: Map<string, any>;
+    playtypes: Map<string, any>;
+    violations: Map<string, any>;
+    scoring: Map<string, any>;
+  }
+) {
+  const playerIds = parseLineupPlayerIds(item.groupId);
+  const lineupMin = Math.max(0.5, Number(item.min) || 1);
+  const gp = Math.max(1, Number(item.gp) || 1);
+  const teamId = String(item.teamId || "");
+  const teamAbbr = String(item.teamAbbr || TEAM_ID_TO_ABBR.get(teamId) || "");
+  const groupId = String(item.groupId || "");
+  const groupName = String(item.groupName || "");
+
+  // Helper: scale player per-game stat into expected production during shared `lineupMin` minutes
+  const getMinScale = (memberMin: number) =>
+    Math.min(1.15, Math.max(0.12, lineupMin / Math.max(14, Number(memberMin) || 26)));
+
+  const matchedZones = playerIds.map((id) => maps.zones.get(id)).filter(Boolean);
+  const matchedTrack = playerIds.map((id) => maps.tracking.get(id)).filter(Boolean);
+  const matchedHustle = playerIds.map((id) => maps.hustle.get(id)).filter(Boolean);
+  const matchedClutch = playerIds.map((id) => maps.clutch.get(id)).filter(Boolean);
+  const matchedPt = playerIds.map((id) => maps.playtypes.get(id)).filter(Boolean);
+  const matchedViol = playerIds.map((id) => maps.violations.get(id)).filter(Boolean);
+  const matchedScoring = playerIds.map((id) => maps.scoring.get(id)).filter(Boolean);
+
+  // Capa 2: Four Factors oficiales de la alineación
+  const advFourFactors = {
+    entityId: groupId,
+    entityName: groupName,
+    teamId,
+    teamAbbr,
+    gp,
+    min: lineupMin,
+    offRtg: round1(item.offRtg),
+    defRtg: round1(item.defRtg),
+    netRtg: round1(item.netRtg),
+    pace: round1(item.pace),
+    efgPct: round1(item.efgPct),
+    ftaRate: round1(item.ftaRate ?? (Number(item.fga) > 0 ? ((Number(item.fta) || 0) / Number(item.fga)) * 100 : 22.0)),
+    tmTovPct: round1(item.tovPct),
+    orebPct: round1(item.orebPct),
+    oppEfgPct: round1(item.oppEfgPct ?? 53.0),
+    oppFtaRate: round1(item.oppFtaRate ?? 22.0),
+    oppTovPct: round1(item.oppTovPct ?? 13.5),
+    oppOrebPct: round1(item.oppOrebPct ?? 26.0),
+    tsPct: round1(item.tsPct),
+    drebPct: round1(item.drebPct),
+    rebPct: round1(item.rebPct),
+    astPct: round1(item.astPct),
+    astTo: round2(item.astTo),
+    astRatio: round1(item.astRatio ?? 18.0),
+    usgPct: 100,
+    pie: round1(item.pie),
+  };
+
+  // Capa 3: Scoring Splits (si viene oficial de leaguedashlineups?MeasureType=Scoring lo usamos íntegro)
+  let advScoring = item.advScoring;
+  if (!advScoring || advScoring.pctPtsPaint === undefined) {
+    if (matchedScoring.length > 0) {
+      const avgField = (k: string) =>
+        round1(matchedScoring.reduce((s, m) => s + (Number(m[k]) || 0), 0) / matchedScoring.length);
+      advScoring = {
+        entityId: groupId,
+        entityName: groupName,
+        teamId,
+        teamAbbr,
+        gp,
+        min: lineupMin,
+        pctFga2pt: avgField("pctFga2pt"),
+        pctFga3pt: avgField("pctFga3pt"),
+        pctPts2pt: avgField("pctPts2pt"),
+        pctPts2ptMr: avgField("pctPts2ptMr"),
+        pctPts3pt: avgField("pctPts3pt"),
+        pctPtsFb: avgField("pctPtsFb"),
+        pctPtsFt: avgField("pctPtsFt"),
+        pctPtsOffTov: avgField("pctPtsOffTov"),
+        pctPtsPaint: avgField("pctPtsPaint"),
+        pctAst2pm: avgField("pctAst2pm"),
+        pctUast2pm: avgField("pctUast2pm"),
+        pctAst3pm: avgField("pctAst3pm"),
+        pctUast3pm: avgField("pctUast3pm"),
+        pctAstFgm: avgField("pctAstFgm"),
+        pctUastFgm: avgField("pctUastFgm"),
+      };
+    }
+  }
+
+  // Capa 4: Zonas de Tiro (Shot Zones) compuestas por jugadores de la alineación y escaladas a minutos juntos
+  let advZones = item.advZones;
+  if (!advZones && matchedZones.length > 0) {
+    const aggZone = (zKey: "restrictedArea" | "paintNonRa" | "midRange" | "leftCorner3" | "rightCorner3" | "aboveBreak3" | "corner3" | "backcourt") => {
+      let fgmSum = 0;
+      let fgaSum = 0;
+      for (const z of matchedZones) {
+        const trackMatch = maps.tracking.get(String(z.entityId || ""));
+        const hustleMatch = maps.hustle.get(String(z.entityId || ""));
+        const memberMin = Number(trackMatch?.min ?? hustleMatch?.min ?? 26);
+        const sc = getMinScale(memberMin);
+        fgmSum += (Number(z[zKey]?.fgm) || 0) * sc;
+        fgaSum += (Number(z[zKey]?.fga) || 0) * sc;
+      }
+      const fgm = round1(fgmSum);
+      const fga = round1(fgaSum);
+      const fgPct = fga > 0 ? round1((fgm / fga) * 100) : 0;
+      return { fgm, fga, fgPct };
+    };
+    const restrictedArea = aggZone("restrictedArea");
+    const paintNonRa = aggZone("paintNonRa");
+    const midRange = aggZone("midRange");
+    const leftCorner3 = aggZone("leftCorner3");
+    const rightCorner3 = aggZone("rightCorner3");
+    const aboveBreak3 = aggZone("aboveBreak3");
+    const corner3 = {
+      fgm: round1(leftCorner3.fgm + rightCorner3.fgm),
+      fga: round1(leftCorner3.fga + rightCorner3.fga),
+      fgPct: leftCorner3.fga + rightCorner3.fga > 0
+        ? round1(((leftCorner3.fgm + rightCorner3.fgm) / (leftCorner3.fga + rightCorner3.fga)) * 100)
+        : 0,
+    };
+    const backcourt = aggZone("backcourt");
+    const totalThreeFgm = corner3.fgm + aboveBreak3.fgm;
+    const totalThreeFga = round1(corner3.fga + aboveBreak3.fga);
+    advZones = {
+      entityId: groupId,
+      entityName: groupName,
+      teamId,
+      teamAbbr,
+      gp,
+      restrictedArea,
+      paintNonRa,
+      midRange,
+      leftCorner3,
+      rightCorner3,
+      aboveBreak3,
+      corner3,
+      backcourt,
+      totalRimFga: restrictedArea.fga,
+      rimFgPct: restrictedArea.fgPct,
+      totalThreeFga,
+      threeFgPct: totalThreeFga > 0 ? round1((totalThreeFgm / totalThreeFga) * 100) : 0,
+    };
+  }
+
+  // Capa 5: Tracking Óptico compuesto
+  let advTracking = item.advTracking;
+  if (!advTracking && matchedTrack.length > 0) {
+    const sumScaled = (field: string, dec = 1) => {
+      const val = matchedTrack.reduce((s, m) => s + (Number(m[field]) || 0) * getMinScale(m.min), 0);
+      return dec >= 2 ? round2(val) : round1(val);
+    };
+    const avgWeighted = (field: string, weightField: string, dec = 1) => {
+      let num = 0;
+      let den = 0;
+      for (const m of matchedTrack) {
+        const w = Math.max(0.1, Number(m[weightField]) || Number(m.min) || 1);
+        num += (Number(m[field]) || 0) * w;
+        den += w;
+      }
+      const val = den > 0 ? num / den : 0;
+      return dec >= 3 ? Math.round(val * 1000) / 1000 : dec === 2 ? round2(val) : round1(val);
+    };
+    advTracking = {
+      entityId: groupId,
+      entityName: groupName,
+      teamId,
+      teamAbbr,
+      gp,
+      min: lineupMin,
+      drives: sumScaled("drives"),
+      driveFgm: sumScaled("driveFgm"),
+      driveFga: sumScaled("driveFga"),
+      drivePts: sumScaled("drivePts"),
+      driveFgPct: avgWeighted("driveFgPct", "driveFga"),
+      driveAstPct: avgWeighted("driveAstPct", "drives"),
+      driveTovPct: avgWeighted("driveTovPct", "drives"),
+      drivePassesPct: avgWeighted("drivePassesPct", "drives"),
+      catchShootFgm: sumScaled("catchShootFgm"),
+      catchShootFga: sumScaled("catchShootFga"),
+      catchShootPts: sumScaled("catchShootPts"),
+      catchShootFgPct: avgWeighted("catchShootFgPct", "catchShootFga"),
+      catchShootFg3Pct: avgWeighted("catchShootFg3Pct", "catchShootFga"),
+      catchShootEfgPct: avgWeighted("catchShootEfgPct", "catchShootFga"),
+      pullUpFgm: sumScaled("pullUpFgm"),
+      pullUpFga: sumScaled("pullUpFga"),
+      pullUpPts: sumScaled("pullUpPts"),
+      pullUpFgPct: avgWeighted("pullUpFgPct", "pullUpFga"),
+      pullUpFg3Pct: avgWeighted("pullUpFg3Pct", "pullUpFga"),
+      pullUpEfgPct: avgWeighted("pullUpEfgPct", "pullUpFga"),
+      passesMade: sumScaled("passesMade"),
+      passesReceived: sumScaled("passesReceived"),
+      secondaryAst: sumScaled("secondaryAst"),
+      potentialAst: sumScaled("potentialAst"),
+      astPtsCreated: sumScaled("astPtsCreated"),
+      astToPassPctAdj: avgWeighted("astToPassPctAdj", "passesMade"),
+      orebContestPct: avgWeighted("orebContestPct", "orebChances"),
+      orebChances: sumScaled("orebChances"),
+      orebChancePctAdj: avgWeighted("orebChancePctAdj", "orebChances"),
+      avgOrebDist: avgWeighted("avgOrebDist", "orebChances"),
+      drebContestPct: avgWeighted("drebContestPct", "drebChances"),
+      drebChances: sumScaled("drebChances"),
+      drebChancePctAdj: avgWeighted("drebChancePctAdj", "drebChances"),
+      avgDrebDist: avgWeighted("avgDrebDist", "drebChances"),
+      rebContestPct: avgWeighted("rebContestPct", "rebChances"),
+      rebChances: sumScaled("rebChances"),
+      rebChancePctAdj: avgWeighted("rebChancePctAdj", "rebChances"),
+      avgRebDist: avgWeighted("avgRebDist", "rebChances"),
+      distMiles: sumScaled("distMiles", 2),
+      distMilesOff: sumScaled("distMilesOff", 2),
+      distMilesDef: sumScaled("distMilesDef", 2),
+      avgSpeed: avgWeighted("avgSpeed", "min", 2),
+      avgSpeedOff: avgWeighted("avgSpeedOff", "min", 2),
+      avgSpeedDef: avgWeighted("avgSpeedDef", "min", 2),
+      touches: sumScaled("touches"),
+      frontCtTouches: sumScaled("frontCtTouches"),
+      timeOfPoss: sumScaled("timeOfPoss"),
+      avgSecPerTouch: avgWeighted("avgSecPerTouch", "touches", 2),
+      avgDribPerTouch: avgWeighted("avgDribPerTouch", "touches", 2),
+      ptsPerTouch: avgWeighted("ptsPerTouch", "touches", 3),
+      paintTouches: sumScaled("paintTouches"),
+      paintTouchFgPct: avgWeighted("paintTouchFgPct", "paintTouches"),
+      paintTouchPts: sumScaled("paintTouchPts"),
+      ptsPerPaintTouch: avgWeighted("ptsPerPaintTouch", "paintTouches", 2),
+      postTouches: sumScaled("postTouches"),
+      postTouchFgPct: avgWeighted("postTouchFgPct", "postTouches"),
+      postTouchPts: sumScaled("postTouchPts"),
+      ptsPerPostTouch: avgWeighted("ptsPerPostTouch", "postTouches", 2),
+      elbowTouches: sumScaled("elbowTouches"),
+      ptsPerElbowTouch: avgWeighted("ptsPerElbowTouch", "elbowTouches", 2),
+    };
+  }
+
+  // Capa 6 & 7: Hustle y Defensa/Opponent (mezclando Misc/Opponent oficiales de la lineup + Hustle/DFG% de sus jugadores)
+  const existingDef = item.advDefHustle || {};
+  const sumHustleScaled = (field: string, dec = 1) => {
+    if (matchedHustle.length === 0) return 0;
+    const val = matchedHustle.reduce((s, m) => s + (Number(m[field]) || 0) * getMinScale(m.min), 0);
+    return dec >= 2 ? round2(val) : round1(val);
+  };
+  const avgHustleWeighted = (field: string, weightField: string) => {
+    if (matchedHustle.length === 0) return 0;
+    let num = 0;
+    let den = 0;
+    for (const m of matchedHustle) {
+      const w = Math.max(0.1, Number(m[weightField]) || Number(m.min) || 1);
+      num += (Number(m[field]) || 0) * w;
+      den += w;
+    }
+    return den > 0 ? round1(num / den) : 0;
+  };
+
+  const advDefHustle = {
+    entityId: groupId,
+    entityName: groupName,
+    teamId,
+    teamAbbr,
+    gp,
+    min: lineupMin,
+    defRating: round1(item.defRtg || existingDef.defRating || 114.0),
+    stl: round1(item.stl ?? sumHustleScaled("stl")),
+    blk: round1(item.blk ?? sumHustleScaled("blk")),
+    dreb: round1(item.dreb ?? sumHustleScaled("dreb")),
+    drebPct: round1(item.drebPct || existingDef.drebPct || 72.0),
+    pctDreb: round1(item.drebPct || existingDef.pctDreb || 72.0),
+    pctStl: avgHustleWeighted("pctStl", "min"),
+    pctBlk: avgHustleWeighted("pctBlk", "min"),
+    ptsPaint: round1(existingDef.ptsPaint ?? sumHustleScaled("ptsPaint")),
+    pts2ndChance: round1(existingDef.pts2ndChance ?? sumHustleScaled("pts2ndChance")),
+    ptsFb: round1(existingDef.ptsFb ?? sumHustleScaled("ptsFb")),
+    ptsOffTov: round1(existingDef.ptsOffTov ?? sumHustleScaled("ptsOffTov")),
+    oppPtsPaint: round1(existingDef.oppPtsPaint ?? sumHustleScaled("oppPtsPaint")),
+    oppPts2ndChance: round1(existingDef.oppPts2ndChance ?? sumHustleScaled("oppPts2ndChance")),
+    oppPtsFb: round1(existingDef.oppPtsFb ?? sumHustleScaled("oppPtsFb")),
+    oppPtsOffTov: round1(existingDef.oppPtsOffTov ?? sumHustleScaled("oppPtsOffTov")),
+    blka: round1(item.blka ?? existingDef.blka ?? 0),
+    pf: round1(item.pf ?? existingDef.pf ?? 0),
+    pfd: round1(item.pfd ?? existingDef.pfd ?? 0),
+    defWs: round2(matchedHustle.reduce((s, m) => s + (Number(m.defWs) || 0) * getMinScale(m.min), 0)),
+    dFgm: round1(existingDef.oppFgm ?? sumHustleScaled("dFgm")),
+    dFga: round1(existingDef.oppFga ?? sumHustleScaled("dFga")),
+    dFgPct: avgHustleWeighted("dFgPct", "dFga") || round1(existingDef.oppFgPct || 0),
+    normalFgPct: avgHustleWeighted("normalFgPct", "dFga") || 46.8,
+    pctPlusMinus: avgHustleWeighted("pctPlusMinus", "dFga"),
+    defFreq: avgHustleWeighted("defFreq", "min"),
+    oppFgm: existingDef.oppFgm ?? sumHustleScaled("dFgm"),
+    oppFga: existingDef.oppFga ?? sumHustleScaled("dFga"),
+    oppFgPct: existingDef.oppFgPct ?? (avgHustleWeighted("dFgPct", "dFga") || 46.5),
+    oppFg3m: existingDef.oppFg3m ?? 0,
+    oppFg3a: existingDef.oppFg3a ?? 0,
+    oppFg3Pct: existingDef.oppFg3Pct ?? 35.5,
+    oppFtm: existingDef.oppFtm ?? 0,
+    oppFta: existingDef.oppFta ?? 0,
+    oppFtPct: existingDef.oppFtPct ?? 78.0,
+    oppOreb: existingDef.oppOreb ?? 0,
+    oppDreb: existingDef.oppDreb ?? 0,
+    oppReb: existingDef.oppReb ?? 0,
+    oppAst: existingDef.oppAst ?? 0,
+    oppTov: existingDef.oppTov ?? 0,
+    oppStl: existingDef.oppStl ?? 0,
+    oppBlk: existingDef.oppBlk ?? 0,
+    oppBlka: existingDef.oppBlka ?? 0,
+    oppPf: existingDef.oppPf ?? 0,
+    oppPfd: existingDef.oppPfd ?? 0,
+    oppPts: existingDef.oppPts ?? 0,
+    contestedShots: sumHustleScaled("contestedShots"),
+    contestedShots2pt: sumHustleScaled("contestedShots2pt"),
+    contestedShots3pt: sumHustleScaled("contestedShots3pt"),
+    deflections: sumHustleScaled("deflections"),
+    chargesDrawn: sumHustleScaled("chargesDrawn", 2),
+    screenAssists: sumHustleScaled("screenAssists"),
+    screenAstPts: sumHustleScaled("screenAstPts"),
+    offLooseBalls: sumHustleScaled("offLooseBalls"),
+    defLooseBalls: sumHustleScaled("defLooseBalls"),
+    looseBalls: sumHustleScaled("looseBalls"),
+    pctLooseBallsOff: avgHustleWeighted("pctLooseBallsOff", "looseBalls"),
+    pctLooseBallsDef: avgHustleWeighted("pctLooseBallsDef", "looseBalls"),
+    offBoxOuts: sumHustleScaled("offBoxOuts"),
+    defBoxOuts: sumHustleScaled("defBoxOuts"),
+    boxOuts: sumHustleScaled("boxOuts"),
+    boxOutTeamRebs: sumHustleScaled("boxOutTeamRebs"),
+    boxOutPlayerRebs: sumHustleScaled("boxOutPlayerRebs"),
+    pctBoxOutsOff: avgHustleWeighted("pctBoxOutsOff", "boxOuts"),
+    pctBoxOutsDef: avgHustleWeighted("pctBoxOutsDef", "boxOuts"),
+    pctBoxOutsTeamReb: avgHustleWeighted("pctBoxOutsTeamReb", "boxOuts"),
+    pctBoxOutsReb: avgHustleWeighted("pctBoxOutsReb", "boxOuts"),
+  };
+
+  // Capa 8: Clutch (<5m, ±5) compuesto de los jugadores de la combinación
+  let advClutch = item.advClutch;
+  if (!advClutch && matchedClutch.length > 0) {
+    const shareFactor = Math.min(1, Math.max(0.25, Number(item.groupQuantity || 5) / 5));
+    const avgCl = (f: string, dec = 1) => {
+      let num = 0;
+      let den = 0;
+      for (const c of matchedClutch) {
+        const w = Math.max(0.2, Number(c.min) || 1);
+        num += (Number(c[f]) || 0) * w;
+        den += w;
+      }
+      const val = den > 0 ? num / den : 0;
+      return dec === 0 ? Math.round(val) : round1(val);
+    };
+    const sumCl = (f: string) =>
+      round1(matchedClutch.reduce((s, c) => s + (Number(c[f]) || 0), 0) * shareFactor * 0.72);
+    const clFga = Math.max(0.1, sumCl("fga"));
+    const clFgm = sumCl("fgm");
+    const clFg3a = Math.max(0.1, sumCl("fg3a"));
+    const clFg3m = sumCl("fg3m");
+    const clFta = Math.max(0.1, sumCl("fta"));
+    const clFtm = sumCl("ftm");
+    advClutch = {
+      entityId: groupId,
+      entityName: groupName,
+      teamId,
+      teamAbbr,
+      gp: avgCl("gp", 0),
+      w: avgCl("w", 0),
+      l: avgCl("l", 0),
+      wPct: avgCl("wPct"),
+      min: round1(avgCl("min") * shareFactor),
+      pts: sumCl("pts"),
+      fgm: clFgm,
+      fga: clFga,
+      fgPct: round1(avgCl("fgPct")),
+      fg3m: clFg3m,
+      fg3a: clFg3a,
+      fg3Pct: round1(avgCl("fg3Pct")),
+      ftm: clFtm,
+      fta: clFta,
+      ftPct: round1(avgCl("ftPct")),
+      reb: sumCl("reb"),
+      ast: sumCl("ast"),
+      stl: sumCl("stl"),
+      blk: sumCl("blk"),
+      tov: sumCl("tov"),
+      plusMinus: round1(avgCl("plusMinus") * shareFactor),
+      offRtg: avgCl("offRtg"),
+      defRtg: avgCl("defRtg"),
+      netRtg: avgCl("netRtg"),
+      tsPct: avgCl("tsPct"),
+      efgPct: avgCl("efgPct"),
+      usgPct: avgCl("usgPct"),
+      pie: avgCl("pie"),
+    };
+  }
+
+  // Capa 9: Playtypes (Synergy) compuestos
+  let advPlaytypes = item.advPlaytypes;
+  if (!advPlaytypes && matchedPt.length > 0) {
+    const ptAggMap = new Map<string, { playType: string; playTypeLabelEs: string; possSum: number; ptsSum: number; pctWeightSum: number; efgSum: number; ftSum: number; tovSum: number; possTotalWeight: number }>();
+    let totalPossOff = 0;
+    for (const mp of matchedPt) {
+      const mMin = Number(maps.tracking.get(String(mp.entityId || ""))?.min || 26);
+      const sc = getMinScale(mMin);
+      totalPossOff += (Number(mp.totalPossOff) || 0) * sc;
+      for (const row of mp.offensive || []) {
+        const key = String(row.playType || "");
+        if (!key) continue;
+        const w = Math.max(0.2, (Number(row.poss) || Number(row.possPct) || 1) * sc);
+        const cur = ptAggMap.get(key) || {
+          playType: key,
+          playTypeLabelEs: row.playTypeLabelEs || key,
+          possSum: 0,
+          ptsSum: 0,
+          pctWeightSum: 0,
+          efgSum: 0,
+          ftSum: 0,
+          tovSum: 0,
+          possTotalWeight: 0,
+        };
+        cur.possSum += (Number(row.poss) || 0) * sc;
+        cur.ptsSum += (Number(row.pts) || 0) * sc;
+        cur.pctWeightSum += (Number(row.percentile) || 50) * w;
+        cur.efgSum += (Number(row.efgPct) || 0) * w;
+        cur.ftSum += (Number(row.ftPossPct) || 0) * w;
+        cur.tovSum += (Number(row.tovPossPct) || 0) * w;
+        cur.possTotalWeight += w;
+        ptAggMap.set(key, cur);
+      }
+    }
+    const offensive = Array.from(ptAggMap.values())
+      .map((r) => {
+        const w = Math.max(0.01, r.possTotalWeight);
+        const ppp = r.possSum > 0 ? round2(r.ptsSum / r.possSum) : 0.98;
+        return {
+          playType: r.playType,
+          playTypeLabelEs: r.playTypeLabelEs,
+          typeGrouping: "offensive" as const,
+          gp,
+          poss: round1(r.possSum),
+          possPct: totalPossOff > 0 ? round1((r.possSum / totalPossOff) * 100) : 0,
+          pts: round1(r.ptsSum),
+          ppp,
+          fgm: 0,
+          fga: 0,
+          fgPct: round1(r.efgSum / w),
+          efgPct: round1(r.efgSum / w),
+          ftPossPct: round1(r.ftSum / w),
+          tovPossPct: round1(r.tovSum / w),
+          percentile: round1(r.pctWeightSum / w),
+        };
+      })
+      .sort((a, b) => b.poss - a.poss);
+    advPlaytypes = {
+      entityId: groupId,
+      entityName: groupName,
+      teamId,
+      teamAbbr,
+      gp,
+      totalPossOff: round1(totalPossOff),
+      topPlayTypeOff: offensive[0] || null,
+      topPlayTypeDef: null,
+      offensive,
+      defensive: [],
+    };
+  }
+
+  // Capa 10: Infracciones y Faltas (totals de temporada escalados al tiempo compartido + PF/PFD/BLKA/TOV oficiales por partido)
+  let advViolations = item.advViolations;
+  if (!advViolations) {
+    const sumViolScaled = (f: string) => {
+      if (matchedViol.length === 0) return 0;
+      const sum = matchedViol.reduce((s, v) => {
+        const sc = getMinScale(v.min);
+        const gpShare = Math.min(1, gp / Math.max(1, Number(v.gp) || gp));
+        return s + (Number(v[f]) || 0) * sc * gpShare;
+      }, 0);
+      return round1(sum);
+    };
+    const travel = sumViolScaled("travel");
+    const doubleDribble = sumViolScaled("doubleDribble");
+    const discontinuedDribble = sumViolScaled("discontinuedDribble");
+    const offThreeSec = sumViolScaled("offThreeSec");
+    const fiveSec = sumViolScaled("fiveSec");
+    const eightSec = sumViolScaled("eightSec");
+    const shotClock = sumViolScaled("shotClock");
+    const inbound = sumViolScaled("inbound");
+    const backcourt = sumViolScaled("backcourt");
+    const offGoaltending = sumViolScaled("offGoaltending");
+    const palming = sumViolScaled("palming");
+    const offFoul = sumViolScaled("offFoul");
+    const defThreeSec = sumViolScaled("defThreeSec");
+    const charge = sumViolScaled("charge");
+    const delayOfGame = sumViolScaled("delayOfGame");
+    const defGoaltending = sumViolScaled("defGoaltending");
+    const lane = sumViolScaled("lane");
+    const jumpBall = sumViolScaled("jumpBall");
+    const kickedBall = sumViolScaled("kickedBall");
+    const totalViolations = round1(
+      travel + doubleDribble + discontinuedDribble + offThreeSec + fiveSec + eightSec +
+      shotClock + inbound + backcourt + offGoaltending + palming + offFoul + defThreeSec +
+      charge + delayOfGame + defGoaltending + lane + jumpBall + kickedBall
+    );
+    advViolations = {
+      entityId: groupId,
+      entityName: groupName,
+      teamId,
+      teamAbbr,
+      gp,
+      min: lineupMin,
+      travel,
+      doubleDribble,
+      discontinuedDribble,
+      offThreeSec,
+      fiveSec,
+      eightSec,
+      shotClock,
+      inbound,
+      backcourt,
+      offGoaltending,
+      palming,
+      offFoul,
+      defThreeSec,
+      charge,
+      delayOfGame,
+      defGoaltending,
+      lane,
+      jumpBall,
+      kickedBall,
+      totalViolations,
+      pf: round1(item.pf ?? advDefHustle.pf ?? 0),
+      pfd: round1(item.pfd ?? advDefHustle.pfd ?? 0),
+      blka: round1(item.blka ?? advDefHustle.blka ?? 0),
+      tov: round1(item.tov ?? 0),
+      dd2: 0,
+      td3: 0,
+      nbaFantasyPts: round1(
+        (Number(item.pts) || 0) +
+        1.2 * (Number(item.reb) || 0) +
+        1.5 * (Number(item.ast) || 0) +
+        3 * (Number(item.stl) || 0) +
+        3 * (Number(item.blk) || 0) -
+        (Number(item.tov) || 0)
+      ),
+      ptsPaint: advDefHustle.ptsPaint,
+      pts2ndChance: advDefHustle.pts2ndChance,
+      ptsFb: advDefHustle.ptsFb,
+      ptsOffTov: advDefHustle.ptsOffTov,
+      oppPtsPaint: advDefHustle.oppPtsPaint,
+      oppPts2ndChance: advDefHustle.oppPts2ndChance,
+      oppPtsFb: advDefHustle.oppPtsFb,
+      oppPtsOffTov: advDefHustle.oppPtsOffTov,
+    };
+  }
+
+  return {
+    ...item,
+    advFourFactors,
+    advScoring,
+    advZones,
+    advTracking,
+    advDefHustle,
+    advClutch,
+    advPlaytypes,
+    advViolations,
+  };
+}
+
+function enrichLineupsWithSnapshotLayers(items: any[], advSnap?: any, playerDatasetsOverride?: any): any[] {
+  if (!Array.isArray(items) || items.length === 0) return [];
+  const maps = {
+    zones: buildEntityIdMap(playerDatasetsOverride?.zones?.items ?? advSnap?.shotZones?.player?.items ?? []),
+    tracking: buildEntityIdMap(playerDatasetsOverride?.tracking?.items ?? advSnap?.tracking?.player?.items ?? []),
+    hustle: buildEntityIdMap(playerDatasetsOverride?.hustle?.items ?? advSnap?.defenseHustle?.player?.items ?? []),
+    clutch: buildEntityIdMap(playerDatasetsOverride?.clutch?.items ?? advSnap?.clutch?.player?.items ?? []),
+    playtypes: buildEntityIdMap(playerDatasetsOverride?.playtypes?.items ?? advSnap?.playtypes?.player?.items ?? []),
+    violations: buildEntityIdMap(playerDatasetsOverride?.violations?.items ?? advSnap?.violations?.player?.items ?? []),
+    scoring: buildEntityIdMap(playerDatasetsOverride?.scoring?.items ?? advSnap?.scoring?.player?.items ?? []),
+  };
+  return items.map((item) => enrichSingleLineupWithAllLayers(item, maps));
+}
+
+function synthesizeTripletsFromLineups5(lineups5Items: any[]): any[] {
+  const tripletMap = new Map<string, any>();
+  for (const row of (lineups5Items || []).slice(0, 600)) {
+    const ids = parseLineupPlayerIds(row.groupId);
+    const names = String(row.groupName || "").split(" - ").map((s) => s.trim()).filter(Boolean);
+    if (ids.length < 5 || names.length < 5) continue;
+    // Generate the top 3 combinations (indices [0,1,2], [0,1,3], [0,2,3])
+    const combos = [[0, 1, 2], [0, 1, 3], [0, 2, 4]];
+    for (const [i, j, k] of combos) {
+      const gIds = [ids[i], ids[j], ids[k]].sort();
+      const key = `${gIds.join("-")}__${row.teamId}`;
+      const existing = tripletMap.get(key);
+      const w = Math.max(1, Number(row.min) || 1);
+      if (!existing) {
+        tripletMap.set(key, {
+          ...row,
+          groupId: `-${gIds.join("-")}-`,
+          groupName: `${names[i]} - ${names[j]} - ${names[k]}`,
+          groupQuantity: 3,
+          _weightSum: w,
+          _weightedNet: (Number(row.netRtg) || 0) * w,
+          _weightedOff: (Number(row.offRtg) || 0) * w,
+          _weightedDef: (Number(row.defRtg) || 0) * w,
+          _weightedPace: (Number(row.pace) || 0) * w,
+        });
+      } else {
+        existing._weightSum += w;
+        existing._weightedNet += (Number(row.netRtg) || 0) * w;
+        existing._weightedOff += (Number(row.offRtg) || 0) * w;
+        existing._weightedDef += (Number(row.defRtg) || 0) * w;
+        existing._weightedPace += (Number(row.pace) || 0) * w;
+        existing.min = round1(existing.min + (Number(row.min) || 0) * 0.65);
+        existing.gp = Math.max(existing.gp, Number(row.gp) || 0);
+        existing.offRtg = round1(existing._weightedOff / existing._weightSum);
+        existing.defRtg = round1(existing._weightedDef / existing._weightSum);
+        existing.netRtg = round1(existing._weightedNet / existing._weightSum);
+        existing.pace = round1(existing._weightedPace / existing._weightSum);
+      }
+    }
+  }
+  return Array.from(tripletMap.values())
+    .map(({ _weightSum, _weightedNet, _weightedOff, _weightedDef, _weightedPace, ...rest }) => ({
+      ...rest,
+      advZones: undefined,
+      advTracking: undefined,
+      advClutch: undefined,
+      advPlaytypes: undefined,
+      advViolations: undefined,
+    }))
+    .sort((a, b) => (b.min || 0) - (a.min || 0))
+    .slice(0, 1500);
+}
+
+export async function getLeagueLineups(
+  seasonToken?: string,
+  groupQuantity: 2 | 3 | 5 = 5,
+  teamId = "0",
+  forceRefresh = false,
+  playerDatasetsOverride?: any
+): Promise<any> {
+  const advSnap = getActiveAdvancedSnapshot();
+
   if (!forceRefresh) {
-    const advSnap = getActiveAdvancedSnapshot();
-    const snapDataset = groupQuantity === 2 ? advSnap?.lineups?.lineups2 : advSnap?.lineups?.lineups5;
-    if (snapDataset?.items?.length) {
-      const filtered = teamId && teamId !== "0"
-        ? snapDataset.items.filter((x: any) => String(x.teamId) === String(teamId))
-        : snapDataset.items;
+    const snapDataset =
+      groupQuantity === 2
+        ? advSnap?.lineups?.lineups2
+        : groupQuantity === 3
+        ? advSnap?.lineups?.lineups3
+        : advSnap?.lineups?.lineups5;
+
+    let snapItems = snapDataset?.items;
+    if ((!snapItems || snapItems.length === 0) && groupQuantity === 3 && advSnap?.lineups?.lineups5?.items?.length) {
+      snapItems = synthesizeTripletsFromLineups5(advSnap.lineups.lineups5.items);
+    }
+
+    if (Array.isArray(snapItems) && snapItems.length > 0) {
+      let filtered = teamId && teamId !== "0"
+        ? snapItems.filter((x: any) => String(x.teamId) === String(teamId))
+        : snapItems;
+
+      // Ensure full 10-layer enrichment if reading a legacy snapshot missing nested objects
+      const needsEnrich = filtered.some((x: any) => !x.advZones || !x.advTracking || !x.advDefHustle || !x.advFourFactors);
+      if (needsEnrich) {
+        filtered = enrichLineupsWithSnapshotLayers(filtered, advSnap, playerDatasetsOverride);
+      }
+
       return {
-        ...snapDataset,
+        ...(snapDataset || { season: resolveNbaSeasonParam(seasonToken), seasonLabel: resolveNbaSeasonParam(seasonToken), generatedAt: advSnap?.generatedAt || new Date().toISOString() }),
         groupQuantity,
         teamId,
         items: filtered,
       };
     }
   }
-  const season = resolveNbaSeasonParam(seasonToken);
-  const endpoint = `https://stats.nba.com/stats/leaguedashlineups?Conference=&DateFrom=&DateTo=&GameScope=&GameSegment=&GroupQuantity=${groupQuantity}&LastNGames=0&LeagueID=00&Location=&MeasureType=Advanced&Month=0&OpponentTeamID=0&Outcome=&PaceAdjust=N&PerMode=PerGame&Period=0&PlusMinus=N&Rank=N&Season=${season}&SeasonSegment=&SeasonType=Regular+Season&ShotClockRange=&StarterBench=&TeamID=${teamId}&VsConference=&VsDivision=`;
 
-  const raw = await cachedFetchAdvancedJson(endpoint, 30 * 60 * 1000, forceRefresh);
-  const objects = parseObjects(raw);
-  let items = objects.map((o: any) => ({
-    groupId: String(o.GROUP_ID || o.TEAM_ID || ""),
-    groupName: String(o.GROUP_NAME || o.TEAM_NAME || ""),
-    teamId: String(o.TEAM_ID || ""),
-    teamAbbr: String(o.TEAM_ABBREVIATION || ""),
-    groupQuantity,
-    gp: Number(o.GP) || 0,
-    w: Number(o.W) || 0,
-    l: Number(o.L) || 0,
-    wPct: Number(o.W_PCT) || 0,
-    min: round1(Number(o.MIN) || 0),
-    offRtg: round1(Number(o.OFF_RATING) || 0),
-    defRtg: round1(Number(o.DEF_RATING) || 0),
-    netRtg: round1(Number(o.NET_RATING) || 0),
-    pace: round1(Number(o.PACE) || 0),
-    efgPct: toPct100(o.EFG_PCT),
-    tsPct: toPct100(o.TS_PCT),
-    orebPct: toPct100(o.OREB_PCT),
-    drebPct: toPct100(o.DREB_PCT),
-    rebPct: toPct100(o.REB_PCT),
-    astPct: toPct100(o.AST_PCT),
-    astTo: round2(Number(o.AST_TO) || 0),
-    tovPct: toPct100(o.TOV_PCT ?? o.TM_TOV_PCT),
-    poss: round1(Number(o.POSS) || 0),
-    pie: toPct100(o.PIE),
-  }));
+  const season = resolveNbaSeasonParam(seasonToken);
+  const buildLineupEp = (measureType: string) =>
+    `https://stats.nba.com/stats/leaguedashlineups?Conference=&DateFrom=&DateTo=&GameScope=&GameSegment=&GroupQuantity=${groupQuantity}&LastNGames=0&LeagueID=00&Location=&MeasureType=${encodeURIComponent(measureType)}&Month=0&OpponentTeamID=0&Outcome=&PaceAdjust=N&PerMode=PerGame&Period=0&PlusMinus=N&Rank=N&Season=${season}&SeasonSegment=&SeasonType=Regular+Season&ShotClockRange=&StarterBench=&TeamID=${teamId}&VsConference=&VsDivision=`;
+
+  const [advRes, baseRes, ffRes, scoringRes, miscRes, oppRes] = await Promise.allSettled([
+    cachedFetchAdvancedJson(buildLineupEp("Advanced"), 30 * 60 * 1000, forceRefresh),
+    cachedFetchAdvancedJson(buildLineupEp("Base"), 30 * 60 * 1000, forceRefresh),
+    cachedFetchAdvancedJson(buildLineupEp("Four Factors"), 30 * 60 * 1000, forceRefresh),
+    cachedFetchAdvancedJson(buildLineupEp("Scoring"), 30 * 60 * 1000, forceRefresh),
+    cachedFetchAdvancedJson(buildLineupEp("Misc"), 30 * 60 * 1000, forceRefresh),
+    cachedFetchAdvancedJson(buildLineupEp("Opponent"), 30 * 60 * 1000, forceRefresh),
+  ]);
+
+  const advObjs = advRes.status === "fulfilled" && advRes.value ? parseObjects(advRes.value) : [];
+  const baseObjs = baseRes.status === "fulfilled" && baseRes.value ? parseObjects(baseRes.value) : [];
+  const ffObjs = ffRes.status === "fulfilled" && ffRes.value ? parseObjects(ffRes.value) : [];
+  const scoringObjs = scoringRes.status === "fulfilled" && scoringRes.value ? parseObjects(scoringRes.value) : [];
+  const miscObjs = miscRes.status === "fulfilled" && miscRes.value ? parseObjects(miscRes.value) : [];
+  const oppObjs = oppRes.status === "fulfilled" && oppRes.value ? parseObjects(oppRes.value) : [];
+
+  const keyOf = (o: any) => `${String(o.GROUP_ID || "")}__${String(o.TEAM_ID || "")}`;
+  const toMap = (arr: any[]) => {
+    const m = new Map<string, any>();
+    for (const o of arr) {
+      const k = keyOf(o);
+      if (k !== "__") m.set(k, o);
+    }
+    return m;
+  };
+  const baseMap = toMap(baseObjs);
+  const ffMap = toMap(ffObjs);
+  const scoringMap = toMap(scoringObjs);
+  const miscMap = toMap(miscObjs);
+  const oppMap = toMap(oppObjs);
+
+  const primaryObjs = advObjs.length > 0 ? advObjs : baseObjs;
+  let items: any[] = primaryObjs.map((o: any) => {
+    const k = keyOf(o);
+    const b = baseMap.get(k) || {};
+    const ff = ffMap.get(k) || {};
+    const sc = scoringMap.get(k) || {};
+    const ms = miscMap.get(k) || {};
+    const op = oppMap.get(k) || {};
+    const groupId = String(o.GROUP_ID || o.TEAM_ID || "");
+    const groupName = String(o.GROUP_NAME || o.TEAM_NAME || "");
+    const tid = String(o.TEAM_ID || "");
+    const tabbr = String(o.TEAM_ABBREVIATION || TEAM_ID_TO_ABBR.get(tid) || "");
+    const gp = Number(o.GP ?? b.GP) || 0;
+    const min = round1(Number(o.MIN ?? b.MIN) || 0);
+    const rawFtaRate = ff.FTA_RATE !== undefined ? Number(ff.FTA_RATE) : (Number(b.FGA) > 0 ? (Number(b.FTA) || 0) / Number(b.FGA) : 0.22);
+    const rawOppFtaRate = Number(ff.OPP_FTA_RATE) || 0.22;
+
+    return {
+      groupId,
+      groupName,
+      teamId: tid,
+      teamAbbr: tabbr,
+      groupQuantity,
+      gp,
+      w: Number(o.W ?? b.W) || 0,
+      l: Number(o.L ?? b.L) || 0,
+      wPct: Number(o.W_PCT ?? b.W_PCT) || 0,
+      min,
+      offRtg: round1(Number(o.OFF_RATING) || 0),
+      defRtg: round1(Number(o.DEF_RATING) || 0),
+      netRtg: round1(Number(o.NET_RATING) || 0),
+      pace: round1(Number(o.PACE) || 0),
+      efgPct: toPct100(o.EFG_PCT ?? ff.EFG_PCT),
+      tsPct: toPct100(o.TS_PCT),
+      orebPct: toPct100(o.OREB_PCT ?? ff.OREB_PCT),
+      drebPct: toPct100(o.DREB_PCT),
+      rebPct: toPct100(o.REB_PCT),
+      astPct: toPct100(o.AST_PCT),
+      astTo: round2(Number(o.AST_TO) || 0),
+      astRatio: round1(Number(o.AST_RATIO) || 0),
+      tovPct: toPct100(o.TOV_PCT ?? o.TM_TOV_PCT ?? ff.TM_TOV_PCT),
+      poss: round1(Number(o.POSS) || 0),
+      pie: toPct100(o.PIE),
+      // Base
+      pts: round1(Number(b.PTS) || 0),
+      reb: round1(Number(b.REB) || 0),
+      oreb: round1(Number(b.OREB) || 0),
+      dreb: round1(Number(b.DREB) || 0),
+      ast: round1(Number(b.AST) || 0),
+      stl: round1(Number(b.STL) || 0),
+      blk: round1(Number(b.BLK) || 0),
+      blka: round1(Number(b.BLKA ?? ms.BLKA) || 0),
+      tov: round1(Number(b.TOV) || 0),
+      pf: round1(Number(b.PF ?? ms.PF) || 0),
+      pfd: round1(Number(b.PFD ?? ms.PFD) || 0),
+      fgm: round1(Number(b.FGM) || 0),
+      fga: round1(Number(b.FGA) || 0),
+      fgPct: toPct100(b.FG_PCT),
+      fg3m: round1(Number(b.FG3M) || 0),
+      fg3a: round1(Number(b.FG3A) || 0),
+      fg3Pct: toPct100(b.FG3_PCT),
+      ftm: round1(Number(b.FTM) || 0),
+      fta: round1(Number(b.FTA) || 0),
+      ftPct: toPct100(b.FT_PCT),
+      plusMinus: round1(Number(b.PLUS_MINUS) || 0),
+      // Four Factors oficiales
+      ftaRate: round1(rawFtaRate <= 1 ? rawFtaRate * 100 : rawFtaRate),
+      oppEfgPct: toPct100(ff.OPP_EFG_PCT),
+      oppFtaRate: round1(rawOppFtaRate <= 1 ? rawOppFtaRate * 100 : rawOppFtaRate),
+      oppTovPct: toPct100(ff.OPP_TOV_PCT),
+      oppOrebPct: toPct100(ff.OPP_OREB_PCT),
+      // Scoring oficial si está disponible
+      advScoring: Object.keys(sc).length > 0 ? {
+        entityId: groupId,
+        entityName: groupName,
+        teamId: tid,
+        teamAbbr: tabbr,
+        gp,
+        min,
+        pctFga2pt: toPct100(sc.PCT_FGA_2PT),
+        pctFga3pt: toPct100(sc.PCT_FGA_3PT),
+        pctPts2pt: toPct100(sc.PCT_PTS_2PT),
+        pctPts2ptMr: toPct100(sc.PCT_PTS_2PT_MR),
+        pctPts3pt: toPct100(sc.PCT_PTS_3PT),
+        pctPtsFb: toPct100(sc.PCT_PTS_FB),
+        pctPtsFt: toPct100(sc.PCT_PTS_FT),
+        pctPtsOffTov: toPct100(sc.PCT_PTS_OFF_TOV),
+        pctPtsPaint: toPct100(sc.PCT_PTS_PAINT),
+        pctAst2pm: toPct100(sc.PCT_AST_2PM),
+        pctUast2pm: toPct100(sc.PCT_UAST_2PM),
+        pctAst3pm: toPct100(sc.PCT_AST_3PM),
+        pctUast3pm: toPct100(sc.PCT_UAST_3PM),
+        pctAstFgm: toPct100(sc.PCT_AST_FGM),
+        pctUastFgm: toPct100(sc.PCT_UAST_FGM),
+      } : undefined,
+      // Pre-poblar campos Misc + Opponent dentro de advDefHustle antes de completar Hustle de jugadores
+      advDefHustle: (Object.keys(ms).length > 0 || Object.keys(op).length > 0) ? {
+        ptsPaint: round1(Number(ms.PTS_PAINT) || 0),
+        pts2ndChance: round1(Number(ms.PTS_2ND_CHANCE) || 0),
+        ptsFb: round1(Number(ms.PTS_FB) || 0),
+        ptsOffTov: round1(Number(ms.PTS_OFF_TOV) || 0),
+        oppPtsPaint: round1(Number(ms.OPP_PTS_PAINT) || 0),
+        oppPts2ndChance: round1(Number(ms.OPP_PTS_2ND_CHANCE) || 0),
+        oppPtsFb: round1(Number(ms.OPP_PTS_FB) || 0),
+        oppPtsOffTov: round1(Number(ms.OPP_PTS_OFF_TOV) || 0),
+        oppFgm: round1(Number(op.OPP_FGM) || 0),
+        oppFga: round1(Number(op.OPP_FGA) || 0),
+        oppFgPct: toPct100(op.OPP_FG_PCT),
+        oppFg3m: round1(Number(op.OPP_FG3M) || 0),
+        oppFg3a: round1(Number(op.OPP_FG3A) || 0),
+        oppFg3Pct: toPct100(op.OPP_FG3_PCT),
+        oppFtm: round1(Number(op.OPP_FTM) || 0),
+        oppFta: round1(Number(op.OPP_FTA) || 0),
+        oppFtPct: toPct100(op.OPP_FT_PCT),
+        oppOreb: round1(Number(op.OPP_OREB) || 0),
+        oppDreb: round1(Number(op.OPP_DREB) || 0),
+        oppReb: round1(Number(op.OPP_REB) || 0),
+        oppAst: round1(Number(op.OPP_AST) || 0),
+        oppTov: round1(Number(op.OPP_TOV) || 0),
+        oppStl: round1(Number(op.OPP_STL) || 0),
+        oppBlk: round1(Number(op.OPP_BLK) || 0),
+        oppBlka: round1(Number(op.OPP_BLKA) || 0),
+        oppPf: round1(Number(op.OPP_PF) || 0),
+        oppPfd: round1(Number(op.OPP_PFD) || 0),
+        oppPts: round1(Number(op.OPP_PTS) || 0),
+      } : undefined,
+    };
+  });
 
   if (items.length === 0) {
     items = [
-      { groupId: "1", groupName: "D. White - J. Holiday - J. Brown - J. Tatum - K. Porzingis", teamId: "1610612738", teamAbbr: "BOS", groupQuantity: 5, gp: 32, w: 26, l: 6, wPct: 0.812, min: 412.5, offRtg: 123.4, defRtg: 106.8, netRtg: 16.6, pace: 99.4, efgPct: 58.2, tsPct: 61.4, orebPct: 29.5, drebPct: 78.4, rebPct: 54.2, astPct: 68.4, astTo: 2.8, tovPct: 10.4, poss: 842, pie: 61.2 },
-      { groupId: "2", groupName: "S. Curry - B. Podziemski - A. Wiggins - J. Kuminga - D. Green", teamId: "1610612744", teamAbbr: "GSW", groupQuantity: 5, gp: 28, w: 19, l: 9, wPct: 0.678, min: 324.0, offRtg: 119.8, defRtg: 111.2, netRtg: 8.6, pace: 101.2, efgPct: 56.4, tsPct: 59.8, orebPct: 28.2, drebPct: 75.6, rebPct: 52.1, astPct: 72.1, astTo: 2.4, tovPct: 12.8, poss: 684, pie: 55.4 },
-      { groupId: "3", groupName: "L. Doncic - K. Irving - K. Thompson - P. Washington - D. Lively II", teamId: "1610612742", teamAbbr: "DAL", groupQuantity: 5, gp: 29, w: 20, l: 9, wPct: 0.690, min: 348.6, offRtg: 121.2, defRtg: 112.4, netRtg: 8.8, pace: 98.6, efgPct: 57.1, tsPct: 60.5, orebPct: 27.8, drebPct: 74.2, rebPct: 51.4, astPct: 64.2, astTo: 2.6, tovPct: 11.2, poss: 712, pie: 56.2 },
-      { groupId: "4", groupName: "S. Gilgeous-Alexander - C. Wallace - L. Dort - J. Williams - C. Holmgren", teamId: "1610612760", teamAbbr: "OKC", groupQuantity: 5, gp: 34, w: 28, l: 6, wPct: 0.824, min: 462.0, offRtg: 122.5, defRtg: 104.2, netRtg: 18.3, pace: 100.8, efgPct: 57.8, tsPct: 61.0, orebPct: 26.4, drebPct: 77.2, rebPct: 52.8, astPct: 67.5, astTo: 2.9, tovPct: 9.8, poss: 968, pie: 63.4 },
-      { groupId: "5", groupName: "J. Murray - C. Braun - M. Porter Jr. - A. Gordon - N. Jokic", teamId: "1610612743", teamAbbr: "DEN", groupQuantity: 5, gp: 31, w: 22, l: 9, wPct: 0.710, min: 428.4, offRtg: 124.6, defRtg: 112.8, netRtg: 11.8, pace: 97.4, efgPct: 58.6, tsPct: 62.1, orebPct: 31.4, drebPct: 76.8, rebPct: 54.6, astPct: 74.8, astTo: 3.2, tovPct: 10.6, poss: 874, pie: 58.9 },
-      { groupId: "6", groupName: "D. Mitchell - D. Garland - M. Strus - E. Mobley - J. Allen", teamId: "1610612739", teamAbbr: "CLE", groupQuantity: 5, gp: 35, w: 29, l: 6, wPct: 0.828, min: 486.2, offRtg: 125.1, defRtg: 108.4, netRtg: 16.7, pace: 100.2, efgPct: 59.2, tsPct: 62.4, orebPct: 30.2, drebPct: 77.8, rebPct: 54.4, astPct: 71.2, astTo: 3.0, tovPct: 10.2, poss: 1012, pie: 62.8 },
-      { groupId: "7", groupName: "J. Brunson - M. Bridges - O. Anunoby - J. Hart - K. Towns", teamId: "1610612752", teamAbbr: "NYK", groupQuantity: 5, gp: 33, w: 23, l: 10, wPct: 0.697, min: 450.0, offRtg: 122.8, defRtg: 111.6, netRtg: 11.2, pace: 96.8, efgPct: 57.4, tsPct: 61.2, orebPct: 32.8, drebPct: 76.4, rebPct: 55.1, astPct: 66.4, astTo: 2.7, tovPct: 11.0, poss: 908, pie: 58.2 },
+      { groupId: "-1628401-1627759-1628369-", groupName: "D. White - J. Brown - J. Tatum", teamId: "1610612738", teamAbbr: "BOS", groupQuantity: groupQuantity, gp: 32, w: 26, l: 6, wPct: 0.812, min: 18.5, offRtg: 123.4, defRtg: 106.8, netRtg: 16.6, pace: 99.4, efgPct: 58.2, tsPct: 61.4, orebPct: 29.5, drebPct: 78.4, rebPct: 54.2, astPct: 68.4, astTo: 2.8, tovPct: 10.4, poss: 38, pie: 61.2, pts: 42.4, reb: 16.2, ast: 10.4, stl: 3.1, blk: 2.0, tov: 4.1, fgPct: 50.2, fg3Pct: 39.4, ftPct: 82.1, plusMinus: 6.2 },
     ];
   }
 
+  // Enrich with all 10 layers (Shot Zones, Tracking, Hustle/DFG%, Clutch, Playtypes, Violations)
+  items = enrichLineupsWithSnapshotLayers(items, advSnap, playerDatasetsOverride);
+
   return { season, seasonLabel: season, groupQuantity, teamId, generatedAt: new Date().toISOString(), items };
+}
+
+// =========================================================================
+// 9B. VERIFIED BUZZER BEATERS & GAME WINNERS (Play-by-Play NBA CDN)
+// =========================================================================
+function parseNbaClockSeconds(clockStr: string): number {
+  const s = String(clockStr || "").trim();
+  const iso = s.match(/^PT(\d+)M(\d+(?:\.\d+)?)S$/i);
+  if (iso) {
+    return (Number(iso[1]) || 0) * 60 + (Number(iso[2]) || 0);
+  }
+  const colon = s.match(/^(\d+):(\d+(?:\.\d+)?)$/);
+  if (colon) {
+    return (Number(colon[1]) || 0) * 60 + (Number(colon[2]) || 0);
+  }
+  const num = Number(s);
+  return Number.isFinite(num) ? num : 999;
+}
+
+function formatClockDisplay(sec: number): string {
+  const clamped = Math.max(0, sec);
+  return `${clamped.toFixed(1)}s`;
+}
+
+function formatPeriodLabel(period: number): string {
+  if (period <= 4) return `${period}Q`;
+  const otNum = period - 4;
+  return otNum === 1 ? "OT" : `${otNum}OT`;
+}
+
+function buildHeroicCountsMaps(items: any[]) {
+  const playerCounts: Record<string, { buzzerBeaters: number; gameWinners: number; otTyingBuzzers: number }> = {};
+  const teamCounts: Record<string, { buzzerBeaters: number; gameWinners: number; otTyingBuzzers: number }> = {};
+  const ensure = (map: Record<string, any>, key: string) => {
+    if (!key) return null;
+    if (!map[key]) map[key] = { buzzerBeaters: 0, gameWinners: 0, otTyingBuzzers: 0 };
+    return map[key];
+  };
+  for (const shot of items || []) {
+    const pBucket = ensure(playerCounts, String(shot.playerId || ""));
+    const tIdBucket = ensure(teamCounts, String(shot.teamId || ""));
+    const tAbbrBucket = ensure(teamCounts, String(shot.teamAbbr || "").toUpperCase());
+    const inc = (b: any) => {
+      if (!b) return;
+      if (shot.shotType === "buzzer_beater") {
+        b.buzzerBeaters += 1;
+        b.gameWinners += 1;
+      } else if (shot.shotType === "game_winner") {
+        b.gameWinners += 1;
+      } else if (shot.shotType === "ot_tying_buzzer") {
+        b.otTyingBuzzers += 1;
+      }
+    };
+    inc(pBucket);
+    inc(tIdBucket);
+    inc(tAbbrBucket);
+  }
+  return { playerCounts, teamCounts };
+}
+
+async function fetchPlayByPlayFromCdn(gameId: string): Promise<any | null> {
+  const url = `https://cdn.nba.com/static/json/liveData/playbyplay/playbyplay_${gameId}.json`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": NBA_STATS_HEADERS["User-Agent"],
+        "Referer": "https://www.nba.com/",
+        "Accept": "application/json",
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    clearTimeout(timer);
+    return null;
+  }
+}
+
+function analyzeGamePlayByPlayHeroicShots(pbpJson: any, gameMeta: {
+  gameId: string;
+  date: string;
+  seasonLabel: string;
+  homeAbbr: string;
+  awayAbbr: string;
+  homeId: string;
+  awayId: string;
+}) {
+  const actions: any[] = Array.isArray(pbpJson?.game?.actions) ? pbpJson.game.actions : [];
+  if (actions.length === 0) return [];
+
+  let maxPeriod = 4;
+  for (const a of actions) {
+    if (Number(a.period) > maxPeriod) maxPeriod = Number(a.period);
+  }
+
+  let finalHome = 0;
+  let finalAway = 0;
+  for (let i = actions.length - 1; i >= 0; i--) {
+    const h = Number(actions[i].scoreHome);
+    const aw = Number(actions[i].scoreAway);
+    if (Number.isFinite(h) && Number.isFinite(aw) && (h > 0 || aw > 0)) {
+      finalHome = h;
+      finalAway = aw;
+      break;
+    }
+  }
+  if (finalHome === finalAway || (finalHome === 0 && finalAway === 0)) return [];
+
+  const winnerIsHome = finalHome > finalAway;
+  const winnerTeamId = winnerIsHome ? gameMeta.homeId : gameMeta.awayId;
+  const winnerTeamAbbr = winnerIsHome ? gameMeta.homeAbbr : gameMeta.awayAbbr;
+  const loserTeamAbbr = winnerIsHome ? gameMeta.awayAbbr : gameMeta.homeAbbr;
+  const finalScoreWinner = winnerIsHome ? finalHome : finalAway;
+  const finalScoreLoser = winnerIsHome ? finalAway : finalHome;
+
+  const detected: any[] = [];
+  let prevHome = 0;
+  let prevAway = 0;
+  let winningCandidate: any = null;
+
+  for (let i = 0; i < actions.length; i++) {
+    const a = actions[i];
+    const h = Number.isFinite(Number(a.scoreHome)) ? Number(a.scoreHome) : prevHome;
+    const aw = Number.isFinite(Number(a.scoreAway)) ? Number(a.scoreAway) : prevAway;
+    const period = Number(a.period) || 1;
+    const sec = parseNbaClockSeconds(a.clock);
+    const teamTricode = String(a.teamTricode || "").toUpperCase();
+    const isScoreChange = h !== prevHome || aw !== prevAway;
+
+    if (isScoreChange) {
+      const actionIsHome = teamTricode
+        ? teamTricode === gameMeta.homeAbbr
+        : h > prevHome;
+      const prevDiffForShooter = actionIsHome ? prevHome - prevAway : prevAway - prevHome;
+      const currDiffForShooter = actionIsHome ? h - aw : aw - h;
+      const ptsScored = actionIsHome ? h - prevHome : aw - prevAway;
+      const isMadeFieldGoal = Number(a.isFieldGoal) === 1 && String(a.shotResult || "").toLowerCase() === "made";
+      const isMadeFreeThrow = String(a.actionType || "").toLowerCase() === "freethrow" && String(a.shotResult || "").toLowerCase() === "made";
+
+      // Check OT-forcing buzzer beater (0.0s tying shot in 4Q or earlier OT)
+      if (
+        isMadeFieldGoal &&
+        period >= 4 &&
+        period < maxPeriod &&
+        sec <= 0.4 &&
+        prevDiffForShooter < 0 &&
+        currDiffForShooter === 0
+      ) {
+        const oppAbbr = actionIsHome ? gameMeta.awayAbbr : gameMeta.homeAbbr;
+        const tId = String(a.teamId || (actionIsHome ? gameMeta.homeId : gameMeta.awayId));
+        detected.push({
+          id: `${gameMeta.gameId}:${a.actionNumber || i}:ot_tie`,
+          seasonLabel: gameMeta.seasonLabel,
+          gameId: gameMeta.gameId,
+          date: gameMeta.date,
+          playerId: String(a.personId || ""),
+          playerName: String(a.playerNameI || a.playerName || "Jugador"),
+          teamId: tId,
+          teamAbbr: teamTricode || (actionIsHome ? gameMeta.homeAbbr : gameMeta.awayAbbr),
+          opponentAbbr: oppAbbr,
+          isHome: actionIsHome,
+          shotType: "ot_tying_buzzer",
+          period,
+          periodLabel: formatPeriodLabel(period),
+          clock: formatClockDisplay(sec),
+          clockSeconds: round1(sec),
+          description: String(a.description || "Canasta sobre la bocina para prórroga"),
+          points: ptsScored,
+          finalScoreTeam: actionIsHome ? finalHome : finalAway,
+          finalScoreOpp: actionIsHome ? finalAway : finalHome,
+          wonGame: actionIsHome === winnerIsHome,
+          shotDistance: a.shotDistance !== undefined && a.shotDistance !== null ? Number(a.shotDistance) : null,
+        });
+      }
+
+      // Check game-winning shot in final period
+      if (period === maxPeriod && period >= 4) {
+        const currDiffForWinner = winnerIsHome ? h - aw : aw - h;
+        const prevDiffForWinner = winnerIsHome ? prevHome - prevAway : prevAway - prevHome;
+
+        // If winner fell back tied or behind, invalidate earlier candidate
+        if (currDiffForWinner <= 0) {
+          winningCandidate = null;
+        } else if (
+          actionIsHome === winnerIsHome &&
+          (isMadeFieldGoal || isMadeFreeThrow) &&
+          sec <= 10.0 &&
+          prevDiffForWinner <= 0 &&
+          currDiffForWinner > 0
+        ) {
+          const isBuzzer = isMadeFieldGoal && sec <= 0.4;
+          winningCandidate = {
+            id: `${gameMeta.gameId}:${a.actionNumber || i}:${isBuzzer ? "bb" : "gw"}`,
+            seasonLabel: gameMeta.seasonLabel,
+            gameId: gameMeta.gameId,
+            date: gameMeta.date,
+            playerId: String(a.personId || ""),
+            playerName: String(a.playerNameI || a.playerName || "Jugador"),
+            teamId: String(a.teamId || winnerTeamId),
+            teamAbbr: teamTricode || winnerTeamAbbr,
+            opponentAbbr: loserTeamAbbr,
+            isHome: winnerIsHome,
+            shotType: isBuzzer ? "buzzer_beater" : "game_winner",
+            period,
+            periodLabel: formatPeriodLabel(period),
+            clock: formatClockDisplay(sec),
+            clockSeconds: round1(sec),
+            description: String(a.description || "Canasta decisiva"),
+            points: ptsScored,
+            finalScoreTeam: finalScoreWinner,
+            finalScoreOpp: finalScoreLoser,
+            wonGame: true,
+            shotDistance: a.shotDistance !== undefined && a.shotDistance !== null ? Number(a.shotDistance) : null,
+          };
+        }
+      }
+    }
+    prevHome = h;
+    prevAway = aw;
+  }
+
+  if (winningCandidate && winningCandidate.playerId && winningCandidate.playerId !== "0") {
+    detected.push(winningCandidate);
+  }
+  return detected.filter((d) => d.playerId && d.playerId !== "0");
+}
+
+async function scanHeroicClutchShotsFromSnapshotAndCdn(forceLive = false) {
+  const advSnap = getActiveAdvancedSnapshot();
+  if (!forceLive && advSnap?.heroicShots?.items) {
+    return advSnap.heroicShots;
+  }
+
+  const baseSnap = readNbaSnapshotFromDisk();
+  if (!baseSnap) {
+    return {
+      season: "2026-27",
+      generatedAt: new Date().toISOString(),
+      items: [],
+      playerCounts: {},
+      teamCounts: {},
+    };
+  }
+
+  const collectCloseGames = (teamsArr: any[], seasonLabel: string, maxDiff: number) => {
+    const byEvent = new Map<string, any>();
+    for (const t of teamsArr || []) {
+      const teamAbbr = String(t.abbreviation || "").toUpperCase();
+      const teamId = String(t.id || NBA_TEAMS_MAP[teamAbbr]?.id || "");
+      for (const g of t.games || []) {
+        const eid = String(g.eventId || "").trim();
+        if (!/^002\d{7}$/.test(eid)) continue;
+        const diff = Math.abs(Number(g.differential) || 0);
+        if (diff > maxDiff) continue;
+        const existing = byEvent.get(eid) || {
+          gameId: eid,
+          date: String(g.date || ""),
+          seasonLabel,
+          homeAbbr: "",
+          awayAbbr: "",
+          homeId: "",
+          awayId: "",
+        };
+        if (g.isHome) {
+          existing.homeAbbr = teamAbbr;
+          existing.homeId = teamId;
+          if (!existing.awayAbbr && g.opponentAbbr) {
+            existing.awayAbbr = String(g.opponentAbbr).toUpperCase();
+            existing.awayId = String(NBA_TEAMS_MAP[existing.awayAbbr]?.id || "");
+          }
+        } else {
+          existing.awayAbbr = teamAbbr;
+          existing.awayId = teamId;
+          if (!existing.homeAbbr && g.opponentAbbr) {
+            existing.homeAbbr = String(g.opponentAbbr).toUpperCase();
+            existing.homeId = String(NBA_TEAMS_MAP[existing.homeAbbr]?.id || "");
+          }
+        }
+        byEvent.set(eid, existing);
+      }
+    }
+    return Array.from(byEvent.values());
+  };
+
+  // Scan close games (|diff| <= 4) from both 2026-27 and 2025-26
+  const close2027 = collectCloseGames(baseSnap.s2027?.teams || [], "2026-27", 4);
+  const close2026 = collectCloseGames(baseSnap.s2026?.teams || [], "2025-26", 4);
+  const gamesToScan = [...close2027, ...close2026];
+
+  const allDetected: any[] = [];
+  await mapWithConcurrency(gamesToScan, 10, async (gm) => {
+    const pbp = await fetchPlayByPlayFromCdn(gm.gameId);
+    if (!pbp) return;
+    const shots = analyzeGamePlayByPlayHeroicShots(pbp, gm);
+    if (shots.length > 0) {
+      allDetected.push(...shots);
+    }
+  });
+
+  // Sort newest first
+  allDetected.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || b.gameId.localeCompare(a.gameId));
+
+  const { playerCounts, teamCounts } = buildHeroicCountsMaps(allDetected);
+  return {
+    season: "2026-27",
+    generatedAt: new Date().toISOString(),
+    items: allDetected,
+    playerCounts,
+    teamCounts,
+  };
+}
+
+export async function getLeagueHeroicShots(seasonToken?: string, forceRefresh = false): Promise<any> {
+  const advSnap = getActiveAdvancedSnapshot();
+  const basePayload =
+    !forceRefresh && advSnap?.heroicShots?.items
+      ? advSnap.heroicShots
+      : await scanHeroicClutchShotsFromSnapshotAndCdn(forceRefresh);
+
+  const allItems: any[] = Array.isArray(basePayload?.items) ? basePayload.items : [];
+  let filteredItems = allItems;
+  if (seasonToken && seasonToken !== "all" && seasonToken !== "continuous") {
+    const targetSeason = resolveNbaSeasonParam(seasonToken);
+    filteredItems = allItems.filter((x) => x.seasonLabel === targetSeason);
+  }
+  const { playerCounts, teamCounts } = buildHeroicCountsMaps(filteredItems);
+
+  return {
+    season: seasonToken && seasonToken !== "all" && seasonToken !== "continuous" ? resolveNbaSeasonParam(seasonToken) : "2025-27",
+    generatedAt: basePayload?.generatedAt || new Date().toISOString(),
+    totalEvents: filteredItems.length,
+    items: filteredItems,
+    playerCounts,
+    teamCounts,
+  };
 }
 
 // =========================================================================
@@ -1762,14 +2903,45 @@ function buildAdvancedLeagueBenchmarks(
   },
   forceRefresh = false
 ): Record<string, { mean: number; sd: number }> {
+  const advSnapForOnOff = getActiveAdvancedSnapshot();
+  const computeOnOffLeagueStats = (): Record<string, { mean: number; sd: number }> => {
+    const outOnOff: Record<string, { mean: number; sd: number }> = {};
+    const byTeam = advSnapForOnOff?.onOffByTeam;
+    if (byTeam && typeof byTeam === "object") {
+      const allEntries: any[] = Object.values(byTeam).flat().filter(Boolean);
+      const rot = allEntries.filter(
+        (x: any) => (Number(x.gp) || 0) >= 5 && (Number(x.minOn) || 0) >= 8
+      );
+      const pool = rot.length >= 15 ? rot : allEntries;
+      const diffRes = computeMeanAndSd(pool.map((x: any) => Number(x.netDiff)), 1);
+      const onRes = computeMeanAndSd(pool.map((x: any) => Number(x.netRtgOn)), 1);
+      const offRes = computeMeanAndSd(pool.map((x: any) => Number(x.netRtgOff)), 1);
+      if (diffRes) outOnOff.adv_onOffNetDiff = diffRes;
+      if (onRes) outOnOff.adv_onOffNetOn = onRes;
+      if (offRes) outOnOff.adv_onOffNetOff = offRes;
+    }
+    if (!outOnOff.adv_onOffNetDiff) outOnOff.adv_onOffNetDiff = { mean: 0.1, sd: 5.9 };
+    if (!outOnOff.adv_onOffNetOn) outOnOff.adv_onOffNetOn = { mean: -0.3, sd: 8.4 };
+    if (!outOnOff.adv_onOffNetOff) outOnOff.adv_onOffNetOff = { mean: -0.4, sd: 6.9 };
+    return outOnOff;
+  };
+
   if (!forceRefresh) {
     const advSnap = getActiveAdvancedSnapshot();
     if (advSnap?.benchmarks?.[scope] && Object.keys(advSnap.benchmarks[scope]).length >= 100) {
-      return advSnap.benchmarks[scope];
+      return {
+        ...advSnap.benchmarks[scope],
+        ...computeOnOffLeagueStats(),
+      };
     }
     const cacheKey = `${scope}:${season}`;
     const hit = advBenchmarksCache.get(cacheKey);
-    if (hit && hit.expiresAt > Date.now()) return hit.value;
+    if (hit && hit.expiresAt > Date.now()) {
+      return {
+        ...hit.value,
+        ...computeOnOffLeagueStats(),
+      };
+    }
   }
   const cacheKey = `${scope}:${season}`;
 
@@ -1808,11 +2980,7 @@ function buildAdvancedLeagueBenchmarks(
   setBench("adv_oppTovPct", ffItems.map((x: any) => Number(x.oppTovPct)).filter((v) => v > 0), 1);
   setBench("adv_oppOrebPct", ffItems.map((x: any) => Number(x.oppOrebPct)).filter((v) => v > 0), 1);
   setBench("adv_oppFtaRate", ffItems.map((x: any) => Number(x.oppFtaRate)).filter((v) => v > 0), 2);
-  if (scope === "player") {
-    out.adv_onOffNetDiff = { mean: 0.0, sd: 6.2 };
-    out.adv_onOffNetOn = out.adv_netRtg || { mean: 0.0, sd: 5.5 };
-    out.adv_onOffNetOff = { mean: 0.0, sd: 5.5 };
-  }
+  Object.assign(out, computeOnOffLeagueStats());
 
   // Layer 3: Scoring Splits
   const scItems = filterPool(datasets.scoring?.items || []);
@@ -2099,7 +3267,7 @@ function buildAdvancedLeagueBenchmarks(
 
 export async function getTeamAdvancedDossier(teamId: string, seasonToken?: string, forceRefresh = false): Promise<any> {
   const season = resolveNbaSeasonParam(seasonToken);
-  const [zones, clutch, hustle, tracking, playtypes, scoring, fourFactors, violations, lineups5, lineups2, liveOnOff] = await Promise.all([
+  const [zones, clutch, hustle, tracking, playtypes, scoring, fourFactors, violations, lineups5, lineups3, lineups2, liveOnOff, heroicAll] = await Promise.all([
     getLeagueShotZonesAdvanced(seasonToken, "team", forceRefresh),
     getLeagueClutchAdvanced(seasonToken, "team", forceRefresh),
     getLeagueDefenseHustleAdvanced(seasonToken, "team", forceRefresh),
@@ -2109,8 +3277,10 @@ export async function getTeamAdvancedDossier(teamId: string, seasonToken?: strin
     getLeagueFourFactorsAdvanced(seasonToken, "team", forceRefresh),
     getLeagueViolationsAdvanced(seasonToken, "team", forceRefresh),
     getLeagueLineups(seasonToken, 5, teamId, forceRefresh),
+    getLeagueLineups(seasonToken, 3, teamId, forceRefresh),
     getLeagueLineups(seasonToken, 2, teamId, forceRefresh),
     getTeamOnOffSplits(teamId, season, forceRefresh),
+    getLeagueHeroicShots("all", forceRefresh),
   ]);
 
   let teamZone = zones.items.find((x: any) => x.entityId === teamId || x.teamId === teamId) || null;
@@ -2162,6 +3332,10 @@ export async function getTeamAdvancedDossier(teamId: string, seasonToken?: strin
     forceRefresh
   );
 
+  const teamHeroicShots = (heroicAll?.items || []).filter(
+    (s: any) => String(s.teamId) === String(teamId) || String(s.teamAbbr).toUpperCase() === teamAbbr.toUpperCase()
+  );
+
   return {
     teamId,
     season,
@@ -2178,14 +3352,16 @@ export async function getTeamAdvancedDossier(teamId: string, seasonToken?: strin
     playtypesDef: teamPlaytype?.defensive || [],
     onOffSplits: liveOnOff.length > 0 ? liveOnOff : defaultOnOffSplits,
     lineups5: lineups5.items || [],
+    lineups3: lineups3.items || [],
     lineups2: lineups2.items || [],
+    heroicShots: teamHeroicShots,
     leagueBenchmarks,
   };
 }
 
 export async function getPlayerAdvancedDossier(playerId: string, teamIdHint?: string, seasonToken?: string, forceRefresh = false): Promise<any> {
   const season = resolveNbaSeasonParam(seasonToken);
-  const [zones, clutch, hustle, tracking, playtypes, scoring, fourFactors, violations, teamOnOff] = await Promise.all([
+  const [zones, clutch, hustle, tracking, playtypes, scoring, fourFactors, violations, teamOnOff, heroicAll] = await Promise.all([
     getLeagueShotZonesAdvanced(seasonToken, "player", forceRefresh),
     getLeagueClutchAdvanced(seasonToken, "player", forceRefresh),
     getLeagueDefenseHustleAdvanced(seasonToken, "player", forceRefresh),
@@ -2195,6 +3371,7 @@ export async function getPlayerAdvancedDossier(playerId: string, teamIdHint?: st
     getLeagueFourFactorsAdvanced(seasonToken, "player", forceRefresh),
     getLeagueViolationsAdvanced(seasonToken, "player", forceRefresh),
     teamIdHint ? getTeamOnOffSplits(teamIdHint, season, forceRefresh) : Promise.resolve([]),
+    getLeagueHeroicShots("all", forceRefresh),
   ]);
 
   let pZone = zones.items.find((x: any) => x.entityId === playerId) || null;
@@ -2235,6 +3412,10 @@ export async function getPlayerAdvancedDossier(playerId: string, teamIdHint?: st
     forceRefresh
   );
 
+  const playerHeroicShots = (heroicAll?.items || []).filter(
+    (s: any) => String(s.playerId) === String(playerId)
+  );
+
   return {
     playerId,
     teamId: teamIdHint || pZone?.teamId || pHustle?.teamId || "",
@@ -2251,6 +3432,7 @@ export async function getPlayerAdvancedDossier(playerId: string, teamIdHint?: st
     playtypesOff: pPlaytype?.offensive || [],
     playtypesDef: pPlaytype?.defensive || [],
     onOffSplit: pOnOff,
+    heroicShots: playerHeroicShots,
     leagueBenchmarks,
   };
 }
@@ -2262,7 +3444,7 @@ export async function buildAdvancedSnapshotFromCurrentState(
   const season = resolveNbaSeasonParam(seasonToken);
   console.log(`[RadarNBA Snapshot Avanzado] Construyendo capas avanzadas para temporada ${season} (forceLive=${forceLive})...`);
 
-  // 1. Fetch / resolve all team and player layers
+  // 1. Fetch / resolve all team and player layers FIRST so lineups can use fresh player datasets
   const [
     teamZones,
     playerZones,
@@ -2280,8 +3462,6 @@ export async function buildAdvancedSnapshotFromCurrentState(
     playerFourFactors,
     teamViolations,
     playerViolations,
-    lineups5,
-    lineups2,
   ] = await Promise.all([
     getLeagueShotZonesAdvanced(season, "team", forceLive),
     getLeagueShotZonesAdvanced(season, "player", forceLive),
@@ -2299,11 +3479,27 @@ export async function buildAdvancedSnapshotFromCurrentState(
     getLeagueFourFactorsAdvanced(season, "player", forceLive),
     getLeagueViolationsAdvanced(season, "team", forceLive),
     getLeagueViolationsAdvanced(season, "player", forceLive),
-    getLeagueLineups(season, 5, "0", forceLive),
-    getLeagueLineups(season, 2, "0", forceLive),
   ]);
 
-  // 2. Fetch or synthesize on/off splits for each team
+  const playerDatasetsOverride = {
+    zones: playerZones,
+    tracking: playerTracking,
+    hustle: playerHustle,
+    clutch: playerClutch,
+    playtypes: playerPlaytypes,
+    violations: playerViolations,
+    scoring: playerScoring,
+  };
+
+  // 2. Fetch 5-Man, 3-Man, 2-Man lineups with all 10 layers + scan Heroic Shots (Buzzer Beaters / Game Winners)
+  const [lineups5, lineups3, lineups2, heroicShots] = await Promise.all([
+    getLeagueLineups(season, 5, "0", forceLive, playerDatasetsOverride),
+    getLeagueLineups(season, 3, "0", forceLive, playerDatasetsOverride),
+    getLeagueLineups(season, 2, "0", forceLive, playerDatasetsOverride),
+    scanHeroicClutchShotsFromSnapshotAndCdn(forceLive),
+  ]);
+
+  // 3. Fetch or synthesize on/off splits for each team
   const onOffByTeam: Record<string, any[]> = {};
   const baseSnap = readNbaSnapshotFromDisk();
   const s2027Players = baseSnap?.s2027?.players || [];
@@ -2321,7 +3517,6 @@ export async function buildAdvancedSnapshotFromCurrentState(
     }
 
     if (!Array.isArray(splits) || splits.length === 0) {
-      // Synthesize high-fidelity on/off court metrics from s2027 players for this team
       const teamPlayers = s2027Players
         .filter((p: any) => String(p.teamId) === tid || String(p.teamAbbr) === abbr)
         .sort((a: any, b: any) => {
@@ -2382,7 +3577,7 @@ export async function buildAdvancedSnapshotFromCurrentState(
     onOffByTeam[tid] = splits;
   });
 
-  // 3. Compute benchmarks across all datasets with forceRefresh=true
+  // 4. Compute benchmarks across all datasets
   const teamBenchmarks = buildAdvancedLeagueBenchmarks(
     "team",
     season,
@@ -2428,8 +3623,9 @@ export async function buildAdvancedSnapshotFromCurrentState(
     scoring: { player: playerScoring, team: teamScoring },
     fourFactors: { player: playerFourFactors, team: teamFourFactors },
     violations: { player: playerViolations, team: teamViolations },
-    lineups: { lineups5, lineups2 },
+    lineups: { lineups5, lineups3, lineups2 },
     onOffByTeam,
+    heroicShots,
     benchmarks: {
       player: playerBenchmarks,
       team: teamBenchmarks,
@@ -2462,8 +3658,10 @@ export async function syncNbaAdvancedSnapshotToDisk(options?: { forceLive?: bool
     playerViolations: payload.violations.player?.items?.length || 0,
     teamViolations: payload.violations.team?.items?.length || 0,
     lineups5: payload.lineups.lineups5?.items?.length || 0,
+    lineups3: payload.lineups.lineups3?.items?.length || 0,
     lineups2: payload.lineups.lineups2?.items?.length || 0,
     teamsWithOnOff: Object.keys(payload.onOffByTeam).length,
+    heroicShotsCount: payload.heroicShots?.items?.length || 0,
     playerBenchmarks: Object.keys(payload.benchmarks.player).length,
     teamBenchmarks: Object.keys(payload.benchmarks.team).length,
   };

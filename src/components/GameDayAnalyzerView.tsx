@@ -2061,7 +2061,7 @@ export function GameDayAnalyzerView({
                 <div className="flex items-center gap-2 min-w-0">
                   <TrendingUp className="w-4 h-4 text-emerald-400 shrink-0" />
                   <h3 className="text-sm font-semibold text-slate-100 truncate">
-                    03A. Noches de Explosión vs Media 2026-27 (▲)
+                    03A. Noches de Explosión vs Media Previa 25 PJ (▲)
                   </h3>
                   <MetricInfoTooltip helpKey="gamedayExplosions" align="left" />
                 </div>
@@ -2156,7 +2156,7 @@ export function GameDayAnalyzerView({
                 <div className="flex items-center gap-2 min-w-0">
                   <TrendingDown className="w-4 h-4 text-rose-400 shrink-0" />
                   <h3 className="text-sm font-semibold text-slate-100 truncate">
-                    03B. Batacazos de Titulares vs Media 2026-27 (▼)
+                    03B. Batacazos de Titulares vs Media Previa 25 PJ (▼)
                   </h3>
                   <MetricInfoTooltip helpKey="gamedaySlumps" align="left" />
                 </div>

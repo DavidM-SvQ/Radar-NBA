@@ -34,6 +34,7 @@ import {
   Trophy,
   Users,
   X,
+  Zap,
 } from 'lucide-react';
 import type {
   ActiveSection,
@@ -43,6 +44,7 @@ import type {
   BootstrapPayload,
   ConsistencyEntry,
   ExperienceMode,
+  InspectorDefaultKpisConfig,
   MilestonesPayload,
   PlayerSummary,
   ScoreboardGame,
@@ -147,6 +149,11 @@ const SeasonMilestonesView = lazyWithPreload(() =>
     default: m.SeasonMilestonesView,
   }))
 );
+const HeroicShotsView = lazyWithPreload(() =>
+  import('./components/HeroicShotsView').then((m) => ({
+    default: m.HeroicShotsView,
+  }))
+);
 const SeasonAwardsView = lazyWithPreload(() =>
   import('./components/SeasonAwardsView').then((m) => ({
     default: m.SeasonAwardsView,
@@ -218,6 +225,9 @@ function preloadSectionChunk(section: ActiveSection): void {
       break;
     case 'milestones':
       void SeasonMilestonesView.preload();
+      break;
+    case 'heroic':
+      void HeroicShotsView.preload();
       break;
     case 'awards':
       void SeasonAwardsView.preload();
@@ -319,6 +329,9 @@ import {
   subscribeBootstrapSlicesClient,
 } from './utils/bootstrapWireCodec';
 import {
+  CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG,
+  fetchPublicInspectorKpiDefaults,
+  fetchPublicWebFeatureFlags,
   loginAdminWithPasscode,
   logoutAdminSession,
   verifyStoredAdminSession,
@@ -461,6 +474,9 @@ export default function App() {
   const [watchlistIds, setWatchlistIds] = useState<Set<string>>(loadSavedWatchlist);
   const [onlyWatchlist, setOnlyWatchlist] = useState(false);
   const [showThresholdBar, setShowThresholdBar] = useState<boolean>(false);
+  const [showHeroicBadges, setShowHeroicBadges] = useState<boolean>(false);
+  const [inspectorDefaultKpis, setInspectorDefaultKpis] =
+    useState<InspectorDefaultKpisConfig>(CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG);
 
   const selectedSeasonTokens = useMemo(() => {
     const parts = String(seasonMode || '2027')
@@ -512,6 +528,7 @@ export default function App() {
   const [awardsLoading, setAwardsLoading] = useState(false);
   const [awardsError, setAwardsError] = useState<string | null>(null);
   const [gamedayRefreshCounter, setGamedayRefreshCounter] = useState(0);
+  const [heroicRefreshCounter, setHeroicRefreshCounter] = useState(0);
   const [copiedLink, setCopiedLink] = useState(false);
   const [isPrivateUnlocked, setIsPrivateUnlocked] = useState<boolean>(false);
   const [checkingAdminSession, setCheckingAdminSession] = useState<boolean>(
@@ -934,6 +951,23 @@ export default function App() {
   }, [seasonMode, fetchBootstrap]);
 
   useEffect(() => {
+    let cancelled = false;
+    void fetchPublicWebFeatureFlags().then((flags) => {
+      if (!cancelled) {
+        setShowHeroicBadges(Boolean(flags.showHeroicBadges));
+      }
+    });
+    void fetchPublicInspectorKpiDefaults().then((cfg) => {
+      if (!cancelled) {
+        setInspectorDefaultKpis(cfg);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (activeSection !== 'milestones') return;
     if (milestonesData) return;
     void fetchMilestones(false);
@@ -991,6 +1025,9 @@ export default function App() {
       void fetchAwards(awardsSeasonScope, true);
     }
     setGamedayRefreshCounter((c) => c + 1);
+    if (activeSection === 'heroic') {
+      setHeroicRefreshCounter((c) => c + 1);
+    }
   }, [
     fetchBootstrap,
     fetchMilestones,
@@ -1114,6 +1151,28 @@ export default function App() {
         mode,
         null
       );
+    },
+    [commitRoute]
+  );
+
+  const handleOpenGamedayDate = useCallback(
+    (date: string) => {
+      setMobileMenuOpen(false);
+      commitRoute(
+        (prev) => ({
+          ...prev,
+          section: 'gameday',
+          inspectedType: null,
+          inspectedId: null,
+          gamedayDate: date || prev.gamedayDate,
+          gamedayReportId: null,
+        }),
+        'push',
+        null
+      );
+      if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
     },
     [commitRoute]
   );
@@ -1559,6 +1618,11 @@ export default function App() {
       icon: Trophy,
     },
     {
+      id: 'heroic',
+      label: 'Buzzer Beaters',
+      icon: Zap,
+    },
+    {
       id: 'teams',
       label: 'Equipos NBA',
       count: teams.length,
@@ -1998,6 +2062,7 @@ export default function App() {
 
           {/* Homogeneous Global "Muestra temporal:" Container (collapsed by default across all viewports) */}
           {activeSection !== 'milestones' &&
+            activeSection !== 'heroic' &&
             activeSection !== 'awards' &&
             activeSection !== 'glossary' &&
             activeSection !== 'fantasy_espn' &&
@@ -2398,6 +2463,7 @@ export default function App() {
           {/* Error Recovery State */}
           {errorMsg &&
             activeSection !== 'milestones' &&
+            activeSection !== 'heroic' &&
             activeSection !== 'awards' &&
             activeSection !== 'glossary' && (
             <div className="bg-[#131C2E] border border-rose-500/40 rounded-lg p-5 flex flex-wrap items-center justify-between gap-4">
@@ -2585,6 +2651,10 @@ export default function App() {
                         onSeasonModeChange={setSeasonMode}
                         settings={settings}
                         onSettingsChange={setSettings}
+                        showHeroicBadges={showHeroicBadges}
+                        onHeroicBadgesChange={setShowHeroicBadges}
+                        inspectorDefaultKpis={inspectorDefaultKpis}
+                        onInspectorDefaultKpisChange={setInspectorDefaultKpis}
                       />
                     )}
                   </Suspense>
@@ -2634,6 +2704,19 @@ export default function App() {
                 onSwitchToAdvanced={() => handleChangeExperienceMode('advanced')}
                 onRetry={() => void fetchMilestones(false)}
                 onInspectEntity={handleInspectEntity}
+              />
+            ) : activeSection === 'heroic' ? (
+              <HeroicShotsView
+                players={players}
+                teams={teams}
+                experienceMode={experienceMode}
+                watchlistIds={watchlistIds}
+                onlyWatchlist={onlyWatchlist}
+                onToggleOnlyWatchlist={() => setOnlyWatchlist((prev) => !prev)}
+                onToggleWatchlist={handleToggleWatchlist}
+                onInspectEntity={handleInspectEntity}
+                onOpenGamedayDate={handleOpenGamedayDate}
+                refreshCounter={heroicRefreshCounter}
               />
             ) : loading ? (
               <SectionViewSkeleton />
@@ -2689,6 +2772,7 @@ export default function App() {
                     teams={teams}
                     currentSeasonTeams={seasonReferenceSlices.teams2027}
                     currentSeasonPlayers={seasonReferenceSlices.players2027}
+                    seasonToken={selectedSeasonTokens[0] || '2027'}
                     benchmarks={benchmarks}
                     experienceMode={experienceMode}
                     watchlistIds={watchlistIds}
@@ -2775,6 +2859,7 @@ export default function App() {
                     onlyWatchlist={onlyWatchlist}
                     onToggleWatchlist={handleToggleWatchlist}
                     onInspectEntity={handleInspectEntity}
+                    showHeroicBadges={showHeroicBadges}
                   />
                 )}
 
@@ -2797,6 +2882,7 @@ export default function App() {
                     onInspectEntity={handleInspectEntity}
                     onAddExternalPlayer={handleAddExternalPlayer}
                     addingPlayerId={addingPlayerId}
+                    showHeroicBadges={showHeroicBadges}
                   />
                 )}
 
@@ -2872,6 +2958,7 @@ export default function App() {
               activeSection === 'comparator' ||
               activeSection === 'awards' ||
               activeSection === 'milestones' ||
+              activeSection === 'heroic' ||
               activeSection === 'teams' ||
               activeSection === 'fantasy_espn' ||
               activeSection === 'glossary';
@@ -2922,6 +3009,9 @@ export default function App() {
             onClose={handleCloseInspector}
             onOpenInComparator={handleOpenInComparator}
             onSelectRosterPlayer={handleAddExternalPlayer}
+            showHeroicBadges={showHeroicBadges}
+            defaultPlayerKpiKeys={inspectorDefaultKpis.playerDefaultKpiKeys}
+            defaultTeamKpiKeys={inspectorDefaultKpis.teamDefaultKpiKeys}
           />
         </Suspense>
       )}

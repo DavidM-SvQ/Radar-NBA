@@ -6,6 +6,8 @@ import type {
   NbaClutchEntry,
   NbaDefenseHustleEntry,
   NbaFourFactorsEntry,
+  NbaHeroicShotCountSummary,
+  NbaHeroicShotsResponse,
   NbaPlaytypeEntitySummary,
   NbaScoringSplitsEntry,
   NbaShotZonesEntry,
@@ -60,6 +62,7 @@ interface TeamsExplorerViewProps {
   onlyWatchlist: boolean;
   onToggleWatchlist: (entityKey: string) => void;
   onInspectEntity: (entityType: 'player' | 'team', entityId: string) => void;
+  showHeroicBadges?: boolean;
 }
 
 type TeamTableView =
@@ -135,6 +138,8 @@ interface EnrichedTeamRow extends TeamSummary {
   advClutch?: NbaClutchEntry;
   advPlaytypes?: NbaPlaytypeEntitySummary;
   advViolations?: NbaViolationsEntry;
+  buzzerBeaters: number;
+  gameWinners: number;
 }
 
 interface TeamColDef {
@@ -223,7 +228,7 @@ const TEAM_LAYERS: TeamLayerDef[] = [
     label: '8. Clutch (<5m, ±5)',
     categoryToFetch: 'clutch',
     defaultSortKey: 'clNetRtg',
-    defaultCols: ['clGp', 'clW', 'clL', 'clWPct', 'clMin', 'clPts', 'clFgPct', 'clFg3Pct', 'clFtPct', 'clOffRtg', 'clDefRtg', 'clNetRtg', 'clTsPct'],
+    defaultCols: ['clGp', 'clW', 'clL', 'clWPct', 'clMin', 'clPts', 'clFgPct', 'clFg3Pct', 'clFtPct', 'clOffRtg', 'clDefRtg', 'clNetRtg', 'clTsPct', 'buzzerBeaters', 'gameWinners'],
   },
   {
     id: 'playtypes',
@@ -461,6 +466,8 @@ const TEAM_COLUMNS_BY_LAYER: Record<TeamTableView, TeamColDef[]> = {
     { key: 'clTsPct', label: 'TS% Cl.', helpKey: 'clutch', suffix: '%', getNumValue: (r) => numOrNull(r.advClutch?.tsPct), format: (r) => fmtNum(numOrNull(r.advClutch?.tsPct), 1, '%') },
     { key: 'clEfgPct', label: 'eFG% Cl.', helpKey: 'clutch', suffix: '%', getNumValue: (r) => numOrNull(r.advClutch?.efgPct), format: (r) => fmtNum(numOrNull(r.advClutch?.efgPct), 1, '%') },
     { key: 'clPie', label: 'PIE% Cl.', helpKey: 'clutch', suffix: '%', getNumValue: (r) => numOrNull(r.advClutch?.pie), format: (r) => fmtNum(numOrNull(r.advClutch?.pie), 1, '%') },
+    { key: 'buzzerBeaters', label: 'Buzzer B. (0.0s)', helpKey: 'buzzerBeater', decimals: 0, getNumValue: (r) => r.buzzerBeaters, format: (r) => `${r.buzzerBeaters}`, tone: (r) => (r.buzzerBeaters > 0 ? 'accent' : 'neutral') },
+    { key: 'gameWinners', label: 'Game Win. (≤10s)', helpKey: 'gameWinner', decimals: 0, getNumValue: (r) => r.gameWinners, format: (r) => `${r.gameWinners}`, tone: (r) => (r.gameWinners > 0 ? 'positive' : 'neutral') },
   ],
   playtypes: [
     { key: 'ptTotalPoss', label: 'Pos. Ofens./PJ', helpKey: 'ppp', decimals: 1, getNumValue: (r) => numOrNull(r.advPlaytypes?.totalPossOff), format: (r) => fmtNum(numOrNull(r.advPlaytypes?.totalPossOff), r.statMode === 'totals' ? 0 : 1) },
@@ -520,6 +527,7 @@ const INVARIANT_TEAM_COL_KEYS = new Set<string>([
   'astToPassPctAdj', 'avgSecPerTouch', 'avgDribPerTouch', 'ptsPerTouch', 'avgSpeed', 'avgSpeedOff', 'avgSpeedDef', 'rebChancePctAdj', 'avgRebDist',
   'drebPct', 'dFgPct', 'normalFgPct', 'pctPlusMinus', 'oppFgPct', 'oppFg3Pct', 'oppFtPct',
   'clGp', 'clW', 'clL', 'clWPct', 'clFgPct', 'clFg3Pct', 'clFtPct', 'clOffRtg', 'clDefRtg', 'clNetRtg', 'clTsPct', 'clEfgPct', 'clPie',
+  'buzzerBeaters', 'gameWinners',
   'ptTopLabel', 'ptTopPpp', 'ptSpotupPpp', 'ptSpotupPct', 'ptPrbhPpp', 'ptPrbhPct', 'ptTransPpp',
   'ptIsoPpp', 'ptPrrPpp', 'ptCutPpp', 'ptPostPpp', 'ptHandoffPpp', 'ptOffScrPpp', 'ptPutbackPpp', 'ptMiscPpp',
   'raFgmTot', 'raFgaTot', 'totalThreeFgaTot',
@@ -569,6 +577,7 @@ export function TeamsExplorerView({
   onlyWatchlist,
   onToggleWatchlist,
   onInspectEntity,
+  showHeroicBadges = false,
 }: TeamsExplorerViewProps) {
   const [viewMode, setViewMode] = useState<TeamTableView>('basic');
   const [statMode, setStatMode] = useState<StatScaleMode>(loadTeamStatMode);
@@ -579,6 +588,7 @@ export function TeamsExplorerView({
   const [sortAsc, setSortAsc] = useState(false);
 
   const [advCache, setAdvCache] = useState<Record<string, Record<string, any>>>({});
+  const [heroicCache, setHeroicCache] = useState<Record<string, Record<string, NbaHeroicShotCountSummary>>>({});
   const [loadingCategory, setLoadingCategory] = useState<NbaAdvancedCategory | null>(null);
   const [categoryError, setCategoryError] = useState<string | null>(null);
 
@@ -672,6 +682,30 @@ export function TeamsExplorerView({
     };
   }, [experienceMode, activeLayerMeta, seasonToken, advCache]);
 
+  // Fetch Buzzer Beaters & Game Winners team counts from snapshot
+  useEffect(() => {
+    if (!showHeroicBadges || heroicCache[seasonToken]) return;
+    let cancelled = false;
+    fetch(`/api/nba/advanced/heroic-shots?season=${encodeURIComponent(seasonToken)}`)
+      .then(async (res) => {
+        if (!res.ok) return null;
+        return (await res.json()) as NbaHeroicShotsResponse;
+      })
+      .then((json) => {
+        if (cancelled || !json) return;
+        setHeroicCache((prev) => ({
+          ...prev,
+          [seasonToken]: json.teamCounts || {},
+        }));
+      })
+      .catch(() => {
+        // Ignore transient heroic fetch failure
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [seasonToken, heroicCache, showHeroicBadges]);
+
   const enrichedTeams: EnrichedTeamRow[] = useMemo(() => {
     const ffMap = advCache[`${seasonToken}:four_factors`] || {};
     const scoringMap = advCache[`${seasonToken}:scoring`] || {};
@@ -681,6 +715,7 @@ export function TeamsExplorerView({
     const clutchMap = advCache[`${seasonToken}:clutch`] || {};
     const playtypesMap = advCache[`${seasonToken}:playtypes`] || {};
     const violationsMap = advCache[`${seasonToken}:violations`] || {};
+    const heroicMap = heroicCache[seasonToken] || {};
 
     const lookup = <T,>(map: Record<string, T>, t: TeamSummary): T | undefined =>
       map[t.id] || map[`abbr:${t.abbreviation.toUpperCase()}`];
@@ -1023,16 +1058,22 @@ export function TeamsExplorerView({
         advClutch,
         advPlaytypes,
         advViolations,
+        buzzerBeaters:
+          (heroicMap[t.id] || heroicMap[String(t.abbreviation || '').toUpperCase()])?.buzzerBeaters ?? 0,
+        gameWinners:
+          (heroicMap[t.id] || heroicMap[String(t.abbreviation || '').toUpperCase()])?.gameWinners ?? 0,
       };
     });
-  }, [teams, windowSize, advCache, seasonToken, statMode]);
+  }, [teams, windowSize, advCache, heroicCache, seasonToken, statMode]);
 
   const activeLayerColumns = useMemo(() => {
-    const allDefs = TEAM_COLUMNS_BY_LAYER[viewMode];
+    const allDefs = TEAM_COLUMNS_BY_LAYER[viewMode].filter(
+      (c) => showHeroicBadges || (c.key !== 'buzzerBeaters' && c.key !== 'gameWinners')
+    );
     const visibleSet = new Set(visibleColsByLayer[viewMode] || activeLayerMeta.defaultCols);
     const active = allDefs.filter((c) => visibleSet.has(c.key));
     return active.length > 0 ? active : allDefs.slice(0, 6);
-  }, [viewMode, visibleColsByLayer, activeLayerMeta]);
+  }, [viewMode, visibleColsByLayer, activeLayerMeta, showHeroicBadges]);
 
   const activeSortColDef = useMemo(
     () => TEAM_COLUMNS_BY_LAYER[viewMode].find((c) => c.key === sortKey),
@@ -1508,9 +1549,15 @@ export function TeamsExplorerView({
         {experienceMode === 'advanced' && (
           <div className="pt-2 border-t border-[#1E293B]">
             <LayerColumnCustomizer
-              columns={TEAM_COLUMNS_BY_LAYER[viewMode].map((c) => ({ key: c.key, label: c.label }))}
-              visibleKeys={visibleColsByLayer[viewMode] || activeLayerMeta.defaultCols}
-              defaultKeys={activeLayerMeta.defaultCols}
+              columns={TEAM_COLUMNS_BY_LAYER[viewMode]
+                .filter((c) => showHeroicBadges || (c.key !== 'buzzerBeaters' && c.key !== 'gameWinners'))
+                .map((c) => ({ key: c.key, label: c.label }))}
+              visibleKeys={(visibleColsByLayer[viewMode] || activeLayerMeta.defaultCols).filter(
+                (k) => showHeroicBadges || (k !== 'buzzerBeaters' && k !== 'gameWinners')
+              )}
+              defaultKeys={activeLayerMeta.defaultCols.filter(
+                (k) => showHeroicBadges || (k !== 'buzzerBeaters' && k !== 'gameWinners')
+              )}
               onChangeVisibleKeys={(next) =>
                 setVisibleColsByLayer((prev) => ({ ...prev, [viewMode]: next }))
               }
@@ -1637,8 +1684,24 @@ export function TeamsExplorerView({
                           framed
                         />
                         <div className="min-w-0">
-                          <h3 className="font-semibold text-sm text-slate-100 truncate">
-                            {t.name}
+                          <h3 className="font-semibold text-sm text-slate-100 truncate flex items-center gap-1.5">
+                            <span className="truncate">{t.name}</span>
+                            {showHeroicBadges && t.buzzerBeaters > 0 && (
+                              <span
+                                title={`${t.buzzerBeaters} Buzzer Beater(s) oficiales`}
+                                className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-orange-500/15 text-orange-300 border border-orange-500/30 shrink-0"
+                              >
+                                ⚡ {t.buzzerBeaters} BB
+                              </span>
+                            )}
+                            {showHeroicBadges && t.gameWinners > 0 && (
+                              <span
+                                title={`${t.gameWinners} Game Winner(s) oficiales`}
+                                className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0"
+                              >
+                                🎯 {t.gameWinners} GW
+                              </span>
+                            )}
                           </h3>
                           <p className="text-xs text-slate-400 truncate">
                             {t.abbreviation} · Conf. {t.conference} · {t.wins}-{t.losses} (
@@ -1881,8 +1944,24 @@ export function TeamsExplorerView({
                           framed
                         />
                         <div>
-                          <div className="font-medium text-slate-100 whitespace-nowrap">
-                            {t.name}
+                          <div className="font-medium text-slate-100 whitespace-nowrap flex items-center gap-1.5">
+                            <span>{t.name}</span>
+                            {showHeroicBadges && t.buzzerBeaters > 0 && (
+                              <span
+                                title={`${t.buzzerBeaters} Buzzer Beater(s) oficiales (0.0s)`}
+                                className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-orange-500/15 text-orange-300 border border-orange-500/30"
+                              >
+                                ⚡ {t.buzzerBeaters} BB
+                              </span>
+                            )}
+                            {showHeroicBadges && t.gameWinners > 0 && (
+                              <span
+                                title={`${t.gameWinners} Game Winner(s) oficiales (≤10s)`}
+                                className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                              >
+                                🎯 {t.gameWinners} GW
+                              </span>
+                            )}
                           </div>
                           <div className="text-xs text-slate-400 whitespace-nowrap">
                             {t.abbreviation} · Conf. {t.conference} · Últ.10: {t.lastTenRecord}

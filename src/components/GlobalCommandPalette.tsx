@@ -18,6 +18,7 @@ import {
   Trophy,
   Users,
   X,
+  Zap,
 } from 'lucide-react';
 import type {
   ActiveSection,
@@ -174,6 +175,13 @@ const SECTION_COMMANDS: Array<{
     subtitle: 'Récords en un partido, dobles-dobles, triples-dobles y líderes',
     keywords: 'hitos records lideres triples dobles anotacion topes',
     icon: Trophy,
+  },
+  {
+    sectionId: 'heroic',
+    label: 'Buzzer Beaters y Game Winners',
+    subtitle: 'Archivo oficial (0.0s y ≤10s), ranking clutch y contexto histórico NBA',
+    keywords: 'buzzer beater game winner bb gw bocina prorroga clutch heroic tiros decisivos',
+    icon: Zap,
   },
   {
     sectionId: 'teams',

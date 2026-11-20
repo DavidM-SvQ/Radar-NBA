@@ -16,6 +16,7 @@ export type PlayerSamplePreset =
 export type InspectorReferenceMode = 'nba' | 'own';
 
 export type OwnBaselineMode =
+  | 'prev_25_no_last'
   | 'both_seasons'
   | 'season_2027'
   | 'season_2026'
@@ -2459,7 +2460,8 @@ export function resolveOwnBaselineSelection(
   sampleGames: PlayerGameLog[],
   mode: OwnBaselineMode,
   customLastK: number,
-  latestLeagueDate2027: string
+  latestLeagueDate2027: string,
+  excludeLatestInCustomK = false
 ): {
   games: PlayerGameLog[];
   label: string;
@@ -2471,6 +2473,15 @@ export function resolveOwnBaselineSelection(
     latestLeagueDate2027 ||
     games2027[0]?.date ||
     new Date().toISOString().slice(0, 10);
+
+  if (mode === 'prev_25_no_last') {
+    const slice = allGames.length > 1 ? allGames.slice(1, 26) : allGames;
+    return {
+      games: slice,
+      label: `25 PJ previos sin último (${slice.length} PJ · ref. 03A/03B)`,
+      shortLabel: `25 PJ previos (${slice.length} PJ)`,
+    };
+  }
 
   if (mode === 'season_2027') {
     return {
@@ -2512,12 +2523,22 @@ export function resolveOwnBaselineSelection(
   }
 
   if (mode === 'custom_last_k') {
+    if (excludeLatestInCustomK && allGames.length > 1) {
+      const avail = allGames.slice(1);
+      const k = Math.max(1, Math.min(avail.length, customLastK));
+      const slice = avail.slice(0, k);
+      return {
+        games: slice,
+        label: `Últimos ${slice.length} PJ previos (sin último PJ)`,
+        shortLabel: `Últ. ${slice.length} PJ ant.`,
+      };
+    }
     const k = Math.max(1, Math.min(allGames.length || 1, customLastK));
     const slice = allGames.slice(0, k);
     return {
       games: slice,
-      label: `Últimos ${slice.length} partidos propios`,
-      shortLabel: `Últ. ${slice.length} PJ`,
+      label: `Últimos ${slice.length} partidos propios (incl. último)`,
+      shortLabel: `Últ. ${slice.length} PJ (c/hoy)`,
     };
   }
 

@@ -2,9 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   CalendarDays,
   Check,
   ChevronDown,
+  Database,
   Lock,
   Minus,
   Plus,
@@ -12,34 +15,49 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  Search,
   Server,
   ShieldCheck,
   Sliders,
   SlidersHorizontal,
   Sparkles,
   Terminal,
+  X,
   Zap,
 } from 'lucide-react';
 import type {
   AdminSecurityConfig,
   AdminSecurityConfigValues,
+  InspectorDefaultKpisConfig,
   SeasonMode,
   ThresholdSettings,
   WindowSize,
 } from '../types/nba';
 import {
+  CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG,
   CLIENT_DEFAULT_SECURITY_VALUES,
   CLIENT_SECURITY_BOUNDS,
+  fetchAdminInspectorKpiDefaults,
   fetchAdminSecurityConfig,
   fetchAdminTelemetry,
+  fetchAdminWebFeatureFlags,
   resetAdminCircuitBreakers,
+  resetAdminInspectorKpiDefaults,
   resetAdminRateLimitCounters,
   resetAdminSecurityConfigDefaults,
+  updateAdminInspectorKpiDefaults,
   updateAdminSecurityConfig,
+  updateAdminWebFeatureFlags,
   type CircuitMetricsClient,
   type RateLimitBackendKind,
   type TelemetrySummaryClient,
 } from '../utils/adminAuthClient';
+import {
+  NBA_ALL_KPIS_CATALOG,
+  NBA_ALL_KPIS_MAP,
+  NBA_KPI_LAYERS,
+  type NbaKpiLayerId,
+} from '../utils/nbaInspectorAllKpis';
 
 interface AdminSecurityConfigPanelProps {
   onLockSession: () => void;
@@ -47,6 +65,10 @@ interface AdminSecurityConfigPanelProps {
   onSeasonModeChange?: (mode: SeasonMode) => void;
   settings?: ThresholdSettings;
   onSettingsChange?: (updater: (prev: ThresholdSettings) => ThresholdSettings) => void;
+  showHeroicBadges?: boolean;
+  onHeroicBadgesChange?: (enabled: boolean) => void;
+  inspectorDefaultKpis?: InspectorDefaultKpisConfig;
+  onInspectorDefaultKpisChange?: (cfg: InspectorDefaultKpisConfig) => void;
 }
 
 type DraftValues = Record<keyof AdminSecurityConfigValues, string>;
@@ -101,11 +123,41 @@ export function AdminSecurityConfigPanel({
   onSeasonModeChange,
   settings,
   onSettingsChange,
+  showHeroicBadges = false,
+  onHeroicBadgesChange,
+  inspectorDefaultKpis,
+  onInspectorDefaultKpisChange,
 }: AdminSecurityConfigPanelProps) {
   const [expanded, setExpanded] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
+  const [savingHeroicFlag, setSavingHeroicFlag] = useState<boolean>(false);
+  const [savingKpis, setSavingKpis] = useState<boolean>(false);
   const [clearingCounters, setClearingCounters] = useState<boolean>(false);
+
+  const [kpiTab, setKpiTab] = useState<'player' | 'team'>('player');
+  const [kpiSearch, setKpiSearch] = useState<string>('');
+  const [kpiLayerFilter, setKpiLayerFilter] = useState<'all' | NbaKpiLayerId>('all');
+  const [savedKpisConfig, setSavedKpisConfig] = useState<InspectorDefaultKpisConfig>(
+    () =>
+      inspectorDefaultKpis ?? {
+        playerDefaultKpiKeys: [...CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG.playerDefaultKpiKeys],
+        teamDefaultKpiKeys: [...CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG.teamDefaultKpiKeys],
+        updatedAt: 0,
+      }
+  );
+  const [draftPlayerKpiKeys, setDraftPlayerKpiKeys] = useState<string[]>(
+    () =>
+      inspectorDefaultKpis?.playerDefaultKpiKeys ?? [
+        ...CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG.playerDefaultKpiKeys,
+      ]
+  );
+  const [draftTeamKpiKeys, setDraftTeamKpiKeys] = useState<string[]>(
+    () =>
+      inspectorDefaultKpis?.teamDefaultKpiKeys ?? [
+        ...CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG.teamDefaultKpiKeys,
+      ]
+  );
 
   const [savedConfig, setSavedConfig] = useState<AdminSecurityConfig>({
     ...CLIENT_DEFAULT_SECURITY_VALUES,
@@ -159,8 +211,25 @@ export function AdminSecurityConfigPanel({
     } else if (res.error) {
       setFeedback({ kind: 'error', text: res.error });
     }
+    const [flagsRes, kpisRes] = await Promise.all([
+      fetchAdminWebFeatureFlags(),
+      fetchAdminInspectorKpiDefaults(),
+    ]);
+    if (flagsRes.unauthorized || kpisRes.unauthorized) {
+      onLockSession();
+      return;
+    }
+    if (flagsRes.ok && flagsRes.flags) {
+      onHeroicBadgesChange?.(Boolean(flagsRes.flags.showHeroicBadges));
+    }
+    if (kpisRes.ok && kpisRes.config) {
+      setSavedKpisConfig(kpisRes.config);
+      setDraftPlayerKpiKeys([...kpisRes.config.playerDefaultKpiKeys]);
+      setDraftTeamKpiKeys([...kpisRes.config.teamDefaultKpiKeys]);
+      onInspectorDefaultKpisChange?.(kpisRes.config);
+    }
     void loadTelemetry();
-  }, [onLockSession, loadTelemetry]);
+  }, [onLockSession, loadTelemetry, onHeroicBadgesChange, onInspectorDefaultKpisChange]);
 
   useEffect(() => {
     void loadConfig();
@@ -314,6 +383,159 @@ export function AdminSecurityConfigPanel({
       setFeedback({
         kind: 'error',
         text: 'No se pudieron reiniciar los circuit breakers.',
+      });
+    }
+  };
+
+  const handleToggleHeroicBadges = async () => {
+    if (savingHeroicFlag) return;
+    const prevVal = Boolean(showHeroicBadges);
+    const nextVal = !prevVal;
+    setSavingHeroicFlag(true);
+    setFeedback(null);
+    onHeroicBadgesChange?.(nextVal);
+    const res = await updateAdminWebFeatureFlags({ showHeroicBadges: nextVal });
+    setSavingHeroicFlag(false);
+    if (res.unauthorized) {
+      onHeroicBadgesChange?.(prevVal);
+      onLockSession();
+      return;
+    }
+    if (res.ok && res.flags) {
+      onHeroicBadgesChange?.(Boolean(res.flags.showHeroicBadges));
+      setFeedback({
+        kind: 'success',
+        text: res.flags.showHeroicBadges
+          ? 'Insignias ⚡ Buzzer Beater y 🎯 Game Winner activadas en toda la web.'
+          : 'Insignias ⚡ Buzzer Beater y 🎯 Game Winner desactivadas en la web pública.',
+      });
+    } else {
+      onHeroicBadgesChange?.(prevVal);
+      setFeedback({
+        kind: 'error',
+        text: res.error || 'No se pudo actualizar el estado de las insignias BB/GW.',
+      });
+    }
+  };
+
+  const activeDraftKpiKeys = kpiTab === 'player' ? draftPlayerKpiKeys : draftTeamKpiKeys;
+  const setActiveDraftKpiKeys = (updater: (prev: string[]) => string[]) => {
+    if (kpiTab === 'player') {
+      setDraftPlayerKpiKeys(updater);
+    } else {
+      setDraftTeamKpiKeys(updater);
+    }
+    if (feedback) setFeedback(null);
+  };
+
+  const kpiLayerShortMap = useMemo(
+    () =>
+      Object.fromEntries(NBA_KPI_LAYERS.map((l) => [l.id, l.shortLabel])) as Record<
+        NbaKpiLayerId,
+        string
+      >,
+    []
+  );
+
+  const scopedAdminKpiCatalog = useMemo(
+    () => NBA_ALL_KPIS_CATALOG.filter((k) => k.scope === 'both' || k.scope === kpiTab),
+    [kpiTab]
+  );
+
+  const filteredAdminKpiCatalog = useMemo(() => {
+    const q = kpiSearch.trim().toLowerCase();
+    return scopedAdminKpiCatalog.filter((k) => {
+      if (kpiLayerFilter !== 'all' && k.layer !== kpiLayerFilter) return false;
+      if (!q) return true;
+      const hay = `${k.label} ${k.shortLabel} ${k.keywords || ''} ${kpiLayerShortMap[k.layer]}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [scopedAdminKpiCatalog, kpiLayerFilter, kpiSearch, kpiLayerShortMap]);
+
+  const kpisDirty = useMemo(() => {
+    const sameList = (a: string[], b: string[]) =>
+      a.length === b.length && a.every((v, idx) => v === b[idx]);
+    return (
+      !sameList(draftPlayerKpiKeys, savedKpisConfig.playerDefaultKpiKeys) ||
+      !sameList(draftTeamKpiKeys, savedKpisConfig.teamDefaultKpiKeys)
+    );
+  }, [draftPlayerKpiKeys, draftTeamKpiKeys, savedKpisConfig]);
+
+  const moveDraftKpi = (idx: number, dir: -1 | 1) => {
+    const target = idx + dir;
+    setActiveDraftKpiKeys((prev) => {
+      if (target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      const [item] = next.splice(idx, 1);
+      next.splice(target, 0, item);
+      return next;
+    });
+  };
+
+  const toggleDraftKpi = (key: string) => {
+    setActiveDraftKpiKeys((prev) => {
+      if (prev.includes(key)) {
+        if (prev.length <= 1) return prev;
+        return prev.filter((k) => k !== key);
+      }
+      if (prev.length >= 80) return prev;
+      return [...prev, key];
+    });
+  };
+
+  const handleSaveInspectorKpis = async () => {
+    if (savingKpis || draftPlayerKpiKeys.length === 0 || draftTeamKpiKeys.length === 0) return;
+    setSavingKpis(true);
+    setFeedback(null);
+    const res = await updateAdminInspectorKpiDefaults({
+      playerDefaultKpiKeys: draftPlayerKpiKeys,
+      teamDefaultKpiKeys: draftTeamKpiKeys,
+    });
+    setSavingKpis(false);
+    if (res.unauthorized) {
+      onLockSession();
+      return;
+    }
+    if (res.ok && res.config) {
+      setSavedKpisConfig(res.config);
+      setDraftPlayerKpiKeys([...res.config.playerDefaultKpiKeys]);
+      setDraftTeamKpiKeys([...res.config.teamDefaultKpiKeys]);
+      onInspectorDefaultKpisChange?.(res.config);
+      setFeedback({
+        kind: 'success',
+        text: `KPIs por defecto y orden guardados (${res.config.playerDefaultKpiKeys.length} Jugador · ${res.config.teamDefaultKpiKeys.length} Equipo).`,
+      });
+    } else {
+      setFeedback({
+        kind: 'error',
+        text: res.error || 'No se pudieron guardar los KPIs por defecto.',
+      });
+    }
+  };
+
+  const handleResetInspectorKpis = async () => {
+    if (savingKpis) return;
+    setSavingKpis(true);
+    setFeedback(null);
+    const res = await resetAdminInspectorKpiDefaults();
+    setSavingKpis(false);
+    if (res.unauthorized) {
+      onLockSession();
+      return;
+    }
+    if (res.ok && res.config) {
+      setSavedKpisConfig(res.config);
+      setDraftPlayerKpiKeys([...res.config.playerDefaultKpiKeys]);
+      setDraftTeamKpiKeys([...res.config.teamDefaultKpiKeys]);
+      onInspectorDefaultKpisChange?.(res.config);
+      setFeedback({
+        kind: 'success',
+        text: 'Restaurados los 20 KPIs por defecto y orden recomendado para Jugador y Equipo.',
+      });
+    } else {
+      setFeedback({
+        kind: 'error',
+        text: res.error || 'No se pudieron restablecer los KPIs por defecto.',
       });
     }
   };
@@ -643,6 +865,287 @@ export function AdminSecurityConfigPanel({
                       </div>
                     </div>
                   ) : null}
+                </div>
+
+                {/* Public Feature Toggle: Buzzer Beater & Game Winner Badges */}
+                <div className="bg-[#0B1120] border border-[#1E293B] rounded-lg p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Zap className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+                      <span className="text-xs font-semibold text-slate-100">
+                        Insignias de Buzzer Beater (⚡ BB) y Game Winner (🎯 GW)
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
+                          showHeroicBadges
+                            ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                            : 'bg-slate-800 text-slate-400 border-slate-700'
+                        }`}
+                      >
+                        {showHeroicBadges ? 'ACTIVADAS' : 'DESACTIVADAS'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      Controla la visibilidad pública de las etiquetas ⚡ BB / 🎯 GW, columnas de clutch y paneles de tiros decisivos en Jugadores, Equipos y Fichas.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={Boolean(showHeroicBadges)}
+                    disabled={savingHeroicFlag}
+                    onClick={() => void handleToggleHeroicBadges()}
+                    className={`min-h-[38px] px-3.5 py-1.5 rounded-lg text-xs font-semibold border inline-flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 disabled:opacity-60 ${
+                      showHeroicBadges
+                        ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 border-emerald-500/40'
+                        : 'bg-[#131C2E] hover:bg-[#182338] text-slate-200 border-[#283548]'
+                    }`}
+                  >
+                    <span
+                      className={`w-7 h-4 rounded-full p-0.5 transition-colors flex items-center ${
+                        showHeroicBadges ? 'bg-emerald-500 justify-end' : 'bg-slate-700 justify-start'
+                      }`}
+                    >
+                      <span className="w-3 h-3 rounded-full bg-white shadow-sm" />
+                    </span>
+                    <span>
+                      {savingHeroicFlag
+                        ? 'Guardando...'
+                        : showHeroicBadges
+                        ? 'Desactivar insignias'
+                        : 'Activar insignias'}
+                    </span>
+                  </button>
+                </div>
+
+                {/* Public Feature: Default Inspector KPIs & Order (Jugador / Equipo) */}
+                <div className="bg-[#0B1120] border border-[#1E293B] rounded-lg p-3.5 sm:p-4 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2.5">
+                    <div className="space-y-0.5 min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Database className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+                        <span className="text-xs font-semibold text-slate-100">
+                          KPIs por Defecto y Orden (Fichas de Jugador y Equipo)
+                        </span>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-orange-500/10 text-orange-300 border border-orange-500/30">
+                          {draftPlayerKpiKeys.length} Jugador · {draftTeamKpiKeys.length} Equipo
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        Configura qué KPIs salen seleccionados de serie en las fichas públicas y el orden exacto (#1, #2…) en que aparecen en la cuadrícula.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <div className="inline-flex items-center bg-[#131C2E] border border-[#1E293B] rounded-lg p-0.5 text-xs">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setKpiTab('player');
+                            setKpiLayerFilter('all');
+                            setKpiSearch('');
+                          }}
+                          className={`px-2.5 py-1 rounded-md font-semibold transition-colors whitespace-nowrap ${
+                            kpiTab === 'player'
+                              ? 'bg-orange-500 text-slate-950'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          Jugador ({draftPlayerKpiKeys.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setKpiTab('team');
+                            setKpiLayerFilter('all');
+                            setKpiSearch('');
+                          }}
+                          className={`px-2.5 py-1 rounded-md font-semibold transition-colors whitespace-nowrap ${
+                            kpiTab === 'team'
+                              ? 'bg-orange-500 text-slate-950'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          Equipo ({draftTeamKpiKeys.length})
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={savingKpis}
+                        onClick={() => void handleResetInspectorKpis()}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium bg-[#131C2E] hover:bg-[#182338] border border-[#1E293B] rounded-lg text-slate-300 hover:text-orange-300 transition-colors whitespace-nowrap disabled:opacity-50"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Restaurar 20 por defecto</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={savingKpis || !kpisDirty}
+                        onClick={() => void handleSaveInspectorKpis()}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap disabled:opacity-50 ${
+                          kpisDirty
+                            ? 'bg-orange-500 hover:bg-orange-400 text-slate-950 border-orange-500'
+                            : 'bg-[#131C2E] text-slate-400 border-[#1E293B]'
+                        }`}
+                      >
+                        <Save className="w-3.5 h-3.5" />
+                        <span>{savingKpis ? 'Guardando...' : 'Guardar KPIs y orden'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                    {/* Left: Ordered active KPIs list */}
+                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3 space-y-2">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-semibold text-slate-200">
+                          Orden activo en {kpiTab === 'player' ? 'Ficha de Jugador' : 'Ficha de Equipo'} ({activeDraftKpiKeys.length})
+                        </span>
+                        <span className="text-slate-500">Usa ▲ / ▼ para reordenar</span>
+                      </div>
+
+                      <div className="max-h-64 overflow-y-auto pr-1 space-y-1">
+                        {activeDraftKpiKeys.map((key, idx) => {
+                          const def = NBA_ALL_KPIS_MAP[key];
+                          const label = def?.label || key;
+                          const layerLabel = def ? kpiLayerShortMap[def.layer] : '';
+                          return (
+                            <div
+                              key={key}
+                              className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md bg-[#0B1120] border border-[#1E293B] text-xs"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="font-mono tabular-nums text-[10px] font-bold text-orange-400 w-5 shrink-0">
+                                  #{idx + 1}
+                                </span>
+                                <span className="truncate text-slate-200 font-medium" title={label}>
+                                  {label}
+                                </span>
+                                {layerLabel && (
+                                  <span className="text-[10px] text-slate-500 hidden sm:inline shrink-0">
+                                    · {layerLabel.replace(/^\d+\.\s*/, '')}
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  type="button"
+                                  disabled={idx === 0}
+                                  onClick={() => moveDraftKpi(idx, -1)}
+                                  title="Subir posición"
+                                  className="p-1 rounded bg-[#131C2E] border border-[#1E293B] text-slate-300 hover:text-white disabled:opacity-30"
+                                >
+                                  <ArrowUp className="w-3 h-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={idx === activeDraftKpiKeys.length - 1}
+                                  onClick={() => moveDraftKpi(idx, 1)}
+                                  title="Bajar posición"
+                                  className="p-1 rounded bg-[#131C2E] border border-[#1E293B] text-slate-300 hover:text-white disabled:opacity-30"
+                                >
+                                  <ArrowDown className="w-3 h-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={activeDraftKpiKeys.length <= 1}
+                                  onClick={() => toggleDraftKpi(key)}
+                                  title="Quitar de los KPIs por defecto"
+                                  className="p-1 rounded bg-[#131C2E] border border-[#1E293B] text-slate-400 hover:text-rose-400 disabled:opacity-30"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Right: Searchable 10-layer KPI catalog */}
+                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3 space-y-2">
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={kpiSearch}
+                          onChange={(e) => setKpiSearch(e.target.value)}
+                          placeholder="Buscar KPI para añadir o quitar (eFG%, PACE, DRIVES, WIN%, CLUTCH...)"
+                          className="w-full pl-8 pr-7 py-1.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded-md text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500"
+                        />
+                        {kpiSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setKpiSearch('')}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-200"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setKpiLayerFilter('all')}
+                          className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors whitespace-nowrap ${
+                            kpiLayerFilter === 'all'
+                              ? 'bg-orange-500 text-slate-950 border-orange-500'
+                              : 'bg-[#0B1120] border-[#1E293B] text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          Todas ({scopedAdminKpiCatalog.length})
+                        </button>
+                        {NBA_KPI_LAYERS.map((l) => {
+                          const hasLayerItems = scopedAdminKpiCatalog.some((k) => k.layer === l.id);
+                          if (!hasLayerItems) return null;
+                          return (
+                            <button
+                              key={l.id}
+                              type="button"
+                              onClick={() => setKpiLayerFilter(l.id)}
+                              className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors whitespace-nowrap ${
+                                kpiLayerFilter === l.id
+                                  ? 'bg-orange-500 text-slate-950 border-orange-500 font-semibold'
+                                  : 'bg-[#0B1120] border-[#1E293B] text-slate-400 hover:text-slate-200'
+                              }`}
+                            >
+                              {l.shortLabel}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div className="max-h-44 overflow-y-auto pr-1 flex flex-wrap gap-1.5">
+                        {filteredAdminKpiCatalog.map((def) => {
+                          const selected = activeDraftKpiKeys.includes(def.key);
+                          return (
+                            <button
+                              key={def.key}
+                              type="button"
+                              onClick={() => toggleDraftKpi(def.key)}
+                              className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded border transition-colors whitespace-nowrap ${
+                                selected
+                                  ? 'bg-orange-500 text-slate-950 border-orange-500 font-semibold'
+                                  : 'bg-[#0B1120] border-[#1E293B] text-slate-300 hover:text-white hover:border-slate-600'
+                              }`}
+                            >
+                              {selected ? (
+                                <Check className="w-3 h-3 shrink-0" />
+                              ) : (
+                                <Plus className="w-3 h-3 shrink-0 text-slate-500" />
+                              )}
+                              <span>{def.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
 

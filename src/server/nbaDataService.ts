@@ -8,12 +8,13 @@ import { NBA_TEAMS_MAP } from "../utils/teamLogos.ts";
 import { createScoutingEngine } from "./scoutingEngine.ts";
 import { buildFantasyEspnSyncPayload } from "./fantasyEspnService.ts";
 import zlib from "zlib";
-import { packBootstrapWirePayload } from "../utils/bootstrapWireCodec.ts";
+import { packBootstrapWirePayload, populateTeamComputedFields } from "../utils/bootstrapWireCodec.ts";
 import { applyCdnDeltaGamesTo2027, hydrateSeasonDatasetFromSnapshot, readNbaSnapshotFromDisk, serializeSeasonDatasetForSnapshot, writeNbaSnapshotToDisk } from "./nbaSnapshotStore.ts";
 import { buildSeasonAwardsPayload, enrichBiosWithEspnRosters } from "./seasonAwardsService.ts";
 import { executeWithCircuitBreaker, identifyProviderFromUrl, isCircuitOpen } from "./circuitBreaker.ts";
 import { STATIC_SCHEDULE_2027 } from "../utils/staticSchedule.ts";
 import { syncNbaAdvancedSnapshotToDisk } from "./nbaAdvancedStatsService.ts";
+import { DEFAULT_PLAYER_NBA_KPI_KEYS, DEFAULT_TEAM_NBA_KPI_KEYS } from "../utils/nbaInspectorAllKpis.ts";
 
 const GAMEDAY_THRESHOLDS_FILE = path.resolve(process.cwd(), "data", "gameday-thresholds-config.json");
 
@@ -103,6 +104,140 @@ function resetGamedayThresholdsConfigDefaults() {
     // Ignore unlink errors
   }
   return { ...activeGamedayThresholds };
+}
+
+const WEB_FEATURE_FLAGS_FILE = path.resolve(process.cwd(), "data", "web-feature-flags.json");
+
+export const DEFAULT_WEB_FEATURE_FLAGS = {
+  showHeroicBadges: false,
+};
+
+let activeWebFeatureFlags = { ...DEFAULT_WEB_FEATURE_FLAGS, updatedAt: 0 };
+
+function initWebFeatureFlagsFromDisk() {
+  try {
+    if (fs.existsSync(WEB_FEATURE_FLAGS_FILE)) {
+      const raw = fs.readFileSync(WEB_FEATURE_FLAGS_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.showHeroicBadges === "boolean") {
+        activeWebFeatureFlags = {
+          showHeroicBadges: parsed.showHeroicBadges,
+          updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : 0,
+        };
+      }
+    }
+  } catch {
+    // Ignore disk read errors
+  }
+}
+initWebFeatureFlagsFromDisk();
+
+function getWebFeatureFlags() {
+  return { ...activeWebFeatureFlags };
+}
+
+function updateWebFeatureFlags(values) {
+  const updated = {
+    showHeroicBadges: Boolean(values?.showHeroicBadges),
+    updatedAt: Date.now(),
+  };
+  activeWebFeatureFlags = updated;
+  try {
+    const dir = path.dirname(WEB_FEATURE_FLAGS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(WEB_FEATURE_FLAGS_FILE, JSON.stringify(updated, null, 2), "utf-8");
+  } catch {
+    // Ignore disk write errors in read-only runtimes
+  }
+  return { ...activeWebFeatureFlags };
+}
+
+const INSPECTOR_KPI_DEFAULTS_FILE = path.resolve(process.cwd(), "data", "inspector-kpi-defaults.json");
+
+export const DEFAULT_INSPECTOR_KPI_CONFIG = {
+  playerDefaultKpiKeys: [...DEFAULT_PLAYER_NBA_KPI_KEYS],
+  teamDefaultKpiKeys: [...DEFAULT_TEAM_NBA_KPI_KEYS],
+};
+
+let activeInspectorKpiConfig = {
+  playerDefaultKpiKeys: [...DEFAULT_INSPECTOR_KPI_CONFIG.playerDefaultKpiKeys],
+  teamDefaultKpiKeys: [...DEFAULT_INSPECTOR_KPI_CONFIG.teamDefaultKpiKeys],
+  updatedAt: 0,
+};
+
+function sanitizeKpiKeyArray(rawList, fallbackList) {
+  if (!Array.isArray(rawList)) return [...fallbackList];
+  const seen = new Set();
+  const clean = [];
+  for (const item of rawList) {
+    const key = String(item || "").trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    clean.push(key);
+    if (clean.length >= 80) break;
+  }
+  return clean.length > 0 ? clean : [...fallbackList];
+}
+
+function initInspectorKpiConfigFromDisk() {
+  try {
+    if (fs.existsSync(INSPECTOR_KPI_DEFAULTS_FILE)) {
+      const raw = fs.readFileSync(INSPECTOR_KPI_DEFAULTS_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (parsed && (Array.isArray(parsed.playerDefaultKpiKeys) || Array.isArray(parsed.teamDefaultKpiKeys))) {
+        activeInspectorKpiConfig = {
+          playerDefaultKpiKeys: sanitizeKpiKeyArray(parsed.playerDefaultKpiKeys, DEFAULT_INSPECTOR_KPI_CONFIG.playerDefaultKpiKeys),
+          teamDefaultKpiKeys: sanitizeKpiKeyArray(parsed.teamDefaultKpiKeys, DEFAULT_INSPECTOR_KPI_CONFIG.teamDefaultKpiKeys),
+          updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : 0,
+        };
+      }
+    }
+  } catch {
+    // Ignore disk read errors
+  }
+}
+initInspectorKpiConfigFromDisk();
+
+function getInspectorKpiDefaultsConfig() {
+  return {
+    playerDefaultKpiKeys: [...activeInspectorKpiConfig.playerDefaultKpiKeys],
+    teamDefaultKpiKeys: [...activeInspectorKpiConfig.teamDefaultKpiKeys],
+    updatedAt: activeInspectorKpiConfig.updatedAt,
+  };
+}
+
+function updateInspectorKpiDefaultsConfig(values) {
+  const updated = {
+    playerDefaultKpiKeys: sanitizeKpiKeyArray(values?.playerDefaultKpiKeys, DEFAULT_INSPECTOR_KPI_CONFIG.playerDefaultKpiKeys),
+    teamDefaultKpiKeys: sanitizeKpiKeyArray(values?.teamDefaultKpiKeys, DEFAULT_INSPECTOR_KPI_CONFIG.teamDefaultKpiKeys),
+    updatedAt: Date.now(),
+  };
+  activeInspectorKpiConfig = updated;
+  try {
+    const dir = path.dirname(INSPECTOR_KPI_DEFAULTS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(INSPECTOR_KPI_DEFAULTS_FILE, JSON.stringify(updated, null, 2), "utf-8");
+  } catch {
+    // Ignore disk write errors in read-only runtimes
+  }
+  return getInspectorKpiDefaultsConfig();
+}
+
+function resetInspectorKpiDefaultsConfig() {
+  const reset = {
+    playerDefaultKpiKeys: [...DEFAULT_INSPECTOR_KPI_CONFIG.playerDefaultKpiKeys],
+    teamDefaultKpiKeys: [...DEFAULT_INSPECTOR_KPI_CONFIG.teamDefaultKpiKeys],
+    updatedAt: Date.now(),
+  };
+  activeInspectorKpiConfig = reset;
+  try {
+    if (fs.existsSync(INSPECTOR_KPI_DEFAULTS_FILE)) {
+      fs.unlinkSync(INSPECTOR_KPI_DEFAULTS_FILE);
+    }
+  } catch {
+    // Ignore unlink errors
+  }
+  return getInspectorKpiDefaultsConfig();
 }
 
 function isSnapshotOnlyRuntime() {
@@ -669,7 +804,7 @@ async function getFullLeagueMemory(forceRefresh = false) {
     if (!t27 && !t26) continue;
     const base = t27 && t27.games.length > 0 ? t27 : t26 || t27;
     const combinedGames = [...t27?.games || [], ...t26?.games || []].sort((a, b) => b.date.localeCompare(a.date));
-    teams.push({ ...base, advanced: t27?.advanced || t26?.advanced, games: combinedGames });
+    teams.push(populateTeamComputedFields({ ...base, advanced: t27?.advanced || t26?.advanced, games: combinedGames }));
   }
   teams.sort((a, b) => b.winPct - a.winPct || b.wins - a.wins || b.differential - a.differential);
   const allPids = /* @__PURE__ */ new Set([...s2027.playersById.keys(), ...s2026.playersById.keys()]);
@@ -760,25 +895,25 @@ function enrichPlayersWithBiosMeta(playersList, biosMap) {
 async function getBootstrapPayload(seasonMode = "continuous", forceRefresh = false) {
   if (seasonMode === "2027") {
     const [s2027, biosMap2, scoreboard2] = await Promise.all([buildSingleSeasonDataset("2026-27", forceRefresh), getPlayerBiosMap(false), fetchLiveScoreboardGames(void 0, forceRefresh)]);
-    const teams = [...s2027.teamsByAbbr.values()].sort((a, b) => b.winPct - a.winPct || b.wins - a.wins || b.differential - a.differential);
+    const teams = [...s2027.teamsByAbbr.values()].map((t) => populateTeamComputedFields(t)).sort((a, b) => b.winPct - a.winPct || b.wins - a.wins || b.differential - a.differential);
     const players = enrichPlayersWithBiosMeta([...s2027.playersById.values()].sort((a, b) => meanNums(b.games.map((g) => g.points)) - meanNums(a.games.map((g) => g.points))), biosMap2);
     return { seasonMode, dataSource: s2027.dataSource, totalLeaguePlayersAvailable: Math.max(biosMap2.size, players.length), allPlayersLoaded: true, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), teams, players, scoreboard: scoreboard2 };
   }
   if (seasonMode === "2026") {
     const [s2026, biosMap2, scoreboard2] = await Promise.all([buildSingleSeasonDataset("2025-26", false), getPlayerBiosMap(false), fetchLiveScoreboardGames(void 0, false)]);
-    const teams = [...s2026.teamsByAbbr.values()].sort((a, b) => b.winPct - a.winPct || b.wins - a.wins || b.differential - a.differential);
+    const teams = [...s2026.teamsByAbbr.values()].map((t) => populateTeamComputedFields(t)).sort((a, b) => b.winPct - a.winPct || b.wins - a.wins || b.differential - a.differential);
     const players = enrichPlayersWithBiosMeta([...s2026.playersById.values()].sort((a, b) => meanNums(b.games.map((g) => g.points)) - meanNums(a.games.map((g) => g.points))), biosMap2);
     return { seasonMode, dataSource: s2026.dataSource, totalLeaguePlayersAvailable: Math.max(biosMap2.size, players.length), allPlayersLoaded: true, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), teams, players, scoreboard: scoreboard2 };
   }
   if (seasonMode === "2025") {
     const [s2025, biosMap2, scoreboard2] = await Promise.all([buildSingleSeasonDataset("2024-25", false), getPlayerBiosMap(false), fetchLiveScoreboardGames(void 0, false)]);
-    const teams = [...s2025.teamsByAbbr.values()].sort((a, b) => b.winPct - a.winPct || b.wins - a.wins || b.differential - a.differential);
+    const teams = [...s2025.teamsByAbbr.values()].map((t) => populateTeamComputedFields(t)).sort((a, b) => b.winPct - a.winPct || b.wins - a.wins || b.differential - a.differential);
     const players = enrichPlayersWithBiosMeta([...s2025.playersById.values()].sort((a, b) => meanNums(b.games.map((g) => g.points)) - meanNums(a.games.map((g) => g.points))), biosMap2);
     return { seasonMode, dataSource: s2025.dataSource, totalLeaguePlayersAvailable: Math.max(biosMap2.size, players.length), allPlayersLoaded: true, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), teams, players, scoreboard: scoreboard2 };
   }
   if (seasonMode === "2024") {
     const [s2024, biosMap2, scoreboard2] = await Promise.all([buildSingleSeasonDataset("2023-24", false), getPlayerBiosMap(false), fetchLiveScoreboardGames(void 0, false)]);
-    const teams = [...s2024.teamsByAbbr.values()].sort((a, b) => b.winPct - a.winPct || b.wins - a.wins || b.differential - a.differential);
+    const teams = [...s2024.teamsByAbbr.values()].map((t) => populateTeamComputedFields(t)).sort((a, b) => b.winPct - a.winPct || b.wins - a.wins || b.differential - a.differential);
     const players = enrichPlayersWithBiosMeta([...s2024.playersById.values()].sort((a, b) => meanNums(b.games.map((g) => g.points)) - meanNums(a.games.map((g) => g.points))), biosMap2);
     return { seasonMode, dataSource: s2024.dataSource, totalLeaguePlayersAvailable: Math.max(biosMap2.size, players.length), allPlayersLoaded: true, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), teams, players, scoreboard: scoreboard2 };
   }
@@ -1986,6 +2121,11 @@ export {
   getGamedayThresholdsConfig,
   updateGamedayThresholdsConfig,
   resetGamedayThresholdsConfigDefaults,
+  getWebFeatureFlags,
+  updateWebFeatureFlags,
+  getInspectorKpiDefaultsConfig,
+  updateInspectorKpiDefaultsConfig,
+  resetInspectorKpiDefaultsConfig,
   getMilestonesPayload,
   getPlayerBiosMap,
   getPlayerInspectorDossier,

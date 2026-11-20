@@ -2741,7 +2741,7 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
 
     const dynamicSections = [];
 
-    // Capítulo 1: Foco principal en el partido más dramático / exhibición MVP con cifras exactas
+    // Capítulo 1: Foco principal en el partido más dramático / exhibición MVP con narrativa táctica limpia
     const focusMatch = (mvp && gd.matchups.find((m) => m.away.abbr === mvp.teamAbbr || m.home.abbr === mvp.teamAbbr)) || sortedByDrama[0];
     if (focusMatch) {
       const enr = matchEnrichments.get(focusMatch.eventId);
@@ -2754,37 +2754,37 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
       const pbp = enr?.pbp;
 
       const p1Parts = [
-        `El foco principal de la noche se concentró en el pulso entre **${winner.name}** y **${loser.name}** (${winner.score}-${loser.score}), resuelto a favor de **${winner.shortName}** a un ritmo de ${focusMatch.pace.toFixed(1)} posesiones.`
+        `El foco principal de la noche se detuvo en el duelo entre **${winner.name}** y **${loser.name}**, cerrado por ${winner.score}-${loser.score} a favor de **${winner.shortName}** tras imponer un ritmo de ${focusMatch.pace.toFixed(1)} posesiones.`
       ];
       if (wLog && lLog) {
         p1Parts.push(
-          `**${winner.shortName}** inclinó la pizarra con un ${wLog.efgPct.toFixed(1)}% de tiro efectivo (${wLog.fgm}/${wLog.fga} TC, ${wLog.fg3m}/${wLog.fg3a} en triples y ${wLog.ftm}/${wLog.fta} en libres) frente al ${lLog.efgPct.toFixed(1)}% de **${loser.shortName}** (${lLog.fgm}/${lLog.fga} TC, ${lLog.fg3m}/${lLog.fg3a} T3), **decantando la balanza desde el cuidado del balón (${wLog.tov} pérdidas frente a ${lLog.tov} del rival)** y un balance de ${wLog.reb}-${lLog.reb} en el rebote (${wLog.oreb} capturas ofensivas).`
+          `La diferencia estuvo en la claridad con la que **${winner.shortName}** seleccionó sus lanzamientos hasta firmar un ${wLog.efgPct.toFixed(1)}% de acierto efectivo, frente al ${lLog.efgPct.toFixed(1)}% de su rival. A esa ventaja en eficacia se sumó **una gestión mucho más limpia del balón (${wLog.tov} pérdidas por ${lLog.tov} del oponente)** y un pulso en el rebote favorable por ${wLog.reb} a ${lLog.reb} que multiplicó las segundas opciones.`
         );
       }
       if (pbp?.keyRun?.summary) {
-        p1Parts.push(`En la secuencia real de pista destacó el ${pbp.keyRun.summary}.`);
+        p1Parts.push(`El punto de inflexión llegó con el ${pbp.keyRun.summary}, tramo que terminó por inclinar el guion del encuentro.`);
       }
 
       const p2Parts = [];
       if (wTop) {
         p2Parts.push(
-          `En el plano individual, **${wTop.playerName}** (${winner.abbr}) marcó el paso con ${wTop.points} puntos, ${wTop.rebounds} rebotes y ${wTop.assists} asistencias (${wTop.fgm}/${wTop.fga} TC, ${wTop.fg3m}/${wTop.fg3a} T3, ${wTop.tsPct.toFixed(1)}% TS en ${Math.round(wTop.minutes)} minutos, ${wTop.plusMinus >= 0 ? `+${wTop.plusMinus}` : wTop.plusMinus} en pista), superando su promedio habitual de ${wTop.ptsBaselineAvg.toFixed(1)} tantos.`
+          `Sobre la pista, **${wTop.playerName}** marcó el pulso para **${winner.shortName}** con ${wTop.points} puntos y ${wTop.assists} asistencias, acertando ${wTop.fgm} de sus ${wTop.fga} tiros de campo y elevando su producción claramente por encima de su media habitual (${wTop.ptsBaselineAvg.toFixed(1)} tantos).`
         );
       }
       if (lTop) {
         p2Parts.push(
-          `En **${loser.shortName}**, la respuesta de **${lTop.playerName}** (${lTop.points} PTS, ${lTop.rebounds} REB, ${lTop.assists} AST, ${lTop.fgm}/${lTop.fga} TC, ${lTop.tsPct.toFixed(1)}% TS) sostuvo la resistencia${pbp?.clutchExecution?.summaryNarrative ? `, pero ${pbp.clutchExecution.summaryNarrative.charAt(0).toLowerCase()}${pbp.clutchExecution.summaryNarrative.slice(1)}.` : ", insuficiente ante **la mayor profundidad y control de posesiones del vencedor**."}`
+          `En el bando de **${loser.shortName}**, **${lTop.playerName}** sostuvo las opciones visitantes con ${lTop.points} puntos y ${lTop.rebounds} rebotes${pbp?.clutchExecution?.summaryNarrative ? `, pero ${pbp.clutchExecution.summaryNarrative.charAt(0).toLowerCase()}${pbp.clutchExecution.summaryNarrative.slice(1)}.` : ", insuficiente ante **la mayor solidez colectiva y control de posesiones del vencedor**."}`
         );
       }
 
       dynamicSections.push({
         kicker: "Foco Principal",
-        title: `${winner.shortName} y la lectura táctica del ${winner.score}-${loser.score}`,
+        title: `${winner.shortName} impone su guion en el ${winner.score}-${loser.score}`,
         body: `${p1Parts.join(" ")}\n\n${p2Parts.join(" ") || (focusMatch.keyTakeawaysSimple || []).join(" ")}`,
       });
     }
 
-    // Capítulo 2: Tendencia colectiva / contraste defensivo y eficiencia de la cartelera
+    // Capítulo 2: Tendencia colectiva / contraste defensivo y economía de posesiones
     const stmtMatch = stmt ? gd.matchups.find((m) => m.away.abbr === stmt.teamAbbr || m.home.abbr === stmt.teamAbbr) : sortedByDrama[sortedByDrama.length - 1];
     if (stmtMatch) {
       const enr = matchEnrichments.get(stmtMatch.eventId);
@@ -2796,63 +2796,116 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
       const lVsAvg = lSeasonAvg > 0 ? loser.score - lSeasonAvg : 0;
 
       const c2p1 = wLog && lLog
-        ? `Más allá de los marcadores ajustados, la otra gran lectura de la fecha la firmó **${winner.name}** al imponerse a **${loser.name}** por ${winner.score}-${loser.score} (+${stmtMatch.margin} puntos). La defensa de **${winner.shortName}** dejó a su oponente en ${loser.score} puntos${lSeasonAvg > 0 ? ` (${lVsAvg >= 0 ? `+${lVsAvg.toFixed(1)}` : lVsAvg.toFixed(1)} frente a su media de ${lSeasonAvg.toFixed(1)})` : ""} con apenas un ${lLog.fgPct.toFixed(1)}% en tiros de campo (${lLog.fgm}/${lLog.fga}) y ${lLog.fg3m}/${lLog.fg3a} en triples, **imponiendo un muro defensivo de ${wLog.stl + wLog.blk} acciones entre robos y tapones (${wLog.stl} ROB, ${wLog.blk} TAP)** y un DefRtg de ${wLog.defRtg.toFixed(1)}.`
-        : `En el bloque de control colectivo, **${winner.name}** marcó territorio ante **${loser.name}** (${winner.score}-${loser.score}) con +${winner.netRtg.toFixed(1)} de diferencial neto y **una ejecución impecable en ambos tableros**.`;
+        ? `Más allá de los marcadores ajustados, la exhibición de solidez atrás llevó la firma de **${winner.name}**, que doblegó a **${loser.name}** por ${winner.score}-${loser.score}. La defensa de **${winner.shortName}** dejó a su adversario en ${loser.score} puntos${lSeasonAvg > 0 ? ` (${lVsAvg < 0 ? `${Math.abs(lVsAvg).toFixed(1)} por debajo` : `${lVsAvg.toFixed(1)} por encima`} de su promedio de ${lSeasonAvg.toFixed(1)})` : ""}, **ahogando sus líneas de tiro hasta un discreto ${lLog.fgPct.toFixed(1)}% de campo** gracias a un despliegue de ${wLog.stl + wLog.blk} acciones defensivas entre robos y tapones.`
+        : `En el plano colectivo, **${winner.name}** abrió brecha frente a **${loser.name}** (${winner.score}-${loser.score}) apoyado en un diferencial neto de +${winner.netRtg.toFixed(1)} y **una notable disciplina en ambos tableros**.`;
 
       const closeMatches = gd.matchups.filter((m) => m.margin <= 6);
+      const avgWinTov = round1(gd.matchups.reduce((acc, m) => acc + (m.away.isWinner ? m.away.tov : m.home.tov), 0) / Math.max(1, gd.matchups.length)).toFixed(1);
+      const avgLoseTov = round1(gd.matchups.reduce((acc, m) => acc + (m.away.isWinner ? m.home.tov : m.away.tov), 0) / Math.max(1, gd.matchups.length)).toFixed(1);
       const c2p2 = closeMatches.length > 0
-        ? `En contraste, los ${closeMatches.length} encuentros resueltos por 6 o menos puntos (${closeMatches.slice(0, 3).map(formatGameScoreline).join(", ")}) premiaron a quienes protegieron el balón y cargaron el rebote ofensivo: en toda la cartelera, las escuadras ganadoras promediaron ${round1(gd.matchups.reduce((acc, m) => acc + (m.away.isWinner ? m.away.tov : m.home.tov), 0) / Math.max(1, gd.matchups.length)).toFixed(1)} pérdidas frente a ${round1(gd.matchups.reduce((acc, m) => acc + (m.away.isWinner ? m.home.tov : m.away.tov), 0) / Math.max(1, gd.matchups.length)).toFixed(1)} de los derrotados, **confirmando el peso decisivo de la economía de posesiones**.`
-        : `A nivel global de cartelera, el contraste entre los ${gd.pulse.blowoutsCount} triunfos holgados (≥15 pts) y el ritmo medio de ${gd.pulse.avgPace.toFixed(1)} posesiones reflejó cómo los equipos con mejor balance entre tiro interior y acierto exterior (${gd.pulse.avgTotalPoints.toFixed(1)} pts combinados por duelo) **rompieron los partidos antes del último cuarto**.`;
+        ? `Esa misma exigencia se trasladó a los ${closeMatches.length} encuentros resueltos por seis o menos puntos (${closeMatches.slice(0, 3).map(formatGameScoreline).join(", ")}). En el cómputo global de la noche, los conjuntos ganadores promediaron ${avgWinTov} pérdidas frente a las ${avgLoseTov} de sus rivales, **confirmando que proteger cada posesión pesó tanto como el acierto exterior**.`
+        : `En el balance general de la cartelera, los ${gd.pulse.blowoutsCount} triunfos resueltos por quince o más puntos mostraron hasta qué punto la consistencia defensiva y la fluidez en el pase separaron a los vencedores cuando el ritmo medio rondó las ${gd.pulse.avgPace.toFixed(1)} posesiones.`;
 
       dynamicSections.push({
         kicker: "Segundo Foco",
-        title: `Cerrojo colectivo de ${winner.shortName} y economía de posesiones`,
+        title: `El cerrojo de ${winner.shortName} y el valor de cuidar el balón`,
         body: `${c2p1}\n\n${c2p2}`,
       });
     }
 
-    const pizarrasParagraphs = (gd.matchups || []).slice(0, 3).map((m) => {
-      const enr = matchEnrichments.get(m.eventId);
-      const winner = m.away.isWinner ? m.away : m.home;
-      const loser = m.away.isWinner ? m.home : m.away;
+    const pizarrasSortedByEff = [...(gd.matchups || [])]
+      .map((m) => {
+        const winner = m.away.isWinner ? m.away : m.home;
+        const loser = m.away.isWinner ? m.home : m.away;
+        return { m, winner, loser, enr: matchEnrichments.get(m.eventId) };
+      })
+      .sort((a, b) => b.winner.efgPct - a.winner.efgPct);
+
+    const pizarra1 = pizarrasSortedByEff[0];
+    const pizarra2 = pizarrasSortedByEff[1];
+    const pizarrasParagraphs = [];
+    if (pizarra1) {
+      const { winner, loser, enr } = pizarra1;
       const wLog = enr?.winnerLog;
       const lLog = enr?.loserLog;
       if (wLog && lLog) {
-        const w2m = Math.max(0, wLog.fgm - wLog.fg3m);
-        const w2a = Math.max(0, wLog.fga - wLog.fg3a);
-        const l2m = Math.max(0, lLog.fgm - lLog.fg3m);
-        const l2a = Math.max(0, lLog.fga - lLog.fg3a);
-        return `En el ${winner.score}-${loser.score} entre **${winner.name}** y **${loser.name}**, la pizarra de **${winner.shortName}** produjo ${wLog.offRtg.toFixed(1)} puntos por 100 posesiones (${w2m}/${w2a} en tiros de dos, ${wLog.fg3m}/${wLog.fg3a} en triples y ${wLog.ast} asistencias sobre ${wLog.fgm} canastas), mientras que **${loser.shortName}** quedó en ${lLog.offRtg.toFixed(1)} OffRtg (${l2m}/${l2a} T2, ${lLog.tov} pérdidas) bajo ${wLog.stl} robos y ${wLog.blk} tapones rivales.`;
+        pizarrasParagraphs.push(
+          `Desde la pizarra colectiva, la propuesta ofensiva más afilada perteneció a **${winner.name}** en su victoria por ${winner.score}-${loser.score} ante **${loser.name}**. Con una circulación que generó ${wLog.ast} asistencias sobre ${wLog.fgm} canastas, el ataque de **${winner.shortName}** escaló hasta ${wLog.offRtg.toFixed(1)} puntos por cada cien posesiones y castigó desde el perímetro con ${wLog.fg3m} triples anotados, obligando a la defensa rival a conceder espacios interiores.`
+        );
+      } else {
+        pizarrasParagraphs.push(
+          `En el plano táctico, **${winner.name}** marcó la pauta ante **${loser.name}** (${winner.score}-${loser.score}) al combinar un ${winner.efgPct.toFixed(1)}% de tiro efectivo con ${winner.ast} asistencias, **desarmando las ayudas rivales mediante una circulación constante**.`
+        );
       }
-      return `En el triunfo de **${winner.name}** ante **${loser.name}** (${winner.score}-${loser.score}), **${winner.shortName}** registró ${winner.efgPct.toFixed(1)}% eFG, ${winner.ast} asistencias y ${winner.tov} pérdidas frente a las ${loser.tov} del rival.`;
-    });
+    }
+    if (pizarra2) {
+      const { winner, loser, enr } = pizarra2;
+      const wLog = enr?.winnerLog;
+      const lLog = enr?.loserLog;
+      if (wLog && lLog) {
+        pizarrasParagraphs.push(
+          `En paralelo, **${winner.name}** edificó su triunfo frente a **${loser.name}** (${winner.score}-${loser.score}) desde el equilibrio entre el rebote ofensivo (${wLog.oreb} capturas) y la actividad defensiva. Al provocar ${lLog.tov} pérdidas y dejar al oponente en un ${lLog.offRtg.toFixed(1)} de rating ofensivo, **${winner.shortName}** demostró que controlar el ritmo (${gd.pulse.avgPace.toFixed(1)} posesiones de media en la jornada) sigue siendo la vía más fiable para gobernar el marcador.`
+        );
+      }
+    }
 
     const pizarrasSection =
       pizarrasParagraphs.join("\n\n") ||
       `El análisis colectivo registró un ritmo medio de ${gd.pulse.avgPace.toFixed(1)} posesiones por 48 minutos.`;
 
-    const hitosSection = [
-      mvp
-        ? `**Exhibición de la Noche**: **${mvp.playerName}** (${mvp.teamAbbr} ${mvp.isHome ? "vs" : "@"} ${mvp.opponentAbbr}, ${mvp.result}) lideró la jornada con ${mvp.points} puntos, ${mvp.rebounds} rebotes y ${mvp.assists} asistencias (${mvp.fgm}/${mvp.fga} TC, ${mvp.fg3m}/${mvp.fg3a} T3, ${mvp.ftm}/${mvp.fta} TL, ${mvp.tsPct.toFixed(1)}% TS, ${mvp.gameScore.toFixed(1)} GmSc en ${Math.round(mvp.minutes)} min), elevándose +${mvp.ptsDelta.toFixed(1)} sobre su media de ${mvp.ptsBaselineAvg.toFixed(1)} PTS.`
-        : "",
-      tripleDoublesNight.length > 0
-        ? `**Triples-Dobles de la Jornada**: ${tripleDoublesNight.join("; ")}.`
-        : "",
-      topExp && (!mvp || topExp.playerId !== mvp.playerId)
-        ? `**Explosión Estadística**: **${topExp.playerName}** (${topExp.teamAbbr} ${topExp.isHome ? "vs" : "@"} ${topExp.opponentAbbr}) alcanzó los ${topExp.points} puntos (+${topExp.ptsDelta.toFixed(1)} respecto a su media de ${topExp.ptsAvg.toFixed(1)}) con ${topExp.fgm}/${topExp.fga} TC, ${topExp.fg3m}/${topExp.fg3a} en triples y ${topExp.tsPct.toFixed(1)}% TS.`
-        : "",
-      gd.slumps.length > 0
-        ? `**Frenazos a Referentes**: **${gd.slumps[0].playerName}** (${gd.slumps[0].teamAbbr}) quedó reducido a ${gd.slumps[0].points} puntos (${gd.slumps[0].ptsDelta.toFixed(1)} vs su media de ${gd.slumps[0].ptsAvg.toFixed(1)}) con ${gd.slumps[0].fgm}/${gd.slumps[0].fga} TC (${gd.slumps[0].tsPct.toFixed(1)}% TS) en ${Math.round(gd.slumps[0].minutes)} minutos.`
-        : "",
-      gd.roleShifts.length > 0
-        ? `**Irrupciones de Minutos y Rol**: Destacaron en la rotación ${gd.roleShifts.slice(0, 3).map((r) => `**${r.playerName}** (${r.teamAbbr}: ${r.points} PTS, ${r.rebounds} REB, ${r.assists} AST en ${r.minutes.toFixed(0)} min, +${r.minutesDelta.toFixed(1)} vs media)`).join("; ")}.`
-        : "",
-      brokenList.length > 0 || extendedList.length > 0
-        ? `**Rachas**: ${extendedList.slice(0, 2).map((ex) => `**${ex.playerName}** (${ex.teamAbbr}) prolongó a ${ex.streakCount} partidos seguidos su serie en ${ex.thresholdLabel} (${ex.nightValueDisplay} hoy)`).join("; ")}${brokenList.length > 0 ? `${extendedList.length > 0 ? ". " : ""}Se cortó la racha de ${brokenList[0].streakCount} encuentros de **${brokenList[0].playerName}** (${brokenList[0].thresholdLabel}, hoy ${brokenList[0].nightValueDisplay}).` : "."}`
-        : "",
-    ]
-      .filter(Boolean)
-      .join("\n\n");
+    const hitosParagraphs = [];
+    if (mvp) {
+      const mvpNarrative = `La actuación individual más influyente de la noche llevó el nombre de **${mvp.playerName}**, clave para **${mvp.teamAbbr}** ante **${mvp.opponentAbbr}** (${mvp.result}) con ${mvp.points} puntos y ${mvp.assists} asistencias. Lejos de depender del volumen, firmó un sobresaliente ${mvp.fgm}/${mvp.fga} en tiros de campo que disparó su aportación muy por encima de su media de ${mvp.ptsBaselineAvg.toFixed(1)} tantos.`;
+      const tdSnippet = tripleDoublesNight.length > 0
+        ? ` La jornada también dejó huella en la estadística global gracias al pulso completo de los triples-dobles firmados en la cartelera (${tripleDoublesNight.slice(0, 2).map((line) => line.split(":")[0]).join(" y ")}).`
+        : "";
+      hitosParagraphs.push(`${mvpNarrative}${tdSnippet}`);
+    } else if (tripleDoublesNight.length > 0) {
+      hitosParagraphs.push(
+        `El protagonismo individual quedó marcado por la polivalencia de quienes gobernaron todos los apartados del juego, con mención especial para ${tripleDoublesNight.slice(0, 2).map((line) => `**${line.split(" (")[0]}**`).join(" y ")}, capaces de producir triples-dobles de alto impacto colectivo.`
+      );
+    }
+
+    const secondaryStoryParts = [];
+    if (topExp && (!mvp || topExp.playerId !== mvp.playerId)) {
+      secondaryStoryParts.push(
+        `Entre los estallidos anotadores destacó **${topExp.playerName}** (${topExp.teamAbbr}), quien alcanzó los ${topExp.points} puntos frente a **${topExp.opponentAbbr}** —${topExp.ptsDelta.toFixed(1)} tantos por encima de su promedio habitual— apoyado en ${topExp.fg3m} triples convertidos.`
+      );
+    }
+    if (gd.slumps.length > 0) {
+      const sl = gd.slumps[0];
+      secondaryStoryParts.push(
+        `En la cara opuesta, **${sl.playerName}** vivió una noche espesa con **${sl.teamAbbr}**, limitado a ${sl.points} puntos tras acertar apenas ${sl.fgm} de ${sl.fga} intentos en ataque.`
+      );
+    }
+    if (secondaryStoryParts.length > 0) {
+      hitosParagraphs.push(secondaryStoryParts.join(" "));
+    }
+
+    const streakAndRoleParts = [];
+    if (gd.roleShifts.length > 0) {
+      const r0 = gd.roleShifts[0];
+      streakAndRoleParts.push(
+        `Desde el banquillo o en rotaciones ampliadas, **${r0.playerName}** aprovechó sus ${r0.minutes.toFixed(0)} minutos con **${r0.teamAbbr}** para aportar ${r0.points} puntos y ${r0.rebounds} rebotes.`
+      );
+    }
+    if (extendedList.length > 0) {
+      const ex = extendedList[0];
+      streakAndRoleParts.push(
+        `En el capítulo de regularidad, **${ex.playerName}** alargó hasta ${ex.streakCount} partidos consecutivos su serie en ${ex.thresholdLabel}.`
+      );
+    }
+    if (brokenList.length > 0) {
+      const br = brokenList[0];
+      streakAndRoleParts.push(
+        `Por el contrario, se detuvo la racha de ${br.streakCount} encuentros seguidos de **${br.playerName}** en ${br.thresholdLabel}.`
+      );
+    }
+    if (streakAndRoleParts.length > 0) {
+      hitosParagraphs.push(streakAndRoleParts.join(" "));
+    }
+
+    const hitosSection = hitosParagraphs.filter(Boolean).join("\n\n");
 
     const espanolesSection =
       spanishNightNotes.length > 0
@@ -2947,7 +3000,7 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
       };
     }
 
-    const cacheKey = `gameday_chronicle_v14:${gd.selectedDate}`;
+    const cacheKey = `gameday_chronicle_v15:${gd.selectedDate}`;
     if (!forceRefresh) {
       const persisted = await readSharedPersistedNarrative(cacheKey);
       if (persisted) {
@@ -3135,28 +3188,28 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
       ].filter(Boolean).join("\n");
 
       const systemInstruction = [
-        "Eres el analista jefe y cronista de scouting NBA de referencia en España. Cada mañana escribes la gran revista editorial de la jornada para que un lector exigente entienda en pocos minutos qué ocurrió exactamente y por qué se ganaron o perdieron los partidos.",
-        "REGLAS INQUEBRANTABLES DE RIGOR, CONCRECIÓN Y PRUEBA NUMÉRICA:",
+        "Eres el analista jefe y cronista de scouting NBA de referencia en España. Cada mañana escribes la gran revista editorial de la jornada para que un lector exigente entienda con profundidad, buen ritmo periodístico y precisión táctica qué ocurrió exactamente en la pista y por qué se ganaron o perdieron los partidos.",
+        "REGLAS INQUEBRANTABLES DE RIGOR, PROSA SELECTIVA Y LECTURA TÁCTICA:",
         "1. RIGOR EMPÍRICO TOTAL: Todos los marcadores, puntos, series de tiro, porcentajes, pérdidas, rebotes, récords y rachas que cites deben coincidir al 100% con el dossier adjunto. Jamás inventes resultados, cifras ni jugadas concretas no descritas. Si mencionas a un expulsado por 6 faltas, copia literalmente su cuarto y reloj si aparecen en `Expulsados 6 faltas PBP`; si no figuran, NO deduzcas ni restes `48 - minutos` (prohibido inventar relojes como `18:00`).",
         '2. PROHIBICIÓN DE DAR DATOS POR SUPUESTOS: Tienes TERMINANTEMENTE PROHIBIDO mencionar: (a) nombres propios o apodos de entrenadores, asistentes o directivos (usa SIEMPRE "el cuerpo técnico de [Equipo]", "la dirección técnica de [Equipo]" o "la pizarra de [Equipo]"); (b) antigüedad, edad, rondas de Draft, condición de rookie, contratos, exequipos o traspasos de jugadores; (c) premios pasados, anillos o series de temporadas anteriores; (d) puestos exactos en la clasificación o próximos rivales; (e) causas médicas no escritas literalmente en el dossier.',
-        '3. PRUEBA NUMÉRICA OBLIGATORIA EN CADA AFIRMACIÓN (CERO PROSA VAGA O GENÉRICA): Queda TERMINANTEMENTE PROHIBIDO soltar afirmaciones cualitativas sin mostrar inmediatamente las cifras reales que las prueban. Por ejemplo:\n   - PROHIBIDO escribir "secando a su rival casi 20 puntos por debajo de su media" sin mostrar los números → OBLIGATORIO: "dejando a **Dallas Mavericks** en 94 puntos (112-94, 19.8 por debajo de su media de 113.8) tras limitarles al 40.2% TC y 8/31 en triples".\n   - PROHIBIDO escribir "con una eficiencia asombrosa", "control de pérdidas ejemplar" o "superioridad interior abrumadora" sin cifras → OBLIGATORIO mostrar la serie exacta (ej. "11/16 TC, 4/6 en triples y 78.9% TS", "apenas 8 pérdidas frente a 17 del rival", "28/45 en tiros de dos —62.2%— y 46 rebotes").\n   - PROHIBIDO mencionar un partido o duelo sin incluir su marcador exacto (ej. 124-121) la primera vez que se analiza.',
-        '4. PROFUNDIDAD Y COHESIÓN TEMÁTICA (PROHIBIDAS LAS IDEAS DISPERSAS Y EL REPASO UNO A UNO): No enumeres partidos secuencialmente ("En el partido 1... en el partido 2...") ni saltes superficialmente de un tema a otro en frases sueltas. Cada sección y capítulo debe desarrollar 1 o 2 tesis claras con profundidad real, hilando causa-efecto táctico respaldada por los datos exactos (incluyendo hitos Play-by-Play de parciales/tiempos muertos y ejecución en los últimos 2 minutos del clutch cuando consten en el dossier).',
-        '5. GRAMÁTICA Y TERMINOLOGÍA NBA EN ESPAÑOL + JERARQUÍA EN NEGRITA (**...**): JAMÁS dupliques el artículo delante de franquicias que ya empiezan por "Los" (PROHIBIDO escribir "Los Los Angeles Lakers" o "los Los Angeles Clippers"; escribe siempre "**Los Angeles Lakers**" o "los **Lakers**"). NUNCA traduzcas literalmente anglicismos técnicos de la NBA: el término "back-to-back" (o B2B) NO se traduce jamás; PROHIBIDO escribir "espalda con espalda", "espalda contra espalda" o "en situación de espalda con espalda" — escribe siempre "en back-to-back" (o "en segunda noche consecutiva sin descanso"). Mantén también términos como clutch, pick and roll o play-in sin calcos artificiales. En todos los párrafos del cuerpo (ENTRADILLA, CAPITULOS_DINAMICOS, PIZARRAS, HITOS, ESPANOLES y la explicación tras :: en CLAVES), utiliza negrita Markdown (**texto**) EXCLUSIVAMENTE para: (a) nombres de jugadores (ej. **Nikola Jokić**), (b) nombres o apodos oficiales de equipos (ej. **Boston Celtics**, **Lakers**), y (c) UNA sola idea táctica clave por párrafo (frase breve de 4 a 10 palabras que sintetice la clave causal, ej. **castigando las 17 pérdidas rivales tras cada atrapada**). PROHIBIDO poner en negrita cifras aisladas y PROHIBIDO poner ** en TITULAR o antes de ::.',
+        '3. DATO PRECISO AL SERVICIO DEL RELATO (CERO VOLCADOS TELEGRÁFICOS DE BOXSCORE): Respalda siempre tus tesis con cifras reales del dossier y cita el marcador exacto (ej. 116-94) la primera vez que analices un encuentro. PERO evita atiborrar una misma frase con 6 o 7 métricas seguidas entre paréntesis: selecciona únicamente los 2 o 3 datos más reveladores para explicar cada idea táctica e intégralos con fluidez dentro de la oración (ej. "alcanzó los 33 puntos con un 11/15 en tiros de campo" o "dejó a su rival en 94 puntos, casi trece por debajo de su media"). El lector ya dispone de las fichas numéricas completas en las tarjetas laterales; tu trabajo es contar el baloncesto con precisión, no copiar actas.',
+        '4. PROFUNDIDAD NARRATIVA, CAUSA-EFECTO Y CERO CLICHÉS: No hagas un repaso telegráfico partido a partido ni encadenes frases sueltas. Tómate la extensión necesaria (2 a 3 párrafos bien construidos por sección) para desarrollar el arco real de cada historia: cómo se planteó el duelo, qué ajuste táctico lo quebró (ayudas defensivas, protección de pintura, castigo tras pérdida, ritmo en transición, rebote ofensivo, parciales o ejecución clutch del PBP cuando consten) y cómo respondieron las estrellas. EVITA tópicos gastados o frases hechas como "arma de destrucción masiva", "el reverso de la moneda", "la tiranía del...", "colapso de la jerarquía" o "dar un golpe sobre la mesa".',
+        '5. GRAMÁTICA Y TERMINOLOGÍA NBA EN ESPAÑOL + JERARQUÍA EN NEGRITA (**...**): JAMÁS dupliques el artículo delante de franquicias que ya empiezan por "Los" (PROHIBIDO escribir "Los Los Angeles Lakers" o "los Los Angeles Clippers"; escribe siempre "**Los Angeles Lakers**" o "los **Lakers**"). NUNCA traduzcas literalmente anglicismos técnicos de la NBA: el término "back-to-back" (o B2B) NO se traduce jamás; PROHIBIDO escribir "espalda con espalda", "espalda contra espalda" o "en situación de espalda con espalda" — escribe siempre "en back-to-back" (o "en segunda noche consecutiva sin descanso"). Mantén también términos como clutch, pick and roll o play-in sin calcos artificiales. En todos los párrafos del cuerpo (ENTRADILLA, CAPITULOS_DINAMICOS, PIZARRAS, HITOS, ESPANOLES y la explicación tras :: en CLAVES), utiliza negrita Markdown (**texto**) EXCLUSIVAMENTE para: (a) nombres de jugadores (ej. **Nikola Jokić**), (b) nombres o apodos oficiales de equipos (ej. **Boston Celtics**, **Lakers**), y (c) UNA sola idea táctica clave por párrafo (frase breve de 4 a 10 palabras que sintetice la clave causal, ej. **castigando las pérdidas rivales tras cada atrapada**). PROHIBIDO poner en negrita cifras aisladas y PROHIBIDO poner ** en TITULAR o antes de ::.',
         "6. FORMATO EXACTO CON ESTAS 7 ETIQUETAS EN MAYÚSCULAS:",
         "===TITULAR===",
         "(Titular periodístico potente de portada en 1 sola línea con foco concreto de la noche, sin # ni **).",
         "===ENTRADILLA===",
         "(Entradilla editorial de 2 a 3 líneas resumiendo los grandes focos con datos clave reales —marcadores o cifras destacadas— aplicando la regla de negritas).",
         "===CAPITULOS_DINAMICOS===",
-        '(Exactamente 2 capítulos de fondo separados por una línea con ---. Formato obligatorio: "Título concreto del capítulo :: Párrafo 1\\n\\nPárrafo 2".\n- CAPÍTULO 1 (El gran pulso / partido eje de la noche): Párrafo 1 desarrolla el guion táctico completo con marcador, ritmo (Pace), porcentajes de tiro, pérdidas/rebotes e hitos PBP si figuran (parciales, tiempos muertos provocados o ejecución en los últimos 2 minutos); Párrafo 2 profundiza en los duelos individuales que lo decidieron con sus líneas estadísticas completas.\n- CAPÍTULO 2 (El contraste táctico / tendencia colectiva dominante): Párrafo 1 analiza en profundidad el patrón colectivo más determinante de la jornada (cerrojo defensivo, dominio en tiros de 2, avalancha exterior o contraste de eficiencia) comparando con exactitud 2 o 3 equipos y sus cifras reales (`OffRtg`/`DefRtg`, `T2%`, `T3%`, `REB`, `PER`, media anotadora vs resultado); Párrafo 2 explica la causa-efecto en pista en finales cerrados o rotaciones sin dejar cabos sueltos).',
+        '(Exactamente 2 capítulos de fondo separados por una línea con ---. Formato obligatorio: "Título concreto del capítulo :: Párrafo 1\\n\\nPárrafo 2\\n\\nPárrafo 3" —2 o 3 párrafos bien desarrollados por capítulo, sin prisa por resumir en exceso—.\n- CAPÍTULO 1 (Foco Principal — el gran pulso o exhibición eje de la noche): Párrafo 1 narra el guion del partido, el choque de estilos y dónde se rompió el marcador (incorporando hitos PBP de parciales, tiempos muertos o últimos 2 minutos si figuran); Párrafo 2 desgrana las claves tácticas colectivas (selección de tiro, defensa, rebote o cuidado del balón con 2-3 cifras limpias por equipo); Párrafo 3 profundiza en los duelos individuales que decidieron el encuentro explicando cómo generaron ventaja en pista.\n- CAPÍTULO 2 (Segundo Foco — el gran contraste táctico o sorpresa colectiva de la cartelera): Párrafo 1 desarrolla otra gran narrativa real de la fecha (cerrojo defensivo que frenó a un ataque potente, remontada o choque de propuestas opuestas) comparando 2 o 3 equipos concretos; Párrafo 2 y/o 3 explican por qué funcionaron esas defensas o ataques en los tramos decisivos, integrando los datos con naturalidad en la prosa).',
         "===PIZARRAS===",
-        "(Epígrafe fijo Pizarras: 2 párrafos densos de pizarra técnica comparando cifras colectivas reales —tiros de 2 vs triples, pérdidas cometidas/provocadas, robos+tapones, rebote ofensivo, `NetRtg`/`DefRtg`/`Pace` frente al promedio NBA— explicando exactamente qué ajustes tácticos ganaron los partidos).",
+        "(Epígrafe fijo Pizarras: 2 o 3 párrafos fluidos de lectura táctica comparada —más analíticos que enumerativos— contrastando cómo los distintos planes de partido de la noche (peso del triple frente a la pintura, presión al manejador y robos+tapones, carga del rebote ofensivo, ritmo frente al Pace medio de la jornada) explicaron los resultados. Cita cifras reales selectivas que ilustren cada argumento sin saturar cada oración con paréntesis encadenados).",
         "===HITOS===",
-        "(Epígrafe fijo Hitos: 2 párrafos entrelazando triples-dobles/dobles-dobles, explosiones y batacazos frente a su media, irrupciones de minutos/rol y rachas prolongadas o rotas, mostrando SIEMPRE la hoja completa de cada protagonista: puntos, rebotes, asistencias, serie `TC`, serie `T3`, `TS%`, `MIN` y el marcador de su partido).",
+        '(Epígrafe fijo Hitos: 2 o 3 párrafos de auténtica crónica narrativa sobre los protagonistas individuales de la fecha —actuaciones estelares, triples-dobles, explosiones por encima de su media, noches frías de referentes, irrupciones desde el banquillo y rachas prolongadas o cortadas—. PROHIBICIÓN ABSOLUTA: NO escribas fichas telegráficas ni enumeraciones de boxscore tipo "Nombre (Equipo): 33 PTS, 5 REB, 9 AST, 4 ROB+TAP, 11/15 TC, 3/5 T3, 8/8 TL, 89.1% TS, 34 MIN, marcador 116-94". En su lugar, redacta párrafos periodísticos ricos y legibles donde expliques QUÉ hizo cada protagonista sobre la pista, cómo influyó en el resultado de su partido y qué significado tiene su registro, integrando únicamente 2 o 3 números decisivos dentro de cada frase).',
         "===ESPANOLES===",
         "(Epígrafe fijo Españoles: si jugaron españoles, 1 párrafo analizando sus minutos, serie de tiro, producción exacta y contexto del partido; si ninguno sumó minutos en esta fecha, 1 frase sobria, directa y natural confirmándolo).",
         "===CLAVES===",
-        '(Epígrafe fijo Claves: exactamente 4 claves analíticas incisivas, una por línea con formato exacto "Título analítico corto sin ** :: Explicación táctica en 2 frases respaldada por marcador exacto y 3-4 cifras concretas aplicando negritas", sin numeración inicial. Criterio obligatorio: [1] la gran exhibición individual de la noche y cómo generó ventaja para su equipo; [2] la pizarra colectiva o cerrojo táctico más determinante de la jornada; [3] el cierre apretado, manejo de pérdidas o factor X más decisivo; [4] lectura táctica transversal de la cartelera con promedios reales de la fecha. PROHIBIDO usar ratios opacos como "tasa de tiros libres" / FTR% o afirmaciones sin cifras).',
+        '(Epígrafe fijo Claves: exactamente 4 claves analíticas incisivas, una por línea con formato exacto "Título analítico corto sin ** :: Explicación táctica en 2 frases respaldada por marcador exacto y 2-3 cifras concretas aplicando negritas", sin numeración inicial. Criterio obligatorio: [1] la gran exhibición individual de la noche y cómo generó ventaja para su equipo; [2] la pizarra colectiva o cerrojo táctico más determinante de la jornada; [3] el cierre apretado, manejo de pérdidas o factor X más decisivo; [4] lectura táctica transversal de la cartelera con promedios reales de la fecha. PROHIBIDO usar ratios opacos como "tasa de tiros libres" / FTR% o afirmaciones sin cifras).',
       ].join("\n");
 
       try {

@@ -57,6 +57,7 @@ export interface InspectorKpiContext {
   team?: TeamSummary;
   playerDossier?: NbaPlayerDossierAdvancedResponse | null;
   teamDossier?: NbaTeamDossierAdvancedResponse | null;
+  sampleGames?: PlayerGameLog[];
 }
 
 export interface InspectorNbaKpiDef {
@@ -78,6 +79,9 @@ export interface InspectorNbaKpiDef {
 
 function getGp(ctx: InspectorKpiContext): number {
   if (ctx.entityType === 'player' && ctx.player) {
+    if (ctx.sampleGames && ctx.sampleGames.length > 0) {
+      return ctx.sampleGames.length;
+    }
     const s27 = ctx.player.games.filter((g) => g.seasonLabel === '2026-27').length;
     return Math.max(
       1,
@@ -204,6 +208,28 @@ function getPlayerSeasonGames(p?: PlayerSummary) {
   if (!p) return [];
   const s27 = p.games.filter((g) => g.seasonLabel === '2026-27');
   return s27.length > 0 ? s27 : p.games;
+}
+
+function getPlayerActiveGames(ctx: InspectorKpiContext): PlayerGameLog[] {
+  if (ctx.sampleGames && ctx.sampleGames.length > 0) return ctx.sampleGames;
+  return getPlayerSeasonGames(ctx.player);
+}
+
+function isCustomPlayerSample(ctx: InspectorKpiContext): boolean {
+  if (
+    ctx.entityType !== 'player' ||
+    !ctx.player ||
+    !ctx.sampleGames ||
+    ctx.sampleGames.length === 0
+  ) {
+    return false;
+  }
+  const s27 = getPlayerSeasonGames(ctx.player);
+  if (ctx.sampleGames.length !== s27.length) return true;
+  return (
+    ctx.sampleGames[0]?.eventId !== s27[0]?.eventId ||
+    ctx.sampleGames[s27.length - 1]?.eventId !== s27[s27.length - 1]?.eventId
+  );
 }
 
 function matchPlayType(rowType: string, key: string): boolean {
@@ -390,6 +416,26 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => ({ text: `${getGp(ctx)}` }),
   },
   {
+    key: 'basic_winPct',
+    layer: 'basic',
+    label: '% Victorias (Win%)',
+    shortLabel: 'Win%',
+    helpKey: 'winPct',
+    scope: 'team',
+    keywords: 'victorias record balance porcentaje',
+    getDisplay: (ctx) => {
+      const t = ctx.team;
+      if (!t) return { text: '—' };
+      const total = t.wins + t.losses;
+      const pct = total > 0 ? (t.wins / total) * 100 : (t.winPct || 0) * 100;
+      return {
+        text: `${pct.toFixed(1)}%`,
+        subtext: `${t.wins}-${t.losses}`,
+        tone: pct >= 55 ? 'positive' : pct < 45 ? 'negative' : 'neutral',
+      };
+    },
+  },
+  {
     key: 'basic_min',
     layer: 'basic',
     label: 'Minutos',
@@ -397,6 +443,9 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     helpKey: 'minBase',
     scope: 'player',
     getDisplay: (ctx) => {
+      if (ctx.sampleGames && ctx.sampleGames.length > 0) {
+        return { text: fmtPerOrTot(mean(ctx.sampleGames.map((g) => g.minutes)), ctx, 1, 0) };
+      }
       const m = getViolations(ctx)?.min ?? ctx.player?.minutesAvg;
       return { text: fmtPerOrTot(m, ctx, 1, 0) };
     },
@@ -411,7 +460,9 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const v =
         ctx.entityType === 'player'
-          ? ctx.player?.ptsAvg
+          ? ctx.sampleGames && ctx.sampleGames.length > 0
+            ? mean(ctx.sampleGames.map((g) => g.points))
+            : ctx.player?.ptsAvg
           : ctx.team?.avgPointsFor;
       return { text: fmtPerOrTot(v, ctx, 1, 0), tone: 'accent' };
     },
@@ -452,7 +503,9 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const v =
         ctx.entityType === 'player'
-          ? ctx.player?.rebAvg
+          ? ctx.sampleGames && ctx.sampleGames.length > 0
+            ? mean(ctx.sampleGames.map((g) => g.rebounds))
+            : ctx.player?.rebAvg
           : getTeamAvgOrTot(ctx, (g) => (g.oreb || 0) + (g.dreb || 0));
       return { text: fmtPerOrTot(v, ctx, 1, 0) };
     },
@@ -467,7 +520,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const v =
         ctx.entityType === 'player'
-          ? mean(getPlayerSeasonGames(ctx.player).map((g) => g.oreb))
+          ? mean(getPlayerActiveGames(ctx).map((g) => g.oreb))
           : getTeamAvgOrTot(ctx, (g) => g.oreb || 0);
       return { text: fmtPerOrTot(v, ctx, 1, 0) };
     },
@@ -482,7 +535,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const v =
         ctx.entityType === 'player'
-          ? mean(getPlayerSeasonGames(ctx.player).map((g) => g.dreb))
+          ? mean(getPlayerActiveGames(ctx).map((g) => g.dreb))
           : getTeamAvgOrTot(ctx, (g) => g.dreb || 0);
       return { text: fmtPerOrTot(v, ctx, 1, 0) };
     },
@@ -497,7 +550,9 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const v =
         ctx.entityType === 'player'
-          ? ctx.player?.astAvg
+          ? ctx.sampleGames && ctx.sampleGames.length > 0
+            ? mean(ctx.sampleGames.map((g) => g.assists))
+            : ctx.player?.astAvg
           : getTeamAvgOrTot(ctx, (g) => g.ast || 0);
       return { text: fmtPerOrTot(v, ctx, 1, 0) };
     },
@@ -512,7 +567,9 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const v =
         ctx.entityType === 'player'
-          ? ctx.player?.stlAvg
+          ? ctx.sampleGames && ctx.sampleGames.length > 0
+            ? mean(ctx.sampleGames.map((g) => g.steals))
+            : ctx.player?.stlAvg
           : getDefHustle(ctx)?.stl ?? getTeamAvgOrTot(ctx, (g) => g.stl || 0);
       return { text: fmtPerOrTot(v, ctx, 1, 0) };
     },
@@ -527,7 +584,9 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const v =
         ctx.entityType === 'player'
-          ? ctx.player?.blkAvg
+          ? ctx.sampleGames && ctx.sampleGames.length > 0
+            ? mean(ctx.sampleGames.map((g) => g.blocks))
+            : ctx.player?.blkAvg
           : getDefHustle(ctx)?.blk ?? getTeamAvgOrTot(ctx, (g) => g.blk || 0);
       return { text: fmtPerOrTot(v, ctx, 1, 0) };
     },
@@ -542,7 +601,9 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const v =
         ctx.entityType === 'player'
-          ? (ctx.player?.stlAvg || 0) + (ctx.player?.blkAvg || 0)
+          ? ctx.sampleGames && ctx.sampleGames.length > 0
+            ? mean(ctx.sampleGames.map((g) => g.stocks))
+            : (ctx.player?.stlAvg || 0) + (ctx.player?.blkAvg || 0)
           : (getDefHustle(ctx)?.stl ?? getTeamAvgOrTot(ctx, (g) => g.stl || 0) ?? 0) +
             (getDefHustle(ctx)?.blk ?? getTeamAvgOrTot(ctx, (g) => g.blk || 0) ?? 0);
       return { text: fmtPerOrTot(v, ctx, 1, 0) };
@@ -558,7 +619,13 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const v =
         ctx.entityType === 'player'
-          ? ctx.player?.fgPct
+          ? ctx.sampleGames && ctx.sampleGames.length > 0
+            ? (() => {
+                const fgm = ctx.sampleGames.reduce((s, g) => s + g.fgm, 0);
+                const fga = ctx.sampleGames.reduce((s, g) => s + g.fga, 0);
+                return fga > 0 ? round1((fgm / fga) * 100) : 0;
+              })()
+            : ctx.player?.fgPct
           : (() => {
               const g = ctx.team?.games || [];
               const fgm = g.reduce((s, x) => s + (x.fgm || 0), 0);
@@ -578,7 +645,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const v =
         ctx.entityType === 'player'
-          ? mean(getPlayerSeasonGames(ctx.player).map((g) => g.fg3m))
+          ? mean(getPlayerActiveGames(ctx).map((g) => g.fg3m))
           : getTeamAvgOrTot(ctx, (g) => g.fg3m || 0);
       return { text: fmtPerOrTot(v, ctx, 1, 0) };
     },
@@ -593,7 +660,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const v =
         ctx.entityType === 'player'
-          ? mean(getPlayerSeasonGames(ctx.player).map((g) => g.fg3a))
+          ? mean(getPlayerActiveGames(ctx).map((g) => g.fg3a))
           : getTeamAvgOrTot(ctx, (g) => g.fg3a || 0);
       return { text: fmtPerOrTot(v, ctx, 1, 0) };
     },
@@ -607,7 +674,15 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     scope: 'both',
     getDisplay: (ctx) => {
       const v =
-        ctx.entityType === 'player' ? ctx.player?.fg3Pct : ctx.team?.fg3Pct;
+        ctx.entityType === 'player'
+          ? ctx.sampleGames && ctx.sampleGames.length > 0
+            ? (() => {
+                const fg3m = ctx.sampleGames.reduce((s, g) => s + g.fg3m, 0);
+                const fg3a = ctx.sampleGames.reduce((s, g) => s + g.fg3a, 0);
+                return fg3a > 0 ? round1((fg3m / fg3a) * 100) : 0;
+              })()
+            : ctx.player?.fg3Pct
+          : ctx.team?.fg3Pct;
       return { text: fmtPctOrRaw(v, 1, '%') };
     },
   },
@@ -620,7 +695,15 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     scope: 'both',
     getDisplay: (ctx) => {
       const v =
-        ctx.entityType === 'player' ? ctx.player?.ftPct : ctx.team?.ftPct;
+        ctx.entityType === 'player'
+          ? ctx.sampleGames && ctx.sampleGames.length > 0
+            ? (() => {
+                const ftm = ctx.sampleGames.reduce((s, g) => s + g.ftm, 0);
+                const fta = ctx.sampleGames.reduce((s, g) => s + g.fta, 0);
+                return fta > 0 ? round1((ftm / fta) * 100) : 0;
+              })()
+            : ctx.player?.ftPct
+          : ctx.team?.ftPct;
       return { text: fmtPctOrRaw(v, 1, '%') };
     },
   },
@@ -632,7 +715,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     helpKey: 'plusMinusBase',
     scope: 'player',
     getDisplay: (ctx) => {
-      const v = mean(getPlayerSeasonGames(ctx.player).map((g) => g.plusMinus));
+      const v = mean(getPlayerActiveGames(ctx).map((g) => g.plusMinus));
       return {
         text: fmtPerOrTot(v, ctx, 1, 0, '', true),
         tone: v >= 0 ? 'positive' : 'negative',
@@ -647,7 +730,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     helpKey: 'pra',
     scope: 'player',
     getDisplay: (ctx) => {
-      const v = mean(getPlayerSeasonGames(ctx.player).map((g) => g.pra));
+      const v = mean(getPlayerActiveGames(ctx).map((g) => g.pra));
       return { text: fmtPerOrTot(v, ctx, 1, 0), tone: 'accent' };
     },
   },
@@ -661,7 +744,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const v =
         ctx.entityType === 'player'
-          ? mean(getPlayerSeasonGames(ctx.player).map((g) => g.fgm))
+          ? mean(getPlayerActiveGames(ctx).map((g) => g.fgm))
           : getTeamAvgOrTot(ctx, (g) => g.fgm || 0);
       return { text: fmtPerOrTot(v, ctx, 1, 0) };
     },
@@ -676,7 +759,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const v =
         ctx.entityType === 'player'
-          ? mean(getPlayerSeasonGames(ctx.player).map((g) => g.fga))
+          ? mean(getPlayerActiveGames(ctx).map((g) => g.fga))
           : getTeamAvgOrTot(ctx, (g) => g.fga || 0);
       return { text: fmtPerOrTot(v, ctx, 1, 0) };
     },
@@ -691,7 +774,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const v =
         ctx.entityType === 'player'
-          ? mean(getPlayerSeasonGames(ctx.player).map((g) => Math.max(0, g.fgm - g.fg3m)))
+          ? mean(getPlayerActiveGames(ctx).map((g) => Math.max(0, g.fgm - g.fg3m)))
           : getTeamAvgOrTot(ctx, (g) => Math.max(0, (g.fgm || 0) - (g.fg3m || 0)));
       return { text: fmtPerOrTot(v, ctx, 1, 0) };
     },
@@ -706,7 +789,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const v =
         ctx.entityType === 'player'
-          ? mean(getPlayerSeasonGames(ctx.player).map((g) => Math.max(0, g.fga - g.fg3a)))
+          ? mean(getPlayerActiveGames(ctx).map((g) => Math.max(0, g.fga - g.fg3a)))
           : getTeamAvgOrTot(ctx, (g) => Math.max(0, (g.fga || 0) - (g.fg3a || 0)));
       return { text: fmtPerOrTot(v, ctx, 1, 0) };
     },
@@ -721,7 +804,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const gs =
         ctx.entityType === 'player'
-          ? getPlayerSeasonGames(ctx.player)
+          ? getPlayerActiveGames(ctx)
           : ctx.team?.games || [];
       const m2 = gs.reduce((s, g) => s + Math.max(0, (g.fgm || 0) - (g.fg3m || 0)), 0);
       const a2 = gs.reduce((s, g) => s + Math.max(0, (g.fga || 0) - (g.fg3a || 0)), 0);
@@ -739,7 +822,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const v =
         ctx.entityType === 'player'
-          ? mean(getPlayerSeasonGames(ctx.player).map((g) => g.ftm))
+          ? mean(getPlayerActiveGames(ctx).map((g) => g.ftm))
           : getTeamAvgOrTot(ctx, (g) => g.ftm || 0);
       return { text: fmtPerOrTot(v, ctx, 1, 0) };
     },
@@ -754,7 +837,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     getDisplay: (ctx) => {
       const v =
         ctx.entityType === 'player'
-          ? mean(getPlayerSeasonGames(ctx.player).map((g) => g.fta))
+          ? mean(getPlayerActiveGames(ctx).map((g) => g.fta))
           : getTeamAvgOrTot(ctx, (g) => g.fta || 0);
       return { text: fmtPerOrTot(v, ctx, 1, 0) };
     },
@@ -846,6 +929,13 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     helpKey: 'efgPct',
     scope: 'both',
     getDisplay: (ctx) => {
+      if (isCustomPlayerSample(ctx)) {
+        const gs = ctx.sampleGames!;
+        const fgm = gs.reduce((s, g) => s + g.fgm, 0);
+        const fg3m = gs.reduce((s, g) => s + g.fg3m, 0);
+        const fga = gs.reduce((s, g) => s + g.fga, 0);
+        return { text: fga > 0 ? `${(((fgm + 0.5 * fg3m) / fga) * 100).toFixed(1)}%` : '—' };
+      }
       const ff = getFourFactors(ctx);
       const v =
         ff?.efgPct ??
@@ -861,6 +951,14 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     helpKey: 'tsPct',
     scope: 'both',
     getDisplay: (ctx) => {
+      if (isCustomPlayerSample(ctx)) {
+        const gs = ctx.sampleGames!;
+        const pts = gs.reduce((s, g) => s + g.points, 0);
+        const fga = gs.reduce((s, g) => s + g.fga, 0);
+        const fta = gs.reduce((s, g) => s + g.fta, 0);
+        const den = 2 * (fga + 0.44 * fta);
+        return { text: den > 0 ? `${((pts / den) * 100).toFixed(1)}%` : '—' };
+      }
       const ff = getFourFactors(ctx);
       const v =
         ff?.tsPct ??
@@ -876,6 +974,15 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     helpKey: 'usgPct',
     scope: 'player',
     getDisplay: (ctx) => {
+      if (isCustomPlayerSample(ctx)) {
+        const gs = ctx.sampleGames!;
+        const m = gs.reduce((s, g) => s + g.minutes, 0);
+        const u =
+          m > 0
+            ? gs.reduce((s, g) => s + g.usgEst * g.minutes, 0) / m
+            : mean(gs.map((g) => g.usgEst));
+        return { text: fmtPctOrRaw(u, 1, '%') };
+      }
       const v = getFourFactors(ctx)?.usgPct ?? ctx.player?.usgAvg;
       return { text: fmtPctOrRaw(v, 1, '%') };
     },
@@ -938,6 +1045,13 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     helpKey: 'astTo',
     scope: 'both',
     getDisplay: (ctx) => {
+      if (isCustomPlayerSample(ctx)) {
+        const gs = ctx.sampleGames!;
+        const ast = gs.reduce((s, g) => s + g.assists, 0);
+        const tov = gs.reduce((s, g) => s + g.turnovers, 0);
+        const ratio = tov > 0 ? ast / tov : ast;
+        return { text: fmtPctOrRaw(ratio, 2) };
+      }
       const v =
         getFourFactors(ctx)?.astTo ??
         (ctx.entityType === 'player'
@@ -1003,6 +1117,14 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     helpKey: 'tovPct',
     scope: 'both',
     getDisplay: (ctx) => {
+      if (isCustomPlayerSample(ctx)) {
+        const gs = ctx.sampleGames!;
+        const tov = gs.reduce((s, g) => s + g.turnovers, 0);
+        const fga = gs.reduce((s, g) => s + g.fga, 0);
+        const fta = gs.reduce((s, g) => s + g.fta, 0);
+        const den = fga + 0.44 * fta + tov;
+        return { text: den > 0 ? `${((tov / den) * 100).toFixed(1)}%` : '—' };
+      }
       const v =
         getFourFactors(ctx)?.tmTovPct ??
         (ctx.entityType === 'player'
@@ -1019,8 +1141,16 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     helpKey: 'ftRate',
     scope: 'both',
     getDisplay: (ctx) => {
-      const v = getFourFactors(ctx)?.ftaRate ?? ctx.team?.ftRate;
-      return { text: fmtPctOrRaw(v, 3) };
+      if (isCustomPlayerSample(ctx)) {
+        const gs = ctx.sampleGames!;
+        const fta = gs.reduce((s, g) => s + g.fta, 0);
+        const fga = gs.reduce((s, g) => s + g.fga, 0);
+        return { text: fga > 0 ? `${((fta / fga) * 100).toFixed(1)}%` : '—' };
+      }
+      const raw = getFourFactors(ctx)?.ftaRate ?? ctx.team?.ftRate;
+      if (typeof raw !== 'number' || !Number.isFinite(raw)) return { text: '—' };
+      const pct = raw > 0 && raw < 1.5 ? raw * 100 : raw;
+      return { text: `${pct.toFixed(1)}%` };
     },
   },
   {
@@ -1063,9 +1193,12 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     shortLabel: 'Opp FTr',
     helpKey: 'oppFourFactors',
     scope: 'both',
-    getDisplay: (ctx) => ({
-      text: fmtPctOrRaw(getFourFactors(ctx)?.oppFtaRate, 3),
-    }),
+    getDisplay: (ctx) => {
+      const raw = getFourFactors(ctx)?.oppFtaRate;
+      if (typeof raw !== 'number' || !Number.isFinite(raw)) return { text: '—' };
+      const pct = raw > 0 && raw < 1.5 ? raw * 100 : raw;
+      return { text: `${pct.toFixed(1)}%` };
+    },
   },
   {
     key: 'adv_onOffNetDiff',
@@ -1127,7 +1260,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     helpKey: 'gmSc',
     scope: 'player',
     getDisplay: (ctx) => {
-      const v = mean(getPlayerSeasonGames(ctx.player).map((g) => g.gameScore));
+      const v = mean(getPlayerActiveGames(ctx).map((g) => g.gameScore));
       return { text: fmtPctOrRaw(v, 1) };
     },
   },
@@ -1140,7 +1273,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     scope: 'both',
     getDisplay: (ctx) => {
       if (ctx.entityType === 'player') {
-        const gs = getPlayerSeasonGames(ctx.player);
+        const gs = getPlayerActiveGames(ctx);
         const pts = gs.reduce((s, g) => s + g.points, 0);
         const fga = gs.reduce((s, g) => s + g.fga, 0);
         return { text: fga > 0 ? (pts / fga).toFixed(2) : '—' };
@@ -1159,7 +1292,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     helpKey: 'ptsPer36',
     scope: 'player',
     getDisplay: (ctx) => {
-      const gs = getPlayerSeasonGames(ctx.player);
+      const gs = getPlayerActiveGames(ctx);
       const pts = gs.reduce((s, g) => s + g.points, 0);
       const min = gs.reduce((s, g) => s + g.minutes, 0);
       return { text: min > 0 ? ((pts / min) * 36).toFixed(1) : '—' };
@@ -1173,7 +1306,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     helpKey: 'rebPer36',
     scope: 'player',
     getDisplay: (ctx) => {
-      const gs = getPlayerSeasonGames(ctx.player);
+      const gs = getPlayerActiveGames(ctx);
       const reb = gs.reduce((s, g) => s + g.rebounds, 0);
       const min = gs.reduce((s, g) => s + g.minutes, 0);
       return { text: min > 0 ? ((reb / min) * 36).toFixed(1) : '—' };
@@ -1187,7 +1320,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     helpKey: 'astPer36',
     scope: 'player',
     getDisplay: (ctx) => {
-      const gs = getPlayerSeasonGames(ctx.player);
+      const gs = getPlayerActiveGames(ctx);
       const ast = gs.reduce((s, g) => s + g.assists, 0);
       const min = gs.reduce((s, g) => s + g.minutes, 0);
       return { text: min > 0 ? ((ast / min) * 36).toFixed(1) : '—' };
@@ -1201,7 +1334,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     helpKey: 'praPer36',
     scope: 'player',
     getDisplay: (ctx) => {
-      const gs = getPlayerSeasonGames(ctx.player);
+      const gs = getPlayerActiveGames(ctx);
       const pra = gs.reduce((s, g) => s + g.pra, 0);
       const min = gs.reduce((s, g) => s + g.minutes, 0);
       return { text: min > 0 ? ((pra / min) * 36).toFixed(1) : '—' };
@@ -1215,7 +1348,7 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     helpKey: 'stocksPer36',
     scope: 'player',
     getDisplay: (ctx) => {
-      const gs = getPlayerSeasonGames(ctx.player);
+      const gs = getPlayerActiveGames(ctx);
       const stk = gs.reduce((s, g) => s + g.stocks, 0);
       const min = gs.reduce((s, g) => s + g.minutes, 0);
       return { text: min > 0 ? ((stk / min) * 36).toFixed(1) : '—' };
@@ -2851,14 +2984,16 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     helpKey: 'doubleDoubles',
     scope: 'player',
     getDisplay: (ctx) => {
-      const dd2 =
-        getViolations(ctx)?.dd2 ??
-        getPlayerSeasonGames(ctx.player).filter(
+      const calcFromGames = (gs: PlayerGameLog[]) =>
+        gs.filter(
           (gm) =>
             [gm.points, gm.rebounds, gm.assists, gm.steals, gm.blocks].filter(
               (x) => x >= 10
             ).length >= 2
         ).length;
+      const dd2 = isCustomPlayerSample(ctx)
+        ? calcFromGames(ctx.sampleGames!)
+        : getViolations(ctx)?.dd2 ?? calcFromGames(getPlayerSeasonGames(ctx.player));
       return { text: `${dd2}` };
     },
   },
@@ -2870,14 +3005,16 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     helpKey: 'tripleDoubles',
     scope: 'player',
     getDisplay: (ctx) => {
-      const td3 =
-        getViolations(ctx)?.td3 ??
-        getPlayerSeasonGames(ctx.player).filter(
+      const calcFromGames = (gs: PlayerGameLog[]) =>
+        gs.filter(
           (gm) =>
             [gm.points, gm.rebounds, gm.assists, gm.steals, gm.blocks].filter(
               (x) => x >= 10
             ).length >= 3
         ).length;
+      const td3 = isCustomPlayerSample(ctx)
+        ? calcFromGames(ctx.sampleGames!)
+        : getViolations(ctx)?.td3 ?? calcFromGames(getPlayerSeasonGames(ctx.player));
       return { text: `${td3}` };
     },
   },
@@ -2888,13 +3025,14 @@ export const NBA_ALL_KPIS_CATALOG: InspectorNbaKpiDef[] = [
     shortLabel: 'NBA FPTS',
     helpKey: 'nbaFantasyPts',
     scope: 'player',
-    isDefaultPlayer: true,
     getDisplay: (ctx) => {
-      const v = getViolations(ctx)?.nbaFantasyPts;
-      if (typeof v === 'number' && Number.isFinite(v)) {
-        return { text: fmtPerOrTot(v, ctx, 1, 0), tone: 'accent' };
+      if (!isCustomPlayerSample(ctx)) {
+        const v = getViolations(ctx)?.nbaFantasyPts;
+        if (typeof v === 'number' && Number.isFinite(v)) {
+          return { text: fmtPerOrTot(v, ctx, 1, 0), tone: 'accent' };
+        }
       }
-      const gamesRef = getPlayerSeasonGames(ctx.player);
+      const gamesRef = getPlayerActiveGames(ctx);
       const calc = gamesRef.length
         ? mean(
             gamesRef.map(
@@ -2917,13 +3055,51 @@ export const NBA_ALL_KPIS_MAP: Record<string, InspectorNbaKpiDef> = Object.fromE
   NBA_ALL_KPIS_CATALOG.map((k) => [k.key, k])
 );
 
-export const DEFAULT_PLAYER_NBA_KPI_KEYS = NBA_ALL_KPIS_CATALOG.filter(
-  (k) => (k.scope === 'both' || k.scope === 'player') && k.isDefaultPlayer
-).map((k) => k.key);
+export const DEFAULT_PLAYER_NBA_KPI_KEYS: string[] = [
+  'basic_min',
+  'basic_pts',
+  'basic_reb',
+  'basic_ast',
+  'basic_stl',
+  'basic_blk',
+  'basic_stocks',
+  'basic_fgPct',
+  'basic_fg3Pct',
+  'basic_ftPct',
+  'basic_plusMinus',
+  'basic_pra',
+  'adv_tsPct',
+  'adv_efgPct',
+  'adv_usgPct',
+  'adv_netRtg',
+  'adv_pie',
+  'adv_astTo',
+  'tr_drives',
+  'cl_pts',
+];
 
-export const DEFAULT_TEAM_NBA_KPI_KEYS = NBA_ALL_KPIS_CATALOG.filter(
-  (k) => (k.scope === 'both' || k.scope === 'team') && k.isDefaultTeam
-).map((k) => k.key);
+export const DEFAULT_TEAM_NBA_KPI_KEYS: string[] = [
+  'basic_winPct',
+  'adv_offRtg',
+  'adv_defRtg',
+  'adv_netRtg',
+  'adv_pace',
+  'basic_pts',
+  'basic_opp_pts',
+  'basic_diff',
+  'adv_efgPct',
+  'adv_tsPct',
+  'basic_fgPct',
+  'basic_fg3Pct',
+  'basic_fg3m',
+  'basic_reb',
+  'basic_ast',
+  'adv_astTo',
+  'adv_orebPct',
+  'adv_tovPct',
+  'hu_ptsPaint',
+  'cl_netRtg',
+];
 
 // ============================================================================
 // METADATA & LEAGUE BENCHMARKS FOR ALL 10 LAYERS (Mean + SD Comparison & Charts)
@@ -3006,6 +3182,7 @@ const SIGNED_KEYS = new Set<string>([
 
 const NON_SCALABLE_KEYS = new Set<string>([
   'basic_gp',
+  'basic_winPct',
   'basic_fgPct',
   'basic_fg2Pct',
   'basic_fg3Pct',
@@ -3030,6 +3207,8 @@ export function getKpiMeta(
   const label = def.label;
   const isPct =
     k.includes('Pct') ||
+    k === 'adv_ftaRate' ||
+    k === 'adv_oppFtaRate' ||
     k.startsWith('sc_') ||
     k.endsWith('Adj') ||
     k === 'def_freq' ||
@@ -3073,7 +3252,7 @@ export function getKpiMeta(
     (statScale === 'per_game' && (k.startsWith('tr_distMiles') || k === 'hu_chargesDrawn' || isViolationCount))
   ) {
     decimals = 2;
-  } else if (k === 'adv_ftaRate' || k === 'adv_oppFtaRate' || k === 'tr_ptsPerTouch' || k === 'def_ws') {
+  } else if (k === 'tr_ptsPerTouch' || k === 'def_ws') {
     decimals = 3;
   } else if (statScale === 'totals' && scalable) {
     decimals = k.startsWith('tr_distMiles') ? 1 : 0;
@@ -3156,9 +3335,9 @@ const RESILIENT_PLAYER_ADV_BENCHMARKS: Record<string, NbaAdvancedBenchmarkStat> 
   adv_rebPct: { mean: 9.3, sd: 4.4 },
   adv_tovPct: { mean: 12.1, sd: 4.5 },
   adv_ftaRate: { mean: 24.8, sd: 13.5 },
-  adv_onOffNetDiff: { mean: 0.0, sd: 6.2 },
-  adv_onOffNetOn: { mean: -0.4, sd: 8.5 },
-  adv_onOffNetOff: { mean: 0.0, sd: 6.5 },
+  adv_onOffNetDiff: { mean: 0.1, sd: 5.9 },
+  adv_onOffNetOn: { mean: -0.3, sd: 8.4 },
+  adv_onOffNetOff: { mean: -0.4, sd: 6.9 },
   sc_pctFga2pt: { mean: 58.5, sd: 18.4 },
   sc_pctFga3pt: { mean: 41.5, sd: 18.4 },
   sc_pctPts2pt: { mean: 50.2, sd: 16.5 },
@@ -3347,6 +3526,7 @@ const RESILIENT_PLAYER_ADV_BENCHMARKS: Record<string, NbaAdvancedBenchmarkStat> 
 };
 
 const RESILIENT_TEAM_ADV_BENCHMARKS: Record<string, NbaAdvancedBenchmarkStat> = {
+  basic_winPct: { mean: 50.0, sd: 14.5 },
   adv_offRtg: { mean: 114.6, sd: 4.2 },
   adv_defRtg: { mean: 114.6, sd: 3.9 },
   adv_netRtg: { mean: 0.0, sd: 6.4 },
@@ -3710,6 +3890,15 @@ export function computeClientLeagueBenchmarks(
       if (res) out[key] = res;
     };
     set('basic_gp', teams.map((t) => (t.wins + t.losses) || t.games.length), 1);
+    set(
+      'basic_winPct',
+      teams.map((t) =>
+        t.wins + t.losses > 0
+          ? (t.wins / (t.wins + t.losses)) * 100
+          : (t.winPct || 0) * 100
+      ),
+      1
+    );
     set('basic_pts', teams.map((t) => t.avgPointsFor), 1);
     set('basic_opp_pts', teams.map((t) => t.avgPointsAgainst), 1);
     set('basic_diff', teams.map((t) => t.differential), 1);
@@ -3766,6 +3955,9 @@ export function computeClientLeagueBenchmarks(
       return fga > 0 ? (fta / fga) * 100 : NaN;
     }), 1);
     setIfMissing('vl_tov', teams.map((t) => mean(t.games.map((g) => g.tov))), 1);
+    if (!out.adv_onOffNetDiff) out.adv_onOffNetDiff = { mean: 0.1, sd: 5.9 };
+    if (!out.adv_onOffNetOn) out.adv_onOffNetOn = { mean: -0.3, sd: 8.4 };
+    if (!out.adv_onOffNetOff) out.adv_onOffNetOff = { mean: -0.4, sd: 6.9 };
   }
 
   return out;

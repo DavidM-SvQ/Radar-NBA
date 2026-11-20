@@ -145,6 +145,16 @@ const APP_SECTIONS_DOCS: AppSectionDoc[] = [
       'Para comprobar con sus 3 modos de comparador si la liga juega más rápido, más eficiente o carga más el rebote ofensivo que el curso pasado y quién lidera cada apartado.',
   },
   {
+    id: 'heroic',
+    title: 'Buzzer Beaters y Game Winners (Play-by-Play Oficial)',
+    purpose:
+      'Archivo histórico interactivo de canastas ganadoras sobre la bocina (0.0s), Game Winners en los últimos ≤10 segundos y empates sobre la bocina para prórroga.',
+    measuredStats:
+      'Reloj exacto (0.0s–10.0s), distancia de tiro medida en pies (ft) con diagrama de pista, ranking de jugadores cerradores, balance neto (anotados vs encajados) de las 30 franquicias y benchmarks históricos NBA.',
+    whenToUse:
+      'Para descubrir quién resuelve los finales apretados de la NBA, consultar jugadas históricas y enlazar directamente con la jornada de cada partido.',
+  },
+  {
     id: 'teams',
     title: 'Equipos NBA (10 Capas + Por Partido / Totales)',
     purpose:
@@ -661,6 +671,22 @@ const METRICS_DICTIONARY: MetricDefinition[] = [
     description: 'Proporción de jugadas que asume directamente el jugador (tiros, tiros libres o pérdidas) mientras está en pista en los últimos 5 minutos cerrados.',
     formula: 'Posesiones finalizadas por el jugador / posesiones totales del equipo en pista',
     benchmark: 'Media NBA ~19.0% · Primeras espadas de la liga en el clutch > 33.0%',
+  },
+  {
+    code: 'buzzerBeater',
+    name: 'Buzzer Beaters (Canastas Ganadoras sobre la Bocina)',
+    category: 'Clutch, Defensa e Infracciones',
+    description: 'Lanzamiento encestado que entra cuando el reloj del partido expira exactamente a 0.0 segundos, dando la victoria directa al equipo sin opción de respuesta rival.',
+    formula: 'Tiro ganador encestado con reloj de partido en 0.0s en el 4Q o Prórroga',
+    benchmark: 'Acontecimiento extraordinario en la NBA: apenas suceden entre 10 y 18 buzzer beaters en toda la temporada regular.',
+  },
+  {
+    code: 'gameWinner',
+    name: 'Game Winners (Tiros Decisivos en los Segundos Finales)',
+    category: 'Clutch, Defensa e Infracciones',
+    description: 'Canasta decisiva anotada en los últimos segundos de partido (≤ 10.0s) que coloca a su equipo por delante en el marcador para sellar el triunfo definitivo.',
+    formula: 'Tiro encestado en ≤10.0s finales para remontar o romper empate y ganar el encuentro',
+    benchmark: 'Distingue a los cerradores más fiables y fríos de la competición (Kobe, Jordan, Lillard, Doncic).',
   },
 
   // Hustle & Defensa Avanzada
@@ -1879,7 +1905,7 @@ export function GlossaryView({ onNavigateSection }: GlossaryViewProps) {
                 <tr className="text-xs text-slate-400">
                   <th className="py-3 pl-4 pr-3 text-left font-semibold">Apartado y Etiqueta</th>
                   <th className="py-3 px-3 text-left font-semibold">Métrica Detonante</th>
-                  <th className="py-3 px-3 text-left font-semibold">Criterio de Activación (vs Media 2026-27)</th>
+                  <th className="py-3 px-3 text-left font-semibold">Criterio de Activación (vs Media Previa 25 PJ)</th>
                   <th className="py-3 px-3 text-left font-semibold">Significado Baloncestístico</th>
                   <th className="py-3 pl-3 pr-4 text-left font-semibold">Lectura para el Siguiente Partido</th>
                 </tr>

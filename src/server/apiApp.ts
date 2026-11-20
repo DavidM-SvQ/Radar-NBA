@@ -3,12 +3,12 @@ import "dotenv/config";
 import express from "express";
 import helmet from "helmet";
 import zlib from "zlib";
-import { DEFAULT_GAMEDAY_THRESHOLDS, getBootstrapPayload, getBootstrapWireBuffers, getFantasyEspnSyncPayload, getGameDayPayload, getGamedayThresholdsConfig, getMilestonesPayload, getPlayerInspectorDossier, getSeasonAwardsPayload, getScoreboardDeltaPayload, getSinglePlayerSummary, getTeamRoster, resetGamedayThresholdsConfigDefaults, scoutingEngine, searchLeaguePlayers, updateGamedayThresholdsConfig } from "./nbaDataService.ts";
-import { getLeagueShotZonesAdvanced, getLeagueClutchAdvanced, getLeagueDefenseHustleAdvanced, getLeagueTrackingAdvanced, getLeaguePlaytypesAdvanced, getLeagueScoringSplitsAdvanced, getLeagueFourFactorsAdvanced, getLeagueViolationsAdvanced, getLeagueLineups, getTeamAdvancedDossier, getPlayerAdvancedDossier } from "./nbaAdvancedStatsService.ts";
+import { DEFAULT_GAMEDAY_THRESHOLDS, DEFAULT_INSPECTOR_KPI_CONFIG, DEFAULT_WEB_FEATURE_FLAGS, getBootstrapPayload, getBootstrapWireBuffers, getFantasyEspnSyncPayload, getGameDayPayload, getGamedayThresholdsConfig, getInspectorKpiDefaultsConfig, getMilestonesPayload, getPlayerInspectorDossier, getSeasonAwardsPayload, getScoreboardDeltaPayload, getSinglePlayerSummary, getTeamRoster, getWebFeatureFlags, resetGamedayThresholdsConfigDefaults, resetInspectorKpiDefaultsConfig, scoutingEngine, searchLeaguePlayers, updateGamedayThresholdsConfig, updateInspectorKpiDefaultsConfig, updateWebFeatureFlags } from "./nbaDataService.ts";
+import { getLeagueShotZonesAdvanced, getLeagueClutchAdvanced, getLeagueDefenseHustleAdvanced, getLeagueTrackingAdvanced, getLeaguePlaytypesAdvanced, getLeagueScoringSplitsAdvanced, getLeagueFourFactorsAdvanced, getLeagueViolationsAdvanced, getLeagueLineups, getLeagueHeroicShots, getTeamAdvancedDossier, getPlayerAdvancedDossier } from "./nbaAdvancedStatsService.ts";
 import { readNbaSnapshotFromDisk } from "./nbaSnapshotStore.ts";
 import { getFantasyStorageBackendInfo, readManualFantasyState, writeManualFantasyState } from "./fantasyEspnService.ts";
 import { DEFAULT_ADMIN_SECURITY_VALUES, adminBruteForceLimiter, adminEndpointFloodLimiter, buildAdminSessionCookieHeader, buildClearAdminSessionCookieHeader, extractAdminTokenFromRequest, getAdminAuthReadiness, getAdminSecurityConfig, getRateLimitBackendInfo, issueAdminSessionToken, nbaApiRateLimiter, nbaHeavyRefreshLimiter, recordAdminLoginFailure, requireAdminAuth, requireAdminCsrfProtection, resetAdminBruteForceForRequest, resetAdminSecurityConfigToDefaults, resetAllRateLimitCounters, saveAdminSecurityConfig, verifyAdminPasscodeConstantTime, verifyAdminSessionToken } from "./securityMiddleware.ts";
-import { ADMIN_SECURITY_BOUNDS, adminLoginBodySchema, adminSecurityConfigBodySchema, awardsQuerySchema, bootstrapQuerySchema, emptyQuerySchema, gameEventParamsSchema, gamedayQuerySchema, gamedayThresholdsBodySchema, getValidated, manualFantasyStateBodySchema, playerParamsSchema, playerSummaryQuerySchema, refreshOnlyQuerySchema, searchQuerySchema, teamParamsSchema, validateRequest, advancedLeagueQuerySchema, advancedLineupsQuerySchema, advancedEntityQuerySchema } from "./validationSchemas.ts";
+import { ADMIN_SECURITY_BOUNDS, adminLoginBodySchema, adminSecurityConfigBodySchema, awardsQuerySchema, bootstrapQuerySchema, emptyQuerySchema, gameEventParamsSchema, gamedayQuerySchema, gamedayThresholdsBodySchema, getValidated, inspectorKpiDefaultsBodySchema, manualFantasyStateBodySchema, playerParamsSchema, playerSummaryQuerySchema, refreshOnlyQuerySchema, searchQuerySchema, teamParamsSchema, validateRequest, advancedLeagueQuerySchema, advancedLineupsQuerySchema, advancedEntityQuerySchema, advancedHeroicShotsQuerySchema, webFeatureFlagsBodySchema } from "./validationSchemas.ts";
 import { getAllCircuitMetrics, resetCircuit } from "./circuitBreaker.ts";
 import { expressTelemetryMiddleware, getTelemetrySummary } from "./telemetryLogger.ts";
 import { getEasternTodayIso } from "../utils/staticSchedule.ts";
@@ -183,6 +183,54 @@ app.post("/api/admin/gameday-thresholds/reset-defaults", requireAdminCsrfProtect
     console.error("Error in POST /api/admin/gameday-thresholds/reset-defaults:", err);
     res.status(500).json({ ok: false, error: "No se pudieron restablecer los criterios recomendados." });
   }
+});
+app.get("/api/admin/web-feature-flags", requireAdminAuth, validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true, flags: getWebFeatureFlags(), defaults: DEFAULT_WEB_FEATURE_FLAGS });
+});
+app.put("/api/admin/web-feature-flags", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema, body: webFeatureFlagsBodySchema }), (req, res) => {
+  try {
+    const { body } = getValidated(req);
+    const updated = updateWebFeatureFlags(body);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, flags: updated, defaults: DEFAULT_WEB_FEATURE_FLAGS });
+  } catch (err) {
+    console.error("Error in PUT /api/admin/web-feature-flags:", err);
+    res.status(500).json({ ok: false, error: "No se pudo guardar la configuración de insignias." });
+  }
+});
+app.get("/api/nba/web-feature-flags", validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true, flags: getWebFeatureFlags() });
+});
+app.get("/api/admin/inspector-kpi-defaults", requireAdminAuth, validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true, config: getInspectorKpiDefaultsConfig(), defaults: DEFAULT_INSPECTOR_KPI_CONFIG });
+});
+app.put("/api/admin/inspector-kpi-defaults", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema, body: inspectorKpiDefaultsBodySchema }), (req, res) => {
+  try {
+    const { body } = getValidated(req);
+    const updated = updateInspectorKpiDefaultsConfig(body);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, config: updated, defaults: DEFAULT_INSPECTOR_KPI_CONFIG });
+  } catch (err) {
+    console.error("Error in PUT /api/admin/inspector-kpi-defaults:", err);
+    res.status(500).json({ ok: false, error: "No se pudo guardar la configuración de KPIs por defecto." });
+  }
+});
+app.post("/api/admin/inspector-kpi-defaults/reset-defaults", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+  try {
+    const restored = resetInspectorKpiDefaultsConfig();
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, config: restored, defaults: DEFAULT_INSPECTOR_KPI_CONFIG });
+  } catch (err) {
+    console.error("Error in POST /api/admin/inspector-kpi-defaults/reset-defaults:", err);
+    res.status(500).json({ ok: false, error: "No se pudieron restablecer los KPIs por defecto." });
+  }
+});
+app.get("/api/nba/inspector-kpi-defaults", validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true, config: getInspectorKpiDefaultsConfig() });
 });
 app.get("/api/nba/bootstrap", validateRequest({ query: bootstrapQuerySchema }), async (req, res) => {
   try {
@@ -455,7 +503,7 @@ app.put("/api/nba/fantasy/manual-state", validateRequest({ query: emptyQuerySche
 app.get("/api/nba/advanced/teams", validateRequest({ query: advancedLeagueQuerySchema }), async (req, res) => {
   try {
     const { query } = getValidated(req);
-    res.setHeader("Cache-Control", query.refresh ? "no-store" : "public, max-age=300, s-maxage=1800, stale-while-revalidate=86400");
+    res.setHeader("Cache-Control", query.refresh ? "no-store" : "no-cache");
     let payload;
     if (query.category === "zones") payload = await getLeagueShotZonesAdvanced(query.season, "team", Boolean(query.refresh));
     else if (query.category === "clutch") payload = await getLeagueClutchAdvanced(query.season, "team", Boolean(query.refresh));
@@ -476,7 +524,7 @@ app.get("/api/nba/advanced/teams", validateRequest({ query: advancedLeagueQueryS
 app.get("/api/nba/advanced/players", validateRequest({ query: advancedLeagueQuerySchema }), async (req, res) => {
   try {
     const { query } = getValidated(req);
-    res.setHeader("Cache-Control", query.refresh ? "no-store" : "public, max-age=300, s-maxage=1800, stale-while-revalidate=86400");
+    res.setHeader("Cache-Control", query.refresh ? "no-store" : "no-cache");
     let payload;
     if (query.category === "zones") payload = await getLeagueShotZonesAdvanced(query.season, "player", Boolean(query.refresh));
     else if (query.category === "clutch") payload = await getLeagueClutchAdvanced(query.season, "player", Boolean(query.refresh));
@@ -497,7 +545,7 @@ app.get("/api/nba/advanced/players", validateRequest({ query: advancedLeagueQuer
 app.get("/api/nba/advanced/lineups", validateRequest({ query: advancedLineupsQuerySchema }), async (req, res) => {
   try {
     const { query } = getValidated(req);
-    res.setHeader("Cache-Control", query.refresh ? "no-store" : "public, max-age=300, s-maxage=1800, stale-while-revalidate=86400");
+    res.setHeader("Cache-Control", query.refresh ? "no-store" : "no-cache");
     const payload = await getLeagueLineups(query.season, query.group as any, query.teamId, Boolean(query.refresh));
     res.json(payload);
   } catch (err) {
@@ -509,7 +557,7 @@ app.get("/api/nba/advanced/lineups", validateRequest({ query: advancedLineupsQue
 app.get("/api/nba/advanced/team/:teamId", validateRequest({ params: teamParamsSchema, query: advancedEntityQuerySchema }), async (req, res) => {
   try {
     const { params, query } = getValidated(req);
-    res.setHeader("Cache-Control", query.refresh ? "no-store" : "public, max-age=300, s-maxage=1800, stale-while-revalidate=86400");
+    res.setHeader("Cache-Control", query.refresh ? "no-store" : "no-cache");
     const dossier = await getTeamAdvancedDossier(params.teamId, query.season, Boolean(query.refresh));
     res.json(dossier);
   } catch (err) {
@@ -521,12 +569,24 @@ app.get("/api/nba/advanced/team/:teamId", validateRequest({ params: teamParamsSc
 app.get("/api/nba/advanced/player/:playerId", validateRequest({ params: playerParamsSchema, query: advancedEntityQuerySchema }), async (req, res) => {
   try {
     const { params, query } = getValidated(req);
-    res.setHeader("Cache-Control", query.refresh ? "no-store" : "public, max-age=300, s-maxage=1800, stale-while-revalidate=86400");
+    res.setHeader("Cache-Control", query.refresh ? "no-store" : "no-cache");
     const dossier = await getPlayerAdvancedDossier(params.playerId, query.teamId, query.season, Boolean(query.refresh));
     res.json(dossier);
   } catch (err) {
     console.error("Error in /api/nba/advanced/player/:playerId:", err);
     res.status(500).json({ error: err?.message || "Error al cargar dossier avanzado de jugador." });
+  }
+});
+
+app.get("/api/nba/advanced/heroic-shots", validateRequest({ query: advancedHeroicShotsQuerySchema }), async (req, res) => {
+  try {
+    const { query } = getValidated(req);
+    res.setHeader("Cache-Control", query.refresh ? "no-store" : "no-cache");
+    const payload = await getLeagueHeroicShots(query.season, Boolean(query.refresh));
+    res.json(payload);
+  } catch (err) {
+    console.error("Error in /api/nba/advanced/heroic-shots:", err);
+    res.status(500).json({ error: err?.message || "Error al cargar buzzer beaters y game winners." });
   }
 });
 

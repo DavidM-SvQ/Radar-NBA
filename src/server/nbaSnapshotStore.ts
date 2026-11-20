@@ -177,8 +177,15 @@ export interface NbaAdvancedSnapshotPayload {
   scoring: { player: any; team: any };
   fourFactors: { player: any; team: any };
   violations: { player: any; team: any };
-  lineups: { lineups5: any; lineups2: any };
+  lineups: { lineups5: any; lineups3?: any; lineups2: any };
   onOffByTeam: Record<string, any[]>;
+  heroicShots?: {
+    season: string;
+    generatedAt: string;
+    items: any[];
+    playerCounts: Record<string, { buzzerBeaters: number; gameWinners: number; otTyingBuzzers: number }>;
+    teamCounts: Record<string, { buzzerBeaters: number; gameWinners: number; otTyingBuzzers: number }>;
+  };
   benchmarks: {
     player: Record<string, { mean: number; sd: number }>;
     team: Record<string, { mean: number; sd: number }>;

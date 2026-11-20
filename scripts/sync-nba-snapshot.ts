@@ -40,7 +40,8 @@ async function main() {
     console.log(`  - Jugadores / Equipos Scoring Splits: ${result.advancedSnapshot.itemsCount.playerScoring} / ${result.advancedSnapshot.itemsCount.teamScoring}`);
     console.log(`  - Jugadores / Equipos 4 Factores: ${result.advancedSnapshot.itemsCount.playerFourFactors} / ${result.advancedSnapshot.itemsCount.teamFourFactors}`);
     console.log(`  - Jugadores / Equipos Infracciones & Violations: ${result.advancedSnapshot.itemsCount.playerViolations} / ${result.advancedSnapshot.itemsCount.teamViolations}`);
-    console.log(`  - Alineaciones 5-Man / 2-Man: ${result.advancedSnapshot.itemsCount.lineups5} / ${result.advancedSnapshot.itemsCount.lineups2}`);
+    console.log(`  - Alineaciones 5-Man / 3-Man / 2-Man: ${result.advancedSnapshot.itemsCount.lineups5} / ${result.advancedSnapshot.itemsCount.lineups3} / ${result.advancedSnapshot.itemsCount.lineups2}`);
+    console.log(`  - Buzzer Beaters & Game Winners verificados: ${result.advancedSnapshot.itemsCount.heroicShotsCount}`);
     console.log(`  - Equipos con On/Off Court Splits: ${result.advancedSnapshot.itemsCount.teamsWithOnOff}`);
     console.log(`  - Benchmarks NBA (Jugador / Equipo): ${result.advancedSnapshot.itemsCount.playerBenchmarks} / ${result.advancedSnapshot.itemsCount.teamBenchmarks}`);
   }

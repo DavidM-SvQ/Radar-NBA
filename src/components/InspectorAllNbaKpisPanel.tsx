@@ -11,6 +11,7 @@ import {
 import type {
   NbaPlayerDossierAdvancedResponse,
   NbaTeamDossierAdvancedResponse,
+  PlayerGameLog,
   PlayerSummary,
   TeamSummary,
 } from '../types/nba';
@@ -22,11 +23,13 @@ import {
   NBA_ALL_KPIS_CATALOG,
   NBA_ALL_KPIS_MAP,
   NBA_KPI_LAYERS,
+  resolveKpiGameSeries,
   type InspectorKpiContext,
   type InspectorNbaKpiDef,
   type InspectorStatScale,
   type NbaKpiLayerId,
 } from '../utils/nbaInspectorAllKpis';
+import { stdDev } from '../utils/analytics';
 import { evaluateReferenceComparison } from '../utils/playerInspectorAnalytics';
 import { MetricInfoTooltip } from './MetricUiHelpers';
 
@@ -49,6 +52,11 @@ interface InspectorAllNbaKpisPanelProps {
   sectionId?: string;
   title?: string;
   subtitle?: string;
+  headerExtra?: React.ReactNode;
+  sampleGames?: PlayerGameLog[];
+  referenceMode?: 'nba' | 'own';
+  ownBaselineGames?: PlayerGameLog[];
+  ownBaselineShortLabel?: string;
 }
 
 export function InspectorAllNbaKpisPanel({
@@ -70,6 +78,11 @@ export function InspectorAllNbaKpisPanel({
   sectionId,
   title,
   subtitle,
+  headerExtra,
+  sampleGames,
+  referenceMode = 'nba',
+  ownBaselineGames = [],
+  ownBaselineShortLabel = 'Datos propios',
 }: InspectorAllNbaKpisPanelProps) {
   const [internalOpen, setInternalOpen] = useState(false);
   const [selectedLayer, setSelectedLayer] = useState<'all' | NbaKpiLayerId>('all');
@@ -98,11 +111,17 @@ export function InspectorAllNbaKpisPanel({
 
   const activeDefs = useMemo<InspectorNbaKpiDef[]>(() => {
     const ordered: InspectorNbaKpiDef[] = [];
-    for (const def of scopedCatalog) {
-      if (activeSet.has(def.key)) ordered.push(def);
+    const seen = new Set<string>();
+    for (const key of activeKeys) {
+      if (seen.has(key)) continue;
+      const def = NBA_ALL_KPIS_MAP[key];
+      if (def && (def.scope === 'both' || def.scope === entityType)) {
+        seen.add(key);
+        ordered.push(def);
+      }
     }
     return ordered;
-  }, [scopedCatalog, activeSet]);
+  }, [activeKeys, entityType]);
 
   const layerShortMap = useMemo(
     () =>
@@ -162,9 +181,63 @@ export function InspectorAllNbaKpisPanel({
       team,
       playerDossier,
       teamDossier,
+      sampleGames,
     }),
-    [entityType, statScale, player, team, playerDossier, teamDossier]
+    [entityType, statScale, player, team, playerDossier, teamDossier, sampleGames]
   );
+
+  const teamPercentileMap = useMemo(() => {
+    const map: Record<string, { label: string; badgeClass: string }> = {};
+    if (entityType !== 'team' || !team || teams.length < 10) return map;
+
+    for (const def of activeDefs) {
+      const val = getKpiNumericValue(def, ctx);
+      if (val === null || !Number.isFinite(val)) continue;
+      const meta = getKpiMeta(def, statScale);
+      const allVals: number[] = [];
+      for (const t of teams) {
+        const v = getKpiNumericValue(def, {
+          entityType: 'team',
+          statScale,
+          team: t,
+        });
+        if (v !== null && Number.isFinite(v)) allVals.push(v);
+      }
+      if (allVals.length < 10) continue;
+
+      let lowerCount = 0;
+      for (let i = 0; i < allVals.length; i++) {
+        if (allVals[i] < val) lowerCount++;
+      }
+      let pct = Math.round((lowerCount / allVals.length) * 100);
+      pct = Math.max(1, Math.min(99, pct));
+      if (meta.lowerIsBetter) pct = 100 - pct;
+
+      let label = `P${pct}`;
+      let badgeClass = 'text-sky-300 bg-sky-950/60 border-sky-500/30';
+      if (pct >= 95) {
+        label = 'Élite (Top 5%)';
+        badgeClass = 'text-emerald-300 bg-emerald-950/80 border-emerald-500/40';
+      } else if (pct >= 80) {
+        label = `Top ${100 - pct}%`;
+        badgeClass = 'text-emerald-400 bg-emerald-950/50 border-emerald-500/30';
+      } else if (pct >= 60) {
+        label = `P${pct} (Sobre media)`;
+        badgeClass = 'text-sky-300 bg-sky-950/60 border-sky-500/30';
+      } else if (pct >= 40) {
+        label = `P${pct} (Media)`;
+        badgeClass = 'text-amber-300 bg-amber-950/50 border-amber-500/30';
+      } else if (pct >= 20) {
+        label = `P${pct} (Bajo media)`;
+        badgeClass = 'text-orange-300 bg-orange-950/50 border-orange-500/30';
+      } else {
+        label = `Inf ${pct}%`;
+        badgeClass = 'text-rose-300 bg-rose-950/60 border-rose-500/40';
+      }
+      map[def.key] = { label, badgeClass };
+    }
+    return map;
+  }, [entityType, team, teams, activeDefs, ctx, statScale]);
 
   const dossierBenchmarks =
     entityType === 'player'
@@ -251,6 +324,8 @@ export function InspectorAllNbaKpisPanel({
           </p>
         </div>
 
+        {headerExtra}
+
         <div className="flex flex-wrap items-center gap-2 shrink-0">
           {/* Por Partido (Priorizado) | Totales */}
           <div className="inline-flex items-center bg-[#0B1120] border border-[#1E293B] rounded-lg p-0.5 text-[11px]">
@@ -301,7 +376,7 @@ export function InspectorAllNbaKpisPanel({
           type="button"
           onClick={() => {
             setSelectedLayer('all');
-            onChangeActiveKeys(defaultKeys);
+            onChangeActiveKeys([...defaultKeys]);
           }}
           className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium border transition-colors whitespace-nowrap ${
             exactActiveLayerId === null
@@ -374,7 +449,7 @@ export function InspectorAllNbaKpisPanel({
 
               <button
                 type="button"
-                onClick={() => onChangeActiveKeys(defaultKeys)}
+                onClick={() => onChangeActiveKeys([...defaultKeys])}
                 className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] rounded-md text-slate-300 hover:text-orange-300 transition-colors whitespace-nowrap"
               >
                 <RotateCcw className="w-3 h-3" />
@@ -491,112 +566,159 @@ export function InspectorAllNbaKpisPanel({
         </div>
       )}
 
-      {/* Active KPIs Grid with NBA Mean + Deviation Bar on every card */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
-        {activeDefs.map((def) => {
-          const disp = def.getDisplay(ctx);
-          const meta = getKpiMeta(def, statScale);
-          const numericVal = getKpiNumericValue(def, ctx);
-          const rawBench = leagueBenchmarks[def.key];
+      {/* Active KPIs Grid with NBA Mean + Deviation Bar (and Own Baseline or Team Percentile) on every card */}
+      {entityType === 'player' && sampleGames && sampleGames.length === 0 ? (
+        <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-6 text-center text-xs text-slate-400">
+          No hay partidos disputados dentro del filtro seleccionado. Prueba otro rango o ajusta el deslizador.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
+          {activeDefs.map((def) => {
+            const disp = def.getDisplay(ctx);
+            const meta = getKpiMeta(def, statScale);
+            const numericVal = getKpiNumericValue(def, ctx);
+            const rawBench = leagueBenchmarks[def.key];
 
-          let refMean = rawBench ? rawBench.mean : NaN;
-          let refSd = rawBench ? rawBench.sd : NaN;
-          if (statScale === 'totals' && meta.scalable && rawBench) {
-            const scaleGp = getEntityScaleGp(def, ctx);
-            refMean = rawBench.mean * scaleGp;
-            refSd = rawBench.sd * scaleGp;
-          }
+            let refModeForCard: 'nba' | 'own' = 'nba';
+            let refLabel = 'Media NBA';
+            let refMean = rawBench ? rawBench.mean : NaN;
+            let refSd = rawBench ? rawBench.sd : NaN;
+            let hasRefData = numericVal !== null && Boolean(rawBench);
 
-          const ev = evaluateReferenceComparison(
-            numericVal ?? 0,
-            refMean,
-            refSd,
-            'nba',
-            {
-              decimals: meta.decimals,
-              suffix: meta.suffix,
-              lowerIsBetter: meta.lowerIsBetter,
-              signed: meta.signed,
-              hasRefData: numericVal !== null && Boolean(rawBench),
+            if (statScale === 'totals' && meta.scalable && rawBench) {
+              const scaleGp = getEntityScaleGp(def, ctx);
+              refMean = rawBench.mean * scaleGp;
+              refSd = rawBench.sd * scaleGp;
             }
-          );
 
-          const valTone =
-            disp.tone === 'positive'
-              ? 'text-emerald-400'
-              : disp.tone === 'negative'
-              ? 'text-rose-400'
-              : disp.tone === 'accent'
-              ? 'text-orange-400'
-              : 'text-slate-100';
+            if (entityType === 'player' && referenceMode === 'own') {
+              const series = resolveKpiGameSeries(def.key, 'player');
+              if (series?.playerSliceValue) {
+                refModeForCard = 'own';
+                refLabel = ownBaselineShortLabel;
+                if (ownBaselineGames.length > 0) {
+                  const rawOwnMean = series.playerSliceValue(ownBaselineGames);
+                  const scaleMult =
+                    statScale === 'totals' && meta.scalable
+                      ? getEntityScaleGp(def, ctx)
+                      : 1;
+                  refMean = rawOwnMean * scaleMult;
+                  const perGameArr =
+                    series.playerGameValue && ownBaselineGames.length >= 2
+                      ? ownBaselineGames.map((g) => series.playerGameValue!(g))
+                      : [];
+                  const ownSd = perGameArr.length >= 2 ? stdDev(perGameArr) : 0;
+                  const fallbackSd = rawBench?.sd || Math.max(0.5, Math.abs(rawOwnMean) * 0.2);
+                  refSd = Math.max(fallbackSd * 0.35, ownSd) * scaleMult;
+                  hasRefData = numericVal !== null;
+                } else {
+                  refMean = NaN;
+                  refSd = NaN;
+                  hasRefData = false;
+                }
+              }
+            }
 
-          return (
-            <div
-              key={def.key}
-              className="p-3.5 border-b border-r border-[#1E293B] flex flex-col justify-between gap-2 hover:bg-[#182338]/40 transition-colors"
-            >
-              <div className="flex items-start justify-between gap-1.5">
-                <span className="inline-flex items-center gap-1 text-[11px] text-slate-400 min-w-0">
-                  <span className="truncate font-medium text-slate-300" title={def.label}>
-                    {def.label}
+            const ev = evaluateReferenceComparison(
+              numericVal ?? 0,
+              refMean,
+              refSd,
+              refModeForCard,
+              {
+                decimals: meta.decimals,
+                suffix: meta.suffix,
+                lowerIsBetter: meta.lowerIsBetter,
+                signed: meta.signed,
+                hasRefData,
+              }
+            );
+
+            const pctBadge = entityType === 'team' ? teamPercentileMap[def.key] : undefined;
+
+            const valTone =
+              disp.tone === 'positive'
+                ? 'text-emerald-400'
+                : disp.tone === 'negative'
+                ? 'text-rose-400'
+                : disp.tone === 'accent'
+                ? 'text-orange-400'
+                : 'text-slate-100';
+
+            return (
+              <div
+                key={def.key}
+                className="p-3.5 border-b border-r border-[#1E293B] flex flex-col justify-between gap-2 hover:bg-[#182338]/40 transition-colors"
+              >
+                <div className="flex items-start justify-between gap-1.5">
+                  <span className="inline-flex items-center gap-1 text-[11px] text-slate-400 min-w-0">
+                    <span className="truncate font-medium text-slate-300" title={def.label}>
+                      {def.label}
+                    </span>
+                    <MetricInfoTooltip
+                      helpKey={def.helpKey}
+                      fallbackTitle={def.label}
+                      align="left"
+                      iconClassName="w-3 h-3"
+                    />
                   </span>
-                  <MetricInfoTooltip
-                    helpKey={def.helpKey}
-                    fallbackTitle={def.label}
-                    align="left"
-                    iconClassName="w-3 h-3"
-                  />
-                </span>
 
-                <div className="inline-flex items-center gap-1.5 shrink-0">
-                  <span className={`text-sm font-bold font-mono tabular-nums ${valTone}`}>
-                    {disp.text}
-                  </span>
-                  {activeDefs.length > 1 && (
-                    <button
-                      type="button"
-                      title="Quitar este KPI"
-                      onClick={() => toggleKpi(def.key)}
-                      className="text-slate-500 hover:text-rose-400 transition-colors p-0.5 shrink-0"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  )}
+                  <div className="inline-flex items-center gap-1.5 shrink-0">
+                    {pctBadge && (
+                      <span
+                        className={`text-[9.5px] px-1.5 py-0.5 rounded-full font-mono font-semibold border whitespace-nowrap ${pctBadge.badgeClass}`}
+                      >
+                        {pctBadge.label}
+                      </span>
+                    )}
+                    <span className={`text-sm font-bold font-mono tabular-nums ${valTone}`}>
+                      {disp.text}
+                    </span>
+                    {activeDefs.length > 1 && (
+                      <button
+                        type="button"
+                        title="Quitar este KPI"
+                        onClick={() => toggleKpi(def.key)}
+                        className="text-slate-500 hover:text-rose-400 transition-colors p-0.5 shrink-0"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {disp.subtext && (
+                  <p className="text-[10px] text-slate-400 font-mono truncate -mt-1">
+                    {disp.subtext}
+                  </p>
+                )}
+
+                {/* Mean + Deviation Bar */}
+                <div className="w-full pt-0.5">
+                  <div className="flex items-center justify-between gap-2 text-[10.5px] mb-1 whitespace-nowrap">
+                    <span className={`font-medium truncate ${ev.textClass}`}>
+                      {ev.statusLabel}
+                      {ev.hasRef ? ` (${ev.deltaFormatted})` : ''}
+                    </span>
+                    <span className="font-mono tabular-nums text-slate-400 shrink-0">
+                      {ev.hasRef ? `${refLabel}: ${ev.refFormatted}` : ev.refFormatted}
+                    </span>
+                  </div>
+                  <div className="relative h-1.5 bg-[#0B1120] border border-[#1E293B] rounded overflow-hidden">
+                    <div
+                      className={`h-full rounded-l transition-transform duration-150 ${ev.barClass}`}
+                      style={{ width: `${ev.pct}%` }}
+                    />
+                    <div
+                      title={`${refLabel}: ${ev.refFormatted}`}
+                      className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-slate-100/80"
+                    />
+                  </div>
                 </div>
               </div>
-
-              {disp.subtext && (
-                <p className="text-[10px] text-slate-400 font-mono truncate -mt-1">
-                  {disp.subtext}
-                </p>
-              )}
-
-              {/* NBA Mean + Deviation Bar (matching Nivel comparado frente a la Media de la NBA) */}
-              <div className="w-full pt-0.5">
-                <div className="flex items-center justify-between gap-2 text-[10.5px] mb-1 whitespace-nowrap">
-                  <span className={`font-medium truncate ${ev.textClass}`}>
-                    {ev.statusLabel}
-                    {ev.hasRef ? ` (${ev.deltaFormatted})` : ''}
-                  </span>
-                  <span className="font-mono tabular-nums text-slate-400 shrink-0">
-                    {ev.hasRef ? `Media NBA: ${ev.refFormatted}` : ev.refFormatted}
-                  </span>
-                </div>
-                <div className="relative h-1.5 bg-[#0B1120] border border-[#1E293B] rounded overflow-hidden">
-                  <div
-                    className={`h-full rounded-l transition-transform duration-150 ${ev.barClass}`}
-                    style={{ width: `${ev.pct}%` }}
-                  />
-                  <div
-                    title={`Media NBA: ${ev.refFormatted}`}
-                    className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-slate-100/80"
-                  />
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Quick shortcut footer */}
       {activeDefs.length === 0 && (
@@ -604,7 +726,7 @@ export function InspectorAllNbaKpisPanel({
           No hay KPIs seleccionados.{' '}
           <button
             type="button"
-            onClick={() => onChangeActiveKeys(Object.keys(NBA_ALL_KPIS_MAP).filter((k) => defaultKeys.includes(k)))}
+            onClick={() => onChangeActiveKeys([...defaultKeys])}
             className="text-orange-400 hover:underline font-semibold"
           >
             Restaurar KPIs por defecto

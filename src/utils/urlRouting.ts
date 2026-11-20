@@ -34,6 +34,7 @@ const VALID_SECTIONS = new Set<ActiveSection>([
   'streaks',
   'duel',
   'milestones',
+  'heroic',
   'awards',
   'comparator',
   'teams',

@@ -4,10 +4,13 @@ import {
   AlertOctagon,
   Flame,
   Gauge,
+  Layers,
   PieChart,
   Scale,
   Shield,
   Target,
+  Timer,
+  Trophy,
   Zap,
 } from 'lucide-react';
 import type {
@@ -15,6 +18,8 @@ import type {
   NbaClutchEntry,
   NbaDefenseHustleEntry,
   NbaFourFactorsEntry,
+  NbaHeroicShotEntry,
+  NbaLineupEntry,
   NbaOnOffSplitEntry,
   NbaPlaytypeEntitySummary,
   NbaScoringSplitsEntry,
@@ -25,7 +30,8 @@ import type {
 } from '../types/nba';
 import { formatSigned } from '../utils/analytics';
 import { evaluateReferenceComparison } from '../utils/playerInspectorAnalytics';
-import { MetricInfoTooltip } from './MetricUiHelpers';
+import { sortRows, useTableSort } from '../utils/tableSort';
+import { MetricInfoTooltip, SortableTh } from './MetricUiHelpers';
 import { LayerColumnCustomizer } from './LayerColumnCustomizer';
 
 function getZoneColor(zoneName: string, pct: number): { bg: string; text: string; ring: string } {
@@ -393,9 +399,54 @@ interface PlaytypesPanelProps {
   entityType: 'team' | 'player';
 }
 
+type PlaytypeSortKey =
+  | 'playTypeLabelEs'
+  | 'possPct'
+  | 'ppp'
+  | 'percentile'
+  | 'efgPct'
+  | 'ftPossPct'
+  | 'tovPossPct'
+  | 'poss'
+  | 'pts';
+
 export function PlaytypesPanel({ playtypes, entityName }: PlaytypesPanelProps) {
   const [activeTab, setActiveTab] = useState<'offensive' | 'defensive'>('offensive');
-  const rows = activeTab === 'offensive' ? playtypes.offensive : playtypes.defensive;
+  const {
+    sortKey,
+    sortAsc,
+    toggleSort,
+  } = useTableSort<PlaytypeSortKey>('possPct', false, ['playTypeLabelEs', 'tovPossPct']);
+
+  const rawRows = activeTab === 'offensive' ? playtypes.offensive : playtypes.defensive;
+  const rows = sortKey
+    ? sortRows(
+        rawRows,
+        (r) => {
+          switch (sortKey) {
+            case 'playTypeLabelEs':
+              return r.playTypeLabelEs;
+            case 'possPct':
+              return r.possPct;
+            case 'ppp':
+              return r.ppp;
+            case 'percentile':
+              return r.percentile;
+            case 'efgPct':
+              return r.efgPct;
+            case 'ftPossPct':
+              return r.ftPossPct;
+            case 'tovPossPct':
+              return r.tovPossPct;
+            case 'poss':
+              return r.poss;
+            case 'pts':
+              return r.pts;
+          }
+        },
+        sortAsc
+      )
+    : rawRows;
 
   return (
     <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4">
@@ -446,15 +497,70 @@ export function PlaytypesPanel({ playtypes, entityName }: PlaytypesPanelProps) {
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-[#1E293B] text-[11px] text-slate-400 uppercase font-mono">
-                <th className="py-2.5 px-3">Tipo de Jugada</th>
-                <th className="py-2.5 px-3 text-right">Frecuencia %</th>
-                <th className="py-2.5 px-3 text-right">PPP (Pts/Pos)</th>
-                <th className="py-2.5 px-3 text-right">Percentil</th>
-                <th className="py-2.5 px-3 text-right">eFG%</th>
-                <th className="py-2.5 px-3 text-right">Falta %</th>
-                <th className="py-2.5 px-3 text-right">Pérdida %</th>
-                <th className="py-2.5 px-3 text-right">Posesiones</th>
-                <th className="py-2.5 px-3 text-right">Pts Totales</th>
+                <SortableTh
+                  label="Tipo de Jugada"
+                  align="left"
+                  active={sortKey === 'playTypeLabelEs'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('playTypeLabelEs')}
+                  className="py-2.5 px-3"
+                />
+                <SortableTh
+                  label="Frecuencia %"
+                  active={sortKey === 'possPct'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('possPct')}
+                  className="py-2.5 px-3"
+                />
+                <SortableTh
+                  label="PPP (Pts/Pos)"
+                  active={sortKey === 'ppp'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('ppp')}
+                  className="py-2.5 px-3"
+                />
+                <SortableTh
+                  label="Percentil"
+                  active={sortKey === 'percentile'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('percentile')}
+                  className="py-2.5 px-3"
+                />
+                <SortableTh
+                  label="eFG%"
+                  active={sortKey === 'efgPct'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('efgPct')}
+                  className="py-2.5 px-3"
+                />
+                <SortableTh
+                  label="Falta %"
+                  active={sortKey === 'ftPossPct'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('ftPossPct')}
+                  className="py-2.5 px-3"
+                />
+                <SortableTh
+                  label="Pérdida %"
+                  active={sortKey === 'tovPossPct'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('tovPossPct')}
+                  className="py-2.5 px-3"
+                />
+                <SortableTh
+                  label="Posesiones"
+                  active={sortKey === 'poss'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('poss')}
+                  className="py-2.5 px-3"
+                />
+                <SortableTh
+                  label="Pts Totales"
+                  active={sortKey === 'pts'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('pts')}
+                  className="py-2.5 px-3"
+                />
               </tr>
             </thead>
             <tbody className="divide-y divide-[#1E293B] font-mono tabular-nums">
@@ -1001,11 +1107,51 @@ interface OnOffSplitsPanelProps {
   leagueBenchmarks?: Record<string, NbaAdvancedBenchmarkStat>;
 }
 
+type OnOffSortKey =
+  | 'playerName'
+  | 'minOn'
+  | 'offRtgOn'
+  | 'defRtgOn'
+  | 'netRtgOn'
+  | 'netRtgOff'
+  | 'netDiff';
+
 export function OnOffSplitsPanel({ splits, title, leagueBenchmarks }: OnOffSplitsPanelProps) {
-  const swingBench = leagueBenchmarks?.adv_onOffNetDiff || { mean: 0.0, sd: 6.2 };
-  const netOnBench = leagueBenchmarks?.adv_onOffNetOn || { mean: -0.4, sd: 8.5 };
+  const swingBench = leagueBenchmarks?.adv_onOffNetDiff || { mean: 0.1, sd: 5.9 };
+  const netOnBench = leagueBenchmarks?.adv_onOffNetOn || { mean: -0.3, sd: 8.4 };
   const offRtgBench = leagueBenchmarks?.adv_offRtg || { mean: 114.6, sd: 4.2 };
   const defRtgBench = leagueBenchmarks?.adv_defRtg || { mean: 114.6, sd: 3.9 };
+
+  const {
+    sortKey,
+    sortAsc,
+    toggleSort,
+  } = useTableSort<OnOffSortKey>('minOn', false, ['playerName', 'defRtgOn']);
+
+  const sortedSplits = sortKey
+    ? sortRows(
+        splits,
+        (r) => {
+          switch (sortKey) {
+            case 'playerName':
+              return r.playerName;
+            case 'minOn':
+              return r.minOn;
+            case 'offRtgOn':
+              return r.offRtgOn;
+            case 'defRtgOn':
+              return r.defRtgOn;
+            case 'netRtgOn':
+              return r.netRtgOn;
+            case 'netRtgOff':
+              return r.netRtgOff;
+            case 'netDiff':
+              return r.netDiff;
+          }
+        },
+        sortAsc
+      )
+    : splits;
 
   return (
     <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4">
@@ -1022,8 +1168,11 @@ export function OnOffSplitsPanel({ splits, title, leagueBenchmarks }: OnOffSplit
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono">
-          <span className="px-2 py-1 rounded bg-[#0B1120] border border-[#1E293B] text-slate-400">
-            Media NBA Swing: <strong className="text-slate-200">{formatSigned(swingBench.mean)}</strong>
+          <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-[#0B1120] border border-[#1E293B] text-slate-400">
+            <span>
+              Media NBA Swing: <strong className="text-slate-200">{formatSigned(swingBench.mean)}</strong>
+            </span>
+            <MetricInfoTooltip helpKey="nbaSwingMean" align="right" iconClassName="w-3.5 h-3.5" />
           </span>
           <span className="px-2 py-1 rounded bg-[#0B1120] border border-[#1E293B] text-slate-400">
             OffRtg: <strong className="text-slate-200">{offRtgBench.mean.toFixed(1)}</strong> · DefRtg:{' '}
@@ -1036,17 +1185,60 @@ export function OnOffSplitsPanel({ splits, title, leagueBenchmarks }: OnOffSplit
         <table className="w-full text-left border-collapse text-xs">
           <thead>
             <tr className="border-b border-[#1E293B] text-[11px] text-slate-400 uppercase font-mono">
-              <th className="py-2 px-3">Jugador</th>
-              <th className="py-2 px-3 text-right">Min ON</th>
-              <th className="py-2 px-3 text-right">OffRtg ON</th>
-              <th className="py-2 px-3 text-right">DefRtg ON</th>
-              <th className="py-2 px-3 text-right">NetRtg ON</th>
-              <th className="py-2 px-3 text-right">NetRtg OFF</th>
-              <th className="py-2 px-3 text-right font-bold text-orange-400">Net Swing vs NBA</th>
+              <SortableTh
+                label="Jugador"
+                align="left"
+                active={sortKey === 'playerName'}
+                asc={sortAsc}
+                onSort={() => toggleSort('playerName')}
+                className="py-2 px-3"
+              />
+              <SortableTh
+                label="Min ON"
+                active={sortKey === 'minOn'}
+                asc={sortAsc}
+                onSort={() => toggleSort('minOn')}
+                className="py-2 px-3"
+              />
+              <SortableTh
+                label="OffRtg ON"
+                active={sortKey === 'offRtgOn'}
+                asc={sortAsc}
+                onSort={() => toggleSort('offRtgOn')}
+                className="py-2 px-3"
+              />
+              <SortableTh
+                label="DefRtg ON"
+                active={sortKey === 'defRtgOn'}
+                asc={sortAsc}
+                onSort={() => toggleSort('defRtgOn')}
+                className="py-2 px-3"
+              />
+              <SortableTh
+                label="NetRtg ON"
+                active={sortKey === 'netRtgOn'}
+                asc={sortAsc}
+                onSort={() => toggleSort('netRtgOn')}
+                className="py-2 px-3"
+              />
+              <SortableTh
+                label="NetRtg OFF"
+                active={sortKey === 'netRtgOff'}
+                asc={sortAsc}
+                onSort={() => toggleSort('netRtgOff')}
+                className="py-2 px-3"
+              />
+              <SortableTh
+                label="Net Swing vs NBA"
+                active={sortKey === 'netDiff'}
+                asc={sortAsc}
+                onSort={() => toggleSort('netDiff')}
+                className="py-2 px-3 font-bold text-orange-400"
+              />
             </tr>
           </thead>
           <tbody className="divide-y divide-[#1E293B] font-mono tabular-nums">
-            {splits.map((row) => {
+            {sortedSplits.map((row) => {
               const isPositive = row.netDiff >= 0;
               const swingEv = evaluateReferenceComparison(
                 row.netDiff,
@@ -1105,6 +1297,444 @@ export function OnOffSplitsPanel({ splits, title, leagueBenchmarks }: OnOffSplit
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+interface HeroicShotsPanelProps {
+  shots: NbaHeroicShotEntry[];
+  entityName: string;
+  entityType: 'player' | 'team';
+  onInspectPlayer?: (playerId: string, playerName?: string) => void;
+}
+
+export function HeroicShotsPanel({
+  shots,
+  entityName,
+  entityType,
+  onInspectPlayer,
+}: HeroicShotsPanelProps) {
+  const safeShots = Array.isArray(shots) ? shots : [];
+  const buzzerBeaters = safeShots.filter((s) => s.shotType === 'buzzer_beater').length;
+  const gameWinners = safeShots.filter(
+    (s) => s.shotType === 'buzzer_beater' || s.shotType === 'game_winner'
+  ).length;
+  const otTyingBuzzers = safeShots.filter((s) => s.shotType === 'ot_tying_buzzer').length;
+
+  const formatShotClock = (clockSeconds: number, clockRaw: string) => {
+    if (Number.isFinite(clockSeconds) && clockSeconds <= 0.15) return '0.0s (Bocina)';
+    if (Number.isFinite(clockSeconds)) return `${clockSeconds.toFixed(1)}s`;
+    return clockRaw || '—';
+  };
+
+  return (
+    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-[#1E293B] pb-3">
+        <div>
+          <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+            <Trophy className="w-4 h-4 text-orange-400 shrink-0" />
+            <span>Buzzer Beaters &amp; Game Winners ({entityName})</span>
+            <MetricInfoTooltip helpKey="buzzerBeater" />
+          </h3>
+          <p className="text-xs text-slate-400">
+            Registro oficial jugada a jugada (NBA CDN): tiros ganadores sobre la bocina (0.0s) y canastas decisivas en los últimos 10 segundos
+          </p>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 font-mono tabular-nums text-xs">
+          <div className="px-2.5 py-1.5 rounded bg-[#0B1120] border border-[#1E293B] text-center">
+            <div className="text-[10px] font-sans text-slate-400">Buzzer B.</div>
+            <div className="text-sm font-bold text-orange-300">{buzzerBeaters}</div>
+          </div>
+          <div className="px-2.5 py-1.5 rounded bg-[#0B1120] border border-[#1E293B] text-center">
+            <div className="text-[10px] font-sans text-slate-400">Game Win.</div>
+            <div className="text-sm font-bold text-emerald-400">{gameWinners}</div>
+          </div>
+          <div className="px-2.5 py-1.5 rounded bg-[#0B1120] border border-[#1E293B] text-center">
+            <div className="text-[10px] font-sans text-slate-400">Empate OT</div>
+            <div className="text-sm font-bold text-sky-400">{otTyingBuzzers}</div>
+          </div>
+        </div>
+      </div>
+
+      {safeShots.length === 0 ? (
+        <div className="p-4 rounded-lg bg-[#0B1120] border border-[#1E293B] text-xs text-slate-400">
+          No hay Buzzer Beaters ni Game Winners oficiales registrados en el snapshot histórico para {entityName}.
+        </div>
+      ) : (
+        <div className="space-y-2.5">
+          {safeShots.map((shot) => {
+            const badge =
+              shot.shotType === 'buzzer_beater'
+                ? {
+                    label: '⚡ Buzzer Beater (0.0s)',
+                    cls: 'bg-orange-500/15 text-orange-300 border-orange-500/35',
+                  }
+                : shot.shotType === 'ot_tying_buzzer'
+                ? {
+                    label: '⏱️ Empate Bocina (OT)',
+                    cls: 'bg-sky-500/15 text-sky-300 border-sky-500/35',
+                  }
+                : {
+                    label: '🎯 Game Winner (≤10s)',
+                    cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35',
+                  };
+
+            return (
+              <div
+                key={shot.id}
+                className="p-3 rounded-lg bg-[#0B1120] border border-[#1E293B] flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+              >
+                <div className="space-y-1 min-w-0">
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span
+                      className={`px-2 py-0.5 rounded border text-[11px] font-semibold ${badge.cls}`}
+                    >
+                      {badge.label}
+                    </span>
+                    <span className="font-mono text-slate-300 font-semibold">
+                      {shot.teamAbbr} {shot.isHome ? 'vs' : '@'} {shot.opponentAbbr}
+                    </span>
+                    <span className="text-slate-500 font-mono text-[11px]">
+                      {shot.seasonLabel} · {shot.date} · {shot.periodLabel} ·{' '}
+                      {formatShotClock(shot.clockSeconds, shot.clock)}
+                    </span>
+                  </div>
+
+                  <div className="text-xs text-slate-300 flex flex-wrap items-center gap-1.5">
+                    {entityType === 'team' && shot.playerName && (
+                      onInspectPlayer && shot.playerId ? (
+                        <button
+                          type="button"
+                          onClick={() => onInspectPlayer(shot.playerId, shot.playerName)}
+                          className="font-semibold text-orange-300 hover:text-orange-200 underline decoration-orange-500/40 underline-offset-2"
+                        >
+                          {shot.playerName}
+                        </button>
+                      ) : (
+                        <span className="font-semibold text-slate-100">{shot.playerName}</span>
+                      )
+                    )}
+                    <span className="text-slate-400">{shot.description}</span>
+                    {typeof shot.shotDistance === 'number' && shot.shotDistance > 0 && (
+                      <span className="text-[11px] font-mono text-slate-500">
+                        ({shot.shotDistance} ft)
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center sm:flex-col sm:items-end gap-2 sm:gap-0.5 shrink-0 font-mono tabular-nums">
+                  <span
+                    className={`text-sm font-bold ${
+                      shot.wonGame ? 'text-emerald-400' : 'text-amber-300'
+                    }`}
+                  >
+                    {shot.wonGame ? 'VICTORIA' : 'EMPATE'} {shot.finalScoreTeam}-{shot.finalScoreOpp}
+                  </span>
+                  <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                    <Timer className="w-3 h-3 text-slate-500" />
+                    +{shot.points} pts
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface TeamLineupsPanelProps {
+  lineups5?: NbaLineupEntry[];
+  lineups3?: NbaLineupEntry[];
+  lineups2?: NbaLineupEntry[];
+  teamAbbr: string;
+  onInspectPlayer?: (playerId: string, playerName?: string) => void;
+}
+
+function parseTeamLineupPlayers(
+  groupId: string,
+  groupName: string
+): Array<{ id: string; name: string }> {
+  const ids = String(groupId || '')
+    .split('-')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const names = String(groupName || '')
+    .split(/\s+-\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return names.map((name, idx) => ({
+    id: ids[idx] || '',
+    name,
+  }));
+}
+
+type TeamLineupSortKey =
+  | 'groupName'
+  | 'gp'
+  | 'min'
+  | 'pts'
+  | 'offRtg'
+  | 'defRtg'
+  | 'netRtg'
+  | 'pace'
+  | 'tsPct'
+  | 'efgPct'
+  | 'tovPct'
+  | 'orebPct';
+
+export function TeamLineupsPanel({
+  lineups5 = [],
+  lineups3 = [],
+  lineups2 = [],
+  teamAbbr,
+  onInspectPlayer,
+}: TeamLineupsPanelProps) {
+  const initialMode: '5' | '3' | '2' =
+    lineups5.length > 0 ? '5' : lineups3.length > 0 ? '3' : '2';
+  const [groupQty, setGroupQty] = useState<'5' | '3' | '2'>(initialMode);
+  const {
+    sortKey,
+    sortAsc,
+    toggleSort,
+  } = useTableSort<TeamLineupSortKey>('min', false, ['groupName', 'defRtg', 'tovPct']);
+
+  const activeList =
+    groupQty === '5' ? lineups5 : groupQty === '3' ? lineups3 : lineups2;
+
+  const sortedRows = (
+    sortKey
+      ? sortRows(
+          activeList,
+          (r) => {
+            switch (sortKey) {
+              case 'groupName':
+                return r.groupName;
+              case 'gp':
+                return r.gp;
+              case 'min':
+                return r.min;
+              case 'pts':
+                return r.pts ?? 0;
+              case 'offRtg':
+                return r.offRtg;
+              case 'defRtg':
+                return r.defRtg;
+              case 'netRtg':
+                return r.netRtg;
+              case 'pace':
+                return r.pace;
+              case 'tsPct':
+                return r.tsPct;
+              case 'efgPct':
+                return r.efgPct;
+              case 'tovPct':
+                return r.tovPct;
+              case 'orebPct':
+                return r.orebPct;
+            }
+          },
+          sortAsc
+        )
+      : activeList
+  ).slice(0, 15);
+
+  return (
+    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1E293B] pb-3">
+        <div>
+          <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+            <Layers className="w-4 h-4 text-orange-400 shrink-0" />
+            <span>Alineaciones &amp; Combinaciones Oficiales ({teamAbbr})</span>
+            <MetricInfoTooltip helpKey="netRtg" />
+          </h3>
+          <p className="text-xs text-slate-400">
+            Quintetos (5-Man), Tríos (3-Man) y Dúos (2-Man) con ratings avanzados, Pace y Cuatro Factores
+          </p>
+        </div>
+
+        <div className="inline-flex bg-[#0B1120] border border-[#1E293B] rounded-lg p-0.5 text-xs">
+          {(
+            [
+              { id: '5' as const, label: `5-Man (${lineups5.length})` },
+              { id: '3' as const, label: `3-Man (${lineups3.length})` },
+              { id: '2' as const, label: `2-Man (${lineups2.length})` },
+            ]
+          ).map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setGroupQty(tab.id)}
+              className={`px-2.5 py-1 rounded-md font-medium transition-colors ${
+                groupQty === tab.id
+                  ? 'bg-orange-500 text-slate-950 font-bold'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {sortedRows.length === 0 ? (
+        <div className="p-4 rounded-lg bg-[#0B1120] border border-[#1E293B] text-xs text-slate-400">
+          No hay combinaciones suficientes de {groupQty}-Man registradas para {teamAbbr} en el snapshot actual.
+        </div>
+      ) : (
+        <div className="overflow-x-auto no-scrollbar">
+          <table className="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr className="border-b border-[#1E293B] text-[11px] text-slate-400 uppercase font-mono">
+                <SortableTh
+                  label={`Combinación (${groupQty}-Man)`}
+                  align="left"
+                  active={sortKey === 'groupName'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('groupName')}
+                  className="py-2 px-3"
+                />
+                <SortableTh
+                  label="PJ"
+                  active={sortKey === 'gp'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('gp')}
+                  className="py-2 px-2"
+                />
+                <SortableTh
+                  label="MIN"
+                  active={sortKey === 'min'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('min')}
+                  className="py-2 px-2"
+                />
+                <SortableTh
+                  label="PTS"
+                  active={sortKey === 'pts'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('pts')}
+                  className="py-2 px-2"
+                />
+                <SortableTh
+                  label="OffRtg"
+                  active={sortKey === 'offRtg'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('offRtg')}
+                  className="py-2 px-2"
+                />
+                <SortableTh
+                  label="DefRtg"
+                  active={sortKey === 'defRtg'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('defRtg')}
+                  className="py-2 px-2"
+                />
+                <SortableTh
+                  label="NetRtg"
+                  active={sortKey === 'netRtg'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('netRtg')}
+                  className="py-2 px-2"
+                />
+                <SortableTh
+                  label="Pace"
+                  active={sortKey === 'pace'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('pace')}
+                  className="py-2 px-2"
+                />
+                <SortableTh
+                  label="TS%"
+                  active={sortKey === 'tsPct'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('tsPct')}
+                  className="py-2 px-2"
+                />
+                <SortableTh
+                  label="eFG%"
+                  active={sortKey === 'efgPct'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('efgPct')}
+                  className="py-2 px-2"
+                />
+                <SortableTh
+                  label="TOV%"
+                  active={sortKey === 'tovPct'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('tovPct')}
+                  className="py-2 px-2"
+                />
+                <SortableTh
+                  label="OREB%"
+                  active={sortKey === 'orebPct'}
+                  asc={sortAsc}
+                  onSort={() => toggleSort('orebPct')}
+                  className="py-2 px-3"
+                />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#1E293B] font-mono tabular-nums">
+              {sortedRows.map((row) => {
+                const members = parseTeamLineupPlayers(row.groupId, row.groupName);
+                const minPg = row.gp > 0 ? row.min / row.gp : row.min;
+                return (
+                  <tr key={row.groupId} className="hover:bg-[#182338] transition-colors">
+                    <td className="py-2.5 px-3 font-sans text-slate-200 min-w-[230px]">
+                      <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
+                        {members.map((m, idx) => (
+                          <span key={`${m.id || m.name}-${idx}`} className="inline-flex items-center">
+                            {onInspectPlayer && m.id ? (
+                              <button
+                                type="button"
+                                onClick={() => onInspectPlayer(m.id, m.name)}
+                                className="text-left text-slate-200 hover:text-orange-300 hover:underline underline-offset-2 font-medium"
+                              >
+                                {m.name}
+                              </button>
+                            ) : (
+                              <span className="font-medium">{m.name}</span>
+                            )}
+                            {idx < members.length - 1 && (
+                              <span className="text-slate-600 mx-1">·</span>
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="py-2.5 px-2 text-right text-slate-400">{row.gp}</td>
+                    <td
+                      className="py-2.5 px-2 text-right text-slate-300"
+                      title={`${row.min.toFixed(1)} min totales (${minPg.toFixed(1)} min/PJ)`}
+                    >
+                      {row.min.toFixed(0)}
+                    </td>
+                    <td className="py-2.5 px-2 text-right text-orange-300">
+                      {typeof row.pts === 'number' ? row.pts.toFixed(1) : '—'}
+                    </td>
+                    <td className="py-2.5 px-2 text-right text-slate-200">{row.offRtg.toFixed(1)}</td>
+                    <td className="py-2.5 px-2 text-right text-slate-200">{row.defRtg.toFixed(1)}</td>
+                    <td
+                      className={`py-2.5 px-2 text-right font-bold ${
+                        row.netRtg >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                      }`}
+                    >
+                      {formatSigned(row.netRtg)}
+                    </td>
+                    <td className="py-2.5 px-2 text-right text-slate-300">{row.pace.toFixed(1)}</td>
+                    <td className="py-2.5 px-2 text-right text-slate-200">{row.tsPct.toFixed(1)}%</td>
+                    <td className="py-2.5 px-2 text-right text-slate-200">{row.efgPct.toFixed(1)}%</td>
+                    <td className="py-2.5 px-2 text-right text-slate-400">{row.tovPct.toFixed(1)}%</td>
+                    <td className="py-2.5 px-3 text-right text-slate-400">{row.orebPct.toFixed(1)}%</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

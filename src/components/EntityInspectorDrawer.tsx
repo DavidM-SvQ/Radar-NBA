@@ -44,24 +44,19 @@ import {
 import {
   computePlainPlayerTakeaways,
   computePlainTeamTakeaways,
-   type LeagueBenchmarks,
+  type LeagueBenchmarks,
 } from '../utils/humanize';
 import {
   buildExtendedPlayerBenchmarks,
-  computeOwnMetricSpread,
   DEFAULT_PLAYER_LOG_COLUMNS,
   DEFAULT_TEAM_LOG_COLUMNS,
   evaluateReferenceComparison,
   formatMetricNumber,
   MAX_PLAYER_LOG_COLUMNS,
   MAX_TEAM_LOG_COLUMNS,
-  PLAYER_ADVANCED_RADIOGRAPHY_MAP,
-  PLAYER_ADVANCED_RADIOGRAPHY_METRICS,
-  PLAYER_ANNUAL_TRACKING_MAP,
   PLAYER_GAME_LOG_COLUMNS,
   PLAYER_LOG_COLUMNS_MAP,
   PLAYER_METRICS_MAP,
-  PLAYER_PER_GAME_METRICS,
   resolveOwnBaselineSelection,
   resolveSampleSelection,
   TEAM_GAME_LOG_COLUMNS,
@@ -78,17 +73,18 @@ import {
 } from '../utils/tableSort';
 import {
   MetricInfoTooltip,
-  NbaComparisonBar,
   SortableTh,
 } from './MetricUiHelpers';
 import { PlayerAvatar, TeamLogo } from './NbaVisuals';
 import {
   ClutchAndDefensePanel,
   FourFactorsFullPanel,
+  HeroicShotsPanel,
   OnOffSplitsPanel,
   PlaytypesPanel,
   ScoringSplitsPanel,
   ShotZonesCourtPanel,
+  TeamLineupsPanel,
   ViolationsPanel,
 } from './NbaAdvancedModules';
 import { InspectorAllNbaKpisPanel } from './InspectorAllNbaKpisPanel';
@@ -188,13 +184,11 @@ function resolvePlayerLogGameSortValue(
   }
 }
 
-const STORAGE_EXTRA_KPIS_KEY = 'radarnba_inspector_extra_kpis_v1';
-const STORAGE_EXTRA_ADV_KPIS_KEY = 'radarnba_inspector_extra_adv_kpis_v1';
 const STORAGE_LOG_COLS_KEY = 'radarnba_inspector_log_cols_v1';
 const STORAGE_TEAM_LOG_COLS_KEY = 'radarnba_inspector_team_log_cols_v2';
 const STORAGE_INSPECTOR_SCALE_KEY = 'radarnba_inspector_stat_scale_v1';
-const STORAGE_PLAYER_ALL_NBA_KPIS_KEY = 'radarnba_inspector_player_nba_kpis_v2';
-const STORAGE_TEAM_ALL_NBA_KPIS_KEY = 'radarnba_inspector_team_nba_kpis_v2';
+const STORAGE_PLAYER_ALL_NBA_KPIS_KEY = 'radarnba_inspector_player_nba_kpis_v3';
+const STORAGE_TEAM_ALL_NBA_KPIS_KEY = 'radarnba_inspector_team_nba_kpis_v3';
 
 function loadSavedTeamLogColumns(): string[] {
   try {
@@ -209,42 +203,6 @@ function loadSavedTeamLogColumns(): string[] {
     return valid.length > 0 ? valid : [...DEFAULT_TEAM_LOG_COLUMNS];
   } catch {
     return [...DEFAULT_TEAM_LOG_COLUMNS];
-  }
-}
-
-function loadSavedExtraKpis(): string[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_EXTRA_KPIS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map(String)
-      .filter(
-        (k) =>
-          Boolean(PLAYER_METRICS_MAP[k]) &&
-          !PLAYER_METRICS_MAP[k].isDefaultBasicKpi
-      );
-  } catch {
-    return [];
-  }
-}
-
-function loadSavedExtraAdvKpis(): string[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_EXTRA_ADV_KPIS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map(String)
-      .filter(
-        (k) =>
-          Boolean(PLAYER_ADVANCED_RADIOGRAPHY_MAP[k]) &&
-          !PLAYER_ADVANCED_RADIOGRAPHY_MAP[k].isDefaultCore15
-      );
-  } catch {
-    return [];
   }
 }
 
@@ -264,25 +222,24 @@ function loadSavedLogColumns(): string[] {
   }
 }
 
-function loadSavedAllNbaKpiKeys(
+function loadSavedCustomNbaKpiKeys(
   storageKey: string,
-  defaults: string[],
   scope: 'player' | 'team'
-): string[] {
+): string[] | null {
   try {
     const raw = localStorage.getItem(storageKey);
-    if (!raw) return [...defaults];
+    if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [...defaults];
+    if (!Array.isArray(parsed)) return null;
     const valid = parsed
       .map(String)
       .filter((k) => {
         const def = NBA_ALL_KPIS_MAP[k];
         return Boolean(def && (def.scope === 'both' || def.scope === scope));
       });
-    return valid.length > 0 ? valid : [...defaults];
+    return valid.length > 0 ? valid : null;
   } catch {
-    return [...defaults];
+    return null;
   }
 }
 
@@ -301,6 +258,9 @@ interface EntityInspectorDrawerProps {
   onClose: () => void;
   onOpenInComparator: (entityType: 'player' | 'team', entityId: string) => void;
   onSelectRosterPlayer: (item: SearchPlayerResult) => Promise<void>;
+  showHeroicBadges?: boolean;
+  defaultPlayerKpiKeys?: string[];
+  defaultTeamKpiKeys?: string[];
 }
 
 interface ReferenceSelectorBarProps {
@@ -313,6 +273,8 @@ interface ReferenceSelectorBarProps {
   onChangeOwnCustomK: (k: number) => void;
   ownShortLabel: string;
   ownLabelOverride?: string;
+  excludeLatestInCustomK?: boolean;
+  onChangeExcludeLatestInCustomK?: (val: boolean) => void;
 }
 
 function ReferenceSelectorBar({
@@ -324,6 +286,8 @@ function ReferenceSelectorBar({
   maxGames,
   onChangeOwnCustomK,
   ownLabelOverride,
+  excludeLatestInCustomK = false,
+  onChangeExcludeLatestInCustomK,
 }: ReferenceSelectorBarProps) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -366,6 +330,7 @@ function ReferenceSelectorBar({
               }
               className="appearance-none bg-[#0B1120] border border-[#283548] hover:border-slate-600 rounded-lg pl-2.5 pr-7 py-1 text-xs text-slate-200 font-medium focus:outline-none focus:border-orange-500 transition-colors"
             >
+              <option value="prev_25_no_last">Base 03A/03B (25 PJ previos s/último)</option>
               <option value="both_seasons">2025/26 + 2026/27 completa</option>
               <option value="season_2027">Temporada 2026/27</option>
               <option value="season_2026">Temporada 2025/26</option>
@@ -377,105 +342,63 @@ function ReferenceSelectorBar({
           </div>
 
           {ownMode === 'custom_last_k' && (
-            <div className="inline-flex items-center gap-1 bg-[#0B1120] border border-[#283548] rounded-lg px-1.5 py-0.5">
-              <button
-                type="button"
-                aria-label="Restar un partido al rango propio"
-                onClick={() => onChangeOwnCustomK(Math.max(1, ownCustomK - 1))}
-                className="p-0.5 text-slate-400 hover:text-white transition-colors"
-              >
-                <Minus className="w-3 h-3" />
-              </button>
-              <input
-                type="number"
-                min={1}
-                max={Math.max(1, maxGames)}
-                value={ownCustomK}
-                onChange={(e) => {
-                  const n = parseInt(e.target.value, 10);
-                  if (!Number.isNaN(n)) {
+            <div className="flex flex-wrap items-center gap-1.5">
+              <div className="inline-flex items-center gap-1 bg-[#0B1120] border border-[#283548] rounded-lg px-1.5 py-0.5">
+                <button
+                  type="button"
+                  aria-label="Restar un partido al rango propio"
+                  onClick={() => onChangeOwnCustomK(Math.max(1, ownCustomK - 1))}
+                  className="p-0.5 text-slate-400 hover:text-white transition-colors"
+                >
+                  <Minus className="w-3 h-3" />
+                </button>
+                <input
+                  type="number"
+                  min={1}
+                  max={Math.max(1, maxGames)}
+                  value={ownCustomK}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10);
+                    if (!Number.isNaN(n)) {
+                      onChangeOwnCustomK(
+                        Math.max(1, Math.min(Math.max(1, maxGames), n))
+                      );
+                    }
+                  }}
+                  className="w-10 bg-transparent text-center font-mono tabular-nums text-xs text-orange-300 font-semibold focus:outline-none"
+                />
+                <span className="text-[10px] text-slate-400 font-mono">PJ</span>
+                <button
+                  type="button"
+                  aria-label="Sumar un partido al rango propio"
+                  onClick={() =>
                     onChangeOwnCustomK(
-                      Math.max(1, Math.min(Math.max(1, maxGames), n))
-                    );
+                      Math.min(Math.max(1, maxGames), ownCustomK + 1)
+                    )
                   }
-                }}
-                className="w-10 bg-transparent text-center font-mono tabular-nums text-xs text-orange-300 font-semibold focus:outline-none"
-              />
-              <span className="text-[10px] text-slate-400 font-mono">PJ</span>
-              <button
-                type="button"
-                aria-label="Sumar un partido al rango propio"
-                onClick={() =>
-                  onChangeOwnCustomK(
-                    Math.min(Math.max(1, maxGames), ownCustomK + 1)
-                  )
-                }
-                className="p-0.5 text-slate-400 hover:text-white transition-colors"
-              >
-                <Plus className="w-3 h-3" />
-              </button>
+                  className="p-0.5 text-slate-400 hover:text-white transition-colors"
+                >
+                  <Plus className="w-3 h-3" />
+                </button>
+              </div>
+              {onChangeExcludeLatestInCustomK && (
+                <button
+                  type="button"
+                  onClick={() => onChangeExcludeLatestInCustomK(!excludeLatestInCustomK)}
+                  title="Activa para excluir el último partido disputado (como 03A/03B) y evitar que esa noche altere la media"
+                  className={`px-2 py-1 text-[11px] rounded-md border transition-colors whitespace-nowrap ${
+                    excludeLatestInCustomK
+                      ? 'bg-orange-500/15 border-orange-500/40 text-orange-300 font-semibold'
+                      : 'bg-[#0B1120] border-[#283548] text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {excludeLatestInCustomK ? 'Sin último PJ ✓' : 'Incl. último PJ'}
+                </button>
+              )}
             </div>
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-interface InspectorReferenceBarProps {
-  value: number;
-  refMean: number;
-  refSd: number;
-  mode: InspectorReferenceMode;
-  refSourceShort: string;
-  decimals: number;
-  suffix: string;
-  lowerIsBetter?: boolean;
-  signed?: boolean;
-  hasRefData?: boolean;
-}
-
-function InspectorReferenceBar({
-  value,
-  refMean,
-  refSd,
-  mode,
-  refSourceShort,
-  decimals,
-  suffix,
-  lowerIsBetter,
-  signed,
-  hasRefData = true,
-}: InspectorReferenceBarProps) {
-  const ev = evaluateReferenceComparison(value, refMean, refSd, mode, {
-    decimals,
-    suffix,
-    lowerIsBetter,
-    signed,
-    hasRefData,
-  });
-
-  return (
-    <div className="w-full">
-      <div className="flex items-center justify-between gap-2 text-[11px] mb-1 whitespace-nowrap">
-        <span className={`font-medium truncate ${ev.textClass}`}>
-          {ev.statusLabel}
-          {ev.hasRef ? ` (${ev.deltaFormatted})` : ''}
-        </span>
-        <span className="font-mono tabular-nums text-slate-400 shrink-0">
-          {ev.hasRef ? `${refSourceShort}: ${ev.refFormatted}` : ev.refFormatted}
-        </span>
-      </div>
-      <div className="relative h-1.5 bg-[#0B1120] border border-[#1E293B] rounded overflow-hidden">
-        <div
-          className={`h-full rounded-l transition-transform duration-150 ${ev.barClass}`}
-          style={{ width: `${ev.pct}%` }}
-        />
-        <div
-          title={`${refSourceShort}: ${ev.refFormatted}`}
-          className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-slate-100/80"
-        />
-      </div>
     </div>
   );
 }
@@ -668,6 +591,9 @@ export function EntityInspectorDrawer({
   onClose,
   onOpenInComparator,
   onSelectRosterPlayer,
+  showHeroicBadges = false,
+  defaultPlayerKpiKeys = DEFAULT_PLAYER_NBA_KPI_KEYS,
+  defaultTeamKpiKeys = DEFAULT_TEAM_NBA_KPI_KEYS,
 }: EntityInspectorDrawerProps) {
   // Modal layout mode: wide popup (default), fullscreen, or side panel
   const [displayMode, setDisplayMode] =
@@ -702,21 +628,17 @@ export function EntityInspectorDrawer({
   }, [defaultPlayerMatchWindow, entityId]);
 
   const [kpiRefMode, setKpiRefMode] = useState<InspectorReferenceMode>('nba');
-  const [advRefMode, setAdvRefMode] = useState<InspectorReferenceMode>('nba');
   const [chartRefMode, setChartRefMode] =
     useState<InspectorReferenceMode>('own');
 
   const [ownBaselineMode, setOwnBaselineMode] =
     useState<OwnBaselineMode>('both_seasons');
   const [ownCustomK, setOwnCustomK] = useState<number>(25);
-
-  const [extraKpiKeys, setExtraKpiKeys] = useState<string[]>(loadSavedExtraKpis);
-  const [showKpiSelector, setShowKpiSelector] = useState(false);
-
-  const [extraAdvKpiKeys, setExtraAdvKpiKeys] = useState<string[]>(
-    loadSavedExtraAdvKpis
-  );
-  const [showAdvKpiSelector, setShowAdvKpiSelector] = useState(false);
+  const [chartOwnBaselineMode, setChartOwnBaselineMode] =
+    useState<OwnBaselineMode>('prev_25_no_last');
+  const [chartOwnCustomK, setChartOwnCustomK] = useState<number>(25);
+  const [chartOwnExcludeLatest, setChartOwnExcludeLatest] =
+    useState<boolean>(true);
 
   const [pChartKpiKey, setPChartKpiKey] = useState<string>('basic_pts');
   const [chartLayerId, setChartLayerId] = useState<NbaKpiLayerId>('basic');
@@ -758,20 +680,73 @@ export function EntityInspectorDrawer({
     }
   });
 
-  const [playerNbaKpiKeys, setPlayerNbaKpiKeys] = useState<string[]>(() =>
-    loadSavedAllNbaKpiKeys(
-      STORAGE_PLAYER_ALL_NBA_KPIS_KEY,
-      DEFAULT_PLAYER_NBA_KPI_KEYS,
-      'player'
-    )
+  const effectivePlayerDefaults = useMemo(() => {
+    const valid = (defaultPlayerKpiKeys || []).filter((k) => {
+      const def = NBA_ALL_KPIS_MAP[k];
+      return Boolean(def && (def.scope === 'both' || def.scope === 'player'));
+    });
+    return valid.length > 0 ? valid : DEFAULT_PLAYER_NBA_KPI_KEYS;
+  }, [defaultPlayerKpiKeys]);
+
+  const effectiveTeamDefaults = useMemo(() => {
+    const valid = (defaultTeamKpiKeys || []).filter((k) => {
+      const def = NBA_ALL_KPIS_MAP[k];
+      return Boolean(def && (def.scope === 'both' || def.scope === 'team'));
+    });
+    return valid.length > 0 ? valid : DEFAULT_TEAM_NBA_KPI_KEYS;
+  }, [defaultTeamKpiKeys]);
+
+  const [playerCustomKpiKeys, setPlayerCustomKpiKeys] = useState<string[] | null>(() =>
+    loadSavedCustomNbaKpiKeys(STORAGE_PLAYER_ALL_NBA_KPIS_KEY, 'player')
   );
-  const [teamNbaKpiKeys, setTeamNbaKpiKeys] = useState<string[]>(() =>
-    loadSavedAllNbaKpiKeys(
-      STORAGE_TEAM_ALL_NBA_KPIS_KEY,
-      DEFAULT_TEAM_NBA_KPI_KEYS,
-      'team'
-    )
+  const [teamCustomKpiKeys, setTeamCustomKpiKeys] = useState<string[] | null>(() =>
+    loadSavedCustomNbaKpiKeys(STORAGE_TEAM_ALL_NBA_KPIS_KEY, 'team')
   );
+  const playerNbaKpiKeys = playerCustomKpiKeys ?? effectivePlayerDefaults;
+  const teamNbaKpiKeys = teamCustomKpiKeys ?? effectiveTeamDefaults;
+
+  const handleChangePlayerNbaKpiKeys = (next: string[]) => {
+    const isExactDefault =
+      next.length === effectivePlayerDefaults.length &&
+      next.every((k, i) => k === effectivePlayerDefaults[i]);
+    if (isExactDefault) {
+      setPlayerCustomKpiKeys(null);
+      try {
+        localStorage.removeItem(STORAGE_PLAYER_ALL_NBA_KPIS_KEY);
+      } catch {
+        // ignore
+      }
+    } else {
+      setPlayerCustomKpiKeys(next);
+      try {
+        localStorage.setItem(STORAGE_PLAYER_ALL_NBA_KPIS_KEY, JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+    }
+  };
+
+  const handleChangeTeamNbaKpiKeys = (next: string[]) => {
+    const isExactDefault =
+      next.length === effectiveTeamDefaults.length &&
+      next.every((k, i) => k === effectiveTeamDefaults[i]);
+    if (isExactDefault) {
+      setTeamCustomKpiKeys(null);
+      try {
+        localStorage.removeItem(STORAGE_TEAM_ALL_NBA_KPIS_KEY);
+      } catch {
+        // ignore
+      }
+    } else {
+      setTeamCustomKpiKeys(next);
+      try {
+        localStorage.setItem(STORAGE_TEAM_ALL_NBA_KPIS_KEY, JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+    }
+  };
+
   const [playerAllKpisOpen, setPlayerAllKpisOpen] = useState(false);
   const [teamAllKpisOpen, setTeamAllKpisOpen] = useState(false);
 
@@ -782,22 +757,6 @@ export function EntityInspectorDrawer({
       // ignore
     }
   }, [statScale]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_PLAYER_ALL_NBA_KPIS_KEY, JSON.stringify(playerNbaKpiKeys));
-    } catch {
-      // ignore
-    }
-  }, [playerNbaKpiKeys]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_TEAM_ALL_NBA_KPIS_KEY, JSON.stringify(teamNbaKpiKeys));
-    } catch {
-      // ignore
-    }
-  }, [teamNbaKpiKeys]);
 
   const {
     sortKey: pLogSortKey,
@@ -810,25 +769,6 @@ export function EntityInspectorDrawer({
     sortAsc: tLogSortAsc,
     toggleSort: toggleTLogSort,
   } = useTableSort<string>('date', false, ['matchup', 'defRtg', 'pointsAgainst', 'tov', 'tovPct']);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_EXTRA_KPIS_KEY, JSON.stringify(extraKpiKeys));
-    } catch {
-      // ignore storage errors
-    }
-  }, [extraKpiKeys]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        STORAGE_EXTRA_ADV_KPIS_KEY,
-        JSON.stringify(extraAdvKpiKeys)
-      );
-    } catch {
-      // ignore storage errors
-    }
-  }, [extraAdvKpiKeys]);
 
   useEffect(() => {
     try {
@@ -1056,18 +996,10 @@ export function EntityInspectorDrawer({
   const leagueTeamStats = useMemo(() => {
     if (!teams || teams.length === 0) return {};
     return {
-      offRtg: teams.map((t) => t.offRtg || 0),
-      defRtg: teams.map((t) => t.defRtg || 0),
-      netRtg: teams.map((t) => t.netRtg || 0),
-      pace: teams.map((t) => t.pace || 0),
-      pointsFor: teams.map((t) => t.avgPointsFor || 0),
-      pointsAgainst: teams.map((t) => t.avgPointsAgainst || 0),
-      differential: teams.map((t) => t.differential || 0),
-      winPct: teams.map((t) => t.winPct || 0),
-      efgPct: teams.map((t) => t.efgPct || 53.5),
-      tovPct: teams.map((t) => t.tovPct || 13.5),
-      orebPct: teams.map((t) => t.orebPct || 27.0),
-      ftRate: teams.map((t) => t.ftRate || 0.21),
+      efgPct: teams.map((t) => t.efgPct).filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0),
+      tovPct: teams.map((t) => t.tovPct).filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0),
+      orebPct: teams.map((t) => t.orebPct).filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0),
+      ftRate: teams.map((t) => t.ftRate).filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0),
     };
   }, [teams]);
 
@@ -1129,6 +1061,17 @@ export function EntityInspectorDrawer({
       )
     : { games: [] as PlayerGameLog[], label: '', shortLabel: '' };
 
+  const chartOwnBaselineSelection = player
+    ? resolveOwnBaselineSelection(
+        allPlayerGames,
+        sampleGames,
+        chartOwnBaselineMode,
+        chartOwnCustomK,
+        latestLeagueDate2027,
+        chartOwnExcludeLatest
+      )
+    : { games: [] as PlayerGameLog[], label: '', shortLabel: '' };
+
   const activeScopeBenchmarks: Record<string, PlayerInspectorBenchmarkItem> =
     dossier && dossier.player.id === entityId
       ? dossier.benchmarksByScope[sampleSelection.benchmarkScope] ||
@@ -1142,40 +1085,11 @@ export function EntityInspectorDrawer({
     if (nextPreset === 'same_date_compare') {
       // Automatically pair 2026/27 sample up to today against same calendar date in 2025/26
       setOwnBaselineMode('same_date_2026');
+      setChartOwnBaselineMode('same_date_2026');
       setKpiRefMode('own');
-      setAdvRefMode('own');
       setChartRefMode('own');
     }
   };
-
-  // KPIs list = All 15 default basic stats + user-added extra KPIs
-  const activeKpiDefs = useMemo(() => {
-    const basics = PLAYER_PER_GAME_METRICS.filter((m) => m.isDefaultBasicKpi);
-    const extras = extraKpiKeys
-      .map((k) => PLAYER_METRICS_MAP[k])
-      .filter(Boolean);
-    return [...basics, ...extras];
-  }, [extraKpiKeys]);
-
-  const addableKpiDefs = useMemo(
-    () => PLAYER_PER_GAME_METRICS.filter((m) => !m.isDefaultBasicKpi),
-    []
-  );
-
-  const activeAdvKpiDefs = useMemo(() => {
-    const defaults15 = PLAYER_ADVANCED_RADIOGRAPHY_METRICS.filter(
-      (m) => m.isDefaultCore15
-    );
-    const extras = extraAdvKpiKeys
-      .map((k) => PLAYER_ADVANCED_RADIOGRAPHY_MAP[k])
-      .filter(Boolean);
-    return [...defaults15, ...extras];
-  }, [extraAdvKpiKeys]);
-
-  const addableAdvKpiDefs = useMemo(
-    () => PLAYER_ADVANCED_RADIOGRAPHY_METRICS.filter((m) => !m.isDefaultCore15),
-    []
-  );
 
   // Determine which annual NBA.com tracking profile to show & its warning context
   const trackingContext = (() => {
@@ -1296,15 +1210,15 @@ export function EntityInspectorDrawer({
         )})`;
       } else {
         const refGames =
-          ownBaselineSelection.games.length > 0
-            ? ownBaselineSelection.games
+          chartOwnBaselineSelection.games.length > 0
+            ? chartOwnBaselineSelection.games
             : allPlayerGames;
         base =
           refGames.length > 0
             ? activeChartSeries.playerSliceValue!(refGames)
             : 0;
         baseLabel = `Su media habitual · ${
-          ownBaselineSelection.shortLabel
+          chartOwnBaselineSelection.shortLabel
         } (${formatMetricNumber(
           base,
           activeChartKpiMeta.decimals,
@@ -1657,77 +1571,53 @@ export function EntityInspectorDrawer({
     return [];
   }, [player, sampleGames, allPlayerGames, team, experienceMode, windowSize, benchmarks]);
 
-  // --- TEAM INSPECTOR DATA (Preserved intact) ---
-  const teamNbaGaugeItems = useMemo(() => {
-    if (!team) return [];
-    const g = team.games;
-    const pace = team.advanced?.pace ?? round1(mean(g.map((x) => x.pace)));
-    if (experienceMode === 'simple') {
-      return [
-        {
-          title: 'Puntos anotados (Ataque)',
-          helpKey: 'avgPointsFor',
-          valueLabel: `${team.avgPointsFor.toFixed(1)} PTS`,
-          value: team.avgPointsFor,
-          benchmark: benchmarks.team.avgPointsFor,
-        },
-        {
-          title: 'Puntos recibidos (Defensa)',
-          helpKey: 'avgPointsAgainst',
-          valueLabel: `${team.avgPointsAgainst.toFixed(1)} PTS`,
-          value: team.avgPointsAgainst,
-          benchmark: benchmarks.team.avgPointsAgainst,
-        },
-        {
-          title: 'Margen medio de puntos',
-          helpKey: 'differential',
-          valueLabel: `${formatSigned(team.differential)} PTS`,
-          value: team.differential,
-          benchmark: benchmarks.team.differential,
-        },
-        {
-          title: 'Velocidad de partido',
-          helpKey: 'paceSimple',
-          valueLabel: `${pace.toFixed(1)} pos`,
-          value: pace,
-          benchmark: benchmarks.team.pace,
-        },
-      ];
-    }
-    const off = team.advanced?.offRtg ?? round1(mean(g.map((x) => x.offRtg)));
-    const def = team.advanced?.defRtg ?? round1(mean(g.map((x) => x.defRtg)));
-    const net = team.advanced?.netRtg ?? round1(off - def);
-    return [
-      {
-        title: 'Ataque cada 100 pos. (OffRtg)',
-        helpKey: 'offRtg',
-        valueLabel: off.toFixed(1),
-        value: off,
-        benchmark: benchmarks.team.offRtg,
-      },
-      {
-        title: 'Defensa cada 100 pos. (DefRtg)',
-        helpKey: 'defRtg',
-        valueLabel: def.toFixed(1),
-        value: def,
-        benchmark: benchmarks.team.defRtg,
-      },
-      {
-        title: 'Dominio Neto (NetRtg)',
-        helpKey: 'netRtg',
-        valueLabel: formatSigned(net),
-        value: net,
-        benchmark: benchmarks.team.netRtg,
-      },
-      {
-        title: 'Ritmo (Pace pos/48m)',
-        helpKey: 'paceSimple',
-        valueLabel: pace.toFixed(1),
-        value: pace,
-        benchmark: benchmarks.team.pace,
-      },
-    ];
-  }, [team, experienceMode, benchmarks]);
+  // --- TEAM INSPECTOR DEAN OLIVER FOUR FACTORS (with real boxscore fallback) ---
+  const teamDeanFactors = useMemo(() => {
+    if (!team) return { efgPct: 0, tovPct: 0, orebPct: 0, ftRate: 0 };
+    const sumFgm = team.games.reduce((s, g) => s + (g.fgm || 0), 0);
+    const sumFga = team.games.reduce((s, g) => s + (g.fga || 0), 0);
+    const sumFg3m = team.games.reduce((s, g) => s + (g.fg3m || 0), 0);
+    const sumFta = team.games.reduce((s, g) => s + (g.fta || 0), 0);
+    const sumTov = team.games.reduce((s, g) => s + (g.tov || 0), 0);
+    const sumOreb = team.games.reduce((s, g) => s + (g.oreb || 0), 0);
+
+    const efg =
+      typeof team.efgPct === 'number' && team.efgPct > 0
+        ? team.efgPct
+        : typeof team.advanced?.efgPct === 'number' && team.advanced.efgPct > 0
+        ? team.advanced.efgPct
+        : sumFga > 0
+        ? round1(((sumFgm + 0.5 * sumFg3m) / sumFga) * 100)
+        : 0;
+
+    const poss = sumFga + 0.44 * sumFta + sumTov;
+    const tov =
+      typeof team.tovPct === 'number' && team.tovPct > 0
+        ? team.tovPct
+        : typeof team.advanced?.tovPct === 'number' && team.advanced.tovPct > 0
+        ? team.advanced.tovPct
+        : poss > 0
+        ? round1((sumTov / poss) * 100)
+        : 0;
+
+    const oreb =
+      typeof team.orebPct === 'number' && team.orebPct > 0
+        ? team.orebPct
+        : typeof team.advanced?.orebPct === 'number' && team.advanced.orebPct > 0
+        ? team.advanced.orebPct
+        : team.games.length > 0 && sumFga > 0
+        ? round1((sumOreb / (sumOreb + Math.max(1, sumFga * 0.34))) * 100)
+        : 0;
+
+    const ftr =
+      typeof team.ftRate === 'number' && team.ftRate > 0
+        ? team.ftRate
+        : sumFga > 0
+        ? Math.round((sumFta / sumFga) * 1000) / 1000
+        : 0;
+
+    return { efgPct: efg, tovPct: tov, orebPct: oreb, ftRate: ftr };
+  }, [team]);
 
   const teamSplits = useMemo(() => {
     if (!team) return [];
@@ -2046,9 +1936,38 @@ export function EntityInspectorDrawer({
                 />
               )}
               <div className="min-w-0">
-                <h2 className="text-base sm:text-lg font-bold text-slate-100 truncate">
-                  {player ? player.name : team?.name}
-                </h2>
+                {(() => {
+                  const hdrShots = showHeroicBadges
+                    ? player
+                      ? playerAdvancedDossier?.heroicShots || []
+                      : teamAdvancedDossier?.heroicShots || []
+                    : [];
+                  const hdrBb = hdrShots.filter((s) => s.shotType === 'buzzer_beater').length;
+                  const hdrGw = hdrShots.filter(
+                    (s) => s.shotType === 'buzzer_beater' || s.shotType === 'game_winner'
+                  ).length;
+                  return (
+                    <h2 className="text-base sm:text-lg font-bold text-slate-100 truncate flex items-center gap-2">
+                      <span className="truncate">{player ? player.name : team?.name}</span>
+                      {showHeroicBadges && hdrBb > 0 && (
+                        <span
+                          title={`${hdrBb} Buzzer Beater(s) oficiales (0.0s)`}
+                          className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-orange-500/15 text-orange-300 border border-orange-500/30 shrink-0"
+                        >
+                          ⚡ {hdrBb} BB
+                        </span>
+                      )}
+                      {showHeroicBadges && hdrGw > 0 && (
+                        <span
+                          title={`${hdrGw} Game Winner(s) oficiales (≤10s)`}
+                          className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0"
+                        >
+                          🎯 {hdrGw} GW
+                        </span>
+                      )}
+                    </h2>
+                  );
+                })()}
                 <p className="text-xs text-slate-400 truncate">
                   {player
                     ? `${player.teamName} · ${
@@ -2502,19 +2421,28 @@ export function EntityInspectorDrawer({
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     {chartLayoutMode === 'timeline' ? (
                       <>
-                        <span className="text-[11px] text-slate-400">
-                          Línea punteada: {chartData.baseLabel}
+                        <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-400">
+                          <span>Línea punteada: {chartData.baseLabel}</span>
+                          {chartRefMode === 'own' && (
+                            <MetricInfoTooltip
+                              helpKey="chartOwnBaseline"
+                              align="left"
+                              iconClassName="w-3.5 h-3.5"
+                            />
+                          )}
                         </span>
                         <ReferenceSelectorBar
                           mode={chartRefMode}
                           onChangeMode={setChartRefMode}
-                          ownMode={ownBaselineMode}
-                          onChangeOwnMode={setOwnBaselineMode}
-                          ownCustomK={ownCustomK}
+                          ownMode={chartOwnBaselineMode}
+                          onChangeOwnMode={setChartOwnBaselineMode}
+                          ownCustomK={chartOwnCustomK}
                           maxGames={totalAvailableGames}
-                          onChangeOwnCustomK={setOwnCustomK}
-                          ownShortLabel={ownBaselineSelection.shortLabel}
+                          onChangeOwnCustomK={setChartOwnCustomK}
+                          ownShortLabel={chartOwnBaselineSelection.shortLabel}
                           ownLabelOverride="Su media habitual"
+                          excludeLatestInCustomK={chartOwnExcludeLatest}
+                          onChangeExcludeLatestInCustomK={setChartOwnExcludeLatest}
                         />
                       </>
                     ) : (
@@ -3281,249 +3209,7 @@ export function EntityInspectorDrawer({
 
 
 
-              {/* SECTION 1: Nivel comparado (All Basic KPIs + Addable KPIs Selector) */}
-              <section className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-100">
-                      {kpiRefMode === 'nba'
-                        ? 'Nivel comparado frente a la Media de la NBA'
-                        : 'Nivel comparado frente a sus Datos propios'}
-                    </h3>
-                    <p className="text-[11px] text-slate-400">
-                      Muestra evaluada: {sampleSelection.titleShort} · Marca
-                      blanca central ={' '}
-                      {kpiRefMode === 'nba'
-                        ? 'promedio rotación NBA'
-                        : ownBaselineSelection.shortLabel}
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <ReferenceSelectorBar
-                      mode={kpiRefMode}
-                      onChangeMode={setKpiRefMode}
-                      ownMode={ownBaselineMode}
-                      onChangeOwnMode={setOwnBaselineMode}
-                      ownCustomK={ownCustomK}
-                      maxGames={totalAvailableGames}
-                      onChangeOwnCustomK={setOwnCustomK}
-                      ownShortLabel={ownBaselineSelection.shortLabel}
-                    />
-
-                    <button
-                      type="button"
-                      onClick={() => setShowKpiSelector((prev) => !prev)}
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
-                        showKpiSelector || extraKpiKeys.length > 0
-                          ? 'bg-orange-500/15 border-orange-500/40 text-orange-300'
-                          : 'bg-[#131C2E] border-[#1E293B] text-slate-200 hover:text-white'
-                      }`}
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>
-                        Añadir KPIs
-                        {extraKpiKeys.length > 0
-                          ? ` (+${extraKpiKeys.length})`
-                          : ''}
-                      </span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Addable KPI Selector Tray */}
-                {showKpiSelector && (
-                  <div className="bg-[#131C2E] border border-[#283548] rounded-lg p-3.5 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-slate-200">
-                        Selecciona indicadores adicionales de tiro, volumen o
-                        ratios para añadir al bloque (las 15 básicas se muestran
-                        siempre):
-                      </span>
-                      {extraKpiKeys.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setExtraKpiKeys([])}
-                          className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-orange-300 transition-colors whitespace-nowrap shrink-0"
-                        >
-                          <RotateCcw className="w-3 h-3" />
-                          <span>Quitar añadidos</span>
-                        </button>
-                      )}
-                    </div>
-
-                    {(
-                      [
-                        {
-                          family: 'shooting' as const,
-                          title: 'Volumen y desglose de tiro',
-                        },
-                        {
-                          family: 'ratios' as const,
-                          title: 'Ratios, eficiencia y proyecciones por 36 min',
-                        },
-                      ] as const
-                    ).map((grp) => (
-                      <div key={grp.family} className="space-y-1.5">
-                        <p className="text-[11px] font-medium text-slate-400">
-                          {grp.title}
-                        </p>
-                        <div className="flex flex-wrap gap-1.5">
-                          {addableKpiDefs
-                            .filter((m) => m.family === grp.family)
-                            .map((m) => {
-                              const selected = extraKpiKeys.includes(m.key);
-                              return (
-                                <button
-                                  key={m.key}
-                                  type="button"
-                                  onClick={() =>
-                                    setExtraKpiKeys((prev) =>
-                                      prev.includes(m.key)
-                                        ? prev.filter((k) => k !== m.key)
-                                        : [...prev, m.key]
-                                    )
-                                  }
-                                  className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border transition-colors whitespace-nowrap shrink-0 ${
-                                    selected
-                                      ? 'bg-orange-500 text-slate-950 border-orange-500 font-semibold'
-                                      : 'bg-[#0B1120] border-[#1E293B] text-slate-300 hover:text-white hover:border-slate-600'
-                                  }`}
-                                >
-                                  {selected && <Check className="w-3 h-3" />}
-                                  <span>{m.shortLabel}</span>
-                                  <span
-                                    className={
-                                      selected
-                                        ? 'text-slate-900/80'
-                                        : 'text-slate-500'
-                                    }
-                                  >
-                                    · {m.label}
-                                  </span>
-                                </button>
-                              );
-                            })}
-                        </div>
-                      </div>
-                    ))}
-
-                    <div className="pt-2.5 border-t border-[#1E293B] flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-[11px] text-slate-400">
-                        ¿Buscas Zonas de Tiro, Tracking Óptico, Hustle, Defensa/DFG%, Clutch, Playtypes o Infracciones (Pasos, Dobles, 3s)?
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPlayerAllKpisOpen(true);
-                          setTimeout(() => {
-                            document
-                              .getElementById('inspector-player-all-nba-kpis')
-                              ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                          }, 50);
-                        }}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold bg-orange-500/15 border border-orange-500/40 text-orange-300 hover:bg-orange-500/25 rounded-md transition-colors whitespace-nowrap"
-                      >
-                        <Plus className="w-3 h-3" />
-                        <span>Abrir selector de las 10 capas NBA.com</span>
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {sampleGames.length === 0 ? (
-                  <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-6 text-center text-xs text-slate-400">
-                    No hay partidos disputados dentro del filtro seleccionado (
-                    {sampleSelection.titleShort}). Prueba otro rango o ajusta el
-                    deslizador.
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y sm:divide-y divide-[#1E293B]">
-                    {activeKpiDefs.map((metric) => {
-                      const val = metric.sliceValue(sampleGames);
-                      const formattedVal = formatMetricNumber(
-                        val,
-                        metric.decimals,
-                        metric.suffix,
-                        metric.signed
-                      );
-
-                      const nbaBench = activeScopeBenchmarks[metric.key];
-                      const hasOwnData = ownBaselineSelection.games.length > 0;
-                      const refMean =
-                        kpiRefMode === 'nba'
-                          ? nbaBench?.mean ?? metric.fallbackMean
-                          : hasOwnData
-                          ? metric.sliceValue(ownBaselineSelection.games)
-                          : NaN;
-                      const refSd =
-                        kpiRefMode === 'nba'
-                          ? nbaBench?.sd ?? metric.fallbackSd
-                          : computeOwnMetricSpread(
-                              ownBaselineSelection.games,
-                              metric
-                            );
-                      const isCustomExtra = !metric.isDefaultBasicKpi;
-
-                      return (
-                        <div
-                          key={metric.key}
-                          className="p-3.5 space-y-1.5 border-b sm:border-r border-[#1E293B] last:border-b-0"
-                        >
-                          <div className="flex items-center justify-between text-xs gap-2">
-                            <span className="inline-flex items-center gap-1 text-slate-300 font-medium min-w-0">
-                              <span className="truncate">{metric.label}</span>
-                              <MetricInfoTooltip
-                                helpKey={metric.helpKey}
-                                align="left"
-                                iconClassName="w-3 h-3"
-                              />
-                            </span>
-                            <div className="inline-flex items-center gap-1.5 shrink-0">
-                              <span className="font-mono tabular-nums font-semibold text-slate-100">
-                                {formattedVal}
-                              </span>
-                              {isCustomExtra && (
-                                <button
-                                  type="button"
-                                  title="Quitar este KPI añadido"
-                                  onClick={() =>
-                                    setExtraKpiKeys((prev) =>
-                                      prev.filter((k) => k !== metric.key)
-                                    )
-                                  }
-                                  className="text-slate-500 hover:text-rose-400 transition-colors p-0.5"
-                                >
-                                  <X className="w-3 h-3" />
-                                </button>
-                              )}
-                            </div>
-                          </div>
-
-                          <InspectorReferenceBar
-                            value={val}
-                            refMean={refMean}
-                            refSd={refSd}
-                            mode={kpiRefMode}
-                            refSourceShort={
-                              kpiRefMode === 'nba'
-                                ? 'Media NBA'
-                                : ownBaselineSelection.shortLabel
-                            }
-                            decimals={metric.decimals}
-                            suffix={metric.suffix}
-                            lowerIsBetter={metric.lowerIsBetter}
-                            signed={metric.signed}
-                            hasRefData={kpiRefMode === 'nba' || hasOwnData}
-                          />
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
-
-              {/* SECTION 2B: TODOS LOS KPIS OFICIALES NBA.COM (10 CAPAS PERSONALIZABLES) */}
+              {/* UNIFIED PLAYER KPIs BLOCK (10 Capas + Media NBA / Datos propios · Personalizable) */}
               <InspectorAllNbaKpisPanel
                 sectionId="inspector-player-all-nba-kpis"
                 entityType="player"
@@ -3535,12 +3221,36 @@ export function EntityInspectorDrawer({
                 playerDossier={playerAdvancedDossier}
                 loadingAdvanced={loadingAdvanced}
                 activeKeys={playerNbaKpiKeys}
-                onChangeActiveKeys={setPlayerNbaKpiKeys}
-                defaultKeys={DEFAULT_PLAYER_NBA_KPI_KEYS}
+                onChangeActiveKeys={handleChangePlayerNbaKpiKeys}
+                defaultKeys={effectivePlayerDefaults}
                 externalOpen={playerAllKpisOpen}
                 onExternalOpenChange={setPlayerAllKpisOpen}
-                title="KPIs Oficiales NBA.com (Todas las Capas · Personalizable)"
-                subtitle="Pulsa una capa para ver todas sus estadísticas exclusivas con Media NBA y desviación, o combina libremente las que quieras."
+                sampleGames={sampleGames}
+                referenceMode={kpiRefMode}
+                ownBaselineGames={ownBaselineSelection.games}
+                ownBaselineShortLabel={ownBaselineSelection.shortLabel}
+                title={
+                  kpiRefMode === 'nba'
+                    ? 'Nivel comparado frente a la Media de la NBA & KPIs Oficiales'
+                    : 'Nivel comparado frente a sus Datos propios & KPIs Oficiales'
+                }
+                subtitle={`Muestra evaluada: ${sampleSelection.titleShort} · Marca blanca central = ${
+                  kpiRefMode === 'nba'
+                    ? 'promedio rotación NBA'
+                    : ownBaselineSelection.shortLabel
+                } · Personaliza entre todas las capas NBA.com.`}
+                headerExtra={
+                  <ReferenceSelectorBar
+                    mode={kpiRefMode}
+                    onChangeMode={setKpiRefMode}
+                    ownMode={ownBaselineMode}
+                    onChangeOwnMode={setOwnBaselineMode}
+                    ownCustomK={ownCustomK}
+                    maxGames={totalAvailableGames}
+                    onChangeOwnCustomK={setOwnCustomK}
+                    ownShortLabel={ownBaselineSelection.shortLabel}
+                  />
+                }
               />
 
 
@@ -4037,6 +3747,14 @@ export function EntityInspectorDrawer({
                         leagueBenchmarks={chartLeagueBenchmarks}
                       />
 
+                      {showHeroicBadges && (
+                        <HeroicShotsPanel
+                          shots={playerAdvancedDossier?.heroicShots || []}
+                          entityName={player.name}
+                          entityType="player"
+                        />
+                      )}
+
                       {playerAdvancedDossier?.scoring && (
                         <ScoringSplitsPanel
                           scoring={playerAdvancedDossier.scoring}
@@ -4168,125 +3886,10 @@ export function EntityInspectorDrawer({
           {/* ================================================================ */}
           {team && (
             <>
-              {/* TAB 1: RESUMEN & KPIS */}
+              {/* TAB 1: RESUMEN & KPIS (Equipo) */}
               {activeInspectorTab === 'overview' && (
                 <>
-                  {/* FEATURED TEAM KPIS GRID WITH LEAGUE PERCENTILES */}
-                  <section className="space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-                          <span>KPIs Colectivos & Percentiles de la NBA</span>
-                          <MetricInfoTooltip helpKey="team_kpi_overview" align="left" />
-                        </h3>
-                        <p className="text-xs text-slate-400">
-                          Estadísticas colectivas comparadas contra las 30 franquicias de la liga
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-xs font-mono text-orange-400 font-semibold px-2.5 py-1 bg-orange-500/10 border border-orange-500/30 rounded-lg">
-                          Balance {team.wins}-{team.losses} (Win% {(team.winPct * 100).toFixed(1)}%)
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setTeamAllKpisOpen(true);
-                            setTimeout(() => {
-                              document
-                                .getElementById('inspector-team-all-nba-kpis')
-                                ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                            }, 50);
-                          }}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold bg-orange-500/15 border border-orange-500/40 text-orange-300 hover:bg-orange-500/25 rounded-lg transition-colors whitespace-nowrap"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>Añadir KPIs NBA.com ({teamNbaKpiKeys.length})</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-                      <KpiPercentileCard
-                        label="Ataque (OffRtg)"
-                        value={(team.offRtg || 0).toFixed(1)}
-                        numericVal={team.offRtg || 0}
-                        allLeagueVals={(leagueTeamStats.offRtg || []).filter((v): v is number => v !== undefined)}
-                        nbaMean={114.5}
-                        helpKey="offRtg"
-                        decimals={1}
-                      />
-                      <KpiPercentileCard
-                        label="Defensa (DefRtg)"
-                        value={(team.defRtg || 0).toFixed(1)}
-                        numericVal={team.defRtg || 0}
-                        allLeagueVals={(leagueTeamStats.defRtg || []).filter((v): v is number => v !== undefined)}
-                        nbaMean={114.5}
-                        helpKey="defRtg"
-                        decimals={1}
-                        lowerIsBetter
-                      />
-                      <KpiPercentileCard
-                        label="Net Rating (NetRtg)"
-                        value={formatMetricNumber(team.netRtg || 0, 1, '', true)}
-                        numericVal={team.netRtg || 0}
-                        allLeagueVals={(leagueTeamStats.netRtg || []).filter((v): v is number => v !== undefined)}
-                        nbaMean={0.0}
-                        helpKey="netRtg"
-                        decimals={1}
-                        signed
-                      />
-                      <KpiPercentileCard
-                        label="Ritmo (Pace)"
-                        value={(team.pace || 0).toFixed(1)}
-                        numericVal={team.pace || 0}
-                        allLeagueVals={(leagueTeamStats.pace || []).filter((v): v is number => v !== undefined)}
-                        nbaMean={98.5}
-                        helpKey="pace"
-                        decimals={1}
-                      />
-                      <KpiPercentileCard
-                        label="Puntos Favor"
-                        value={team.avgPointsFor.toFixed(1)}
-                        numericVal={team.avgPointsFor}
-                        allLeagueVals={(leagueTeamStats.pointsFor || []).filter((v): v is number => v !== undefined)}
-                        nbaMean={114.2}
-                        helpKey="avgPointsFor"
-                        decimals={1}
-                      />
-                      <KpiPercentileCard
-                        label="Puntos Contra"
-                        value={team.avgPointsAgainst.toFixed(1)}
-                        numericVal={team.avgPointsAgainst}
-                        allLeagueVals={(leagueTeamStats.pointsAgainst || []).filter((v): v is number => v !== undefined)}
-                        nbaMean={114.2}
-                        helpKey="pointsAgainst"
-                        decimals={1}
-                        lowerIsBetter
-                      />
-                      <KpiPercentileCard
-                        label="Diferencial"
-                        value={formatMetricNumber(team.differential, 1, '', true)}
-                        numericVal={team.differential}
-                        allLeagueVals={(leagueTeamStats.differential || []).filter((v): v is number => v !== undefined)}
-                        nbaMean={0.0}
-                        helpKey="differential"
-                        decimals={1}
-                        signed
-                      />
-                      <KpiPercentileCard
-                        label="% Victorias (Win%)"
-                        value={`${(team.winPct * 100).toFixed(1)}%`}
-                        numericVal={team.winPct * 100}
-                        allLeagueVals={(leagueTeamStats.winPct || []).map((w) => w * 100)}
-                        nbaMean={50.0}
-                        helpKey="winPct"
-                        decimals={1}
-                        suffix="%"
-                      />
-                    </div>
-                  </section>
-
-                  {/* DEAN OLIVER 4 FACTORS & POSSESSION EFFICIENCY BLOCK */}
+                  {/* 1. DEAN OLIVER 4 FACTORS BLOCK (FIRST) */}
                   <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4 shadow-sm">
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1E293B] pb-3">
                       <div>
@@ -4306,10 +3909,14 @@ export function EntityInspectorDrawer({
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                       <KpiPercentileCard
                         label="1. Eficiencia Tiro (eFG%)"
-                        value={`${(team.efgPct || 0).toFixed(1)}%`}
-                        numericVal={team.efgPct || 0}
-                        allLeagueVals={(leagueTeamStats.efgPct || []).filter((v): v is number => v !== undefined)}
-                        nbaMean={53.5}
+                        value={`${teamDeanFactors.efgPct.toFixed(1)}%`}
+                        numericVal={teamDeanFactors.efgPct}
+                        allLeagueVals={leagueTeamStats.efgPct || []}
+                        nbaMean={
+                          leagueTeamStats.efgPct?.length
+                            ? round1(mean(leagueTeamStats.efgPct))
+                            : teamDeanFactors.efgPct
+                        }
                         helpKey="efgPct"
                         decimals={1}
                         suffix="%"
@@ -4317,10 +3924,14 @@ export function EntityInspectorDrawer({
 
                       <KpiPercentileCard
                         label="2. Pérdidas (TOV%)"
-                        value={`${(team.tovPct || 13.5).toFixed(1)}%`}
-                        numericVal={team.tovPct || 13.5}
-                        allLeagueVals={(leagueTeamStats.tovPct || []).filter((v): v is number => v !== undefined)}
-                        nbaMean={13.5}
+                        value={`${teamDeanFactors.tovPct.toFixed(1)}%`}
+                        numericVal={teamDeanFactors.tovPct}
+                        allLeagueVals={leagueTeamStats.tovPct || []}
+                        nbaMean={
+                          leagueTeamStats.tovPct?.length
+                            ? round1(mean(leagueTeamStats.tovPct))
+                            : teamDeanFactors.tovPct
+                        }
                         helpKey="tovPct"
                         decimals={1}
                         suffix="%"
@@ -4329,10 +3940,14 @@ export function EntityInspectorDrawer({
 
                       <KpiPercentileCard
                         label="3. Reb. Ofensivo (OREB%)"
-                        value={`${(team.orebPct || 27.0).toFixed(1)}%`}
-                        numericVal={team.orebPct || 27.0}
-                        allLeagueVals={(leagueTeamStats.orebPct || []).filter((v): v is number => v !== undefined)}
-                        nbaMean={27.0}
+                        value={`${teamDeanFactors.orebPct.toFixed(1)}%`}
+                        numericVal={teamDeanFactors.orebPct}
+                        allLeagueVals={leagueTeamStats.orebPct || []}
+                        nbaMean={
+                          leagueTeamStats.orebPct?.length
+                            ? round1(mean(leagueTeamStats.orebPct))
+                            : teamDeanFactors.orebPct
+                        }
                         helpKey="orebPct"
                         decimals={1}
                         suffix="%"
@@ -4340,106 +3955,21 @@ export function EntityInspectorDrawer({
 
                       <KpiPercentileCard
                         label="4. Tiros Libres (FT Rate)"
-                        value={(team.ftRate || 0.21).toFixed(2)}
-                        numericVal={team.ftRate || 0.21}
-                        allLeagueVals={(leagueTeamStats.ftRate || []).filter((v): v is number => v !== undefined)}
-                        nbaMean={0.21}
+                        value={teamDeanFactors.ftRate.toFixed(2)}
+                        numericVal={teamDeanFactors.ftRate}
+                        allLeagueVals={leagueTeamStats.ftRate || []}
+                        nbaMean={
+                          leagueTeamStats.ftRate?.length
+                            ? Math.round(mean(leagueTeamStats.ftRate) * 100) / 100
+                            : teamDeanFactors.ftRate
+                        }
                         helpKey="ftRate"
                         decimals={2}
                       />
                     </div>
-
-                    <div className="bg-[#0B1120] border border-[#1E293B] rounded-xl p-3.5 space-y-2.5">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-slate-300 font-semibold flex items-center gap-1.5">
-                          <span>Eficiencia por 100 Posesiones</span>
-                          <MetricInfoTooltip helpKey="netRtg" align="left" />
-                        </span>
-                        <span className="font-mono text-xs tabular-nums">
-                          NetRtg:{' '}
-                          <strong className={(team.netRtg || 0) >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
-                            {formatSigned(team.netRtg || 0, 1)} pts/100pos
-                          </strong>
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
-                        <div className="bg-[#131C2E] p-3 rounded-lg border border-[#1E293B] flex justify-between items-center">
-                          <div>
-                            <span className="text-sky-300 font-sans text-xs font-medium block">Eficiencia Ofensiva (OffRtg)</span>
-                            <span className="text-[10px] text-slate-400 font-sans">Pts anotados por 100 pos</span>
-                          </div>
-                          <span className="text-lg font-bold text-slate-100">{(team.offRtg || 0).toFixed(1)}</span>
-                        </div>
-
-                        <div className="bg-[#131C2E] p-3 rounded-lg border border-[#1E293B] flex justify-between items-center">
-                          <div>
-                            <span className="text-rose-300 font-sans text-xs font-medium block">Eficiencia Defensiva (DefRtg)</span>
-                            <span className="text-[10px] text-slate-400 font-sans">Pts recibidos por 100 pos (Menor = Mejor)</span>
-                          </div>
-                          <span className="text-lg font-bold text-slate-100">{(team.defRtg || 0).toFixed(1)}</span>
-                        </div>
-                      </div>
-                    </div>
                   </section>
 
-                  <section className="space-y-2.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <h3 className="text-sm font-semibold text-slate-100">
-                        Nivel comparado frente a la Media de la NBA
-                      </h3>
-                      <span className="text-[11px] text-slate-400">
-                        Marca blanca central = promedio NBA
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y sm:divide-y-0 sm:divide-x divide-[#1E293B]">
-                      {teamNbaGaugeItems.slice(0, 2).map((item, idx) => (
-                        <div key={idx} className="p-3.5 space-y-1.5">
-                          <div className="flex items-center justify-between text-xs gap-2">
-                            <span className="inline-flex items-center gap-1 text-slate-300 font-medium">
-                              <span>{item.title}</span>
-                              <MetricInfoTooltip
-                                helpKey={item.helpKey}
-                                align="left"
-                                iconClassName="w-3 h-3"
-                              />
-                            </span>
-                            <span className="font-mono tabular-nums font-semibold text-slate-100">
-                              {item.valueLabel}
-                            </span>
-                          </div>
-                          <NbaComparisonBar
-                            value={item.value}
-                            benchmark={item.benchmark}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y sm:divide-y-0 sm:divide-x divide-[#1E293B]">
-                      {teamNbaGaugeItems.slice(2, 4).map((item, idx) => (
-                        <div key={idx} className="p-3.5 space-y-1.5">
-                          <div className="flex items-center justify-between text-xs gap-2">
-                            <span className="inline-flex items-center gap-1 text-slate-300 font-medium">
-                              <span>{item.title}</span>
-                              <MetricInfoTooltip
-                                helpKey={item.helpKey}
-                                align="left"
-                                iconClassName="w-3 h-3"
-                              />
-                            </span>
-                            <span className="font-mono tabular-nums font-semibold text-slate-100">
-                              {item.valueLabel}
-                            </span>
-                          </div>
-                          <NbaComparisonBar
-                            value={item.value}
-                            benchmark={item.benchmark}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-
+                  {/* 2. UNIFIED TEAM KPIs & NBA PERCENTILES BLOCK (10 Capas Personalizable) */}
                   <InspectorAllNbaKpisPanel
                     sectionId="inspector-team-all-nba-kpis"
                     entityType="team"
@@ -4451,12 +3981,17 @@ export function EntityInspectorDrawer({
                     teamDossier={teamAdvancedDossier}
                     loadingAdvanced={loadingAdvanced}
                     activeKeys={teamNbaKpiKeys}
-                    onChangeActiveKeys={setTeamNbaKpiKeys}
-                    defaultKeys={DEFAULT_TEAM_NBA_KPI_KEYS}
+                    onChangeActiveKeys={handleChangeTeamNbaKpiKeys}
+                    defaultKeys={effectiveTeamDefaults}
                     externalOpen={teamAllKpisOpen}
                     onExternalOpenChange={setTeamAllKpisOpen}
-                    title="KPIs Colectivos Oficiales NBA.com (Todas las Capas · Personalizable)"
-                    subtitle="Pulsa cualquier capa para cargar sus estadísticas exclusivas con Media NBA y desviación, o combina libremente tus KPIs favoritos."
+                    title="KPIs Colectivos, Percentiles NBA & Oficiales NBA.com (10 Capas · Personalizable)"
+                    subtitle="Estadísticas colectivas con percentil frente a las 30 franquicias y media NBA. Personaliza qué KPIs mostrar o explora las 10 capas."
+                    headerExtra={
+                      <span className="text-xs font-mono text-orange-400 font-semibold px-2.5 py-1 bg-orange-500/10 border border-orange-500/30 rounded-lg whitespace-nowrap">
+                        Balance {team.wins}-{team.losses} (Win% {(team.winPct * 100).toFixed(1)}%)
+                      </span>
+                    }
                   />
                 </>
               )}
@@ -5275,6 +4810,37 @@ export function EntityInspectorDrawer({
                           splits={teamAdvancedDossier.onOffSplits}
                           title={`Impacto On / Off Court de la Plantilla (${team.abbreviation})`}
                           leagueBenchmarks={chartLeagueBenchmarks}
+                        />
+                      )}
+
+                      <TeamLineupsPanel
+                        lineups5={teamAdvancedDossier?.lineups5}
+                        lineups3={teamAdvancedDossier?.lineups3}
+                        lineups2={teamAdvancedDossier?.lineups2}
+                        teamAbbr={team.abbreviation}
+                        onInspectPlayer={(pId, pName) => {
+                          void onSelectRosterPlayer({
+                            id: pId,
+                            name: pName || pId,
+                            teamAbbr: team.abbreviation,
+                            position: '',
+                          });
+                        }}
+                      />
+
+                      {showHeroicBadges && (
+                        <HeroicShotsPanel
+                          shots={teamAdvancedDossier?.heroicShots || []}
+                          entityName={team.name}
+                          entityType="team"
+                          onInspectPlayer={(pId, pName) => {
+                            void onSelectRosterPlayer({
+                              id: pId,
+                              name: pName || pId,
+                              teamAbbr: team.abbreviation,
+                              position: '',
+                            });
+                          }}
                         />
                       )}
                     </>

@@ -5,6 +5,7 @@ export type ActiveSection =
   | 'streaks'
   | 'duel'
   | 'milestones'
+  | 'heroic'
   | 'awards'
   | 'comparator'
   | 'teams'
@@ -94,6 +95,17 @@ export interface GamedayThresholdsConfigValues {
 }
 
 export interface GamedayThresholdsConfig extends GamedayThresholdsConfigValues {
+  updatedAt: number;
+}
+
+export interface WebFeatureFlags {
+  showHeroicBadges: boolean;
+  updatedAt: number;
+}
+
+export interface InspectorDefaultKpisConfig {
+  playerDefaultKpiKeys: string[];
+  teamDefaultKpiKeys: string[];
   updatedAt: number;
 }
 
@@ -1547,6 +1559,47 @@ export interface NbaOnOffSplitEntry {
   defDiff: number;
 }
 
+export type NbaHeroicShotType = 'buzzer_beater' | 'game_winner' | 'ot_tying_buzzer';
+
+export interface NbaHeroicShotEntry {
+  id: string;
+  seasonLabel: string;
+  gameId: string;
+  date: string;
+  playerId: string;
+  playerName: string;
+  teamId: string;
+  teamAbbr: string;
+  opponentAbbr: string;
+  isHome: boolean;
+  shotType: NbaHeroicShotType;
+  period: number;
+  periodLabel: string;
+  clock: string;
+  clockSeconds: number;
+  description: string;
+  points: number;
+  finalScoreTeam: number;
+  finalScoreOpp: number;
+  wonGame: boolean;
+  shotDistance?: number | null;
+}
+
+export interface NbaHeroicShotCountSummary {
+  buzzerBeaters: number;
+  gameWinners: number;
+  otTyingBuzzers: number;
+}
+
+export interface NbaHeroicShotsResponse {
+  season: string;
+  generatedAt: string;
+  totalEvents: number;
+  items: NbaHeroicShotEntry[];
+  playerCounts: Record<string, NbaHeroicShotCountSummary>;
+  teamCounts: Record<string, NbaHeroicShotCountSummary>;
+}
+
 export interface NbaLineupEntry {
   groupId: string;
   groupName: string;
@@ -1569,9 +1622,47 @@ export interface NbaLineupEntry {
   rebPct: number;
   astPct: number;
   astTo: number;
+  astRatio?: number;
   tovPct: number;
   poss: number;
   pie: number;
+  // Capa 1: Básicas & Caja (leaguedashlineups?MeasureType=Base)
+  pts?: number;
+  reb?: number;
+  oreb?: number;
+  dreb?: number;
+  ast?: number;
+  stl?: number;
+  blk?: number;
+  blka?: number;
+  tov?: number;
+  pf?: number;
+  pfd?: number;
+  fgm?: number;
+  fga?: number;
+  fgPct?: number;
+  fg3m?: number;
+  fg3a?: number;
+  fg3Pct?: number;
+  ftm?: number;
+  fta?: number;
+  ftPct?: number;
+  plusMinus?: number;
+  // Capa 2: Cuatro Factores oficiales de la alineación (MeasureType=Four Factors)
+  ftaRate?: number;
+  oppEfgPct?: number;
+  oppFtaRate?: number;
+  oppTovPct?: number;
+  oppOrebPct?: number;
+  // Capas 3-10 integradas (Scoring/Misc/Opponent oficial + composición de jugadores del quinteto/dúo/trío)
+  advFourFactors?: NbaFourFactorsEntry;
+  advScoring?: NbaScoringSplitsEntry;
+  advZones?: NbaShotZonesEntry;
+  advTracking?: NbaTrackingEntry;
+  advDefHustle?: NbaDefenseHustleEntry;
+  advClutch?: NbaClutchEntry;
+  advPlaytypes?: NbaPlaytypeEntitySummary;
+  advViolations?: NbaViolationsEntry;
 }
 
 export interface NbaAdvancedLeagueResponse<T = any> {
@@ -1616,7 +1707,9 @@ export interface NbaTeamDossierAdvancedResponse {
   playtypesDef: NbaPlaytypeRow[];
   onOffSplits: NbaOnOffSplitEntry[];
   lineups5: NbaLineupEntry[];
+  lineups3?: NbaLineupEntry[];
   lineups2: NbaLineupEntry[];
+  heroicShots?: NbaHeroicShotEntry[];
   leagueBenchmarks?: Record<string, NbaAdvancedBenchmarkStat>;
 }
 
@@ -1637,6 +1730,7 @@ export interface NbaPlayerDossierAdvancedResponse {
   playtypesOff: NbaPlaytypeRow[];
   playtypesDef: NbaPlaytypeRow[];
   onOffSplit: NbaOnOffSplitEntry | null;
+  heroicShots?: NbaHeroicShotEntry[];
   leagueBenchmarks?: Record<string, NbaAdvancedBenchmarkStat>;
 }
 
