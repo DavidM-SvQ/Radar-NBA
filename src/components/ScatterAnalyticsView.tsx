@@ -44,7 +44,11 @@ import {
 import { NBA_TEAMS_MAP } from '../utils/teamLogos';
 import { PlayerAvatar, TeamLogo } from './NbaVisuals';
 import { ExportImageButton } from './ExportImageButton';
-import { buildTableSnapshotBlob } from '../utils/exportImageCard';
+import {
+  buildSvgChartSnapshotBlob,
+  buildTableSnapshotBlob,
+  preloadAllTeamLogoDataUris,
+} from '../utils/exportImageCard';
 import { fetchSharedHeroicShots } from '../utils/heroicShotsClient';
 import { type LeagueBenchmarks } from '../utils/humanize';
 import { extractUnifiedFilterOptions } from '../utils/entityFilters';
@@ -355,6 +359,11 @@ export function ScatterAnalyticsView({
   >({});
   const [loadingSnapshot, setLoadingSnapshot] = useState(false);
   const inFlightKeysRef = useRef<Set<string>>(new Set());
+
+  // Preload team logo data URIs for instant, crisp chart exports
+  useEffect(() => {
+    preloadAllTeamLogoDataUris();
+  }, []);
 
   // Teams view state
   const [teamChartMode, setTeamChartMode] = useState<'scatter' | 'gaussian'>('scatter');
@@ -859,7 +868,22 @@ export function ScatterAnalyticsView({
       })
       .sort((a, b) => (teamMetricX.lowerIsBetter ? a.value - b.value : b.value - a.value));
 
-    return { mu, sigma, points, ranked };
+    const zoneCounts = {
+      elite_2s: 0,
+      above_1s: 0,
+      core_1s: 0,
+      below_1s: 0,
+      tail_2s: 0,
+    };
+    for (const r of ranked) {
+      if (r.perfZ >= 2) zoneCounts.elite_2s++;
+      else if (r.perfZ >= 1) zoneCounts.above_1s++;
+      else if (r.perfZ > -1) zoneCounts.core_1s++;
+      else if (r.perfZ > -2) zoneCounts.below_1s++;
+      else zoneCounts.tail_2s++;
+    }
+
+    return { mu, sigma, points, ranked, zoneCounts };
   }, [gaussianTeams, teamGaussianReferenceValues, teamMetricX.lowerIsBetter]);
 
   // Handle Team Preset Select
@@ -1252,7 +1276,22 @@ export function ScatterAnalyticsView({
         playerMetricX.lowerIsBetter ? a.value - b.value : b.value - a.value
       );
 
-    return { mu, sigma, points, ranked };
+    const zoneCounts = {
+      elite_2s: 0,
+      above_1s: 0,
+      core_1s: 0,
+      below_1s: 0,
+      tail_2s: 0,
+    };
+    for (const r of ranked) {
+      if (r.perfZ >= 2) zoneCounts.elite_2s++;
+      else if (r.perfZ >= 1) zoneCounts.above_1s++;
+      else if (r.perfZ > -1) zoneCounts.core_1s++;
+      else if (r.perfZ > -2) zoneCounts.below_1s++;
+      else zoneCounts.tail_2s++;
+    }
+
+    return { mu, sigma, points, ranked, zoneCounts };
   }, [gaussianPlayers, playerGaussianReferenceValues, playerMetricX.lowerIsBetter]);
 
   // Handle Player Preset Select
@@ -1654,6 +1693,7 @@ export function ScatterAnalyticsView({
           <image
             href={payload.logoUrl}
             xlinkHref={payload.logoUrl}
+            data-team-abbr={payload.abbreviation}
             x={cx - imgSize / 2}
             y={cy - imgSize / 2}
             width={imgSize}
@@ -2716,60 +2756,92 @@ export function ScatterAnalyticsView({
                   <ExportImageButton
                     onBuildImage={() =>
                       teamChartMode === 'gaussian'
-                        ? buildTableSnapshotBlob({
+                        ? buildSvgChartSnapshotBlob({
+                            containerId: 'teams-gaussian-container',
                             filename: `RadarNBA-Equipos-Gauss-${teamMetricX.shortLabel}`,
                             categoryTag: 'CAMPANA DE GAUSS · EQUIPOS NBA',
                             title: `Distribución Normal: ${teamMetricX.shortLabel}`,
                             subtitle: `${teamGaussianSummary.ranked.length} franquicias · Media μ=${formatScatterMetricValue(teamGaussianSummary.mu, teamMetricX)}${teamMetricX.unit} · σ=±${formatScatterMetricValue(teamGaussianSummary.sigma, teamMetricX)}`,
-                            entityColumnLabel: 'FRANQUICIA',
-                            columns: [
-                              { key: 'val', label: teamMetricX.shortLabel, align: 'right', widthWeight: 1.2 },
-                              { key: 'z', label: 'Z-SCORE', align: 'right', widthWeight: 1.1 },
-                              { key: 'pct', label: 'PERCENTIL', align: 'right', widthWeight: 1.1 },
-                              { key: 'record', label: 'BALANCE', align: 'right', widthWeight: 1.1 },
+                            kpis: [
+                              { label: 'Media (μ)', value: `${formatScatterMetricValue(teamGaussianSummary.mu, teamMetricX)}${teamMetricX.unit}` },
+                              { label: 'Desv. típica (σ)', value: `±${formatScatterMetricValue(teamGaussianSummary.sigma, teamMetricX)}${teamMetricX.unit}` },
+                              { label: 'Franquicias', value: String(teamGaussianSummary.ranked.length) },
+                              { label: 'Líder / Top 1', value: teamGaussianSummary.ranked[0]?.team.shortName || '—', sublabel: formatScatterMetricValue(teamGaussianSummary.ranked[0]?.value, teamMetricX) + teamMetricX.unit },
                             ],
-                            rows: teamGaussianSummary.ranked.slice(0, 15).map((row, idx) => ({
-                              rank: idx + 1,
-                              teamAbbr: row.team.abbreviation,
-                              entityName: row.team.name,
-                              entitySubtext: `${row.team.division} · ${row.team.conference}`,
-                              cells: {
-                                val: `${formatScatterMetricValue(row.value, teamMetricX)}${teamMetricX.unit}`,
-                                z: formatSignedZ(row.perfZ),
-                                pct: `P${row.percentile}`,
-                                record: `${row.team.wins}-${row.team.losses}`,
-                              },
-                            })),
+                            footerBadges: [
+                              { title: 'Élite (≥ +2σ)', text: `${teamGaussianSummary.zoneCounts.elite_2s} franquicias`, tone: 'positive' },
+                              { title: 'Por encima (+1σ)', text: `${teamGaussianSummary.zoneCounts.above_1s} franquicias`, tone: 'sky' },
+                              { title: 'Núcleo central', text: `${teamGaussianSummary.zoneCounts.core_1s} franquicias`, tone: 'neutral' },
+                              { title: 'Por debajo (<-1σ)', text: `${teamGaussianSummary.zoneCounts.below_1s + teamGaussianSummary.zoneCounts.tail_2s} franquicias`, tone: 'negative' },
+                            ],
+                            fallbackTable: {
+                              filename: `RadarNBA-Equipos-Gauss-${teamMetricX.shortLabel}`,
+                              categoryTag: 'CAMPANA DE GAUSS · EQUIPOS NBA',
+                              title: `Distribución Normal: ${teamMetricX.shortLabel}`,
+                              subtitle: `${teamGaussianSummary.ranked.length} franquicias`,
+                              entityColumnLabel: 'FRANQUICIA',
+                              columns: [
+                                { key: 'val', label: teamMetricX.shortLabel, align: 'right', widthWeight: 1.2 },
+                                { key: 'z', label: 'Z-SCORE', align: 'right', widthWeight: 1.1 },
+                                { key: 'pct', label: 'PERCENTIL', align: 'right', widthWeight: 1.1 },
+                                { key: 'record', label: 'BALANCE', align: 'right', widthWeight: 1.1 },
+                              ],
+                              rows: teamGaussianSummary.ranked.slice(0, 15).map((row, idx) => ({
+                                rank: idx + 1,
+                                teamAbbr: row.team.abbreviation,
+                                entityName: row.team.name,
+                                entitySubtext: `${row.team.division} · ${row.team.conference}`,
+                                cells: {
+                                  val: `${formatScatterMetricValue(row.value, teamMetricX)}${teamMetricX.unit}`,
+                                  z: formatSignedZ(row.perfZ),
+                                  pct: `P${row.percentile}`,
+                                  record: `${row.team.wins}-${row.team.losses}`,
+                                },
+                              })),
+                            },
                           })
-                        : buildTableSnapshotBlob({
+                        : buildSvgChartSnapshotBlob({
+                            containerId: 'teams-scatter-container',
                             filename: `RadarNBA-Equipos-${teamMetricY.shortLabel}-vs-${teamMetricX.shortLabel}`,
                             categoryTag: 'EXPLORADOR ANALÍTICO · EQUIPOS NBA',
                             title: `${teamMetricY.shortLabel} vs ${teamMetricX.shortLabel}`,
                             subtitle: `${filteredTeams.length} franquicias analizadas · Ejes: ${teamMetricY.label} vs ${teamMetricX.label}`,
-                            entityColumnLabel: 'FRANQUICIA',
-                            columns: [
-                              { key: 'conf', label: 'CONF', align: 'left', widthWeight: 1 },
-                              { key: 'valX', label: teamMetricX.shortLabel, align: 'right', widthWeight: 1.2 },
-                              { key: 'valY', label: teamMetricY.shortLabel, align: 'right', widthWeight: 1.2 },
-                              { key: 'net', label: 'NET RTG', align: 'right', widthWeight: 1 },
-                              { key: 'record', label: 'BALANCE', align: 'right', widthWeight: 1.1 },
+                            kpis: [
+                              { label: 'Eje X (Horizontal)', value: `${formatScatterMetricValue(teamMeanX, teamMetricX)}${teamMetricX.unit}`, sublabel: teamMetricX.shortLabel },
+                              { label: 'Eje Y (Vertical)', value: `${formatScatterMetricValue(teamMeanY, teamMetricY)}${teamMetricY.unit}`, sublabel: teamMetricY.shortLabel },
+                              { label: 'Franquicias', value: String(filteredTeams.length) },
+                              { label: 'Ámbito media', value: effectiveTeamMeanScope === 'filtered' ? 'Selección' : 'Liga (26-27)' },
                             ],
-                            rows: filteredTeams.slice(0, 15).map((t, idx) => {
-                              const netVal = t.stats.netRtg ?? 0;
-                              return {
-                                rank: idx + 1,
-                                teamAbbr: t.abbreviation,
-                                entityName: t.name,
-                                entitySubtext: `${t.division} · ${t.conference}`,
-                                cells: {
-                                  conf: t.conference,
-                                  valX: formatScatterMetricValue(t.stats[teamMetricX.id], teamMetricX),
-                                  valY: formatScatterMetricValue(t.stats[teamMetricY.id], teamMetricY),
-                                  net: `${netVal >= 0 ? '+' : ''}${netVal.toFixed(1)}`,
-                                  record: `${t.wins}-${t.losses}`,
-                                },
-                              };
-                            }),
+                            fallbackTable: {
+                              filename: `RadarNBA-Equipos-${teamMetricY.shortLabel}-vs-${teamMetricX.shortLabel}`,
+                              categoryTag: 'EXPLORADOR ANALÍTICO · EQUIPOS NBA',
+                              title: `${teamMetricY.shortLabel} vs ${teamMetricX.shortLabel}`,
+                              subtitle: `${filteredTeams.length} franquicias analizadas`,
+                              entityColumnLabel: 'FRANQUICIA',
+                              columns: [
+                                { key: 'conf', label: 'CONF', align: 'left', widthWeight: 1 },
+                                { key: 'valX', label: teamMetricX.shortLabel, align: 'right', widthWeight: 1.2 },
+                                { key: 'valY', label: teamMetricY.shortLabel, align: 'right', widthWeight: 1.2 },
+                                { key: 'net', label: 'NET RTG', align: 'right', widthWeight: 1 },
+                                { key: 'record', label: 'BALANCE', align: 'right', widthWeight: 1.1 },
+                              ],
+                              rows: filteredTeams.slice(0, 15).map((t, idx) => {
+                                const netVal = t.stats.netRtg ?? 0;
+                                return {
+                                  rank: idx + 1,
+                                  teamAbbr: t.abbreviation,
+                                  entityName: t.name,
+                                  entitySubtext: `${t.division} · ${t.conference}`,
+                                  cells: {
+                                    conf: t.conference,
+                                    valX: formatScatterMetricValue(t.stats[teamMetricX.id], teamMetricX),
+                                    valY: formatScatterMetricValue(t.stats[teamMetricY.id], teamMetricY),
+                                    net: `${netVal >= 0 ? '+' : ''}${netVal.toFixed(1)}`,
+                                    record: `${t.wins}-${t.losses}`,
+                                  },
+                                };
+                              }),
+                            },
                           })
                     }
                     label="Exportar PNG"
@@ -3399,59 +3471,91 @@ export function ScatterAnalyticsView({
                   <ExportImageButton
                     onBuildImage={() =>
                       playerChartMode === 'gaussian'
-                        ? buildTableSnapshotBlob({
+                        ? buildSvgChartSnapshotBlob({
+                            containerId: 'players-gaussian-container',
                             filename: `RadarNBA-Jugadores-Gauss-${playerMetricX.shortLabel}`,
                             categoryTag: 'CAMPANA DE GAUSS · JUGADORES NBA',
                             title: `Distribución Normal: ${playerMetricX.shortLabel}`,
                             subtitle: `${playerGaussianSummary.ranked.length} jugadores · Media μ=${formatScatterMetricValue(playerGaussianSummary.mu, playerMetricX)}${playerMetricX.unit} · σ=±${formatScatterMetricValue(playerGaussianSummary.sigma, playerMetricX)}`,
-                            entityColumnLabel: 'JUGADOR',
-                            columns: [
-                              { key: 'team', label: 'EQUIPO', align: 'left', widthWeight: 1 },
-                              { key: 'val', label: playerMetricX.shortLabel, align: 'right', widthWeight: 1.2 },
-                              { key: 'z', label: 'Z-SCORE', align: 'right', widthWeight: 1.1 },
-                              { key: 'pct', label: 'PERCENTIL', align: 'right', widthWeight: 1.1 },
-                              { key: 'min', label: 'MIN/PJ', align: 'right', widthWeight: 0.9 },
+                            kpis: [
+                              { label: 'Media (μ)', value: `${formatScatterMetricValue(playerGaussianSummary.mu, playerMetricX)}${playerMetricX.unit}` },
+                              { label: 'Desv. típica (σ)', value: `±${formatScatterMetricValue(playerGaussianSummary.sigma, playerMetricX)}${playerMetricX.unit}` },
+                              { label: 'Jugadores', value: String(playerGaussianSummary.ranked.length) },
+                              { label: 'Líder / Top 1', value: playerGaussianSummary.ranked[0]?.player.name || '—', sublabel: formatScatterMetricValue(playerGaussianSummary.ranked[0]?.value, playerMetricX) + playerMetricX.unit },
                             ],
-                            rows: playerGaussianSummary.ranked.slice(0, 15).map((row, idx) => ({
-                              rank: idx + 1,
-                              teamAbbr: row.player.teamAbbr,
-                              entityName: row.player.name,
-                              entitySubtext: `${row.player.teamAbbr} · ${row.player.position}`,
-                              cells: {
-                                team: row.player.teamAbbr,
-                                val: `${formatScatterMetricValue(row.value, playerMetricX)}${playerMetricX.unit}`,
-                                z: formatSignedZ(row.perfZ),
-                                pct: `P${row.percentile}`,
-                                min: String(row.player.minAvg),
-                              },
-                            })),
+                            footerBadges: [
+                              { title: 'Élite (≥ +2σ)', text: `${playerGaussianSummary.zoneCounts.elite_2s} jugadores`, tone: 'positive' },
+                              { title: 'Por encima (+1σ)', text: `${playerGaussianSummary.zoneCounts.above_1s} jugadores`, tone: 'sky' },
+                              { title: 'Núcleo central', text: `${playerGaussianSummary.zoneCounts.core_1s} jugadores`, tone: 'neutral' },
+                              { title: 'Por debajo (<-1σ)', text: `${playerGaussianSummary.zoneCounts.below_1s + playerGaussianSummary.zoneCounts.tail_2s} jugadores`, tone: 'negative' },
+                            ],
+                            fallbackTable: {
+                              filename: `RadarNBA-Jugadores-Gauss-${playerMetricX.shortLabel}`,
+                              categoryTag: 'CAMPANA DE GAUSS · JUGADORES NBA',
+                              title: `Distribución Normal: ${playerMetricX.shortLabel}`,
+                              subtitle: `${playerGaussianSummary.ranked.length} jugadores`,
+                              entityColumnLabel: 'JUGADOR',
+                              columns: [
+                                { key: 'team', label: 'EQUIPO', align: 'left', widthWeight: 1 },
+                                { key: 'val', label: playerMetricX.shortLabel, align: 'right', widthWeight: 1.2 },
+                                { key: 'z', label: 'Z-SCORE', align: 'right', widthWeight: 1.1 },
+                                { key: 'pct', label: 'PERCENTIL', align: 'right', widthWeight: 1.1 },
+                                { key: 'min', label: 'MIN/PJ', align: 'right', widthWeight: 0.9 },
+                              ],
+                              rows: playerGaussianSummary.ranked.slice(0, 15).map((row, idx) => ({
+                                rank: idx + 1,
+                                teamAbbr: row.player.teamAbbr,
+                                entityName: row.player.name,
+                                entitySubtext: `${row.player.teamAbbr} · ${row.player.position}`,
+                                cells: {
+                                  team: row.player.teamAbbr,
+                                  val: `${formatScatterMetricValue(row.value, playerMetricX)}${playerMetricX.unit}`,
+                                  z: formatSignedZ(row.perfZ),
+                                  pct: `P${row.percentile}`,
+                                  min: String(row.player.minAvg),
+                                },
+                              })),
+                            },
                           })
-                        : buildTableSnapshotBlob({
+                        : buildSvgChartSnapshotBlob({
+                            containerId: 'players-scatter-container',
                             filename: `RadarNBA-Jugadores-${playerMetricY.shortLabel}-vs-${playerMetricX.shortLabel}`,
                             categoryTag: 'EXPLORADOR ANALÍTICO · JUGADORES NBA',
                             title: `${playerMetricY.shortLabel} vs ${playerMetricX.shortLabel}`,
                             subtitle: `${filteredPlayers.length} jugadores · Ejes: ${playerMetricY.label} vs ${playerMetricX.label}`,
-                            entityColumnLabel: 'JUGADOR',
-                            columns: [
-                              { key: 'team', label: 'EQUIPO', align: 'left', widthWeight: 1 },
-                              { key: 'pos', label: 'POS', align: 'left', widthWeight: 0.8 },
-                              { key: 'valX', label: playerMetricX.shortLabel, align: 'right', widthWeight: 1.2 },
-                              { key: 'valY', label: playerMetricY.shortLabel, align: 'right', widthWeight: 1.2 },
-                              { key: 'min', label: 'MIN/PJ', align: 'right', widthWeight: 1 },
+                            kpis: [
+                              { label: 'Eje X (Horizontal)', value: `${formatScatterMetricValue(playerMeanX, playerMetricX)}${playerMetricX.unit}`, sublabel: playerMetricX.shortLabel },
+                              { label: 'Eje Y (Vertical)', value: `${formatScatterMetricValue(playerMeanY, playerMetricY)}${playerMetricY.unit}`, sublabel: playerMetricY.shortLabel },
+                              { label: 'Jugadores', value: String(filteredPlayers.length) },
+                              { label: 'Mínimo PJ', value: String(minGames) },
                             ],
-                            rows: filteredPlayers.slice(0, 15).map((p, idx) => ({
-                              rank: idx + 1,
-                              teamAbbr: p.teamAbbr,
-                              entityName: p.name,
-                              entitySubtext: `${p.teamAbbr} · ${p.position}`,
-                              cells: {
-                                team: p.teamAbbr,
-                                pos: p.position,
-                                valX: formatScatterMetricValue(p.x, playerMetricX),
-                                valY: formatScatterMetricValue(p.y, playerMetricY),
-                                min: String(p.minAvg),
-                              },
-                            })),
+                            fallbackTable: {
+                              filename: `RadarNBA-Jugadores-${playerMetricY.shortLabel}-vs-${playerMetricX.shortLabel}`,
+                              categoryTag: 'EXPLORADOR ANALÍTICO · JUGADORES NBA',
+                              title: `${playerMetricY.shortLabel} vs ${playerMetricX.shortLabel}`,
+                              subtitle: `${filteredPlayers.length} jugadores analizados`,
+                              entityColumnLabel: 'JUGADOR',
+                              columns: [
+                                { key: 'team', label: 'EQUIPO', align: 'left', widthWeight: 1 },
+                                { key: 'pos', label: 'POS', align: 'left', widthWeight: 0.8 },
+                                { key: 'valX', label: playerMetricX.shortLabel, align: 'right', widthWeight: 1.2 },
+                                { key: 'valY', label: playerMetricY.shortLabel, align: 'right', widthWeight: 1.2 },
+                                { key: 'min', label: 'MIN/PJ', align: 'right', widthWeight: 1 },
+                              ],
+                              rows: filteredPlayers.slice(0, 15).map((p, idx) => ({
+                                rank: idx + 1,
+                                teamAbbr: p.teamAbbr,
+                                entityName: p.name,
+                                entitySubtext: `${p.teamAbbr} · ${p.position}`,
+                                cells: {
+                                  team: p.teamAbbr,
+                                  pos: p.position,
+                                  valX: formatScatterMetricValue(p.x, playerMetricX),
+                                  valY: formatScatterMetricValue(p.y, playerMetricY),
+                                  min: String(p.minAvg),
+                                },
+                              })),
+                            },
                           })
                     }
                     label="Exportar PNG"

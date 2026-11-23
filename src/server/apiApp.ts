@@ -12,6 +12,7 @@ import { ADMIN_SECURITY_BOUNDS, adminLoginBodySchema, adminSecurityConfigBodySch
 import { getAllCircuitMetrics, resetCircuit } from "./circuitBreaker.ts";
 import { expressTelemetryMiddleware, getTelemetrySummary } from "./telemetryLogger.ts";
 import { getEasternTodayIso } from "../utils/staticSchedule.ts";
+import { NBA_TEAMS_MAP } from "../utils/teamLogos.ts";
 const isProduction = process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL);
 const isVercelDeployment = Boolean(process.env.VERCEL);
 function sendPreserializedJsonBuffers(req, res, buffers, cacheControl) {
@@ -46,6 +47,47 @@ app.use((err, _req, res, next) => {
   }
   next(err);
 });
+const TEAM_LOGO_BUFFER_CACHE = new Map<string, { buffer: Buffer; contentType: string }>();
+
+app.get("/api/nba/team-logo/:abbr", async (req, res) => {
+  const rawAbbr = String(req.params.abbr || "").toUpperCase().trim();
+  const meta = NBA_TEAMS_MAP[rawAbbr];
+  if (!meta) {
+    res.status(404).send("Franquicia no encontrada");
+    return;
+  }
+
+  const cached = TEAM_LOGO_BUFFER_CACHE.get(rawAbbr);
+  if (cached) {
+    res.setHeader("Content-Type", cached.contentType);
+    res.setHeader("Cache-Control", "public, max-age=604800, immutable");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.send(cached.buffer);
+    return;
+  }
+
+  try {
+    const slug = meta.espnSlug || rawAbbr.toLowerCase();
+    const espnUrl = `https://a.espncdn.com/i/teamlogos/nba/500/${slug}.png`;
+    const response = await fetch(espnUrl);
+    if (!response.ok) {
+      res.status(502).send("Error al obtener logo de CDN");
+      return;
+    }
+    const arrayBuf = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuf);
+    const contentType = response.headers.get("content-type") || "image/png";
+    TEAM_LOGO_BUFFER_CACHE.set(rawAbbr, { buffer, contentType });
+
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "public, max-age=604800, immutable");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.send(buffer);
+  } catch {
+    res.status(500).send("Error interno en proxy de logo");
+  }
+});
+
 app.use("/api/nba", nbaApiRateLimiter, nbaHeavyRefreshLimiter);
 app.use("/api/admin", (req, res, next) => {
   if (

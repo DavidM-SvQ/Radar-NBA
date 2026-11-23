@@ -655,7 +655,10 @@ export function GaussianDistributionChart({
       )}
 
       {/* Main Responsive Gaussian SVG Canvas */}
-      <div className="relative w-full bg-[#0E1626]/50 border border-[#1E293B] rounded-lg p-2 sm:p-3 overflow-hidden">
+      <div
+        id={scope === 'teams' ? 'teams-gaussian-container' : 'players-gaussian-container'}
+        className="relative w-full bg-[#0E1626]/50 border border-[#1E293B] rounded-lg p-2 sm:p-3 overflow-hidden"
+      >
         <svg
           viewBox={`0 0 ${W} ${H}`}
           className="w-full h-auto max-h-[470px] select-none overflow-visible"
@@ -936,6 +939,7 @@ export function GaussianDistributionChart({
                     <image
                       href={entity.logoUrl}
                       xlinkHref={entity.logoUrl}
+                      data-team-abbr={entity.abbreviation || ''}
                       x={px - imgSz / 2}
                       y={py - imgSz / 2}
                       width={imgSz}

@@ -1,4 +1,9 @@
-import { getTeamDarkUiPalette, hexToRgba } from './teamLogos';
+import {
+  NBA_TEAMS_MAP,
+  getTeamDarkUiPalette,
+  getTeamLogoUrls,
+  hexToRgba,
+} from './teamLogos';
 
 export type SnapshotCellTone =
   | 'neutral'
@@ -98,6 +103,24 @@ export interface ComparisonSnapshotConfig {
   colDeltaLabel?: string;
   rows: ComparisonMetricRow[];
   footerNote?: string;
+}
+
+export interface SvgChartFooterBadge {
+  title: string;
+  text: string;
+  tone?: SnapshotCellTone;
+}
+
+export interface SvgChartSnapshotConfig {
+  containerId: string;
+  filename: string;
+  categoryTag?: string;
+  title: string;
+  subtitle?: string;
+  kpis?: SnapshotKpiItem[];
+  footerBadges?: SvgChartFooterBadge[];
+  footerNote?: string;
+  fallbackTable?: TableSnapshotConfig;
 }
 
 const FONT_SANS =
@@ -667,6 +690,364 @@ export async function buildTableSnapshotBlob(
   ctx.stroke();
 
   drawCommonFooter(ctx, W, tableTop + tableH + 16, PAD_X, config.footerNote);
+
+  const blob = await canvasToPngBlob(canvas);
+  return {
+    blob,
+    filename: sanitizeExportFilename(config.filename),
+  };
+}
+
+const INLINE_LOGO_DATA_CACHE = new Map<string, Promise<string>>();
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (typeof FileReader !== 'undefined') {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (typeof reader.result === 'string') {
+          resolve(reader.result);
+        } else {
+          reject(new Error('No se pudo convertir el logo a Data URL'));
+        }
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    } else {
+      blob
+        .arrayBuffer()
+        .then((ab) => {
+          const b64 = Buffer.from(ab).toString('base64');
+          resolve(`data:${blob.type || 'image/png'};base64,${b64}`);
+        })
+        .catch(reject);
+    }
+  });
+}
+
+function generateSvgTeamBadgeDataUri(abbr: string): string {
+  const clean = (abbr || 'NBA').toUpperCase().trim().slice(0, 4);
+  const pal = getTeamDarkUiPalette(clean);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96"><circle cx="48" cy="48" r="46" fill="#0B1120" stroke="${pal.primary}" stroke-width="4"/><circle cx="48" cy="48" r="38" fill="${hexToRgba(pal.primary, 0.35)}" stroke="${pal.secondary || '#FFFFFF'}" stroke-width="2"/><text x="48" y="55" font-family="'JetBrains Mono', monospace" font-size="22" font-weight="800" fill="#F8FAFC" text-anchor="middle">${clean}</text></svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+export function extractAbbrFromImageElement(imgEl: SVGImageElement): string {
+  const dataAbbr = (imgEl.getAttribute('data-team-abbr') || '').toUpperCase().trim();
+  if (dataAbbr && NBA_TEAMS_MAP[dataAbbr]) return dataAbbr;
+
+  const href = imgEl.getAttribute('href') || imgEl.getAttribute('xlink:href') || '';
+  if (href) {
+    const espnMatch = href.match(/\/teamlogos\/nba\/\d+\/([a-z0-9_-]+)\.png/i);
+    if (espnMatch) {
+      const slug = espnMatch[1].toLowerCase();
+      const matched = Object.values(NBA_TEAMS_MAP).find(
+        (m) => m.espnSlug.toLowerCase() === slug || m.abbr.toLowerCase() === slug
+      );
+      if (matched) return matched.abbr;
+    }
+
+    const nbaIdMatch = href.match(/\/logos\/nba\/(\d+)\//i);
+    if (nbaIdMatch) {
+      const matched = Object.values(NBA_TEAMS_MAP).find(
+        (m) => String(m.nbaId) === nbaIdMatch[1]
+      );
+      if (matched) return matched.abbr;
+    }
+  }
+
+  return dataAbbr || 'NBA';
+}
+
+export function getTeamLogoDataUri(abbr: string): Promise<string> {
+  const cleanAbbr = (abbr || 'NBA').toUpperCase().trim();
+  const cached = INLINE_LOGO_DATA_CACHE.get(cleanAbbr);
+  if (cached) return cached;
+
+  const task = (async (): Promise<string> => {
+    // Tier 1: Same-origin backend proxy (/api/nba/team-logo/:abbr)
+    try {
+      const res = await fetch(`/api/nba/team-logo/${cleanAbbr}`);
+      if (res.ok) {
+        const blob = await res.blob();
+        if (blob && blob.size > 200) {
+          const dataUri = await blobToDataUrl(blob);
+          if (dataUri) return dataUri;
+        }
+      }
+    } catch {
+      // Fallback to next tier
+    }
+
+    // Tier 2: Direct ESPN CDN fetch with CORS
+    const meta = NBA_TEAMS_MAP[cleanAbbr];
+    const slug = meta?.espnSlug || cleanAbbr.toLowerCase();
+    const espnUrl = `https://a.espncdn.com/i/teamlogos/nba/500/${slug}.png`;
+    try {
+      const res = await fetch(espnUrl, { mode: 'cors' });
+      if (res.ok) {
+        const blob = await res.blob();
+        if (blob && blob.size > 200) {
+          const dataUri = await blobToDataUrl(blob);
+          if (dataUri) return dataUri;
+        }
+      }
+    } catch {
+      // Fallback to next tier
+    }
+
+    // Tier 3: Offscreen HTML Image element drawing with CORS query
+    try {
+      const imageResult = await new Promise<string | null>((resolve) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          try {
+            const c = document.createElement('canvas');
+            c.width = 96;
+            c.height = 96;
+            const cctx = c.getContext('2d');
+            if (!cctx) return resolve(null);
+            cctx.drawImage(img, 0, 0, 96, 96);
+            resolve(c.toDataURL('image/png'));
+          } catch {
+            resolve(null);
+          }
+        };
+        img.onerror = () => resolve(null);
+        img.src = `${espnUrl}?cors=1`;
+      });
+      if (imageResult) return imageResult;
+    } catch {
+      // Fallback to next tier
+    }
+
+    // Tier 4: Vector SVG badge with official franchise palette
+    return generateSvgTeamBadgeDataUri(cleanAbbr);
+  })();
+
+  INLINE_LOGO_DATA_CACHE.set(cleanAbbr, task);
+  return task;
+}
+
+export function preloadAllTeamLogoDataUris(): void {
+  if (typeof window === 'undefined') return;
+  const teamAbbrs = Object.keys(NBA_TEAMS_MAP);
+  teamAbbrs.forEach((abbr) => {
+    void getTeamLogoDataUri(abbr);
+  });
+}
+
+async function inlineSvgExternalImages(
+  svgClone: SVGSVGElement
+): Promise<void> {
+  const imageEls = Array.from(svgClone.querySelectorAll('image'));
+  if (imageEls.length === 0) return;
+
+  await Promise.all(
+    imageEls.map(async (imgEl) => {
+      const abbr = extractAbbrFromImageElement(imgEl);
+      const dataUri = await getTeamLogoDataUri(abbr);
+      imgEl.setAttribute('href', dataUri);
+      imgEl.setAttribute('xlink:href', dataUri);
+    })
+  );
+}
+
+export async function buildSvgChartSnapshotBlob(
+  config: SvgChartSnapshotConfig
+): Promise<{ blob: Blob; filename: string }> {
+  await ensureFontsReady();
+
+  const container =
+    typeof document !== 'undefined'
+      ? document.getElementById(config.containerId)
+      : null;
+  const svgEl = container?.querySelector('svg') as SVGSVGElement | null;
+
+  if (!svgEl) {
+    if (config.fallbackTable) {
+      return buildTableSnapshotBlob(config.fallbackTable);
+    }
+    throw new Error('No se encontró el gráfico activo para exportar.');
+  }
+
+  const rect = svgEl.getBoundingClientRect();
+  const vbAttr = svgEl.getAttribute('viewBox');
+  let vbW = 0;
+  let vbH = 0;
+  if (vbAttr) {
+    const parts = vbAttr
+      .trim()
+      .split(/[\s,]+/)
+      .map(Number);
+    if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+      vbW = parts[2];
+      vbH = parts[3];
+    }
+  }
+
+  const attrW = parseFloat(svgEl.getAttribute('width') || '0');
+  const attrH = parseFloat(svgEl.getAttribute('height') || '0');
+  const srcW = vbW || (rect.width > 10 ? rect.width : attrW > 10 ? attrW : 960);
+  const srcH = vbH || (rect.height > 10 ? rect.height : attrH > 10 ? attrH : 460);
+
+  const W = 1200;
+  const PAD_X = 32;
+  const innerW = W - PAD_X * 2;
+  const chartInnerPad = 14;
+  const chartTargetW = innerW - chartInnerPad * 2;
+  const aspect = srcW / Math.max(1, srcH);
+  const chartTargetH = Math.round(
+    Math.max(360, Math.min(640, chartTargetW / Math.max(0.6, aspect)))
+  );
+  const chartCardH = chartTargetH + chartInnerPad * 2;
+
+  const hasKpis = Boolean(config.kpis && config.kpis.length > 0);
+  const badges = (config.footerBadges || []).slice(0, 4);
+  const badgesH = badges.length > 0 ? 64 : 0;
+  const headerBlockH = (config.subtitle ? 100 : 78) + (hasKpis ? 90 : 0);
+  const footerH = 44;
+  const H =
+    headerBlockH +
+    chartCardH +
+    (badgesH > 0 ? badgesH + 14 : 0) +
+    footerH +
+    20;
+
+  // Clone and sanitize SVG so it renders faithfully offscreen without external network dependencies
+  const svgClone = svgEl.cloneNode(true) as SVGSVGElement;
+  svgClone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  svgClone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+  if (!vbAttr) {
+    svgClone.setAttribute('viewBox', `0 0 ${Math.round(srcW)} ${Math.round(srcH)}`);
+  }
+  svgClone.setAttribute('width', String(chartTargetW));
+  svgClone.setAttribute('height', String(chartTargetH));
+  svgClone.style.width = `${chartTargetW}px`;
+  svgClone.style.height = `${chartTargetH}px`;
+  svgClone.style.maxHeight = 'none';
+  svgClone.style.overflow = 'visible';
+
+  // Inject font CSS rules so Tailwind classNames (.font-mono / .font-sans) render properly in standalone SVG
+  const styleNode = svgClone.ownerDocument.createElementNS(
+    'http://www.w3.org/2000/svg',
+    'style'
+  );
+  styleNode.textContent = `
+    text { font-family: ${FONT_SANS}; }
+    .font-sans { font-family: ${FONT_SANS}; }
+    .font-mono { font-family: ${FONT_MONO}; }
+    .font-bold { font-weight: 700; }
+    .font-semibold { font-weight: 600; }
+  `;
+  svgClone.insertBefore(styleNode, svgClone.firstChild);
+
+  await inlineSvgExternalImages(svgClone);
+
+  const svgXml = new XMLSerializer().serializeToString(svgClone);
+  const svgBlob = new Blob([svgXml], { type: 'image/svg+xml;charset=utf-8' });
+  const svgUrl = URL.createObjectURL(svgBlob);
+
+  let renderedChartImg: HTMLImageElement;
+  try {
+    renderedChartImg = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () =>
+        reject(new Error('Error al rasterizar el gráfico SVG.'));
+      img.src = svgUrl;
+    });
+  } finally {
+    URL.revokeObjectURL(svgUrl);
+  }
+
+  const scale = 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = W * scale;
+  canvas.height = H * scale;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Contexto 2D no disponible en este navegador.');
+  }
+  ctx.scale(scale, scale);
+
+  ctx.fillStyle = PALETTE.bgCanvas;
+  ctx.fillRect(0, 0, W, H);
+
+  let cursorY = drawCommonHeader(
+    ctx,
+    W,
+    PAD_X,
+    config.categoryTag || 'EXPLORADOR ANALÍTICO',
+    config.title,
+    config.subtitle
+  );
+
+  if (config.kpis && config.kpis.length > 0) {
+    cursorY = drawKpiStrip(ctx, PAD_X, cursorY, innerW, config.kpis);
+  }
+
+  // Chart Surface Card
+  drawRoundedRect(ctx, PAD_X, cursorY, innerW, chartCardH, 10);
+  ctx.fillStyle = '#0E1626';
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = PALETTE.border;
+  ctx.stroke();
+
+  ctx.drawImage(
+    renderedChartImg,
+    PAD_X + chartInnerPad,
+    cursorY + chartInnerPad,
+    chartTargetW,
+    chartTargetH
+  );
+
+  cursorY += chartCardH;
+
+  // Optional 4-badge quadrant / sigma summary strip
+  if (badges.length > 0) {
+    cursorY += 14;
+    const gap = 10;
+    const bw = (innerW - gap * (badges.length - 1)) / badges.length;
+    badges.forEach((b, idx) => {
+      const bx = PAD_X + idx * (bw + gap);
+      drawRoundedRect(ctx, bx, cursorY, bw, badgesH, 8);
+      ctx.fillStyle = PALETTE.bgSurface;
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = PALETTE.border;
+      ctx.stroke();
+
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      ctx.font = `700 10.5px ${FONT_SANS}`;
+      ctx.fillStyle = resolveToneColor(b.tone || 'accent');
+      ctx.fillText(
+        truncateCanvasText(ctx, b.title.toUpperCase(), bw - 20),
+        bx + 10,
+        cursorY + 21
+      );
+
+      ctx.font = `500 11.5px ${FONT_SANS}`;
+      ctx.fillStyle = PALETTE.textSecondary;
+      ctx.fillText(
+        truncateCanvasText(ctx, b.text, bw - 20),
+        bx + 10,
+        cursorY + 43
+      );
+    });
+    cursorY += badgesH;
+  }
+
+  drawCommonFooter(
+    ctx,
+    W,
+    cursorY + 16,
+    PAD_X,
+    config.footerNote || 'RadarNBA · Explorador Analítico Avanzado'
+  );
 
   const blob = await canvasToPngBlob(canvas);
   return {
