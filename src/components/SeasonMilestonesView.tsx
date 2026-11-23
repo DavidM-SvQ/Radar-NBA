@@ -703,7 +703,7 @@ export function SeasonMilestonesView({
                 ? 'Modo comparación:'
                 : 'Comparador interanual:'}
             </span>
-            <div className="flex flex-wrap items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg">
+            <div className="flex flex-wrap items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg">
               {(
                 [
                   {
@@ -733,7 +733,7 @@ export function SeasonMilestonesView({
                   key={m.id}
                   type="button"
                   onClick={() => setCompMode(m.id)}
-                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     compMode === m.id
                       ? 'bg-orange-500 text-slate-950 font-semibold'
                       : 'text-slate-300 hover:text-white hover:bg-[#182338]'
@@ -751,13 +751,13 @@ export function SeasonMilestonesView({
               <span className="text-xs text-slate-400 whitespace-nowrap">
                 Columnas visibles:
               </span>
-              <div className="inline-flex items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg">
+              <div className="inline-flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg">
                 <button
                   type="button"
                   onClick={toggleCurSeasonCol}
                   aria-pressed={showCurSeasonCol}
                   title="Mostrar u ocultar la columna de la temporada actual (2026-27)"
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[28px] inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     showCurSeasonCol
                       ? 'bg-orange-500/20 text-orange-300 border border-orange-500/40 font-semibold'
                       : 'text-slate-400 hover:text-slate-200 border border-transparent'
@@ -776,7 +776,7 @@ export function SeasonMilestonesView({
                   onClick={togglePrevSeasonCol}
                   aria-pressed={showPrevSeasonCol}
                   title="Mostrar u ocultar la columna de la temporada pasada (2025-26)"
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[28px] inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     showPrevSeasonCol
                       ? 'bg-[#1E293B] text-slate-100 border border-slate-600/60 font-semibold'
                       : 'text-slate-400 hover:text-slate-200 border border-transparent'
@@ -812,7 +812,7 @@ export function SeasonMilestonesView({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Buscar hito, jugador o equipo..."
-                className="w-full pl-8 pr-2.5 py-1.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500"
+                className="w-full h-9 pl-8 pr-2.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded-md text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500"
               />
             </div>
           </div>
@@ -849,7 +849,7 @@ export function SeasonMilestonesView({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex flex-wrap items-center gap-1 p-0.5 bg-[#131C2E] border border-[#1E293B] rounded-lg">
+            <div className="flex flex-wrap items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg">
               {(
                 [
                   { id: 'basic', label: 'Esenciales' },
@@ -861,7 +861,7 @@ export function SeasonMilestonesView({
                   key={opt.id}
                   type="button"
                   onClick={() => setGlobalLayer(opt.id)}
-                  className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     globalLayer === opt.id
                       ? 'bg-orange-500 text-slate-950 font-semibold'
                       : 'text-slate-300 hover:text-white'
@@ -876,7 +876,7 @@ export function SeasonMilestonesView({
               <button
                 type="button"
                 onClick={onSwitchToAdvanced}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-[#131C2E] hover:bg-[#182338] border border-[#1E293B] rounded-lg text-orange-400 transition-colors whitespace-nowrap shrink-0"
+                className="min-h-[36px] inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-[#131C2E] hover:bg-[#182338] border border-[#1E293B] rounded-lg text-orange-400 transition-colors whitespace-nowrap shrink-0"
               >
                 <Sliders className="w-3.5 h-3.5" />
                 <span>Modo Avanzado</span>
@@ -1161,7 +1161,7 @@ export function SeasonMilestonesView({
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
-            <div className="flex flex-wrap items-center gap-1 p-0.5 bg-[#131C2E] border border-[#1E293B] rounded-lg">
+            <div className="flex flex-wrap items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg">
               {(
                 [
                   {
@@ -1188,7 +1188,7 @@ export function SeasonMilestonesView({
                   key={opt.id}
                   type="button"
                   onClick={() => setSgCategory(opt.id)}
-                  className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     sgCategory === opt.id
                       ? 'bg-orange-500 text-slate-950 font-semibold'
                       : 'text-slate-300 hover:text-white'
@@ -1199,7 +1199,7 @@ export function SeasonMilestonesView({
               ))}
             </div>
 
-            <div className="flex flex-wrap items-center gap-1 p-0.5 bg-[#131C2E] border border-[#1E293B] rounded-lg">
+            <div className="flex flex-wrap items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg">
               {(
                 [
                   { id: 'all', label: 'Todas las facetas' },
@@ -1213,7 +1213,7 @@ export function SeasonMilestonesView({
                   key={sub.id}
                   type="button"
                   onClick={() => setSgSubGroup(sub.id)}
-                  className={`px-2 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     sgSubGroup === sub.id
                       ? 'bg-[#1E293B] text-orange-400 font-semibold'
                       : 'text-slate-400 hover:text-slate-200'
@@ -1591,7 +1591,7 @@ export function SeasonMilestonesView({
             </div>
 
             {compMode !== 'head_to_head' && (
-              <div className="flex flex-wrap items-center gap-1 p-0.5 bg-[#131C2E] border border-[#1E293B] rounded-lg">
+              <div className="flex flex-wrap items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg">
                 {(
                   [
                     { id: 'all', label: 'Promedios y Totales' },
@@ -1603,7 +1603,7 @@ export function SeasonMilestonesView({
                     key={mode.id}
                     type="button"
                     onClick={() => setLeaderStatMode(mode.id)}
-                    className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+                    className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                       leaderStatMode === mode.id
                         ? 'bg-[#1E293B] text-orange-400 font-semibold'
                         : 'text-slate-400 hover:text-slate-200'
@@ -1616,7 +1616,7 @@ export function SeasonMilestonesView({
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-1 p-0.5 bg-[#131C2E] border border-[#1E293B] rounded-lg self-start">
+          <div className="flex flex-wrap items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg self-start">
             {(
               [
                 { id: 'all', label: `Todos (${baseSeasonLeaders.length})` },
@@ -1678,7 +1678,7 @@ export function SeasonMilestonesView({
                 key={g.id}
                 type="button"
                 onClick={() => setLeaderGroup(g.id)}
-                className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+                className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                   leaderGroup === g.id
                     ? 'bg-orange-500 text-slate-950 font-semibold'
                     : 'text-slate-300 hover:text-white'

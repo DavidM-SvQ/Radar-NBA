@@ -7,7 +7,6 @@ import type {
   NbaDefenseHustleEntry,
   NbaFourFactorsEntry,
   NbaHeroicShotCountSummary,
-  NbaHeroicShotsResponse,
   NbaPlaytypeEntitySummary,
   NbaScoringSplitsEntry,
   NbaShotZonesEntry,
@@ -16,6 +15,7 @@ import type {
   TeamSummary,
   WindowSize,
 } from '../types/nba';
+import { fetchSharedHeroicShots } from '../utils/heroicShotsClient';
 import {
   DEFAULT_UNIFIED_FILTERS,
   matchesTeamUnifiedFilters,
@@ -43,7 +43,7 @@ import {
   compareSortValues,
   parseStreakCodeValue,
 } from '../utils/tableSort';
-import { TeamLogo } from './NbaVisuals';
+import { MiniSparkline, TeamLogo } from './NbaVisuals';
 import { LayerColumnCustomizer } from './LayerColumnCustomizer';
 import { ExportImageButton } from './ExportImageButton';
 import {
@@ -686,11 +686,7 @@ export function TeamsExplorerView({
   useEffect(() => {
     if (!showHeroicBadges || heroicCache[seasonToken]) return;
     let cancelled = false;
-    fetch(`/api/nba/advanced/heroic-shots?season=${encodeURIComponent(seasonToken)}`)
-      .then(async (res) => {
-        if (!res.ok) return null;
-        return (await res.json()) as NbaHeroicShotsResponse;
-      })
+    fetchSharedHeroicShots(seasonToken)
       .then((json) => {
         if (cancelled || !json) return;
         setHeroicCache((prev) => ({
@@ -1397,7 +1393,7 @@ export function TeamsExplorerView({
   return (
     <div className="space-y-5">
       {/* Row 1: Homogeneous 4-Column Summary Strip */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden [&>*:nth-child(odd)]:border-r [&>*:nth-child(odd)]:border-[#1E293B] [&>*:nth-child(-n+2)]:border-b [&>*:nth-child(-n+2)]:border-[#1E293B] lg:[&>*]:border-b-0 lg:[&>*]:border-r lg:[&>*:last-child]:border-r-0">
+      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden [&>*:nth-child(odd)]:border-r [&>*:nth-child(odd)]:border-[#1E293B] [&>*:nth-child(-n+2)]:border-b [&>*:nth-child(-n+2)]:border-[#1E293B] lg:[&>*]:border-b-0 lg:[&>*]:border-r lg:[&>*:last-child]:border-r-0">
         <div className="p-3.5 sm:p-4">
           <div className="flex items-center justify-between gap-1 text-xs text-slate-400">
             <span className="truncate">Franquicias NBA</span>
@@ -1576,7 +1572,7 @@ export function TeamsExplorerView({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Buscar equipo o abreviatura..."
-              className="w-full pl-9 pr-3 py-2 sm:py-1.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500 transition-colors"
+              className="w-full h-9 pl-9 pr-3 text-xs bg-[#0B1120] border border-[#1E293B] rounded-md text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500 transition-colors"
             />
           </div>
           <div className="flex flex-wrap items-center justify-between xl:justify-end gap-2.5">
@@ -1584,14 +1580,14 @@ export function TeamsExplorerView({
               {filtered.length} de {enrichedTeams.length} franquicias visibles
             </span>
             <div
-              className="inline-flex items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs"
+              className="inline-flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs"
               role="group"
               aria-label="Modo de volumen estadístico"
             >
               <button
                 type="button"
                 onClick={() => setStatMode('per_game')}
-                className={`px-2.5 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap ${
+                className={`min-h-[28px] px-2.5 py-1 rounded-md font-medium transition-colors whitespace-nowrap ${
                   statMode === 'per_game'
                     ? 'bg-orange-500 text-slate-950 font-semibold'
                     : 'text-slate-400 hover:text-slate-200'
@@ -1602,7 +1598,7 @@ export function TeamsExplorerView({
               <button
                 type="button"
                 onClick={() => setStatMode('totals')}
-                className={`px-2.5 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap ${
+                className={`min-h-[28px] px-2.5 py-1 rounded-md font-medium transition-colors whitespace-nowrap ${
                   statMode === 'totals'
                     ? 'bg-orange-500 text-slate-950 font-semibold'
                     : 'text-slate-400 hover:text-slate-200'
@@ -1738,44 +1734,61 @@ export function TeamsExplorerView({
                     </div>
 
                     {experienceMode === 'simple' ? (
-                      <div className="grid grid-cols-4 gap-2 bg-[#0B1120]/70 border border-[#1E293B]/80 rounded-lg px-2.5 py-2 text-xs">
-                        <div
-                          className={getHeatmapClass(
-                            t.avgPointsFor,
-                            statMode === 'totals' ? dynamicTotalsBenchmarks.avgPointsFor : benchmarks.team.avgPointsFor
-                          )}
-                        >
-                          <div className="text-[10px] text-slate-400">PTS Fav/Con</div>
-                          <div className="font-mono tabular-nums text-slate-100 mt-0.5">
-                            {t.avgPointsFor.toFixed(0)}/{t.avgPointsAgainst.toFixed(0)}
-                          </div>
-                        </div>
-                        <div
-                          className={getHeatmapClass(
-                            t.differential,
-                            statMode === 'totals' ? dynamicTotalsBenchmarks.differential : benchmarks.team.differential
-                          )}
-                        >
-                          <div className="text-[10px] text-slate-400">Dif. Base</div>
+                      <div className="space-y-1.5">
+                        <div className="grid grid-cols-4 gap-2 bg-[#0B1120]/70 border border-[#1E293B]/80 rounded-lg px-2.5 py-2 text-xs">
                           <div
-                            className={`font-mono tabular-nums font-medium mt-0.5 ${
-                              t.differential >= 0 ? 'text-emerald-400' : 'text-rose-400'
-                            }`}
+                            className={getHeatmapClass(
+                              t.avgPointsFor,
+                              statMode === 'totals' ? dynamicTotalsBenchmarks.avgPointsFor : benchmarks.team.avgPointsFor
+                            )}
                           >
-                            {formatSigned(t.differential, statMode === 'totals' ? 0 : 1)}
+                            <div className="text-[10px] text-slate-400">PTS Fav/Con</div>
+                            <div className="font-mono tabular-nums text-slate-100 mt-0.5">
+                              {t.avgPointsFor.toFixed(0)}/{t.avgPointsAgainst.toFixed(0)}
+                            </div>
+                          </div>
+                          <div
+                            className={getHeatmapClass(
+                              t.differential,
+                              statMode === 'totals' ? dynamicTotalsBenchmarks.differential : benchmarks.team.differential
+                            )}
+                          >
+                            <div className="text-[10px] text-slate-400">Dif. Base</div>
+                            <div
+                              className={`font-mono tabular-nums font-medium mt-0.5 ${
+                                t.differential >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                              }`}
+                            >
+                              {formatSigned(t.differential, statMode === 'totals' ? 0 : 1)}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] text-slate-400">Dif. Últ.{windowSize}</div>
+                            <div className="font-mono tabular-nums font-semibold text-orange-300 mt-0.5">
+                              {formatSigned(t.windowDiff, statMode === 'totals' ? 0 : 1)}
+                            </div>
+                          </div>
+                          <div className={`text-right ${getHeatmapClass(t.fg3Pct, benchmarks.team.fg3Pct)}`}>
+                            <div className="text-[10px] text-slate-400">3PM (3P%)</div>
+                            <div className="font-mono tabular-nums text-slate-200 mt-0.5">
+                              {t.fg3mAvg.toFixed(statMode === 'totals' ? 0 : 1)} ({t.fg3Pct.toFixed(0)}%)
+                            </div>
                           </div>
                         </div>
-                        <div>
-                          <div className="text-[10px] text-slate-400">Dif. Últ.{windowSize}</div>
-                          <div className="font-mono tabular-nums font-semibold text-orange-300 mt-0.5">
-                            {formatSigned(t.windowDiff, statMode === 'totals' ? 0 : 1)}
-                          </div>
-                        </div>
-                        <div className={`text-right ${getHeatmapClass(t.fg3Pct, benchmarks.team.fg3Pct)}`}>
-                          <div className="text-[10px] text-slate-400">3PM (3P%)</div>
-                          <div className="font-mono tabular-nums text-slate-200 mt-0.5">
-                            {t.fg3mAvg.toFixed(statMode === 'totals' ? 0 : 1)} ({t.fg3Pct.toFixed(0)}%)
-                          </div>
+                        <div className="flex items-center justify-between gap-2 px-1">
+                          <span className="text-[10px] text-slate-400">
+                            Tendencia últimos 10 PJ (margen ±)
+                          </span>
+                          <MiniSparkline
+                            values={[...t.games.slice(0, 10)]
+                              .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                              .map((g) => g.differential)}
+                            referenceValue={0}
+                            signedZero
+                            width={84}
+                            height={20}
+                            title="Margen de puntos en los últimos 10 partidos"
+                          />
                         </div>
                       </div>
                     ) : (
@@ -1835,6 +1848,9 @@ export function TeamsExplorerView({
                     <SH label="Ataque (Anota)" k="avgPointsFor" />
                     <SH label="Defensa (Recibe)" k="avgPointsAgainst" />
                     <SH label={`Margen Últ.${windowSize}`} k="windowDiff" helpKey="windowDiff" />
+                    <th className="py-3 px-2.5 text-center font-medium text-slate-400 whitespace-nowrap">
+                      Tendencia 10 PJ
+                    </th>
                     <SH
                       label="Dominio vs Media NBA"
                       k="domVsNba"
@@ -1888,6 +1904,7 @@ export function TeamsExplorerView({
                     <td className="py-2.5 px-2.5 text-right font-mono text-slate-500 bg-slate-800/20 italic tabular-nums">
                       ±{(statMode === 'totals' ? dynamicTotalsBenchmarks.windowDiffAbsMean : (benchmarks.team.differential.spreadMean || 0)).toFixed(statMode === 'totals' ? 0 : 1)}
                     </td>
+                    <td className="py-2.5 px-2.5 bg-slate-800/20" />
                     <td className="py-2.5 px-3 bg-slate-800/20" />
                     <td className="py-2.5 pl-2.5 pr-4 bg-slate-800/20" />
                   </>
@@ -2021,6 +2038,20 @@ export function TeamsExplorerView({
                           >
                             {formatSigned(t.windowDiff, statMode === 'totals' ? 0 : 1)} PTS
                           </span>
+                        </td>
+                        <td className="py-2.5 px-2.5 text-center">
+                          <div className="inline-flex items-center justify-center">
+                            <MiniSparkline
+                              values={[...t.games.slice(0, 10)]
+                                .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                                .map((g) => g.differential)}
+                              referenceValue={0}
+                              signedZero
+                              width={72}
+                              height={22}
+                              title={`Últimos 10 PJ de ${t.abbreviation} (línea base 0)`}
+                            />
+                          </div>
                         </td>
                         <td className="py-2.5 px-3">
                           <NbaComparisonBar

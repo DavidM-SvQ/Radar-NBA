@@ -538,11 +538,15 @@ export function GameDayAnalyzerView({
 
   const renderPlayerQuickRow = (p: GameDayPlayerLine) => {
     const watched = watchlistIds.has(`player:${p.playerId}`);
+    const isSixth = Boolean(p.isSixthMan) || p.isStarter === false;
+    const posLabel = String(p.position || '').trim();
     return (
       <div
         key={p.playerId}
         onClick={() => onInspectEntity('player', p.playerId)}
-        className="px-3 py-2 flex items-center justify-between gap-2 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors text-xs"
+        className={`px-3 py-2 flex items-center justify-between gap-2 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors text-xs ${
+          isSixth ? 'bg-[#101A2F]/80 border-t border-slate-700/80' : ''
+        }`}
       >
         <div className="min-w-0 flex items-center gap-2">
           <button
@@ -567,7 +571,19 @@ export function GameDayAnalyzerView({
             size="xs"
           />
           <div className="min-w-0">
-            <p className="font-medium text-slate-100 truncate">{p.playerName}</p>
+            <div className="flex items-center gap-1.5 min-w-0">
+              {posLabel && (
+                <span className="font-mono text-[10px] font-semibold text-slate-400 shrink-0 w-7">
+                  {posLabel}
+                </span>
+              )}
+              <p className="font-medium text-slate-100 truncate">{p.playerName}</p>
+              {isSixth && (
+                <span className="font-mono text-[10px] font-semibold text-orange-400 shrink-0">
+                  6º hombre
+                </span>
+              )}
+            </div>
             <p className="text-[11px] text-slate-400 font-mono tabular-nums whitespace-nowrap">
               {p.minutes.toFixed(0)}m · {p.fgm}/{p.fga} TC
               {p.fg3m > 0 ? ` · ${p.fg3m} T3` : ''}
@@ -1366,12 +1382,16 @@ export function GameDayAnalyzerView({
                                     ? 'Falta GEMINI_API_KEY en el entorno'
                                     : ch.quotaExhausted || ch.fallbackReason === 'quota_exhausted_429'
                                     ? 'Límite de cuota diaria alcanzado (Free Tier)'
+                                    : ch.overload503 || String(ch.fallbackReason || '').startsWith('overload_503')
+                                    ? 'Alta demanda temporal en Gemini'
                                     : 'Agotado tiempo de respuesta de IA'}
                                 </span>
                                 {ch.missingApiKey
                                   ? 'El backend no detecta la variable GEMINI_API_KEY en este entorno de ejecución (Vercel Preview/Dev o local). Asegúrate de que la variable esté asignada a todos los entornos en Vercel o en tu .env.'
                                   : ch.quotaExhausted || ch.fallbackReason === 'quota_exhausted_429'
                                   ? 'Has alcanzado el límite diario de 20 peticiones del plan gratuito (Free Tier) de Google AI Studio para este modelo. La cuota se restablece automáticamente cada 24 horas, o puedes utilizar una clave con facturación habilitada.'
+                                  : ch.overload503 || String(ch.fallbackReason || '').startsWith('overload_503')
+                                  ? 'Los modelos de Gemini experimentaron un pico puntual de demanda (503). Se muestra esta crónica determinista de respaldo sin pérdida de datos. Pulsa "Reintentar con IA" en unos segundos.'
                                   : 'La llamada a los modelos de Gemini agotó el tiempo de espera o la API no respondió a tiempo. Se muestra esta crónica determinista de respaldo sin pérdida de datos. Pulsa "Reintentar con IA" para volver a intentar la generación.'}
                                 <span className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900/95" />
                               </span>

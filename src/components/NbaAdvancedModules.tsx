@@ -34,20 +34,94 @@ import { sortRows, useTableSort } from '../utils/tableSort';
 import { MetricInfoTooltip, SortableTh } from './MetricUiHelpers';
 import { LayerColumnCustomizer } from './LayerColumnCustomizer';
 
-function getZoneColor(zoneName: string, pct: number): { bg: string; text: string; ring: string } {
-  let avg = 40;
-  if (zoneName === 'restrictedArea') avg = 66.0;
-  else if (zoneName === 'paintNonRa') avg = 43.5;
-  else if (zoneName === 'midRange') avg = 42.0;
-  else if (zoneName === 'corner3') avg = 38.5;
-  else if (zoneName === 'aboveBreak3') avg = 35.8;
+function getZoneBenchmark(zoneName: string): number {
+  if (zoneName === 'restrictedArea') return 66.0;
+  if (zoneName === 'paintNonRa') return 43.5;
+  if (zoneName === 'midRange') return 42.0;
+  if (zoneName === 'corner3' || zoneName === 'leftCorner3' || zoneName === 'rightCorner3') return 38.5;
+  if (zoneName === 'aboveBreak3') return 35.8;
+  return 40.0;
+}
 
+function getZoneColor(
+  zoneName: string,
+  pct: number
+): {
+  bg: string;
+  text: string;
+  ring: string;
+  svgFill: string;
+  svgFillActive: string;
+  svgStroke: string;
+  hexText: string;
+  diff: number;
+  avg: number;
+} {
+  const avg = getZoneBenchmark(zoneName);
   const diff = pct - avg;
-  if (diff >= 4.0) return { bg: 'bg-emerald-950/40', text: 'text-emerald-400', ring: 'border-emerald-500/40' };
-  if (diff >= 1.0) return { bg: 'bg-emerald-900/20', text: 'text-emerald-300', ring: 'border-emerald-600/30' };
-  if (diff >= -2.0) return { bg: 'bg-amber-950/30', text: 'text-amber-300', ring: 'border-amber-500/30' };
-  if (diff >= -5.0) return { bg: 'bg-rose-950/30', text: 'text-rose-300', ring: 'border-rose-500/30' };
-  return { bg: 'bg-rose-950/50', text: 'text-rose-400', ring: 'border-rose-500/50' };
+  if (diff >= 4.0) {
+    return {
+      bg: 'bg-emerald-950/40',
+      text: 'text-emerald-400',
+      ring: 'border-emerald-500/40',
+      svgFill: 'rgba(16, 185, 129, 0.24)',
+      svgFillActive: 'rgba(16, 185, 129, 0.42)',
+      svgStroke: '#34D399',
+      hexText: '#6EE7B7',
+      diff,
+      avg,
+    };
+  }
+  if (diff >= 1.0) {
+    return {
+      bg: 'bg-emerald-900/20',
+      text: 'text-emerald-300',
+      ring: 'border-emerald-600/30',
+      svgFill: 'rgba(16, 185, 129, 0.14)',
+      svgFillActive: 'rgba(16, 185, 129, 0.30)',
+      svgStroke: '#6EE7B7',
+      hexText: '#A7F3D0',
+      diff,
+      avg,
+    };
+  }
+  if (diff >= -2.0) {
+    return {
+      bg: 'bg-amber-950/30',
+      text: 'text-amber-300',
+      ring: 'border-amber-500/30',
+      svgFill: 'rgba(245, 158, 11, 0.14)',
+      svgFillActive: 'rgba(245, 158, 11, 0.30)',
+      svgStroke: '#FBBF24',
+      hexText: '#FDE68A',
+      diff,
+      avg,
+    };
+  }
+  if (diff >= -5.0) {
+    return {
+      bg: 'bg-rose-950/30',
+      text: 'text-rose-300',
+      ring: 'border-rose-500/30',
+      svgFill: 'rgba(244, 63, 94, 0.15)',
+      svgFillActive: 'rgba(244, 63, 94, 0.32)',
+      svgStroke: '#FB7185',
+      hexText: '#FECDD3',
+      diff,
+      avg,
+    };
+  }
+  return {
+    bg: 'bg-rose-950/50',
+    text: 'text-rose-400',
+    ring: 'border-rose-500/50',
+    svgFill: 'rgba(244, 63, 94, 0.24)',
+    svgFillActive: 'rgba(244, 63, 94, 0.42)',
+    svgStroke: '#F43F5E',
+    hexText: '#FDA4AF',
+    diff,
+    avg,
+  };
 }
 
 function usePersistentModuleKeys(storageKey: string, validKeys: string[], defaultKeys: string[]) {
@@ -152,11 +226,15 @@ interface ShotZonesCourtPanelProps {
 
 export function ShotZonesCourtPanel({ zones, title, subtitle }: ShotZonesCourtPanelProps) {
   const [selectedZone, setSelectedZone] = useState<string | null>(null);
+  const [hoveredZone, setHoveredZone] = useState<string | null>(null);
+
+  const activeZoneId = hoveredZone || selectedZone;
 
   const zoneCards: Array<{
     id: string;
     label: string;
     shortLabel: string;
+    courtLabel: string;
     metric: ShotZoneMetric;
     desc: string;
   }> = [
@@ -164,6 +242,7 @@ export function ShotZonesCourtPanel({ zones, title, subtitle }: ShotZonesCourtPa
       id: 'restrictedArea',
       label: 'Bajo el Aro (Restricted Area)',
       shortLabel: 'Bajo Aro (0-4 ft)',
+      courtLabel: 'ARO',
       metric: zones.restrictedArea,
       desc: 'Tiros a menos de 1.2 m del aro, bandejas y mates.',
     },
@@ -171,6 +250,7 @@ export function ShotZonesCourtPanel({ zones, title, subtitle }: ShotZonesCourtPa
       id: 'paintNonRa',
       label: 'Pintura Fuera de Zona Restringida',
       shortLabel: 'Pintura Flotadores (4-14 ft)',
+      courtLabel: 'PINTURA',
       metric: zones.paintNonRa,
       desc: 'Flotadores, ganchos y suspensiones cortas.',
     },
@@ -178,6 +258,7 @@ export function ShotZonesCourtPanel({ zones, title, subtitle }: ShotZonesCourtPa
       id: 'midRange',
       label: 'Media Distancia (Mid-Range)',
       shortLabel: 'Media Distancia (14-22 ft)',
+      courtLabel: 'MEDIA DIST.',
       metric: zones.midRange,
       desc: 'Suspensiones tras bote y bloqueos directos.',
     },
@@ -185,6 +266,7 @@ export function ShotZonesCourtPanel({ zones, title, subtitle }: ShotZonesCourtPa
       id: 'leftCorner3',
       label: 'Triple Esquina Izquierda',
       shortLabel: 'Triple Esq. Izq',
+      courtLabel: 'ESQ I',
       metric: zones.leftCorner3,
       desc: 'Tiro de 3 puntos más cercano al aro (6.70 m).',
     },
@@ -192,6 +274,7 @@ export function ShotZonesCourtPanel({ zones, title, subtitle }: ShotZonesCourtPa
       id: 'rightCorner3',
       label: 'Triple Esquina Derecha',
       shortLabel: 'Triple Esq. Der',
+      courtLabel: 'ESQ D',
       metric: zones.rightCorner3,
       desc: 'Triple desde el rincón derecho de la cancha.',
     },
@@ -199,13 +282,73 @@ export function ShotZonesCourtPanel({ zones, title, subtitle }: ShotZonesCourtPa
       id: 'aboveBreak3',
       label: 'Triple Frontal y Cabecera',
       shortLabel: 'Triple Cabecera (Above Break)',
+      courtLabel: 'TRIPLE CABECERA / ALAS',
       metric: zones.aboveBreak3,
       desc: 'Lanzamientos de 7.24 m desde las alas y cabecera.',
     },
   ];
 
+  const zoneSvgDefs: Array<{
+    id: string;
+    pathD: string;
+    fillRule?: 'evenodd' | 'nonzero';
+    labelX: number;
+    labelY: number;
+    metric: ShotZoneMetric;
+    compactCorner?: boolean;
+  }> = [
+    {
+      id: 'aboveBreak3',
+      pathD: 'M 10,95.19 L 28,95.19 A 142.5,142.5 0 0,0 292,95.19 L 310,95.19 L 310,292 L 10,292 Z',
+      labelX: 160,
+      labelY: 224,
+      metric: zones.aboveBreak3,
+    },
+    {
+      id: 'leftCorner3',
+      pathD: 'M 10,10 H 28 V 95.19 H 10 Z',
+      labelX: 19,
+      labelY: 53,
+      metric: zones.leftCorner3,
+      compactCorner: true,
+    },
+    {
+      id: 'rightCorner3',
+      pathD: 'M 292,10 H 310 V 95.19 H 292 Z',
+      labelX: 301,
+      labelY: 53,
+      metric: zones.rightCorner3,
+      compactCorner: true,
+    },
+    {
+      id: 'midRange',
+      pathD: 'M 28,10 H 292 V 95.19 A 142.5,142.5 0 0,1 28,95.19 Z M 112,10 H 208 V 124 H 112 Z',
+      fillRule: 'evenodd',
+      labelX: 160,
+      labelY: 152,
+      metric: zones.midRange,
+    },
+    {
+      id: 'paintNonRa',
+      pathD: 'M 112,10 H 208 V 124 H 112 Z M 136,34 H 184 V 41.5 A 24,24 0 0,1 136,41.5 Z',
+      fillRule: 'evenodd',
+      labelX: 160,
+      labelY: 95,
+      metric: zones.paintNonRa,
+    },
+    {
+      id: 'restrictedArea',
+      pathD: 'M 136,34 H 184 V 41.5 A 24,24 0 0,1 136,41.5 Z',
+      labelX: 160,
+      labelY: 54,
+      metric: zones.restrictedArea,
+    },
+  ];
+
+  const activeDetail = zoneCards.find((z) => z.id === activeZoneId) || null;
+
   return (
-    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-5">
+    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#1E293B] pb-3">
         <div>
           <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
@@ -241,141 +384,181 @@ export function ShotZonesCourtPanel({ zones, title, subtitle }: ShotZonesCourtPa
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-center">
-        <div className="lg:col-span-6 bg-[#0B1120] rounded-xl border border-[#1E293B] p-4 flex flex-col items-center">
-          <div className="w-full max-w-[380px] aspect-[50/47] relative border-b-2 border-slate-700/60 bg-[#0c1424] rounded-t-2xl overflow-hidden shadow-inner">
+        <div className="lg:col-span-6 bg-[#0B1120] rounded-lg border border-[#1E293B] p-3.5 sm:p-4 flex flex-col items-center gap-2.5">
+          <div className="w-full max-w-[390px]">
             <svg
-              viewBox="0 0 500 470"
-              className="w-full h-full text-slate-600/40"
-              stroke="currentColor"
-              strokeWidth="3"
-              fill="none"
+              viewBox="0 0 320 302"
+              className="w-full h-auto block rounded-md bg-[#0A101D] select-none"
+              role="img"
+              aria-label="Mapa de calor interactivo por zonas de tiro NBA"
             >
-              <rect x="5" y="5" width="490" height="460" strokeWidth="4" />
-              <rect x="170" y="5" width="160" height="190" />
-              <circle cx="250" cy="190" r="60" />
-              <path d="M 210,5 A 40,40 0 0,0 290,5" strokeWidth="3" />
-              <line x1="220" y1="40" x2="280" y2="40" stroke="#F97316" strokeWidth="4" />
-              <circle cx="250" cy="52" r="12" stroke="#F97316" strokeWidth="3" fill="#F97316" fillOpacity="0.2" />
-              <path d="M 30,5 L 30,140 A 237.5,237.5 0 0,0 470,140 L 470,5" strokeWidth="3" />
+              {/* Interactive Zone Fills (Scale 6px = 1ft, 50x47 ft half court) */}
+              {zoneSvgDefs.map((z) => {
+                const c = getZoneColor(z.id, z.metric.fgPct);
+                const isSelected = selectedZone === z.id;
+                const isActive = activeZoneId === z.id;
+                return (
+                  <path
+                    key={z.id}
+                    d={z.pathD}
+                    fillRule={z.fillRule}
+                    fill={isActive ? c.svgFillActive : c.svgFill}
+                    stroke={isSelected ? '#F97316' : isActive ? c.svgStroke : 'transparent'}
+                    strokeWidth={isSelected ? 2 : 1.2}
+                    className="cursor-pointer transition-colors duration-150"
+                    onMouseEnter={() => setHoveredZone(z.id)}
+                    onMouseLeave={() => setHoveredZone((prev) => (prev === z.id ? null : prev))}
+                    onClick={() => setSelectedZone((prev) => (prev === z.id ? null : z.id))}
+                  />
+                );
+              })}
+
+              {/* Official NBA Court Geometry Markings */}
+              <g stroke="#475569" strokeWidth="1.5" fill="none" className="pointer-events-none">
+                {/* Half-court outer boundary */}
+                <rect x="10" y="10" width="300" height="282" strokeWidth="2" />
+                {/* Paint / Key (16ft x 19ft) */}
+                <rect x="112" y="10" width="96" height="114" />
+                {/* Free-throw circle */}
+                <circle cx="160" cy="124" r="36" />
+                {/* Center half-court arc */}
+                <path d="M 124,292 A 36,36 0 0,1 196,292" strokeDasharray="4 3" opacity="0.65" />
+                {/* Restricted area arc (4ft) */}
+                <path d="M 136,41.5 A 24,24 0 0,0 184,41.5" />
+                {/* 3PT Line (22ft corners to break, 23.75ft arc) */}
+                <path d="M 28,10 L 28,95.19 A 142.5,142.5 0 0,0 292,95.19 L 292,10" strokeWidth="1.8" />
+                {/* Backboard & Rim */}
+                <line x1="142" y1="34" x2="178" y2="34" stroke="#94A3B8" strokeWidth="2.5" />
+                <circle cx="160" cy="41.5" r="4.8" stroke="#F97316" strokeWidth="2" fill="#F97316" fillOpacity="0.25" />
+              </g>
+
+              {/* On-Court FG% & Volume Callouts */}
+              {zoneSvgDefs.map((z) => {
+                const c = getZoneColor(z.id, z.metric.fgPct);
+                const meta = zoneCards.find((card) => card.id === z.id)!;
+                const isSelected = selectedZone === z.id;
+                const isActive = activeZoneId === z.id;
+
+                if (z.compactCorner) {
+                  return (
+                    <g key={`lbl-${z.id}`} className="pointer-events-none">
+                      <text
+                        x={z.labelX}
+                        y={z.labelY}
+                        transform={`rotate(-90, ${z.labelX}, ${z.labelY})`}
+                        textAnchor="middle"
+                        dominantBaseline="central"
+                        fill={isActive ? '#FFFFFF' : c.hexText}
+                        fontSize="8.5"
+                        fontWeight="700"
+                        fontFamily="ui-monospace, SFMono-Regular, monospace"
+                      >
+                        {z.metric.fgPct.toFixed(0)}%
+                      </text>
+                    </g>
+                  );
+                }
+
+                const pillW = z.id === 'aboveBreak3' ? 116 : z.id === 'midRange' ? 92 : 76;
+                const pillH = 26;
+                return (
+                  <g key={`lbl-${z.id}`} className="pointer-events-none">
+                    <rect
+                      x={z.labelX - pillW / 2}
+                      y={z.labelY - pillH / 2}
+                      width={pillW}
+                      height={pillH}
+                      rx="5"
+                      fill="#0B1120"
+                      fillOpacity={isActive ? 0.94 : 0.84}
+                      stroke={isSelected ? '#F97316' : isActive ? c.svgStroke : '#1E293B'}
+                      strokeWidth={isSelected ? 1.4 : 1}
+                    />
+                    <text
+                      x={z.labelX}
+                      y={z.labelY - 4}
+                      textAnchor="middle"
+                      fill="#94A3B8"
+                      fontSize="7"
+                      fontWeight="700"
+                      fontFamily="ui-sans-serif, system-ui, sans-serif"
+                    >
+                      {meta.courtLabel}
+                    </text>
+                    <text
+                      x={z.labelX}
+                      y={z.labelY + 7}
+                      textAnchor="middle"
+                      fill={c.hexText}
+                      fontSize="10"
+                      fontWeight="700"
+                      fontFamily="ui-monospace, SFMono-Regular, monospace"
+                    >
+                      {z.metric.fgPct.toFixed(1)}% ({z.metric.fga.toFixed(1)})
+                    </text>
+                  </g>
+                );
+              })}
             </svg>
-
-            <button
-              type="button"
-              onClick={() => setSelectedZone('restrictedArea')}
-              className={`absolute top-[6%] left-1/2 -translate-x-1/2 min-w-[74px] py-1 px-2 rounded-lg text-center transition-all border ${
-                selectedZone === 'restrictedArea'
-                  ? 'ring-2 ring-orange-500 scale-105 bg-orange-950/90'
-                  : 'bg-[#131C2E]/92 hover:bg-[#1A263D]'
-              } border-slate-700 text-[10px] font-mono z-10`}
-            >
-              <div className="text-[9px] text-slate-400 uppercase font-sans font-bold leading-tight">Aro</div>
-              <div className="font-bold text-slate-100 tabular-nums leading-tight">
-                {zones.restrictedArea.fgPct.toFixed(1)}%
-              </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSelectedZone('paintNonRa')}
-              className={`absolute top-[25%] left-1/2 -translate-x-1/2 min-w-[86px] py-1 px-2.5 rounded-lg text-center transition-all border ${
-                selectedZone === 'paintNonRa'
-                  ? 'ring-2 ring-orange-500 scale-105 bg-orange-950/90'
-                  : 'bg-[#131C2E]/92 hover:bg-[#1A263D]'
-              } border-slate-700 text-[10px] font-mono z-10`}
-            >
-              <div className="text-[9px] text-slate-400 uppercase font-sans font-bold leading-tight">Pintura</div>
-              <div className="font-bold text-slate-100 tabular-nums leading-tight">
-                {zones.paintNonRa.fgPct.toFixed(1)}%
-              </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSelectedZone('leftCorner3')}
-              className={`absolute top-[9%] left-[2.5%] w-[21%] min-w-[66px] py-1 px-1.5 rounded-lg text-center transition-all border ${
-                selectedZone === 'leftCorner3'
-                  ? 'ring-2 ring-orange-500 scale-105 bg-orange-950/90'
-                  : 'bg-[#131C2E]/92 hover:bg-[#1A263D]'
-              } border-slate-700 text-[10px] font-mono z-10`}
-            >
-              <div className="text-[8px] text-slate-400 uppercase font-sans font-bold leading-tight">Esq Izq</div>
-              <div className="font-bold text-slate-100 tabular-nums leading-tight">
-                {zones.leftCorner3.fgPct.toFixed(1)}%
-              </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSelectedZone('rightCorner3')}
-              className={`absolute top-[9%] right-[2.5%] w-[21%] min-w-[66px] py-1 px-1.5 rounded-lg text-center transition-all border ${
-                selectedZone === 'rightCorner3'
-                  ? 'ring-2 ring-orange-500 scale-105 bg-orange-950/90'
-                  : 'bg-[#131C2E]/92 hover:bg-[#1A263D]'
-              } border-slate-700 text-[10px] font-mono z-10`}
-            >
-              <div className="text-[8px] text-slate-400 uppercase font-sans font-bold leading-tight">Esq Der</div>
-              <div className="font-bold text-slate-100 tabular-nums leading-tight">
-                {zones.rightCorner3.fgPct.toFixed(1)}%
-              </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSelectedZone('midRange')}
-              className={`absolute top-[45%] left-1/2 -translate-x-1/2 min-w-[116px] py-1 px-2.5 rounded-lg text-center transition-all border ${
-                selectedZone === 'midRange'
-                  ? 'ring-2 ring-orange-500 scale-105 bg-orange-950/90'
-                  : 'bg-[#131C2E]/92 hover:bg-[#1A263D]'
-              } border-slate-700 text-[10px] font-mono z-10`}
-            >
-              <div className="text-[9px] text-slate-400 uppercase font-sans font-bold leading-tight">Media Distancia</div>
-              <div className="font-bold text-slate-100 tabular-nums leading-tight">
-                {zones.midRange.fgPct.toFixed(1)}%
-              </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSelectedZone('aboveBreak3')}
-              className={`absolute top-[74%] left-1/2 -translate-x-1/2 min-w-[152px] py-1.5 px-3 rounded-lg text-center transition-all border ${
-                selectedZone === 'aboveBreak3'
-                  ? 'ring-2 ring-orange-500 scale-105 bg-orange-950/90'
-                  : 'bg-[#131C2E]/92 hover:bg-[#1A263D]'
-              } border-slate-700 text-[10px] font-mono z-10`}
-            >
-              <div className="text-[9px] text-slate-400 uppercase font-sans font-bold leading-tight">Triple Cabecera / Alas</div>
-              <div className="font-bold text-slate-100 tabular-nums leading-tight">
-                {zones.aboveBreak3.fgPct.toFixed(1)}%
-              </div>
-            </button>
           </div>
-          <span className="text-[11px] text-slate-500 mt-2 font-medium">
-            Pulsa en cualquier demarcación para filtrar detalles
-          </span>
+
+          <div className="w-full max-w-[390px] flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-400">
+            <div className="flex items-center gap-3">
+              <span className="inline-flex items-center gap-1">
+                <span className="w-2 h-2 rounded-sm bg-emerald-400" />
+                <span>Sobre media NBA</span>
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="w-2 h-2 rounded-sm bg-amber-400" />
+                <span>En media</span>
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="w-2 h-2 rounded-sm bg-rose-400" />
+                <span>Bajo media</span>
+              </span>
+            </div>
+            <span className="font-mono text-slate-300 truncate">
+              {activeDetail
+                ? `${activeDetail.courtLabel}: ${activeDetail.metric.fgPct.toFixed(1)}%`
+                : 'Pulsa una zona para fijar'}
+            </span>
+          </div>
         </div>
 
         <div className="lg:col-span-6 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
           {zoneCards.map((card) => {
             const colors = getZoneColor(card.id, card.metric.fgPct);
             const isSelected = selectedZone === card.id;
+            const isHovered = hoveredZone === card.id;
             return (
               <div
                 key={card.id}
+                onMouseEnter={() => setHoveredZone(card.id)}
+                onMouseLeave={() => setHoveredZone((prev) => (prev === card.id ? null : prev))}
                 onClick={() => setSelectedZone(isSelected ? null : card.id)}
-                className={`p-3 rounded-xl border transition-all cursor-pointer ${colors.bg} ${colors.ring} ${
-                  isSelected ? 'ring-2 ring-orange-500 shadow-md' : 'hover:border-slate-600'
+                className={`p-3 rounded-lg border transition-all cursor-pointer ${colors.bg} ${colors.ring} ${
+                  isSelected
+                    ? 'ring-2 ring-orange-500 shadow-md'
+                    : isHovered
+                    ? 'border-slate-500'
+                    : 'hover:border-slate-600'
                 }`}
               >
                 <div className="flex items-center justify-between gap-1 mb-1">
                   <span className="text-xs font-semibold text-slate-200 truncate">
                     {card.shortLabel}
                   </span>
-                  <span className={`text-xs font-mono font-bold tabular-nums ${colors.text}`}>
-                    {card.metric.fgPct.toFixed(1)}%
-                  </span>
+                  <div className="inline-flex items-baseline gap-1.5 shrink-0 font-mono tabular-nums">
+                    <span className="text-[10px] text-slate-400">
+                      {formatSigned(colors.diff, 1, '%')}
+                    </span>
+                    <span className={`text-xs font-bold ${colors.text}`}>
+                      {card.metric.fgPct.toFixed(1)}%
+                    </span>
+                  </div>
                 </div>
                 <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
-                  <span>Por partido / Total:</span>
+                  <span>Media NBA: {colors.avg.toFixed(1)}%</span>
                   <span className="font-semibold text-slate-300 tabular-nums">
                     {card.metric.fgm.toFixed(1)}/{card.metric.fga.toFixed(1)} PJ
                     {card.metric.fgmTotal !== undefined && card.metric.fgaTotal !== undefined
@@ -449,7 +632,7 @@ export function PlaytypesPanel({ playtypes, entityName }: PlaytypesPanelProps) {
     : rawRows;
 
   return (
-    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4">
+    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#1E293B] pb-3">
         <div>
           <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
@@ -716,7 +899,7 @@ export function ClutchAndDefensePanel({
     <div className="space-y-5">
       {/* CLUTCH SITUATIONS CARD */}
       {clutch && (
-        <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4">
+        <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1E293B] pb-3">
             <div>
               <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
@@ -770,7 +953,7 @@ export function ClutchAndDefensePanel({
 
       {/* DEFENSE & HUSTLE STATS CARD */}
       {defenseHustle && (
-        <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4">
+        <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4">
           <div className="border-b border-[#1E293B] pb-3">
             <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
               <Shield className="w-4 h-4 text-orange-400 shrink-0" />
@@ -817,7 +1000,7 @@ export function ClutchAndDefensePanel({
 
       {/* TRACKING STATS CARD (SECOND SPECTRUM) */}
       {tracking && (
-        <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4">
+        <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4">
           <div className="border-b border-[#1E293B] pb-3">
             <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
               <Zap className="w-4 h-4 text-orange-400 shrink-0" />
@@ -839,7 +1022,7 @@ export function ClutchAndDefensePanel({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 font-mono tabular-nums text-xs">
             {TRACKING_CARDS.filter((c) => trackingKeys.includes(c.key)).map((c) => (
-              <div key={c.key} className="p-3.5 rounded-xl bg-[#0B1120] border border-[#1E293B] flex flex-col justify-between gap-1">
+              <div key={c.key} className="p-3.5 rounded-lg bg-[#0B1120] border border-[#1E293B] flex flex-col justify-between gap-1">
                 <div>
                   <span className="block text-[11px] font-sans font-bold text-slate-300">{c.label}</span>
                   <span className={`block text-base font-bold mt-0.5 ${c.toneClass ? c.toneClass(tracking) : 'text-slate-100'}`}>
@@ -895,7 +1078,7 @@ export function ScoringSplitsPanel({
   );
 
   return (
-    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4">
+    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4">
       <div className="border-b border-[#1E293B] pb-3">
         <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
           <PieChart className="w-4 h-4 text-orange-400 shrink-0" />
@@ -967,7 +1150,7 @@ export function FourFactorsFullPanel({
   );
 
   return (
-    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4">
+    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4">
       <div className="border-b border-[#1E293B] pb-3">
         <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
           <Scale className="w-4 h-4 text-orange-400 shrink-0" />
@@ -1062,7 +1245,7 @@ export function ViolationsPanel({
   );
 
   return (
-    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4">
+    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4">
       <div className="border-b border-[#1E293B] pb-3">
         <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
           <AlertOctagon className="w-4 h-4 text-orange-400 shrink-0" />
@@ -1154,7 +1337,7 @@ export function OnOffSplitsPanel({ splits, title, leagueBenchmarks }: OnOffSplit
     : splits;
 
   return (
-    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4">
+    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-2 border-b border-[#1E293B] pb-3">
         <div>
           <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
@@ -1328,7 +1511,7 @@ export function HeroicShotsPanel({
   };
 
   return (
-    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4">
+    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-2 border-b border-[#1E293B] pb-3">
         <div>
           <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
@@ -1543,7 +1726,7 @@ export function TeamLineupsPanel({
   ).slice(0, 15);
 
   return (
-    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4">
+    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1E293B] pb-3">
         <div>
           <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
@@ -1556,7 +1739,7 @@ export function TeamLineupsPanel({
           </p>
         </div>
 
-        <div className="inline-flex bg-[#0B1120] border border-[#1E293B] rounded-lg p-0.5 text-xs">
+        <div className="inline-flex bg-[#0B1120] border border-[#1E293B] rounded-lg p-1 text-xs">
           {(
             [
               { id: '5' as const, label: `5-Man (${lineups5.length})` },

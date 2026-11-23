@@ -2,6 +2,8 @@ import type { ActiveSection, AwardCategoryId } from '../types/nba';
 
 export type FantasyUrlTab =
   | 'lineup'
+  | 'teams'
+  | 'matchup'
   | 'waivers'
   | 'trades'
   | 'injuries_rules'
@@ -47,6 +49,8 @@ const VALID_SECTIONS = new Set<ActiveSection>([
 
 const VALID_FANTASY_TABS = new Set<FantasyUrlTab>([
   'lineup',
+  'teams',
+  'matchup',
   'waivers',
   'trades',
   'injuries_rules',

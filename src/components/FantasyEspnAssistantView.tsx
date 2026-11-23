@@ -17,6 +17,7 @@ import {
   Search,
   ShieldAlert,
   Sparkles,
+  Swords,
   Trash2,
   TrendingUp,
   Upload,
@@ -79,6 +80,11 @@ import {
   matchesPlayerUnifiedFilters,
   type UnifiedTableFiltersState,
 } from '../utils/entityFilters';
+import {
+  FantasyLeagueTeamsTab,
+  FantasyMatchupComparatorTab,
+  MY_TEAM_KEY,
+} from './FantasyLeagueTeamsAndMatchup';
 
 const OFFICIAL_SCORING_CATEGORIES_ROWS: Array<{
   action: string;
@@ -196,7 +202,14 @@ const OFFICIAL_SCORING_CATEGORIES_ROWS: Array<{
   },
 ];
 
-export type FantasyTab = 'lineup' | 'waivers' | 'trades' | 'injuries_rules' | 'rules';
+export type FantasyTab =
+  | 'lineup'
+  | 'teams'
+  | 'matchup'
+  | 'waivers'
+  | 'trades'
+  | 'injuries_rules'
+  | 'rules';
 
 interface FantasyEspnAssistantViewProps {
   players: PlayerSummary[];
@@ -928,10 +941,18 @@ export function FantasyEspnAssistantView({
     right: number;
   } | null>(null);
 
+  // External jump target from "Equipos de la Liga" -> "Comparativa 10v10"
+  const [requestedMatchupPair, setRequestedMatchupPair] = useState<{
+    teamAKey: string;
+    teamBKey?: string;
+    nonce: number;
+  } | null>(null);
+
   // Player Game Logs Breakdown Modal State & Game Corrections
   const [inspectedPlayerForLogsId, setInspectedPlayerForLogsId] = useState<string | null>(null);
   const [editingLogKey, setEditingLogKey] = useState<string | null>(null);
   const [editingLogDelta, setEditingLogDelta] = useState<string>('');
+  const [editingLogFinalOverride, setEditingLogFinalOverride] = useState<string | null>(null);
   const [editingLogReason, setEditingLogReason] = useState<string>('');
 
   const {
@@ -981,6 +1002,7 @@ export function FantasyEspnAssistantView({
       });
       setEditingLogKey(null);
       setEditingLogDelta('');
+      setEditingLogFinalOverride(null);
       setEditingLogReason('');
       setActionBannerMsg('Ajuste de puntos Fantasy guardado correctamente para el partido.');
     },
@@ -3435,71 +3457,97 @@ export function FantasyEspnAssistantView({
         </div>
       </div>
 
-      {/* Main 5-Tab Navigation */}
+      {/* Main 7-Tab Navigation */}
       <div className="flex flex-wrap items-center gap-1.5 bg-[#131C2E] border border-[#1E293B] p-1.5 rounded-lg w-full min-w-0 max-w-full">
         <button
           type="button"
           onClick={() => handleSelectFantasyTab('lineup')}
-          className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-2 text-xs font-semibold rounded-md transition-colors max-w-full text-left ${
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-md transition-colors max-w-full text-left ${
             activeTab === 'lineup'
               ? 'bg-orange-500 text-slate-950'
               : 'text-slate-300 hover:text-white hover:bg-[#182338]'
           }`}
         >
           <Zap className="w-3.5 h-3.5 shrink-0" />
-          <span>1. Mi Equipo y Bloqueo Semanal</span>
+          <span>1. Mi Equipo</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleSelectFantasyTab('teams')}
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-md transition-colors max-w-full text-left ${
+            activeTab === 'teams'
+              ? 'bg-orange-500 text-slate-950'
+              : 'text-slate-300 hover:text-white hover:bg-[#182338]'
+          }`}
+        >
+          <Users className="w-3.5 h-3.5 shrink-0" />
+          <span>2. Equipos de la Liga</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleSelectFantasyTab('matchup')}
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-md transition-colors max-w-full text-left ${
+            activeTab === 'matchup'
+              ? 'bg-orange-500 text-slate-950'
+              : 'text-slate-300 hover:text-white hover:bg-[#182338]'
+          }`}
+        >
+          <Swords className="w-3.5 h-3.5 shrink-0" />
+          <span>3. Comparativa 10v10</span>
         </button>
 
         <button
           type="button"
           onClick={() => handleSelectFantasyTab('waivers')}
-          className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-2 text-xs font-semibold rounded-md transition-colors max-w-full text-left ${
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-md transition-colors max-w-full text-left ${
             activeTab === 'waivers'
               ? 'bg-orange-500 text-slate-950'
               : 'text-slate-300 hover:text-white hover:bg-[#182338]'
           }`}
         >
           <TrendingUp className="w-3.5 h-3.5 shrink-0" />
-          <span>2. Agentes Libres &amp; Alta × Corte ({availableWaiverPool.length})</span>
+          <span>4. Agentes Libres ({availableWaiverPool.length})</span>
         </button>
 
         <button
           type="button"
           onClick={() => handleSelectFantasyTab('trades')}
-          className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-2 text-xs font-semibold rounded-md transition-colors max-w-full text-left ${
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-md transition-colors max-w-full text-left ${
             activeTab === 'trades'
               ? 'bg-orange-500 text-slate-950'
               : 'text-slate-300 hover:text-white hover:bg-[#182338]'
           }`}
         >
           <ArrowLeftRight className="w-3.5 h-3.5 shrink-0" />
-          <span>3. Analizador de Traspasos</span>
+          <span>5. Traspasos</span>
         </button>
 
         <button
           type="button"
           onClick={() => handleSelectFantasyTab('injuries_rules')}
-          className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-2 text-xs font-semibold rounded-md transition-colors max-w-full text-left ${
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-md transition-colors max-w-full text-left ${
             activeTab === 'injuries_rules'
               ? 'bg-orange-500 text-slate-950'
               : 'text-slate-300 hover:text-white hover:bg-[#182338]'
           }`}
         >
           <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
-          <span>4. Bajas (Riesgo 0 FPTS) &amp; Auditoría</span>
+          <span>6. Bajas y Auditoría</span>
         </button>
 
         <button
           type="button"
           onClick={() => handleSelectFantasyTab('rules')}
-          className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-2 text-xs font-semibold rounded-md transition-colors max-w-full text-left ${
+          className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-md transition-colors max-w-full text-left ${
             activeTab === 'rules'
               ? 'bg-orange-500 text-slate-950'
               : 'text-slate-300 hover:text-white hover:bg-[#182338]'
           }`}
         >
           <Sparkles className="w-3.5 h-3.5 shrink-0" />
-          <span>5. Reglas</span>
+          <span>7. Reglas</span>
         </button>
       </div>
 
@@ -4089,7 +4137,55 @@ export function FantasyEspnAssistantView({
         </section>
       )}
 
-      {/* TAB 2: WAIVER WIRE, FREE AGENTS & MANDATORY DROP SIMULATOR */}
+      {/* TAB 2: LEAGUE TEAMS ROSTERS, POINTS & RECTIFICATION */}
+      {activeTab === 'teams' && (
+        <FantasyLeagueTeamsTab
+          leagueState={leagueState}
+          rivalSlotKeys={rivalSlotKeys}
+          getRivalDisplayName={getRivalDisplayName}
+          enrichedById={enrichedById}
+          activeWeek={activeWeek}
+          onInspectEntity={onInspectEntity}
+          onInspectPlayerLogs={(pid) => setInspectedPlayerForLogsId(pid)}
+          onOpenTeamManager={(teamKey) => {
+            if (teamKey === MY_TEAM_KEY) {
+              setManagerTab('my_team');
+            } else {
+              setManagerTab('rivals_manager');
+              setSelectedRivalTeamId(teamKey);
+            }
+            setRosterModalOpen(true);
+          }}
+          onCompareTeams={(teamAKey, teamBKey) => {
+            setRequestedMatchupPair({
+              teamAKey,
+              teamBKey,
+              nonce: Date.now(),
+            });
+            handleSelectFantasyTab('matchup');
+          }}
+        />
+      )}
+
+      {/* TAB 3: TWO-TEAM 10v10 MATCHUP COMPARATOR */}
+      {activeTab === 'matchup' && (
+        <FantasyMatchupComparatorTab
+          leagueState={leagueState}
+          rivalSlotKeys={rivalSlotKeys}
+          getRivalDisplayName={getRivalDisplayName}
+          enrichedCatalog={enrichedCatalog}
+          enrichedById={enrichedById}
+          teamsByAbbr={teamsByAbbr}
+          effectiveWeeks={effectiveWeeks}
+          projectionMode={projectionMode}
+          onChangeProjectionMode={setProjectionMode}
+          onInspectEntity={onInspectEntity}
+          onInspectPlayerLogs={(pid) => setInspectedPlayerForLogsId(pid)}
+          requestedPair={requestedMatchupPair}
+        />
+      )}
+
+      {/* TAB 4: WAIVER WIRE, FREE AGENTS & MANDATORY DROP SIMULATOR */}
       {activeTab === 'waivers' && (
         <div className="space-y-4">
           {/* Mandatory 12-Contract Add x Drop Simulator Strip */}
@@ -6569,6 +6665,15 @@ export function FantasyEspnAssistantView({
                                     </span>
                                   </span>
                                   <div className="flex items-center gap-2 ml-2 shrink-0">
+                                    <button
+                                      type="button"
+                                      title="Ver partidos y rectificar puntos Fantasy (±)"
+                                      onClick={() => setInspectedPlayerForLogsId(pid)}
+                                      className="text-amber-400 hover:text-amber-300 text-[11px] inline-flex items-center gap-0.5 font-medium"
+                                    >
+                                      <Edit3 className="w-3 h-3" />
+                                      <span>Pts</span>
+                                    </button>
                                     {leagueState.roster.length <
                                       OFFICIAL_LEAGUE_RULES.maxContracts && (
                                       <button
@@ -7746,10 +7851,13 @@ export function FantasyEspnAssistantView({
         const g2027 = (item.player.games || []).filter((g) => g.seasonLabel === '2026-27');
 
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
             <div
               className="fixed inset-0 bg-black/75 backdrop-blur-[2px]"
-              onClick={() => setInspectedPlayerForLogsId(null)}
+              onClick={() => {
+                setInspectedPlayerForLogsId(null);
+                setEditingLogFinalOverride(null);
+              }}
               aria-hidden="true"
             />
             <div className="relative z-10 w-full max-w-4xl bg-[#0F172A] border border-[#1E293B] rounded-xl p-5 space-y-4 shadow-2xl max-h-[90vh] flex flex-col">
@@ -7898,6 +8006,7 @@ export function FantasyEspnAssistantView({
                           onChange={(e) => {
                             const newKey = e.target.value;
                             setEditingLogKey(newKey);
+                            setEditingLogFinalOverride(null);
                             const found = g2027.find((g) => (g.eventId || g.date) === newKey);
                             const corr = found
                               ? leagueState.gameCorrections?.[`${item.player.id}:${found.eventId}`] ||
@@ -7924,40 +8033,92 @@ export function FantasyEspnAssistantView({
                         </select>
                       </div>
 
-                      {/* Delta points */}
-                      <div className="md:col-span-3 space-y-1">
-                        <label className="text-[10px] font-semibold text-slate-300 block">
-                          2. Diferencial (± FPTS):
-                        </label>
-                        <div>
-                          <input
-                            type="number"
-                            step="0.25"
-                            placeholder="Ej: +2.5 ó -1.0"
-                            value={formDeltaValue}
-                            onChange={(e) => {
-                              setEditingLogKey(targetGame?.eventId || targetGame?.date || null);
-                              setEditingLogDelta(e.target.value);
-                            }}
-                            className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-amber-500/40 rounded-lg text-amber-200 font-mono font-bold text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
-                          />
-                          <div className="flex gap-1 mt-1">
-                            {['+0.5', '+1.0', '+2.0', '+2.5', '-1.0'].map((preset) => (
-                              <button
-                                key={preset}
-                                type="button"
-                                onClick={() => {
-                                  setEditingLogKey(targetGame?.eventId || targetGame?.date || null);
-                                  setEditingLogDelta(preset);
-                                }}
-                                className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#182338] hover:bg-amber-500/20 text-slate-300 hover:text-amber-300 transition-colors"
-                              >
-                                {preset}
-                              </button>
-                            ))}
+                      {/* Delta points + Direct Final Total */}
+                      {(() => {
+                        const baseBreakdown = targetGame
+                          ? computeOfficialGameFptsBreakdown(targetGame, 0)
+                          : null;
+                        const baseTotal = baseBreakdown?.totalFpts ?? 0;
+                        const parsedDelta = parseFloat(formDeltaValue);
+                        const activeDeltaNum = Number.isFinite(parsedDelta) ? parsedDelta : 0;
+                        const computedFinal =
+                          Math.round((baseTotal + activeDeltaNum) * 100) / 100;
+                        const finalInputValue =
+                          editingLogFinalOverride !== null
+                            ? editingLogFinalOverride
+                            : String(computedFinal);
+
+                        return (
+                          <div className="md:col-span-3 space-y-1">
+                            <div className="grid grid-cols-2 gap-1.5">
+                              <div>
+                                <label className="text-[10px] font-semibold text-slate-300 block truncate">
+                                  2a. Ajuste (± FPTS):
+                                </label>
+                                <input
+                                  type="number"
+                                  step="0.25"
+                                  placeholder="+2.5 / -1.0"
+                                  value={formDeltaValue}
+                                  onChange={(e) => {
+                                    setEditingLogKey(
+                                      targetGame?.eventId || targetGame?.date || null
+                                    );
+                                    setEditingLogFinalOverride(null);
+                                    setEditingLogDelta(e.target.value);
+                                  }}
+                                  className="w-full px-2 py-1.5 bg-[#0B1120] border border-amber-500/40 rounded-lg text-amber-200 font-mono font-bold text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                />
+                              </div>
+                              <div>
+                                <label
+                                  className="text-[10px] font-semibold text-slate-300 block truncate"
+                                  title={`Base NBA.com: ${baseTotal.toFixed(2)} FPTS`}
+                                >
+                                  2b. Total final ({baseTotal.toFixed(1)}):
+                                </label>
+                                <input
+                                  type="number"
+                                  step="0.25"
+                                  value={finalInputValue}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    setEditingLogKey(
+                                      targetGame?.eventId || targetGame?.date || null
+                                    );
+                                    setEditingLogFinalOverride(raw);
+                                    const targetNum = parseFloat(raw);
+                                    if (Number.isFinite(targetNum)) {
+                                      const calcDelta =
+                                        Math.round((targetNum - baseTotal) * 100) / 100;
+                                      setEditingLogDelta(String(calcDelta));
+                                    }
+                                  }}
+                                  className="w-full px-2 py-1.5 bg-[#0B1120] border border-emerald-500/40 rounded-lg text-emerald-300 font-mono font-bold text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                />
+                              </div>
+                            </div>
+                            <div className="flex gap-1 mt-1">
+                              {['+0.5', '+1.0', '+2.0', '+2.5', '-1.0'].map((preset) => (
+                                <button
+                                  key={preset}
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingLogKey(
+                                      targetGame?.eventId || targetGame?.date || null
+                                    );
+                                    setEditingLogFinalOverride(null);
+                                    setEditingLogDelta(preset);
+                                  }}
+                                  className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#182338] hover:bg-amber-500/20 text-slate-300 hover:text-amber-300 transition-colors"
+                                >
+                                  {preset}
+                                </button>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      </div>
+                        );
+                      })()}
 
                       {/* Reason & Buttons */}
                       <div className="md:col-span-5 space-y-1">
@@ -8005,6 +8166,7 @@ export function FantasyEspnAssistantView({
                                   ''
                                 );
                                 setEditingLogDelta('');
+                                setEditingLogFinalOverride(null);
                                 setEditingLogReason('');
                               }}
                               className="px-2 py-1 text-rose-400 hover:text-rose-300 hover:bg-rose-950/30 rounded-lg text-xs transition-colors"

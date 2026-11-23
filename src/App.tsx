@@ -14,6 +14,7 @@ import {
   Activity,
   ArrowLeftRight,
   Award,
+  Bell,
   BookOpen,
   CalendarDays,
   Check,
@@ -45,6 +46,7 @@ import type {
   ConsistencyEntry,
   ExperienceMode,
   InspectorDefaultKpisConfig,
+  MilestoneNotificationsPayload,
   MilestonesPayload,
   PlayerSummary,
   ScoreboardGame,
@@ -75,6 +77,7 @@ import { LiveGamedayBanner } from './components/LiveGamedayBanner';
 import { MetricInfoTooltip } from './components/MetricUiHelpers';
 import { TeamLogo } from './components/NbaVisuals';
 import { GuidedHomeView } from './components/GuidedHomeView';
+import { NotificationCenterPopover } from './components/NotificationCenterPopover';
 
 type PreloadableLazyComponent<T extends ComponentType<any>> =
   LazyExoticComponent<T> & {
@@ -184,6 +187,11 @@ const AdminGamedayThresholdsPanel = lazyWithPreload(() =>
     default: m.AdminGamedayThresholdsPanel,
   }))
 );
+const AdminMilestoneNotificationsPanel = lazyWithPreload(() =>
+  import('./components/AdminMilestoneNotificationsPanel').then((m) => ({
+    default: m.AdminMilestoneNotificationsPanel,
+  }))
+);
 const EntityInspectorDrawer = lazyWithPreload(() =>
   import('./components/EntityInspectorDrawer').then((m) => ({
     default: m.EntityInspectorDrawer,
@@ -238,6 +246,7 @@ function preloadSectionChunk(section: ActiveSection): void {
     case 'fantasy_espn':
       void FantasyEspnAssistantView.preload();
       void AdminSecurityConfigPanel.preload();
+      void AdminMilestoneNotificationsPanel.preload();
       break;
   }
 }
@@ -331,6 +340,7 @@ import {
 import {
   CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG,
   fetchPublicInspectorKpiDefaults,
+  fetchPublicMilestoneNotifications,
   fetchPublicWebFeatureFlags,
   loginAdminWithPasscode,
   logoutAdminSession,
@@ -538,13 +548,18 @@ export default function App() {
   const dailyChronicleWarmedRef = useRef<boolean>(false);
   const dailyChronicleWarmAbortRef = useRef<AbortController | null>(null);
   const dailyChronicleWarmTimerRef = useRef<number | null>(null);
-  const [adminZoneSection, setAdminZoneSection] = useState<'fantasy' | 'thresholds' | 'web_config'>(
-    'fantasy'
-  );
+  const [milestoneNotifications, setMilestoneNotifications] =
+    useState<MilestoneNotificationsPayload | null>(null);
+  const [adminZoneSection, setAdminZoneSection] = useState<
+    'fantasy' | 'thresholds' | 'notifications' | 'web_config'
+  >('fantasy');
   const [passcodeAttempt, setPasscodeAttempt] = useState('');
   const [passcodeErrorMsg, setPasscodeErrorMsg] = useState<string | null>(null);
   const [passcodeLockedOut, setPasscodeLockedOut] = useState(false);
   const [verifyingPasscode, setVerifyingPasscode] = useState(false);
+  const [lastManualSyncAt, setLastManualSyncAt] = useState<number | null>(null);
+  const [refreshCooldownActive, setRefreshCooldownActive] = useState(false);
+  const refreshCooldownTimerRef = useRef<number | null>(null);
 
   // URL-synced Inspector, Jornadas, Comparator, Duel & Fantasy sub-routing state
   const [inspected, setInspected] = useState<{
@@ -950,6 +965,13 @@ export default function App() {
     void fetchBootstrap(seasonMode, false, false);
   }, [seasonMode, fetchBootstrap]);
 
+  const refreshMilestoneNotifications = useCallback(async (forceRefresh = false) => {
+    const payload = await fetchPublicMilestoneNotifications(forceRefresh);
+    if (payload) {
+      setMilestoneNotifications(payload);
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     void fetchPublicWebFeatureFlags().then((flags) => {
@@ -960,6 +982,11 @@ export default function App() {
     void fetchPublicInspectorKpiDefaults().then((cfg) => {
       if (!cancelled) {
         setInspectorDefaultKpis(cfg);
+      }
+    });
+    void fetchPublicMilestoneNotifications(false).then((payload) => {
+      if (!cancelled && payload) {
+        setMilestoneNotifications(payload);
       }
     });
     return () => {
@@ -1016,7 +1043,34 @@ export default function App() {
     }
   }, [activeSection, loading]);
 
+  useEffect(() => {
+    return () => {
+      if (refreshCooldownTimerRef.current !== null) {
+        window.clearTimeout(refreshCooldownTimerRef.current);
+      }
+    };
+  }, []);
+
+  const isRefreshIrrelevantView =
+    activeSection === 'glossary' ||
+    (activeSection === 'awards' && awardsSeasonScope === '2026') ||
+    (!['gameday', 'milestones', 'fantasy_espn', 'awards', 'glossary'].includes(
+      activeSection
+    ) &&
+      ['2026', '2025', '2024'].includes(seasonMode));
+
   const handleManualRefresh = useCallback(() => {
+    if (isRefreshIrrelevantView || refreshCooldownActive) return;
+    setLastManualSyncAt(Date.now());
+    setRefreshCooldownActive(true);
+    if (refreshCooldownTimerRef.current !== null) {
+      window.clearTimeout(refreshCooldownTimerRef.current);
+    }
+    refreshCooldownTimerRef.current = window.setTimeout(() => {
+      setRefreshCooldownActive(false);
+      refreshCooldownTimerRef.current = null;
+    }, 30_000);
+
     void fetchBootstrap(seasonMode, true, allPlayersLoaded);
     if (activeSection === 'milestones' || milestonesData) {
       void fetchMilestones(true);
@@ -1025,13 +1079,17 @@ export default function App() {
       void fetchAwards(awardsSeasonScope, true);
     }
     setGamedayRefreshCounter((c) => c + 1);
+    void refreshMilestoneNotifications(true);
     if (activeSection === 'heroic') {
       setHeroicRefreshCounter((c) => c + 1);
     }
   }, [
+    isRefreshIrrelevantView,
+    refreshCooldownActive,
     fetchBootstrap,
     fetchMilestones,
     fetchAwards,
+    refreshMilestoneNotifications,
     seasonMode,
     allPlayersLoaded,
     activeSection,
@@ -2013,6 +2071,17 @@ export default function App() {
               </button>
             </div>
 
+            <NotificationCenterPopover
+              payload={milestoneNotifications}
+              watchlistIds={watchlistIds}
+              onInspectEntity={handleInspectEntity}
+              onOpenGamedayDate={handleOpenGamedayDate}
+              onOpenAdminNotifications={() => {
+                setAdminZoneSection('notifications');
+                handleNavigateSection('fantasy_espn');
+              }}
+            />
+
             <button
               type="button"
               onClick={() => void handleCopyShareUrl()}
@@ -2034,20 +2103,46 @@ export default function App() {
               </span>
             </button>
 
-            <button
-              type="button"
-              disabled={loading || refreshing || milestonesLoading || awardsLoading}
-              onClick={handleManualRefresh}
-              aria-label="Actualizar datos"
-              className="inline-flex items-center justify-center gap-2 min-w-[40px] min-h-[36px] sm:min-w-0 px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold bg-orange-500 hover:bg-orange-400 active:scale-[0.98] disabled:opacity-60 text-slate-950 rounded-lg transition-all whitespace-nowrap shrink-0"
-            >
-              <RefreshCw
-                className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`}
-              />
-              <span className="hidden sm:inline">
-                {refreshing ? 'Actualizando...' : 'Actualizar datos'}
-              </span>
-            </button>
+            {(() => {
+              const isBusy =
+                loading || refreshing || milestonesLoading || awardsLoading;
+              const isShaded = isRefreshIrrelevantView || refreshCooldownActive;
+              const lastSyncLabel = lastManualSyncAt
+                ? new Date(lastManualSyncAt).toLocaleTimeString('es-ES', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })
+                : null;
+              const refreshTooltip =
+                activeSection === 'glossary'
+                  ? 'El glosario es una guía estática; no requiere actualizar datos en vivo.'
+                  : isRefreshIrrelevantView
+                  ? 'Temporada histórica ya cerrada: no hay nuevos partidos en directo que actualizar.'
+                  : refreshCooldownActive
+                  ? `Datos recién actualizados${lastSyncLabel ? ` (${lastSyncLabel})` : ''}. Espera unos segundos antes de volver a consultar.`
+                  : refreshing
+                  ? 'Actualizando datos en vivo...'
+                  : `Actualizar datos en vivo${lastSyncLabel ? ` (última: ${lastSyncLabel})` : ''}`;
+
+              return (
+                <button
+                  type="button"
+                  disabled={isBusy || isShaded}
+                  onClick={handleManualRefresh}
+                  aria-label={refreshTooltip}
+                  title={refreshTooltip}
+                  className={`inline-flex items-center justify-center w-9 h-9 rounded-lg border transition-all shrink-0 ${
+                    isShaded
+                      ? 'bg-[#131C2E] border-[#1E293B] text-slate-500 opacity-55 cursor-not-allowed'
+                      : 'bg-orange-500 hover:bg-orange-400 active:scale-[0.98] border-orange-500 text-slate-950 disabled:opacity-55 disabled:cursor-not-allowed'
+                  }`}
+                >
+                  <RefreshCw
+                    className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`}
+                  />
+                </button>
+              );
+            })()}
           </div>
         </header>
 
@@ -2603,6 +2698,18 @@ export default function App() {
                         </button>
                         <button
                           type="button"
+                          onClick={() => setAdminZoneSection('notifications')}
+                          className={`px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-1.5 ${
+                            adminZoneSection === 'notifications'
+                              ? 'bg-orange-500 text-slate-950 shadow-sm'
+                              : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
+                          }`}
+                        >
+                          <Bell className="w-3.5 h-3.5 shrink-0" />
+                          <span>Notificaciones de Hitos</span>
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => setAdminZoneSection('web_config')}
                           className={`px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-1.5 ${
                             adminZoneSection === 'web_config'
@@ -2643,6 +2750,11 @@ export default function App() {
                     ) : adminZoneSection === 'thresholds' ? (
                       <AdminGamedayThresholdsPanel
                         onLockSession={handleLockAdminSession}
+                      />
+                    ) : adminZoneSection === 'notifications' ? (
+                      <AdminMilestoneNotificationsPanel
+                        onLockSession={handleLockAdminSession}
+                        onConfigSaved={() => void refreshMilestoneNotifications(true)}
                       />
                     ) : (
                       <AdminSecurityConfigPanel

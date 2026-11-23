@@ -244,3 +244,84 @@ export function countRemainingGamesForTeam(
       (g.awayAbbr === cleanTeam || g.homeAbbr === cleanTeam)
   ).length;
 }
+
+export function buildAllSeasonFantasyWeeks(
+  referenceWeeks: FantasyWeekWindow[] = [],
+  referenceTodayIso = getEasternTodayIso()
+): FantasyWeekWindow[] {
+  const seasonStartMonday = '2026-10-19';
+  const lastScheduledDate =
+    STATIC_SCHEDULE_2027[STATIC_SCHEDULE_2027.length - 1]?.dateIso || '2027-04-11';
+  const refByStartIso = new Map<string, FantasyWeekWindow>();
+  for (const rw of referenceWeeks) {
+    if (rw?.startIso) refByStartIso.set(rw.startIso, rw);
+  }
+
+  const allTeamAbbrs = Object.keys(NBA_TEAMS_MAP);
+  const weeks: FantasyWeekWindow[] = [];
+  let cursorMonday = seasonStartMonday;
+  let weekNum = 1;
+
+  while (cursorMonday <= lastScheduledDate && weekNum <= 30) {
+    const startIso = cursorMonday;
+    const endIso = addDaysIso(startIso, 6);
+    const matchedRef = refByStartIso.get(startIso);
+
+    if (matchedRef) {
+      weeks.push({
+        ...matchedRef,
+        weekNumber: weekNum,
+        label: `J${weekNum} · ${matchedRef.label}`,
+      });
+    } else {
+      const weekGames = STATIC_SCHEDULE_2027.filter(
+        (g) => g.dateIso >= startIso && g.dateIso <= endIso
+      );
+      if (weekGames.length > 0) {
+        const teamSchedules: FantasyWeekWindow['teamSchedules'] = {};
+        for (const abbr of allTeamAbbrs) {
+          teamSchedules[abbr] = { gamesCount: 0, b2bCount: 0, games: [] };
+        }
+        for (const g of weekGames) {
+          for (const side of ['away', 'home'] as const) {
+            const teamAbbr = side === 'away' ? g.awayAbbr : g.homeAbbr;
+            const oppAbbr = side === 'away' ? g.homeAbbr : g.awayAbbr;
+            const bucket = teamSchedules[teamAbbr];
+            if (!bucket) continue;
+            const prevSlot = bucket.games[bucket.games.length - 1];
+            const isBackToBack = prevSlot
+              ? addDaysIso(prevSlot.dateIso, 1) === g.dateIso
+              : false;
+            bucket.games.push({
+              gameId: g.gameId,
+              dateIso: g.dateIso,
+              dayShortEs: formatDayShortEs(g.dateIso),
+              opponentAbbr: oppAbbr,
+              isHome: side === 'home',
+              isBackToBack,
+            });
+            bucket.gamesCount = bucket.games.length;
+            if (isBackToBack) bucket.b2bCount += 1;
+          }
+        }
+        weeks.push({
+          id: `week_${weekNum}_${startIso}`,
+          weekNumber: weekNum,
+          label: `Jornada ${weekNum}`,
+          rangeLabel: formatRangeLabelEs(startIso, endIso),
+          startIso,
+          endIso,
+          lockDeadlineLabel: `Lun ${formatDayShortEs(startIso)}`,
+          isLocked: referenceTodayIso > startIso,
+          teamSchedules,
+        });
+      }
+    }
+
+    cursorMonday = addDaysIso(cursorMonday, 7);
+    weekNum += 1;
+  }
+
+  return weeks;
+}
+

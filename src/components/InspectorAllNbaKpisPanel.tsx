@@ -214,25 +214,25 @@ export function InspectorAllNbaKpisPanel({
       if (meta.lowerIsBetter) pct = 100 - pct;
 
       let label = `P${pct}`;
-      let badgeClass = 'text-sky-300 bg-sky-950/60 border-sky-500/30';
+      let badgeClass = 'text-sky-300';
       if (pct >= 95) {
-        label = 'Élite (Top 5%)';
-        badgeClass = 'text-emerald-300 bg-emerald-950/80 border-emerald-500/40';
+        label = 'Top 5%';
+        badgeClass = 'text-emerald-300';
       } else if (pct >= 80) {
         label = `Top ${100 - pct}%`;
-        badgeClass = 'text-emerald-400 bg-emerald-950/50 border-emerald-500/30';
+        badgeClass = 'text-emerald-400';
       } else if (pct >= 60) {
-        label = `P${pct} (Sobre media)`;
-        badgeClass = 'text-sky-300 bg-sky-950/60 border-sky-500/30';
+        label = `P${pct}`;
+        badgeClass = 'text-sky-300';
       } else if (pct >= 40) {
-        label = `P${pct} (Media)`;
-        badgeClass = 'text-amber-300 bg-amber-950/50 border-amber-500/30';
+        label = `P${pct}`;
+        badgeClass = 'text-amber-300';
       } else if (pct >= 20) {
-        label = `P${pct} (Bajo media)`;
-        badgeClass = 'text-orange-300 bg-orange-950/50 border-orange-500/30';
+        label = `P${pct}`;
+        badgeClass = 'text-orange-300';
       } else {
         label = `Inf ${pct}%`;
-        badgeClass = 'text-rose-300 bg-rose-950/60 border-rose-500/40';
+        badgeClass = 'text-rose-300';
       }
       map[def.key] = { label, badgeClass };
     }
@@ -328,11 +328,11 @@ export function InspectorAllNbaKpisPanel({
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
           {/* Por Partido (Priorizado) | Totales */}
-          <div className="inline-flex items-center bg-[#0B1120] border border-[#1E293B] rounded-lg p-0.5 text-[11px]">
+          <div className="inline-flex items-center bg-[#0B1120] border border-[#1E293B] rounded-lg p-1 text-[11px]">
             <button
               type="button"
               onClick={() => onChangeStatScale('per_game')}
-              className={`px-2.5 py-1 rounded-md font-semibold transition-colors whitespace-nowrap ${
+              className={`min-h-[28px] px-2.5 py-1 rounded-md font-semibold transition-colors whitespace-nowrap ${
                 statScale === 'per_game'
                   ? 'bg-orange-500 text-slate-950'
                   : 'text-slate-400 hover:text-slate-200'
@@ -343,7 +343,7 @@ export function InspectorAllNbaKpisPanel({
             <button
               type="button"
               onClick={() => onChangeStatScale('totals')}
-              className={`px-2.5 py-1 rounded-md font-semibold transition-colors whitespace-nowrap ${
+              className={`min-h-[28px] px-2.5 py-1 rounded-md font-semibold transition-colors whitespace-nowrap ${
                 statScale === 'totals'
                   ? 'bg-orange-500 text-slate-950'
                   : 'text-slate-400 hover:text-slate-200'
@@ -356,7 +356,7 @@ export function InspectorAllNbaKpisPanel({
           <button
             type="button"
             onClick={() => setIsOpen(!isOpen)}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap ${
+            className={`min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap ${
               isOpen
                 ? 'bg-orange-500 text-slate-950 border-orange-500'
                 : 'bg-orange-500/15 border-orange-500/40 text-orange-300 hover:bg-orange-500/25'
@@ -371,7 +371,7 @@ export function InspectorAllNbaKpisPanel({
       </div>
 
       {/* Always-Visible 10-Layer Exclusive Switcher Bar */}
-      <div className="bg-[#0B1120]/70 border border-[#1E293B] rounded-xl p-2 flex flex-wrap items-center gap-1.5">
+      <div className="bg-[#0B1120]/70 border border-[#1E293B] rounded-lg p-2 flex flex-wrap items-center gap-1.5">
         <button
           type="button"
           onClick={() => {
@@ -415,7 +415,7 @@ export function InspectorAllNbaKpisPanel({
 
       {/* Expandable Individual KPI Selector Drawer */}
       {isOpen && (
-        <div className="bg-[#131C2E] border border-[#283548] rounded-xl p-3.5 sm:p-4 space-y-3 shadow-md">
+        <div className="bg-[#131C2E] border border-[#283548] rounded-lg p-3.5 sm:p-4 space-y-3 shadow-md">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-100">
               <Sparkles className="w-3.5 h-3.5 text-orange-400 shrink-0" />
@@ -474,7 +474,7 @@ export function InspectorAllNbaKpisPanel({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Buscar cualquier métrica NBA.com: pasos, aro, drives, catch & shoot, deflections, clutch, ppp, dfg%, on/off, dd2..."
-              className="w-full pl-8 pr-8 py-1.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500"
+              className="w-full h-9 pl-8 pr-8 text-xs bg-[#0B1120] border border-[#1E293B] rounded-md text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500"
             />
             {searchQuery && (
               <button
@@ -665,7 +665,7 @@ export function InspectorAllNbaKpisPanel({
                   <div className="inline-flex items-center gap-1.5 shrink-0">
                     {pctBadge && (
                       <span
-                        className={`text-[9.5px] px-1.5 py-0.5 rounded-full font-mono font-semibold border whitespace-nowrap ${pctBadge.badgeClass}`}
+                        className={`text-[10px] font-mono font-semibold whitespace-nowrap ${pctBadge.badgeClass}`}
                       >
                         {pctBadge.label}
                       </span>

@@ -3,12 +3,12 @@ import "dotenv/config";
 import express from "express";
 import helmet from "helmet";
 import zlib from "zlib";
-import { DEFAULT_GAMEDAY_THRESHOLDS, DEFAULT_INSPECTOR_KPI_CONFIG, DEFAULT_WEB_FEATURE_FLAGS, getBootstrapPayload, getBootstrapWireBuffers, getFantasyEspnSyncPayload, getGameDayPayload, getGamedayThresholdsConfig, getInspectorKpiDefaultsConfig, getMilestonesPayload, getPlayerInspectorDossier, getSeasonAwardsPayload, getScoreboardDeltaPayload, getSinglePlayerSummary, getTeamRoster, getWebFeatureFlags, resetGamedayThresholdsConfigDefaults, resetInspectorKpiDefaultsConfig, scoutingEngine, searchLeaguePlayers, updateGamedayThresholdsConfig, updateInspectorKpiDefaultsConfig, updateWebFeatureFlags } from "./nbaDataService.ts";
+import { DEFAULT_GAMEDAY_THRESHOLDS, DEFAULT_INSPECTOR_KPI_CONFIG, DEFAULT_MILESTONE_NOTIFICATIONS_CONFIG, DEFAULT_WEB_FEATURE_FLAGS, getBootstrapPayload, getBootstrapWireBuffers, getFantasyEspnSyncPayload, getGameDayPayload, getGamedayThresholdsConfig, getInspectorKpiDefaultsConfig, getMilestoneNotificationsConfig, getMilestoneNotificationsPayload, getMilestoneNotificationsSeasonCounts, getMilestonesPayload, getPlayerInspectorDossier, getSeasonAwardsPayload, getScoreboardDeltaPayload, getSinglePlayerSummary, getTeamRoster, getWebFeatureFlags, resetGamedayThresholdsConfigDefaults, resetInspectorKpiDefaultsConfig, resetMilestoneNotificationsConfigDefaults, scoutingEngine, searchLeaguePlayers, updateGamedayThresholdsConfig, updateInspectorKpiDefaultsConfig, updateMilestoneNotificationsConfig, updateWebFeatureFlags } from "./nbaDataService.ts";
 import { getLeagueShotZonesAdvanced, getLeagueClutchAdvanced, getLeagueDefenseHustleAdvanced, getLeagueTrackingAdvanced, getLeaguePlaytypesAdvanced, getLeagueScoringSplitsAdvanced, getLeagueFourFactorsAdvanced, getLeagueViolationsAdvanced, getLeagueLineups, getLeagueHeroicShots, getTeamAdvancedDossier, getPlayerAdvancedDossier } from "./nbaAdvancedStatsService.ts";
 import { readNbaSnapshotFromDisk } from "./nbaSnapshotStore.ts";
 import { getFantasyStorageBackendInfo, readManualFantasyState, writeManualFantasyState } from "./fantasyEspnService.ts";
 import { DEFAULT_ADMIN_SECURITY_VALUES, adminBruteForceLimiter, adminEndpointFloodLimiter, buildAdminSessionCookieHeader, buildClearAdminSessionCookieHeader, extractAdminTokenFromRequest, getAdminAuthReadiness, getAdminSecurityConfig, getRateLimitBackendInfo, issueAdminSessionToken, nbaApiRateLimiter, nbaHeavyRefreshLimiter, recordAdminLoginFailure, requireAdminAuth, requireAdminCsrfProtection, resetAdminBruteForceForRequest, resetAdminSecurityConfigToDefaults, resetAllRateLimitCounters, saveAdminSecurityConfig, verifyAdminPasscodeConstantTime, verifyAdminSessionToken } from "./securityMiddleware.ts";
-import { ADMIN_SECURITY_BOUNDS, adminLoginBodySchema, adminSecurityConfigBodySchema, awardsQuerySchema, bootstrapQuerySchema, emptyQuerySchema, gameEventParamsSchema, gamedayQuerySchema, gamedayThresholdsBodySchema, getValidated, inspectorKpiDefaultsBodySchema, manualFantasyStateBodySchema, playerParamsSchema, playerSummaryQuerySchema, refreshOnlyQuerySchema, searchQuerySchema, teamParamsSchema, validateRequest, advancedLeagueQuerySchema, advancedLineupsQuerySchema, advancedEntityQuerySchema, advancedHeroicShotsQuerySchema, webFeatureFlagsBodySchema } from "./validationSchemas.ts";
+import { ADMIN_SECURITY_BOUNDS, adminLoginBodySchema, adminSecurityConfigBodySchema, awardsQuerySchema, bootstrapQuerySchema, emptyQuerySchema, gameEventParamsSchema, gamedayQuerySchema, gamedayThresholdsBodySchema, getValidated, inspectorKpiDefaultsBodySchema, manualFantasyStateBodySchema, milestoneNotificationsBodySchema, playerParamsSchema, playerSummaryQuerySchema, refreshOnlyQuerySchema, searchQuerySchema, teamParamsSchema, validateRequest, advancedLeagueQuerySchema, advancedLineupsQuerySchema, advancedEntityQuerySchema, advancedHeroicShotsQuerySchema, webFeatureFlagsBodySchema } from "./validationSchemas.ts";
 import { getAllCircuitMetrics, resetCircuit } from "./circuitBreaker.ts";
 import { expressTelemetryMiddleware, getTelemetrySummary } from "./telemetryLogger.ts";
 import { getEasternTodayIso } from "../utils/staticSchedule.ts";
@@ -47,7 +47,16 @@ app.use((err, _req, res, next) => {
   next(err);
 });
 app.use("/api/nba", nbaApiRateLimiter, nbaHeavyRefreshLimiter);
-app.use("/api/admin", adminEndpointFloodLimiter);
+app.use("/api/admin", (req, res, next) => {
+  if (
+    req.path === "/milestone-notifications/preview-counts" ||
+    req.path === "/session"
+  ) {
+    next();
+    return;
+  }
+  return adminEndpointFloodLimiter(req, res, next);
+});
 app.get("/admin", adminEndpointFloodLimiter, (_req, _res, next) => {
   next();
 });
@@ -226,6 +235,56 @@ app.post("/api/admin/inspector-kpi-defaults/reset-defaults", requireAdminCsrfPro
   } catch (err) {
     console.error("Error in POST /api/admin/inspector-kpi-defaults/reset-defaults:", err);
     res.status(500).json({ ok: false, error: "No se pudieron restablecer los KPIs por defecto." });
+  }
+});
+app.get("/api/admin/milestone-notifications", requireAdminAuth, validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true, config: getMilestoneNotificationsConfig(), defaults: DEFAULT_MILESTONE_NOTIFICATIONS_CONFIG });
+});
+app.put("/api/admin/milestone-notifications", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema, body: milestoneNotificationsBodySchema }), (req, res) => {
+  try {
+    const { body } = getValidated(req);
+    const updated = updateMilestoneNotificationsConfig(body);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, config: updated, defaults: DEFAULT_MILESTONE_NOTIFICATIONS_CONFIG });
+  } catch (err) {
+    console.error("Error in PUT /api/admin/milestone-notifications:", err);
+    res.status(500).json({ ok: false, error: "No se pudo guardar la configuración de notificaciones." });
+  }
+});
+app.post("/api/admin/milestone-notifications/reset-defaults", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+  try {
+    const restored = resetMilestoneNotificationsConfigDefaults();
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, config: restored, defaults: DEFAULT_MILESTONE_NOTIFICATIONS_CONFIG });
+  } catch (err) {
+    console.error("Error in POST /api/admin/milestone-notifications/reset-defaults:", err);
+    res.status(500).json({ ok: false, error: "No se pudieron restablecer las notificaciones por defecto." });
+  }
+});
+app.post("/api/admin/milestone-notifications/preview-counts", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema, body: milestoneNotificationsBodySchema }), async (req, res) => {
+  try {
+    const { body } = getValidated(req);
+    const preview = await getMilestoneNotificationsSeasonCounts(body);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, ...preview });
+  } catch (err) {
+    console.error("Error in POST /api/admin/milestone-notifications/preview-counts:", err);
+    res.status(500).json({ ok: false, error: "No se pudo calcular la simulación de conteos." });
+  }
+});
+app.get("/api/nba/notifications", validateRequest({ query: refreshOnlyQuerySchema }), async (req, res) => {
+  try {
+    const { query } = getValidated(req);
+    res.setHeader(
+      "Cache-Control",
+      query.refresh ? "no-store" : "public, max-age=30, s-maxage=120, stale-while-revalidate=300"
+    );
+    const payload = await getMilestoneNotificationsPayload(Boolean(query.refresh));
+    res.json(payload);
+  } catch (err) {
+    console.error("Error in GET /api/nba/notifications:", err);
+    res.status(500).json({ error: "No se pudieron cargar las notificaciones de hitos." });
   }
 });
 app.get("/api/nba/inspector-kpi-defaults", validateRequest({ query: emptyQuerySchema }), (_req, res) => {
@@ -581,7 +640,10 @@ app.get("/api/nba/advanced/player/:playerId", validateRequest({ params: playerPa
 app.get("/api/nba/advanced/heroic-shots", validateRequest({ query: advancedHeroicShotsQuerySchema }), async (req, res) => {
   try {
     const { query } = getValidated(req);
-    res.setHeader("Cache-Control", query.refresh ? "no-store" : "no-cache");
+    res.setHeader(
+      "Cache-Control",
+      query.refresh ? "no-store" : "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400"
+    );
     const payload = await getLeagueHeroicShots(query.season, Boolean(query.refresh));
     res.json(payload);
   } catch (err) {

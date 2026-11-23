@@ -2556,12 +2556,16 @@ export function GameScoutingReportModal({
                                         ? 'Falta GEMINI_API_KEY en el entorno'
                                         : narrative.quotaExhausted || narrative.fallbackReason === 'quota_exhausted_429'
                                         ? 'Límite de cuota diaria alcanzado (Free Tier)'
+                                        : narrative.overload503 || String(narrative.fallbackReason || '').startsWith('overload_503')
+                                        ? 'Alta demanda temporal en Gemini'
                                         : 'Agotado tiempo de respuesta de IA'}
                                     </span>
                                     {narrative.missingApiKey
                                       ? 'El backend no detecta la variable GEMINI_API_KEY en este entorno de ejecución.'
                                       : narrative.quotaExhausted || narrative.fallbackReason === 'quota_exhausted_429'
                                       ? 'Se alcanzó el límite diario de peticiones para este modelo Gemini en el Free Tier de Google AI Studio.'
+                                      : narrative.overload503 || String(narrative.fallbackReason || '').startsWith('overload_503')
+                                      ? 'Los modelos de Gemini experimentaron un pico puntual de demanda (503). Se muestra esta crónica determinista de respaldo sin pérdida de datos; puedes pulsar "Reintentar con IA" en unos segundos.'
                                       : 'La llamada a los modelos de Gemini agotó el tiempo de espera o la API no respondió a tiempo. Se muestra esta crónica determinista de respaldo sin pérdida de datos.'}
                                     <span className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900/95" />
                                   </span>

@@ -422,11 +422,11 @@ export function computePercentileAndDelta(
   if (validVals.length === 0 || !Number.isFinite(val)) {
     return {
       percentile: 50,
-      label: 'Promedio',
+      label: 'Media',
       deltaVsNba: 0,
       nbaMean,
       barColorClass: 'bg-sky-400',
-      badgeColorClass: 'text-slate-300 bg-slate-800/80 border-slate-700',
+      badgeColorClass: 'text-slate-300',
     };
   }
 
@@ -446,32 +446,32 @@ export function computePercentileAndDelta(
 
   let label = `P${pct}`;
   let barColorClass = 'bg-sky-400';
-  let badgeColorClass = 'text-sky-300 bg-sky-950/60 border-sky-500/30';
+  let badgeColorClass = 'text-sky-300';
 
   if (pct >= 95) {
-    label = 'Élite (Top 5%)';
+    label = 'Top 5%';
     barColorClass = 'bg-emerald-400';
-    badgeColorClass = 'text-emerald-300 bg-emerald-950/80 border-emerald-500/40';
+    badgeColorClass = 'text-emerald-300';
   } else if (pct >= 80) {
     label = `Top ${100 - pct}%`;
     barColorClass = 'bg-emerald-500';
-    badgeColorClass = 'text-emerald-400 bg-emerald-950/50 border-emerald-500/30';
+    badgeColorClass = 'text-emerald-400';
   } else if (pct >= 60) {
-    label = `P${pct} (Sobre media)`;
+    label = `P${pct}`;
     barColorClass = 'bg-sky-400';
-    badgeColorClass = 'text-sky-300 bg-sky-950/60 border-sky-500/30';
+    badgeColorClass = 'text-sky-300';
   } else if (pct >= 40) {
-    label = `P${pct} (Media)`;
+    label = `P${pct}`;
     barColorClass = 'bg-amber-400';
-    badgeColorClass = 'text-amber-300 bg-amber-950/50 border-amber-500/30';
+    badgeColorClass = 'text-amber-300';
   } else if (pct >= 20) {
-    label = `P${pct} (Bajo media)`;
+    label = `P${pct}`;
     barColorClass = 'bg-orange-400';
-    badgeColorClass = 'text-orange-300 bg-orange-950/50 border-orange-500/30';
+    badgeColorClass = 'text-orange-300';
   } else {
     label = `Inf ${pct}%`;
     barColorClass = 'bg-rose-500';
-    badgeColorClass = 'text-rose-300 bg-rose-950/60 border-rose-500/40';
+    badgeColorClass = 'text-rose-300';
   }
 
   return {
@@ -524,7 +524,7 @@ function KpiPercentileCard({
   );
 
   return (
-    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3.5 flex flex-col justify-between space-y-2.5 transition-all hover:border-[#334155] shadow-sm">
+    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3.5 flex flex-col justify-between space-y-2.5 transition-all hover:border-[#334155] shadow-sm">
       <div className="flex items-center justify-between gap-1.5 text-xs">
         <span className="font-medium text-slate-300 truncate inline-flex items-center gap-1">
           <span>{label}</span>
@@ -533,7 +533,7 @@ function KpiPercentileCard({
           )}
         </span>
         <span
-          className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-semibold border shrink-0 ${info.badgeColorClass}`}
+          className={`text-[10px] font-mono font-semibold shrink-0 whitespace-nowrap ${info.badgeColorClass}`}
         >
           {info.label}
         </span>
@@ -1984,7 +1984,7 @@ export function EntityInspectorDrawer({
 
             <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
               {/* Selector de formato de ventana: Popup Ámplio / Completa / Panel Lateral */}
-              <div className="hidden sm:flex items-center bg-[#131C2E] border border-[#1E293B] rounded-lg p-0.5 shrink-0">
+              <div className="hidden sm:flex items-center bg-[#131C2E] border border-[#1E293B] rounded-lg p-1 shrink-0">
                 <button
                   type="button"
                   onClick={() => setDisplayMode('wide')}
@@ -2383,7 +2383,7 @@ export function EntityInspectorDrawer({
 
                   {/* Chart Disposition Switch when per-game series is available */}
                   {activeChartSeries && (
-                    <div className="inline-flex items-center gap-0.5 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg shrink-0">
+                    <div className="inline-flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg shrink-0">
                       <button
                         type="button"
                         onClick={() => {
@@ -2451,14 +2451,14 @@ export function EntityInspectorDrawer({
                           Ambas temporadas comparten el mismo eje horizontal de
                           partidos
                         </span>
-                        <div className="inline-flex items-center gap-0.5 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-md">
+                        <div className="inline-flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg">
                           <button
                             type="button"
                             onClick={() => {
                               setParallelAlign('opening');
                               setHoveredChartIdx(null);
                             }}
-                            className={`px-2 py-1 text-[11px] rounded transition-colors whitespace-nowrap ${
+                            className={`px-2 py-1 text-[11px] rounded-md transition-colors whitespace-nowrap ${
                               parallelAlign === 'opening'
                                 ? 'bg-[#1E293B] text-orange-300 font-semibold'
                                 : 'text-slate-400 hover:text-slate-200'
@@ -2472,7 +2472,7 @@ export function EntityInspectorDrawer({
                               setParallelAlign('recent');
                               setHoveredChartIdx(null);
                             }}
-                            className={`px-2 py-1 text-[11px] rounded transition-colors whitespace-nowrap ${
+                            className={`px-2 py-1 text-[11px] rounded-md transition-colors whitespace-nowrap ${
                               parallelAlign === 'recent'
                                 ? 'bg-[#1E293B] text-orange-300 font-semibold'
                                 : 'text-slate-400 hover:text-slate-200'
@@ -2486,7 +2486,7 @@ export function EntityInspectorDrawer({
                   </div>
                 )}
 
-                <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3.5 space-y-3">
+                <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3.5 space-y-3">
                   {!activeChartSeries ? (
                     <NbaAggregateDistributionChart
                       activeKpi={activeChartKpiDef}
@@ -3086,7 +3086,7 @@ export function EntityInspectorDrawer({
               {activeInspectorTab === 'overview' && (
                 <>
                   {/* MASTER FILTER BAR: Configurable Sample Slider + Predefined Ranges */}
-              <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3.5 sm:p-4 space-y-3">
+              <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3.5 sm:p-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <h3 className="text-xs font-semibold text-slate-200">
@@ -3637,7 +3637,7 @@ export function EntityInspectorDrawer({
                 <section className="space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {/* Bio Card */}
-                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4 shadow-sm">
+                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4 shadow-sm">
                       <h3 className="text-sm font-bold text-slate-100 border-b border-[#1E293B] pb-2 flex items-center gap-2">
                         <Users className="w-4 h-4 text-orange-400" />
                         <span>Información Biográfica</span>
@@ -3653,21 +3653,21 @@ export function EntityInspectorDrawer({
                     </div>
 
                     {/* Quick Stats Card */}
-                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4 shadow-sm">
+                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4 shadow-sm">
                       <h3 className="text-sm font-bold text-slate-100 border-b border-[#1E293B] pb-2 flex items-center gap-2">
                         <TrendingUp className="w-4 h-4 text-orange-400" />
                         <span>Resumen Temporada 26/27</span>
                       </h3>
                       <div className="grid grid-cols-3 gap-3">
-                         <div className="text-center p-2 rounded-xl bg-[#0B1120] border border-[#1E293B]">
+                         <div className="text-center p-2 rounded-lg bg-[#0B1120] border border-[#1E293B]">
                            <span className="block text-[10px] text-slate-500 font-bold uppercase mb-1">Partidos</span>
                            <span className="text-lg font-bold text-orange-400 font-mono tabular-nums">{count2027}</span>
                          </div>
-                         <div className="text-center p-2 rounded-xl bg-[#0B1120] border border-[#1E293B]">
+                         <div className="text-center p-2 rounded-lg bg-[#0B1120] border border-[#1E293B]">
                            <span className="block text-[10px] text-slate-500 font-bold uppercase mb-1">Minutos</span>
                            <span className="text-lg font-bold text-slate-100 font-mono tabular-nums">{(player.minutesAvg || 0).toFixed(1)}</span>
                          </div>
-                         <div className="text-center p-2 rounded-xl bg-[#0B1120] border border-[#1E293B]">
+                         <div className="text-center p-2 rounded-lg bg-[#0B1120] border border-[#1E293B]">
                            <span className="block text-[10px] text-slate-500 font-bold uppercase mb-1">Puntos</span>
                            <span className="text-lg font-bold text-slate-100 font-mono tabular-nums">{(player.ptsAvg || 0).toFixed(1)}</span>
                          </div>
@@ -3676,12 +3676,12 @@ export function EntityInspectorDrawer({
                   </div>
 
                   {/* Watchlist Status */}
-                  <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4 shadow-sm">
+                  <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4 shadow-sm">
                     <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
                       <Star className={`w-4 h-4 ${isWatched ? 'text-orange-400 fill-orange-400' : 'text-slate-400'}`} />
                       <span>Estado en Seguimiento</span>
                     </h3>
-                    <div className="flex items-center justify-between gap-4 p-4 bg-[#0B1120] rounded-xl border border-[#1E293B]">
+                    <div className="flex items-center justify-between gap-4 p-4 bg-[#0B1120] rounded-lg border border-[#1E293B]">
                        <div className="flex items-center gap-3">
                          <div className={`p-2 rounded-full ${isWatched ? 'bg-orange-500/20 text-orange-400' : 'bg-slate-800 text-slate-500'}`}>
                            <Star className={`w-5 h-5 ${isWatched ? 'fill-orange-400' : ''}`} />
@@ -3707,7 +3707,7 @@ export function EntityInspectorDrawer({
               {activeInspectorTab === 'nba_lab' && (
                 <section className="space-y-6">
                   {loadingAdvanced && !playerAdvancedDossier ? (
-                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-8 text-center text-xs text-slate-400">
+                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-8 text-center text-xs text-slate-400">
                       Cargando estadísticas avanzadas oficiales de NBA.com...
                     </div>
                   ) : (
@@ -3780,7 +3780,7 @@ export function EntityInspectorDrawer({
                       )}
 
                       {playerAdvancedDossier?.onOffSplit && (
-                        <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-3">
+                        <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-3">
                           <div className="border-b border-[#1E293B] pb-2.5">
                             <h4 className="text-sm font-bold text-slate-100 flex items-center gap-2">
                               <span>Impacto Individual On / Off Court</span>
@@ -3890,7 +3890,7 @@ export function EntityInspectorDrawer({
               {activeInspectorTab === 'overview' && (
                 <>
                   {/* 1. DEAN OLIVER 4 FACTORS BLOCK (FIRST) */}
-                  <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4 shadow-sm">
+                  <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4 shadow-sm">
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1E293B] pb-3">
                       <div>
                         <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
@@ -4049,7 +4049,7 @@ export function EntityInspectorDrawer({
                       )}
                     </div>
 
-                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3.5 space-y-3">
+                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3.5 space-y-3">
                       {!activeChartSeries ? (
                         <NbaAggregateDistributionChart
                           activeKpi={activeChartKpiDef}
@@ -4741,7 +4741,7 @@ export function EntityInspectorDrawer({
               {activeInspectorTab === 'nba_lab' && (
                 <section className="space-y-6">
                   {loadingAdvanced && !teamAdvancedDossier ? (
-                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-8 text-center text-xs text-slate-400">
+                    <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-8 text-center text-xs text-slate-400">
                       Cargando estadísticas avanzadas oficiales de NBA.com...
                     </div>
                   ) : (

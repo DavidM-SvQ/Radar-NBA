@@ -6,7 +6,6 @@ import type {
   NbaClutchEntry,
   NbaDefenseHustleEntry,
   NbaHeroicShotCountSummary,
-  NbaHeroicShotsResponse,
   NbaPlaytypeEntitySummary,
   NbaScoringSplitsEntry,
   NbaShotZonesEntry,
@@ -17,6 +16,7 @@ import type {
   TeamSummary,
   WindowSize,
 } from '../types/nba';
+import { fetchSharedHeroicShots } from '../utils/heroicShotsClient';
 import {
   DEFAULT_UNIFIED_FILTERS,
   buildEntityLookupContext,
@@ -43,7 +43,7 @@ import {
   SortableTh,
 } from './MetricUiHelpers';
 import { STICKY_THEAD_CLASS, compareSortValues } from '../utils/tableSort';
-import { PlayerAvatar } from './NbaVisuals';
+import { MiniSparkline, PlayerAvatar } from './NbaVisuals';
 import { ExportImageButton } from './ExportImageButton';
 import {
   buildTableSnapshotBlob,
@@ -227,6 +227,7 @@ interface EnrichedPlayerRow extends PlayerSummary {
   statMode: StatScaleMode;
   minBase: number;
   ptsBase: number;
+  ptsPerGameAvg: number;
   ptsWin: number;
   pctDelta: number;
   rebBase: number;
@@ -707,11 +708,7 @@ export function PlayersExplorerView({
   useEffect(() => {
     if (!showHeroicBadges || heroicCache[seasonToken]) return;
     let cancelled = false;
-    fetch(`/api/nba/advanced/heroic-shots?season=${encodeURIComponent(seasonToken)}`)
-      .then(async (res) => {
-        if (!res.ok) return null;
-        return (await res.json()) as NbaHeroicShotsResponse;
-      })
+    fetchSharedHeroicShots(seasonToken)
       .then((json) => {
         if (cancelled || !json) return;
         setHeroicCache((prev) => ({
@@ -1046,6 +1043,7 @@ export function PlayersExplorerView({
         statMode,
         minBase: isTotals ? minTot : minAvg,
         ptsBase: isTotals ? ptsTot : ptsAvg,
+        ptsPerGameAvg: ptsAvg,
         ptsWin: isTotals ? ptsWinTot : ptsWinAvg,
         pctDelta,
         rebBase: scaleBase(rebAvg, rebTot),
@@ -1360,7 +1358,7 @@ export function PlayersExplorerView({
           label: formatPlayerColHeader(col, statMode, windowSize),
         }));
 
-  const mobileCardHeight = experienceMode === 'simple' ? 152 : 124;
+  const mobileCardHeight = experienceMode === 'simple' ? 176 : 124;
   const mobileContainerHeight = 580;
   const mobileStartIndex = Math.max(0, Math.floor(mobileScrollTop / mobileCardHeight) - 4);
   const mobileVisibleCount = Math.ceil(mobileContainerHeight / mobileCardHeight) + 8;
@@ -1384,7 +1382,7 @@ export function PlayersExplorerView({
   return (
     <div className="space-y-5">
       {/* Row 1: Homogeneous 4-Column Summary Strip */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden [&>*:nth-child(odd)]:border-r [&>*:nth-child(odd)]:border-[#1E293B] [&>*:nth-child(-n+2)]:border-b [&>*:nth-child(-n+2)]:border-[#1E293B] lg:[&>*]:border-b-0 lg:[&>*]:border-r lg:[&>*:last-child]:border-r-0">
+      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden [&>*:nth-child(odd)]:border-r [&>*:nth-child(odd)]:border-[#1E293B] [&>*:nth-child(-n+2)]:border-b [&>*:nth-child(-n+2)]:border-[#1E293B] lg:[&>*]:border-b-0 lg:[&>*]:border-r lg:[&>*:last-child]:border-r-0">
         <div className="p-3.5 sm:p-4">
           <div className="flex items-center justify-between gap-1 text-xs text-slate-400">
             <span className="truncate">Jugadores (NBA.com)</span>
@@ -1426,7 +1424,7 @@ export function PlayersExplorerView({
               </p>
               <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-orange-400 truncate">
                 {summary?.topScorer
-                  ? `${summary.topScorer.ptsBase.toFixed(statMode === 'totals' ? 0 : 1)} PTS${statMode === 'totals' ? ' tot.' : '/PJ'} · Élite NBA`
+                  ? `${summary.topScorer.ptsBase.toFixed(statMode === 'totals' ? 0 : 1)} PTS${statMode === 'totals' ? ' tot.' : '/PJ'} · ${summary.topScorer.tsPct.toFixed(1)}% TS`
                   : '—'}
               </p>
             </div>
@@ -1458,7 +1456,7 @@ export function PlayersExplorerView({
               <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-emerald-400 truncate">
                 {summary?.topUsage
                   ? experienceMode === 'simple'
-                    ? `${summary.topUsage.usgPct.toFixed(1)}% ataques · 1ª Estrella`
+                    ? `${summary.topUsage.usgPct.toFixed(1)}% ataques`
                     : `${summary.topUsage.usgPct.toFixed(1)}% USG · ${summary.topUsage.gmSc.toFixed(1)} GmSc`
                   : '—'}
               </p>
@@ -1491,7 +1489,7 @@ export function PlayersExplorerView({
               <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-slate-300 truncate">
                 {summary?.topPie
                   ? experienceMode === 'simple'
-                    ? `Impacto ${summary.topPie.pie.toFixed(1)}% · Nivel MVP`
+                    ? `Impacto ${summary.topPie.pie.toFixed(1)}% PIE`
                     : `${summary.topPie.pie.toFixed(1)}% PIE · Net ${formatSigned(summary.topPie.netRtg)}`
                   : '—'}
               </p>
@@ -1547,7 +1545,7 @@ export function PlayersExplorerView({
                 type="button"
                 disabled={loadingAllPlayers}
                 onClick={onLoadAllPlayers}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#283548] rounded-lg text-orange-300 transition-colors whitespace-nowrap shrink-0 disabled:opacity-60"
+                className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#283548] rounded-lg text-orange-300 transition-colors whitespace-nowrap shrink-0 disabled:opacity-60"
               >
                 <Users className="w-3.5 h-3.5 text-orange-400" />
                 <span>
@@ -1592,20 +1590,20 @@ export function PlayersExplorerView({
               value={query}
               onChange={(e) => void handleQueryChange(e.target.value)}
               placeholder="Buscar jugador (Jokic, Doncic, Aldama)..."
-              className="w-full pl-9 pr-3 py-2 sm:py-1.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500 transition-colors"
+              className="w-full h-9 pl-9 pr-3 text-xs bg-[#0B1120] border border-[#1E293B] rounded-md text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500 transition-colors"
             />
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5 shrink-0">
             <div
-              className="inline-flex items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs"
+              className="inline-flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs"
               role="group"
               aria-label="Modo de volumen estadístico"
             >
               <button
                 type="button"
                 onClick={() => setStatMode('per_game')}
-                className={`px-2.5 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap ${
+                className={`min-h-[28px] px-2.5 py-1 rounded-md font-medium transition-colors whitespace-nowrap ${
                   statMode === 'per_game'
                     ? 'bg-orange-500 text-slate-950 font-semibold'
                     : 'text-slate-400 hover:text-slate-200'
@@ -1616,7 +1614,7 @@ export function PlayersExplorerView({
               <button
                 type="button"
                 onClick={() => setStatMode('totals')}
-                className={`px-2.5 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap ${
+                className={`min-h-[28px] px-2.5 py-1 rounded-md font-medium transition-colors whitespace-nowrap ${
                   statMode === 'totals'
                     ? 'bg-orange-500 text-slate-950 font-semibold'
                     : 'text-slate-400 hover:text-slate-200'
@@ -1848,6 +1846,20 @@ export function PlayersExplorerView({
                               </div>
                             </div>
                           </div>
+                          <div className="flex items-center justify-between gap-2 px-0.5">
+                            <span className="text-[10px] text-slate-400">
+                              Ritmo últimos 10 PJ vs media
+                            </span>
+                            <MiniSparkline
+                              values={[...p.games.slice(0, 10)]
+                                .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                                .map((g) => g.points)}
+                              referenceValue={p.ptsPerGameAvg}
+                              width={84}
+                              height={20}
+                              title={`Puntos de ${p.name} en los últimos 10 partidos`}
+                            />
+                          </div>
                           <NbaComparisonBar
                             value={p.ptsBase}
                             benchmark={activePtsBenchmark}
@@ -1905,6 +1917,9 @@ export function PlayersExplorerView({
                         <SH label="Minutos" k="minBase" />
                         <SH label="Puntos" k="ptsBase" />
                         <SH label={`Últ. ${windowSize} PJ`} k="ptsWin" />
+                        <th className="py-3 px-2.5 text-center font-medium text-slate-400 whitespace-nowrap">
+                          Ritmo (10 PJ)
+                        </th>
                         <SH label="Rebotes" k="rebBase" />
                         <SH label="Asistencias" k="astBase" />
                         <SH label="Acierto Real" k="tsPct" />
@@ -2024,6 +2039,19 @@ export function PlayersExplorerView({
                               <div className={`text-[11px] ${formHint.textClass}`}>
                                 {p.pctDelta > 2 ? '▲ ' : p.pctDelta < -2 ? '▼ ' : ''}
                                 {formHint.label}
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-2.5 text-center">
+                              <div className="inline-flex items-center justify-center">
+                                <MiniSparkline
+                                  values={[...p.games.slice(0, 10)]
+                                    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                                    .map((g) => g.points)}
+                                  referenceValue={p.ptsPerGameAvg}
+                                  width={72}
+                                  height={22}
+                                  title={`Puntos de ${p.name} en los últimos 10 PJ vs su media (${p.ptsPerGameAvg.toFixed(1)})`}
+                                />
                               </div>
                             </td>
                             <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-200 whitespace-nowrap">

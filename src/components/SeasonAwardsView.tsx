@@ -370,7 +370,7 @@ export function SeasonAwardsView({
   return (
     <div className="space-y-4 sm:space-y-5">
       {/* Control Header Panel */}
-      <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-3.5 sm:p-4 space-y-3.5">
+      <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3.5 sm:p-4 space-y-3.5">
         {/* Top Row: Title + Season Scope + Watchlist */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="space-y-0.5">
@@ -413,7 +413,7 @@ export function SeasonAwardsView({
             <button
               type="button"
               onClick={onToggleOnlyWatchlist}
-              className={`min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+              className={`min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
                 onlyWatchlist
                   ? 'bg-orange-500/15 border-orange-500/50 text-orange-300'
                   : 'bg-[#0B1120] border-[#1E293B] text-slate-300 hover:text-white'
@@ -445,7 +445,7 @@ export function SeasonAwardsView({
                   aria-selected={isActive}
                   type="button"
                   onClick={() => onChangeCategory(tab.id)}
-                  className={`min-h-[34px] px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[32px] px-3 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     isActive
                       ? 'bg-orange-500 text-slate-950 font-semibold'
                       : 'text-slate-300 hover:text-white hover:bg-[#131C2E]'
@@ -505,7 +505,7 @@ export function SeasonAwardsView({
                 <button
                   type="button"
                   onClick={() => handleToggleShowIneligible(false)}
-                  className={`flex-1 sm:flex-initial px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${
+                  className={`flex-1 sm:flex-initial min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
                     !showIneligible
                       ? 'bg-[#1E293B] text-orange-400 font-semibold'
                       : 'text-slate-400 hover:text-slate-200'
@@ -516,7 +516,7 @@ export function SeasonAwardsView({
                 <button
                   type="button"
                   onClick={() => handleToggleShowIneligible(true)}
-                  className={`flex-1 sm:flex-initial px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${
+                  className={`flex-1 sm:flex-initial min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
                     showIneligible
                       ? 'bg-[#1E293B] text-orange-400 font-semibold'
                       : 'text-slate-400 hover:text-slate-200'
@@ -544,7 +544,7 @@ export function SeasonAwardsView({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Buscar jugador o equipo..."
-              className="w-full pl-8 pr-3 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500"
+              className="w-full h-9 pl-8 pr-3 bg-[#0B1120] border border-[#1E293B] rounded-md text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500"
             />
           </div>
         </div>
@@ -876,10 +876,10 @@ export function SeasonAwardsView({
                   const isEligible = cand.projectedGames82 >= minProjectedGames;
                   const rankLabel =
                     idx === 0
-                      ? '01. Favorito actual'
+                      ? '01. Líder'
                       : idx === 1
-                      ? '02. Segundo clasificado'
-                      : '03. Tercer clasificado';
+                      ? '02. Segundo'
+                      : '03. Tercero';
                   const metrics =
                     experienceMode === 'simple'
                       ? cand.metricsSimple
@@ -915,7 +915,7 @@ export function SeasonAwardsView({
                             {rankLabel}
                           </span>
                           <div className="flex items-center gap-2">
-                            <span className="text-[11px] text-slate-400">Índice Radar</span>
+                            <span className="text-[11px] text-slate-400">Índice</span>
                             <span className="font-mono tabular-nums text-sm font-bold text-slate-100">
                               {cand.awardScore.toFixed(1)}
                             </span>

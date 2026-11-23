@@ -2554,7 +2554,7 @@ async function fetchPlayByPlayFromCdn(gameId: string): Promise<any | null> {
   }
 }
 
-function analyzeGamePlayByPlayHeroicShots(pbpJson: any, gameMeta: {
+export function analyzeGamePlayByPlayHeroicShots(pbpJson: any, gameMeta: {
   gameId: string;
   date: string;
   seasonLabel: string;
@@ -2703,21 +2703,30 @@ function analyzeGamePlayByPlayHeroicShots(pbpJson: any, gameMeta: {
   return detected.filter((d) => d.playerId && d.playerId !== "0");
 }
 
-async function scanHeroicClutchShotsFromSnapshotAndCdn(forceLive = false) {
+async function scanHeroicClutchShotsFromSnapshotAndCdn(
+  options: boolean | { forceLive?: boolean; fullRescan?: boolean } = false
+) {
+  const forceLive = typeof options === "boolean" ? options : Boolean(options.forceLive);
+  const fullRescan = typeof options === "object" && Boolean(options.fullRescan);
   const advSnap = getActiveAdvancedSnapshot();
-  if (!forceLive && advSnap?.heroicShots?.items) {
-    return advSnap.heroicShots;
+  const prevHeroic = advSnap?.heroicShots;
+
+  if (!forceLive && prevHeroic?.items) {
+    return prevHeroic;
   }
 
   const baseSnap = readNbaSnapshotFromDisk();
   if (!baseSnap) {
-    return {
-      season: "2026-27",
-      generatedAt: new Date().toISOString(),
-      items: [],
-      playerCounts: {},
-      teamCounts: {},
-    };
+    return (
+      prevHeroic || {
+        season: "2026-27",
+        generatedAt: new Date().toISOString(),
+        scannedGameIds: [],
+        items: [],
+        playerCounts: {},
+        teamCounts: {},
+      }
+    );
   }
 
   const collectCloseGames = (teamsArr: any[], seasonLabel: string, maxDiff: number) => {
@@ -2763,25 +2772,80 @@ async function scanHeroicClutchShotsFromSnapshotAndCdn(forceLive = false) {
   // Scan close games (|diff| <= 4) from both 2026-27 and 2025-26
   const close2027 = collectCloseGames(baseSnap.s2027?.teams || [], "2026-27", 4);
   const close2026 = collectCloseGames(baseSnap.s2026?.teams || [], "2025-26", 4);
-  const gamesToScan = [...close2027, ...close2026];
+  const allCloseGames = [...close2027, ...close2026];
 
-  const allDetected: any[] = [];
+  const existingItems: any[] = !fullRescan && Array.isArray(prevHeroic?.items) ? prevHeroic.items : [];
+  const scannedSet = new Set<string>(!fullRescan && Array.isArray(prevHeroic?.scannedGameIds) ? prevHeroic.scannedGameIds : []);
+
+  // Legacy migration: if previous snapshot already holds heroic shots without scannedGameIds,
+  // treat finished 2025-26 archive + already-detected gameIds as archived so daily sync only checks new games.
+  if (!fullRescan && scannedSet.size === 0 && existingItems.length > 0) {
+    for (const gm of close2026) scannedSet.add(gm.gameId);
+    for (const item of existingItems) {
+      if (item?.gameId) scannedSet.add(String(item.gameId));
+    }
+  }
+
+  const gamesToScan = fullRescan
+    ? allCloseGames
+    : allCloseGames.filter((gm) => !scannedSet.has(gm.gameId));
+
+  // If every close game has already been scanned and persisted, return snapshot with 0 CDN requests
+  if (gamesToScan.length === 0 && !fullRescan && existingItems.length > 0) {
+    const mergedScanned = Array.from(scannedSet);
+    if (Array.isArray(prevHeroic?.scannedGameIds) && prevHeroic.scannedGameIds.length === mergedScanned.length) {
+      return prevHeroic;
+    }
+    const { playerCounts, teamCounts } = buildHeroicCountsMaps(existingItems);
+    return {
+      season: "2026-27",
+      generatedAt: prevHeroic?.generatedAt || new Date().toISOString(),
+      scannedGameIds: mergedScanned,
+      items: existingItems,
+      playerCounts,
+      teamCounts,
+    };
+  }
+
+  const rescannedGameIds = new Set<string>();
+  const newlyDetected: any[] = [];
   await mapWithConcurrency(gamesToScan, 10, async (gm) => {
     const pbp = await fetchPlayByPlayFromCdn(gm.gameId);
     if (!pbp) return;
+    rescannedGameIds.add(gm.gameId);
+    scannedSet.add(gm.gameId);
     const shots = analyzeGamePlayByPlayHeroicShots(pbp, gm);
     if (shots.length > 0) {
-      allDetected.push(...shots);
+      newlyDetected.push(...shots);
     }
   });
 
+  const mergedById = new Map<string, any>();
+  for (const prevShot of existingItems) {
+    const gid = String(prevShot?.gameId || "");
+    if (!fullRescan && !rescannedGameIds.has(gid) && prevShot?.id) {
+      mergedById.set(String(prevShot.id), prevShot);
+    }
+  }
+  for (const newShot of newlyDetected) {
+    if (newShot?.id) {
+      mergedById.set(String(newShot.id), newShot);
+    }
+  }
+
+  const allDetected = Array.from(mergedById.values());
   // Sort newest first
-  allDetected.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || b.gameId.localeCompare(a.gameId));
+  allDetected.sort(
+    (a, b) =>
+      String(b.date || "").localeCompare(String(a.date || "")) ||
+      String(b.gameId || "").localeCompare(String(a.gameId || ""))
+  );
 
   const { playerCounts, teamCounts } = buildHeroicCountsMaps(allDetected);
   return {
     season: "2026-27",
     generatedAt: new Date().toISOString(),
+    scannedGameIds: Array.from(scannedSet),
     items: allDetected,
     playerCounts,
     teamCounts,
@@ -2790,10 +2854,31 @@ async function scanHeroicClutchShotsFromSnapshotAndCdn(forceLive = false) {
 
 export async function getLeagueHeroicShots(seasonToken?: string, forceRefresh = false): Promise<any> {
   const advSnap = getActiveAdvancedSnapshot();
+  const prevHeroic = advSnap?.heroicShots;
   const basePayload =
-    !forceRefresh && advSnap?.heroicShots?.items
-      ? advSnap.heroicShots
-      : await scanHeroicClutchShotsFromSnapshotAndCdn(forceRefresh);
+    !forceRefresh && prevHeroic?.items
+      ? prevHeroic
+      : await scanHeroicClutchShotsFromSnapshotAndCdn({ forceLive: forceRefresh });
+
+  if (
+    advSnap &&
+    basePayload &&
+    basePayload !== prevHeroic &&
+    Array.isArray(basePayload.items) &&
+    ((prevHeroic?.items?.length ?? -1) !== basePayload.items.length ||
+      (prevHeroic?.scannedGameIds?.length ?? -1) !== (basePayload.scannedGameIds?.length ?? -1))
+  ) {
+    const updatedSnap: NbaAdvancedSnapshotPayload = {
+      ...advSnap,
+      heroicShots: basePayload,
+    };
+    memoryAdvancedSnapshot = updatedSnap;
+    try {
+      writeNbaAdvancedSnapshotToDisk(updatedSnap);
+    } catch (err) {
+      console.warn("[RadarNBA] No se pudo persistir heroicShots incremental en disco:", err);
+    }
+  }
 
   const allItems: any[] = Array.isArray(basePayload?.items) ? basePayload.items : [];
   let filteredItems = allItems;
@@ -3491,12 +3576,12 @@ export async function buildAdvancedSnapshotFromCurrentState(
     scoring: playerScoring,
   };
 
-  // 2. Fetch 5-Man, 3-Man, 2-Man lineups with all 10 layers + scan Heroic Shots (Buzzer Beaters / Game Winners)
+  // 2. Fetch 5-Man, 3-Man, 2-Man lineups with all 10 layers + incremental CDN scan for new Heroic Shots (BB / GW)
   const [lineups5, lineups3, lineups2, heroicShots] = await Promise.all([
     getLeagueLineups(season, 5, "0", forceLive, playerDatasetsOverride),
     getLeagueLineups(season, 3, "0", forceLive, playerDatasetsOverride),
     getLeagueLineups(season, 2, "0", forceLive, playerDatasetsOverride),
-    scanHeroicClutchShotsFromSnapshotAndCdn(forceLive),
+    scanHeroicClutchShotsFromSnapshotAndCdn({ forceLive: true }),
   ]);
 
   // 3. Fetch or synthesize on/off splits for each team

@@ -31,7 +31,6 @@ import type {
   ExperienceMode,
   NbaAdvancedCategory,
   NbaHeroicShotCountSummary,
-  NbaHeroicShotsResponse,
   PlayerSummary,
   TeamSummary,
   WindowSize,
@@ -46,6 +45,7 @@ import { NBA_TEAMS_MAP } from '../utils/teamLogos';
 import { PlayerAvatar, TeamLogo } from './NbaVisuals';
 import { ExportImageButton } from './ExportImageButton';
 import { buildTableSnapshotBlob } from '../utils/exportImageCard';
+import { fetchSharedHeroicShots } from '../utils/heroicShotsClient';
 import { type LeagueBenchmarks } from '../utils/humanize';
 import { extractUnifiedFilterOptions } from '../utils/entityFilters';
 import {
@@ -434,7 +434,7 @@ export function ScatterAnalyticsView({
   const teamCatalogMetrics = useMemo(() => getScatterMetricsForScope('team'), []);
   const playerCatalogMetrics = useMemo(() => getScatterMetricsForScope('player'), []);
 
-  // Fetch Heroic Shots (BB / GW) for active seasonToken
+  // Fetch Heroic Shots (BB / GW) for active seasonToken via shared deduplicated client cache
   useEffect(() => {
     if (heroicCache[seasonToken]) return;
     const reqKey = `heroic:${seasonToken}`;
@@ -442,10 +442,7 @@ export function ScatterAnalyticsView({
     inFlightKeysRef.current.add(reqKey);
 
     let cancelled = false;
-    fetch(
-      `/api/nba/advanced/heroic-shots?season=${encodeURIComponent(seasonToken)}&v=${ADV_SNAPSHOT_FETCH_VERSION}`
-    )
-      .then(async (res) => (res.ok ? ((await res.json()) as NbaHeroicShotsResponse) : null))
+    fetchSharedHeroicShots(seasonToken)
       .then((json) => {
         if (cancelled || !json) return;
         setHeroicCache((prev) => ({
@@ -1151,6 +1148,7 @@ export function ScatterAnalyticsView({
         return {
           id: p.id,
           name: p.name,
+          headshotUrl: p.headshotUrl,
           teamAbbr: p.teamAbbr,
           position: p.position,
           minAvg: avgMin,
@@ -1750,7 +1748,7 @@ export function ScatterAnalyticsView({
   return (
     <div className="space-y-4">
       {/* 1. Header with View Mode Switcher (Equipos | Jugadores | Matriz Correlación) */}
-      <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-4 space-y-4">
+      <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 bg-orange-500/10 rounded-lg flex items-center justify-center text-orange-400 shrink-0">
@@ -1761,11 +1759,11 @@ export function ScatterAnalyticsView({
                 <h2 className="text-base font-bold text-slate-100 truncate">
                   Explorador Analítico Avanzado
                 </h2>
-                <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-orange-500/15 text-orange-400 border border-orange-500/30">
+                <span className="text-[11px] font-mono font-semibold text-orange-400 pl-2 border-l border-[#283548]">
                   10 Capas NBA
                 </span>
                 {loadingSnapshot && (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-300 pl-2 border-l border-[#283548]">
                     <Loader2 className="w-3 h-3 animate-spin" />
                     Sincronizando métricas...
                   </span>
@@ -1778,7 +1776,7 @@ export function ScatterAnalyticsView({
           </div>
 
           {/* Primary View Segment Tabs */}
-          <div className="flex items-center gap-1.5 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg self-start lg:self-auto overflow-x-auto no-scrollbar">
+          <div className="flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg self-start lg:self-auto overflow-x-auto no-scrollbar max-w-full">
             <button
               type="button"
               onClick={() => {
@@ -1786,7 +1784,7 @@ export function ScatterAnalyticsView({
                 setHoveredEntity(null);
                 setTooltipDismissed(true);
               }}
-              className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-medium rounded-md transition-all whitespace-nowrap shrink-0 ${
+              className={`min-h-[28px] flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                 activeTab === 'teams'
                   ? 'bg-orange-500 text-slate-950 font-semibold shadow-sm'
                   : 'text-slate-300 hover:text-white hover:bg-[#182338]'
@@ -1803,7 +1801,7 @@ export function ScatterAnalyticsView({
                 setHoveredEntity(null);
                 setTooltipDismissed(true);
               }}
-              className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-medium rounded-md transition-all whitespace-nowrap shrink-0 ${
+              className={`min-h-[28px] flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                 activeTab === 'players'
                   ? 'bg-orange-500 text-slate-950 font-semibold shadow-sm'
                   : 'text-slate-300 hover:text-white hover:bg-[#182338]'
@@ -1820,7 +1818,7 @@ export function ScatterAnalyticsView({
                 setHoveredEntity(null);
                 setTooltipDismissed(true);
               }}
-              className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-medium rounded-md transition-all whitespace-nowrap shrink-0 ${
+              className={`min-h-[28px] flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                 activeTab === 'correlation'
                   ? 'bg-orange-500 text-slate-950 font-semibold shadow-sm'
                   : 'text-slate-300 hover:text-white hover:bg-[#182338]'
@@ -2019,7 +2017,7 @@ export function ScatterAnalyticsView({
                   setTeamMetricXId(e.target.value);
                   setTeamPresetId('custom');
                 }}
-                className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
+                className="w-full h-9 px-2.5 bg-[#0B1120] border border-[#1E293B] rounded-md text-xs text-slate-200 focus:outline-none focus:border-orange-500"
               >
                 {groupedTeamMetrics.map((group) => (
                   <optgroup key={group.id} label={group.label}>
@@ -2057,7 +2055,7 @@ export function ScatterAnalyticsView({
                   setTeamMetricYId(e.target.value);
                   setTeamPresetId('custom');
                 }}
-                className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500 disabled:cursor-not-allowed"
+                className="w-full h-9 px-2.5 bg-[#0B1120] border border-[#1E293B] rounded-md text-xs text-slate-200 focus:outline-none focus:border-orange-500 disabled:cursor-not-allowed"
               >
                 {groupedTeamMetrics.map((group) => (
                   <optgroup key={group.id} label={group.label}>
@@ -2080,7 +2078,7 @@ export function ScatterAnalyticsView({
                 <select
                   value={teamConfFilter}
                   onChange={(e) => setTeamConfFilter(e.target.value as any)}
-                  className="w-full px-2 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200"
+                  className="w-full h-9 px-2 bg-[#0B1120] border border-[#1E293B] rounded-md text-xs text-slate-200"
                 >
                   <option value="all">Todas Conf.</option>
                   <option value="Este">Este (15)</option>
@@ -2089,7 +2087,7 @@ export function ScatterAnalyticsView({
                 <select
                   value={teamDivFilter}
                   onChange={(e) => setTeamDivFilter(e.target.value)}
-                  className="w-full px-2 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200"
+                  className="w-full h-9 px-2 bg-[#0B1120] border border-[#1E293B] rounded-md text-xs text-slate-200"
                 >
                   <option value="all">Div: Todas</option>
                   {DIVISIONS.map((d) => (
@@ -2126,7 +2124,7 @@ export function ScatterAnalyticsView({
                 value={teamMetricSizeId}
                 disabled={teamChartMode === 'gaussian'}
                 onChange={(e) => setTeamMetricSizeId(e.target.value)}
-                className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500 disabled:cursor-not-allowed"
+                className="w-full h-9 px-2.5 bg-[#0B1120] border border-[#1E293B] rounded-md text-xs text-slate-200 focus:outline-none focus:border-orange-500 disabled:cursor-not-allowed"
               >
                 <option value="none">---</option>
                 {groupedTeamMetrics.map((group) => (
@@ -2153,7 +2151,7 @@ export function ScatterAnalyticsView({
                   value={teamQuery}
                   onChange={(e) => setTeamQuery(e.target.value)}
                   placeholder="Buscar franquicia o abreviatura..."
-                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500"
+                  className="w-full h-9 pl-8 pr-3 text-xs bg-[#0B1120] border border-[#1E293B] rounded-md text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500"
                 />
               </div>
             </div>
@@ -2186,7 +2184,7 @@ export function ScatterAnalyticsView({
                     setPlayerMetricXId(e.target.value);
                     setPlayerPresetId('custom');
                   }}
-                  className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
+                  className="w-full h-9 px-2.5 bg-[#0B1120] border border-[#1E293B] rounded-md text-xs text-slate-200 focus:outline-none focus:border-orange-500"
                 >
                   {groupedPlayerMetrics.map((group) => (
                     <optgroup key={group.id} label={group.label}>
@@ -2224,7 +2222,7 @@ export function ScatterAnalyticsView({
                     setPlayerMetricYId(e.target.value);
                     setPlayerPresetId('custom');
                   }}
-                  className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500 disabled:cursor-not-allowed"
+                  className="w-full h-9 px-2.5 bg-[#0B1120] border border-[#1E293B] rounded-md text-xs text-slate-200 focus:outline-none focus:border-orange-500 disabled:cursor-not-allowed"
                 >
                   {groupedPlayerMetrics.map((group) => (
                     <optgroup key={group.id} label={group.label}>
@@ -2263,7 +2261,7 @@ export function ScatterAnalyticsView({
                   value={playerMetricSizeId}
                   disabled={playerChartMode === 'gaussian'}
                   onChange={(e) => setPlayerMetricSizeId(e.target.value)}
-                  className="w-full px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500 disabled:cursor-not-allowed"
+                  className="w-full h-9 px-2.5 bg-[#0B1120] border border-[#1E293B] rounded-md text-xs text-slate-200 focus:outline-none focus:border-orange-500 disabled:cursor-not-allowed"
                 >
                   <option value="none">---</option>
                   {groupedPlayerMetrics.map((group) => (
@@ -2290,7 +2288,7 @@ export function ScatterAnalyticsView({
                     value={playerQuery}
                     onChange={(e) => setPlayerQuery(e.target.value)}
                     placeholder="Buscar jugador..."
-                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500"
+                    className="w-full h-9 pl-8 pr-3 text-xs bg-[#0B1120] border border-[#1E293B] rounded-md text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500"
                   />
                 </div>
               </div>
@@ -2331,7 +2329,7 @@ export function ScatterAnalyticsView({
                       }
                     }
                   }}
-                  className="w-full px-2 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
+                  className="w-full h-9 px-2 bg-[#0B1120] border border-[#1E293B] rounded-md text-xs text-slate-200 focus:outline-none focus:border-orange-500"
                 >
                   <option value="all">Todas (NBA)</option>
                   <option value="East">Este</option>
@@ -2357,7 +2355,7 @@ export function ScatterAnalyticsView({
                       setPlayerTeamFilter('all');
                     }
                   }}
-                  className="w-full px-2 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
+                  className="w-full h-9 px-2 bg-[#0B1120] border border-[#1E293B] rounded-md text-xs text-slate-200 focus:outline-none focus:border-orange-500"
                 >
                   <option value="all">Todas</option>
                   {availablePlayerDivisions.map((d) => (
@@ -2376,7 +2374,7 @@ export function ScatterAnalyticsView({
                 <select
                   value={playerTeamFilter}
                   onChange={(e) => setPlayerTeamFilter(e.target.value)}
-                  className="w-full px-2 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
+                  className="w-full h-9 px-2 bg-[#0B1120] border border-[#1E293B] rounded-md text-xs text-slate-200 focus:outline-none focus:border-orange-500"
                 >
                   <option value="all">Todos</option>
                   {availablePlayerTeams.map((t) => (
@@ -2395,7 +2393,7 @@ export function ScatterAnalyticsView({
                 <select
                   value={playerPosFilter}
                   onChange={(e) => setPlayerPosFilter(e.target.value as any)}
-                  className="w-full px-2 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
+                  className="w-full h-9 px-2 bg-[#0B1120] border border-[#1E293B] rounded-md text-xs text-slate-200 focus:outline-none focus:border-orange-500"
                 >
                   <option value="all">Todas</option>
                   <option value="G">G - Bases</option>
@@ -2412,7 +2410,7 @@ export function ScatterAnalyticsView({
                 <select
                   value={playerCountryFilter}
                   onChange={(e) => setPlayerCountryFilter(e.target.value)}
-                  className="w-full px-2 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
+                  className="w-full h-9 px-2 bg-[#0B1120] border border-[#1E293B] rounded-md text-xs text-slate-200 focus:outline-none focus:border-orange-500"
                 >
                   <option value="all">Todos</option>
                   {playerFilterOptions.countries.map((c) => (
@@ -2431,7 +2429,7 @@ export function ScatterAnalyticsView({
                 <select
                   value={playerBirthYearFilter}
                   onChange={(e) => setPlayerBirthYearFilter(e.target.value)}
-                  className="w-full px-2 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs text-slate-200 focus:outline-none focus:border-orange-500"
+                  className="w-full h-9 px-2 bg-[#0B1120] border border-[#1E293B] rounded-md text-xs text-slate-200 focus:outline-none focus:border-orange-500"
                 >
                   <option value="all">Todos</option>
                   {playerFilterOptions.birthYears.map((yr) => (
@@ -2478,7 +2476,7 @@ export function ScatterAnalyticsView({
                   }}
                   title={`Umbral base dinámico: ${recommendedMinGames} PJ (60% de ~${Math.round(avgTeamGp)} PJ jugados)`}
                   aria-label="Partidos jugados mínimos"
-                  className="w-full px-2 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs font-mono text-slate-200 focus:outline-none focus:border-orange-500"
+                  className="w-full h-9 px-2 bg-[#0B1120] border border-[#1E293B] rounded-md text-xs font-mono text-slate-200 focus:outline-none focus:border-orange-500"
                 />
               </div>
 
@@ -2498,7 +2496,7 @@ export function ScatterAnalyticsView({
                     setMinMpg(Number.isFinite(n) && n >= 0 ? n : 0);
                   }}
                   aria-label="Minutos por partido mínimos"
-                  className="w-full px-2 py-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs font-mono text-slate-200 focus:outline-none focus:border-orange-500"
+                  className="w-full h-9 px-2 bg-[#0B1120] border border-[#1E293B] rounded-md text-xs font-mono text-slate-200 focus:outline-none focus:border-orange-500"
                 />
               </div>
 
@@ -2511,7 +2509,7 @@ export function ScatterAnalyticsView({
                   type="button"
                   onClick={() => setOnlyRookies((prev) => !prev)}
                   aria-pressed={onlyRookies}
-                  className={`w-full min-h-[30px] px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 transition-all whitespace-nowrap ${
+                  className={`w-full h-9 px-2.5 rounded-md border text-xs font-semibold flex items-center justify-center gap-1.5 transition-all whitespace-nowrap ${
                     onlyRookies
                       ? 'bg-orange-500 text-slate-950 border-orange-400 shadow-sm'
                       : 'bg-[#0B1120] text-slate-300 border-[#1E293B] hover:border-orange-500/50 hover:text-white'
@@ -2531,13 +2529,13 @@ export function ScatterAnalyticsView({
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
           {/* Main Chart Area */}
           <div className="lg:col-span-3 space-y-3">
-            <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-4 min-h-[560px] flex flex-col justify-between relative">
+            <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 min-h-[560px] flex flex-col justify-between relative">
               {/* Dual Axes / Gaussian Header Indicators Bar with Mode Switcher */}
               <div className="flex flex-wrap items-center justify-between gap-3 mb-2 pb-2.5 border-b border-[#1E293B]">
                 <div className="flex flex-wrap items-center gap-2">
                   {/* Chart Mode Switcher: Dispersión 2D vs Campana de Gauss */}
                   <div
-                    className="inline-flex items-center rounded-md bg-[#0B1120] border border-[#1E293B] p-0.5 text-[11px]"
+                    className="inline-flex items-center gap-1 rounded-lg bg-[#0B1120] border border-[#1E293B] p-1 text-[11px]"
                     role="group"
                     aria-label="Tipo de gráfico para Equipos"
                   >
@@ -2547,7 +2545,7 @@ export function ScatterAnalyticsView({
                         setTeamChartMode('scatter');
                         setHoveredGaussianId(null);
                       }}
-                      className={`px-2.5 py-1 rounded transition-colors whitespace-nowrap shrink-0 font-medium ${
+                      className={`min-h-[28px] px-2.5 py-1 rounded-md transition-colors whitespace-nowrap shrink-0 font-medium ${
                         teamChartMode === 'scatter'
                           ? 'bg-orange-500 text-slate-950 font-semibold'
                           : 'text-slate-300 hover:text-white'
@@ -2562,7 +2560,7 @@ export function ScatterAnalyticsView({
                         setHoveredEntity(null);
                         setTooltipDismissed(true);
                       }}
-                      className={`px-2.5 py-1 rounded transition-colors whitespace-nowrap shrink-0 font-medium ${
+                      className={`min-h-[28px] px-2.5 py-1 rounded-md transition-colors whitespace-nowrap shrink-0 font-medium ${
                         teamChartMode === 'gaussian'
                           ? 'bg-orange-500 text-slate-950 font-semibold'
                           : 'text-slate-300 hover:text-white'
@@ -2663,7 +2661,7 @@ export function ScatterAnalyticsView({
                             setHoveredGaussianId(null);
                           }}
                           title={`Ver ${teamMetricY.shortLabel} en la Campana de Gauss`}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] hover:border-orange-500/40 text-[11px] text-slate-300 hover:text-orange-300 transition-colors whitespace-nowrap shrink-0"
+                          className="min-h-[28px] inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] hover:border-orange-500/40 text-[11px] text-slate-300 hover:text-orange-300 transition-colors whitespace-nowrap shrink-0"
                         >
                           <ArrowLeftRight className="w-3 h-3 text-orange-400" />
                           <span>Ver {teamMetricY.shortLabel}</span>
@@ -2676,14 +2674,14 @@ export function ScatterAnalyticsView({
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   {hasTeamFilterSelection && (
                     <div
-                      className="inline-flex items-center rounded-md bg-[#0B1120] border border-[#1E293B] p-0.5 text-[11px]"
+                      className="inline-flex items-center gap-1 rounded-lg bg-[#0B1120] border border-[#1E293B] p-1 text-[11px]"
                       role="group"
                       aria-label="Ámbito de la media de los ejes (Equipos)"
                     >
                       <button
                         type="button"
                         onClick={() => setTeamMeanScope('league')}
-                        className={`px-2 py-1 rounded transition-colors whitespace-nowrap font-medium ${
+                        className={`min-h-[28px] px-2.5 py-1 rounded-md transition-colors whitespace-nowrap font-medium ${
                           effectiveTeamMeanScope === 'league'
                             ? 'bg-orange-500 text-slate-950 font-semibold'
                             : 'text-slate-300 hover:text-white'
@@ -2695,7 +2693,7 @@ export function ScatterAnalyticsView({
                         type="button"
                         onClick={() => setTeamMeanScope('filtered')}
                         disabled={filteredTeams.length === 0}
-                        className={`px-2 py-1 rounded transition-colors whitespace-nowrap font-medium disabled:opacity-40 disabled:cursor-not-allowed ${
+                        className={`min-h-[28px] px-2.5 py-1 rounded-md transition-colors whitespace-nowrap font-medium disabled:opacity-40 disabled:cursor-not-allowed ${
                           effectiveTeamMeanScope === 'filtered'
                             ? 'bg-sky-500 text-slate-950 font-semibold'
                             : 'text-slate-300 hover:text-white'
@@ -3070,7 +3068,7 @@ export function ScatterAnalyticsView({
 
           {/* Teams Table Sidebar */}
           <div className="space-y-3">
-            <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3 flex flex-col h-full max-h-[640px]">
+            <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3 flex flex-col h-full max-h-[640px]">
               <div className="flex items-center justify-between pb-2 border-b border-[#1E293B]">
                 <span className="text-xs font-bold text-slate-200">
                   Franquicias ({teamChartMode === 'gaussian' ? teamGaussianSummary.ranked.length : filteredTeams.length})
@@ -3213,13 +3211,13 @@ export function ScatterAnalyticsView({
       {activeTab === 'players' && (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
           <div className="lg:col-span-3 space-y-3">
-            <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-4 min-h-[560px] flex flex-col justify-between relative">
+            <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 min-h-[560px] flex flex-col justify-between relative">
               {/* Dual Axes / Gaussian Header Indicators Bar with Mode Switcher */}
               <div className="flex flex-wrap items-center justify-between gap-3 mb-2 pb-2.5 border-b border-[#1E293B]">
                 <div className="flex flex-wrap items-center gap-2">
                   {/* Chart Mode Switcher: Dispersión 2D vs Campana de Gauss */}
                   <div
-                    className="inline-flex items-center rounded-md bg-[#0B1120] border border-[#1E293B] p-0.5 text-[11px]"
+                    className="inline-flex items-center gap-1 rounded-lg bg-[#0B1120] border border-[#1E293B] p-1 text-[11px]"
                     role="group"
                     aria-label="Tipo de gráfico para Jugadores"
                   >
@@ -3229,7 +3227,7 @@ export function ScatterAnalyticsView({
                         setPlayerChartMode('scatter');
                         setHoveredGaussianId(null);
                       }}
-                      className={`px-2.5 py-1 rounded transition-colors whitespace-nowrap shrink-0 font-medium ${
+                      className={`min-h-[28px] px-2.5 py-1 rounded-md transition-colors whitespace-nowrap shrink-0 font-medium ${
                         playerChartMode === 'scatter'
                           ? 'bg-sky-500 text-slate-950 font-semibold'
                           : 'text-slate-300 hover:text-white'
@@ -3244,7 +3242,7 @@ export function ScatterAnalyticsView({
                         setHoveredEntity(null);
                         setTooltipDismissed(true);
                       }}
-                      className={`px-2.5 py-1 rounded transition-colors whitespace-nowrap shrink-0 font-medium ${
+                      className={`min-h-[28px] px-2.5 py-1 rounded-md transition-colors whitespace-nowrap shrink-0 font-medium ${
                         playerChartMode === 'gaussian'
                           ? 'bg-sky-500 text-slate-950 font-semibold'
                           : 'text-slate-300 hover:text-white'
@@ -3345,7 +3343,7 @@ export function ScatterAnalyticsView({
                             setHoveredGaussianId(null);
                           }}
                           title={`Ver ${playerMetricY.shortLabel} en la Campana de Gauss`}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] hover:border-sky-500/40 text-[11px] text-slate-300 hover:text-sky-300 transition-colors whitespace-nowrap shrink-0"
+                          className="min-h-[28px] inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] hover:border-sky-500/40 text-[11px] text-slate-300 hover:text-sky-300 transition-colors whitespace-nowrap shrink-0"
                         >
                           <ArrowLeftRight className="w-3 h-3 text-sky-400" />
                           <span>Ver {playerMetricY.shortLabel}</span>
@@ -3358,14 +3356,14 @@ export function ScatterAnalyticsView({
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   {hasPlayerFilterSelection && (
                     <div
-                      className="inline-flex items-center rounded-md bg-[#0B1120] border border-[#1E293B] p-0.5 text-[11px]"
+                      className="inline-flex items-center gap-1 rounded-lg bg-[#0B1120] border border-[#1E293B] p-1 text-[11px]"
                       role="group"
                       aria-label="Ámbito de la media de los ejes (Jugadores)"
                     >
                       <button
                         type="button"
                         onClick={() => setPlayerMeanScope('league')}
-                        className={`px-2 py-1 rounded transition-colors whitespace-nowrap font-medium ${
+                        className={`min-h-[28px] px-2.5 py-1 rounded-md transition-colors whitespace-nowrap font-medium ${
                           effectivePlayerMeanScope === 'league'
                             ? 'bg-orange-500 text-slate-950 font-semibold'
                             : 'text-slate-300 hover:text-white'
@@ -3377,7 +3375,7 @@ export function ScatterAnalyticsView({
                         type="button"
                         onClick={() => setPlayerMeanScope('filtered')}
                         disabled={(playerChartMode === 'gaussian' ? gaussianPlayers.length : filteredPlayers.length) === 0}
-                        className={`px-2 py-1 rounded transition-colors whitespace-nowrap font-medium disabled:opacity-40 disabled:cursor-not-allowed ${
+                        className={`min-h-[28px] px-2.5 py-1 rounded-md transition-colors whitespace-nowrap font-medium disabled:opacity-40 disabled:cursor-not-allowed ${
                           effectivePlayerMeanScope === 'filtered'
                             ? 'bg-sky-500 text-slate-950 font-semibold'
                             : 'text-slate-300 hover:text-white'
@@ -3746,7 +3744,7 @@ export function ScatterAnalyticsView({
 
           {/* Players Table Sidebar */}
           <div className="space-y-3">
-            <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-3 flex flex-col h-full max-h-[640px]">
+            <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3 flex flex-col h-full max-h-[640px]">
               <div className="flex items-center justify-between pb-2 border-b border-[#1E293B]">
                 <span className="text-xs font-bold text-slate-200">
                   Líderes ({playerChartMode === 'gaussian' ? playerGaussianSummary.ranked.length : filteredPlayers.length})
@@ -3782,10 +3780,12 @@ export function ScatterAnalyticsView({
                             <span className="text-[10px] font-mono tabular-nums text-slate-500 w-4 text-center">
                               {idx + 1}
                             </span>
-                            <span
-                              className="w-2.5 h-2.5 rounded-full shrink-0"
-                              style={{ backgroundColor: p.primaryColor }}
-                              title={`Franquicia: ${p.teamAbbr}`}
+                            <PlayerAvatar
+                              playerId={p.id}
+                              name={p.name}
+                              headshotUrl={p.headshotUrl}
+                              teamAbbr={p.teamAbbr}
+                              size="xs"
                             />
                             <div className="min-w-0">
                               <span className="text-xs font-semibold text-slate-200 block truncate">
@@ -3839,10 +3839,12 @@ export function ScatterAnalyticsView({
                               <span className="text-[10px] font-mono text-slate-500 w-4 text-center">
                                 {idx + 1}
                               </span>
-                              <span
-                                className="w-2.5 h-2.5 rounded-full shrink-0"
-                                style={{ backgroundColor: p.teamPrimaryColor }}
-                                title={`Franquicia: ${p.teamAbbr}`}
+                              <PlayerAvatar
+                                playerId={p.id}
+                                name={p.name}
+                                headshotUrl={p.item.headshotUrl}
+                                teamAbbr={p.teamAbbr}
+                                size="xs"
                               />
                               <div className="min-w-0">
                                 <span className="text-xs font-semibold text-slate-200 block truncate">
@@ -3881,7 +3883,7 @@ export function ScatterAnalyticsView({
       {activeTab === 'correlation' && correlationData && (
         <div className="space-y-4">
           {/* Controls Header: Scope (Teams vs Players) + Pack Selector (10 Layers) + Target Metric */}
-          <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-4 space-y-3">
+          <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 space-y-3">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
@@ -3895,14 +3897,14 @@ export function ScatterAnalyticsView({
 
               <div className="flex flex-wrap items-center gap-2">
                 {/* Scope switcher: Teams vs Players */}
-                <div className="inline-flex items-center p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs">
+                <div className="inline-flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs">
                   <button
                     type="button"
                     onClick={() => {
                       setCorrScope('teams');
                       setCorrTargetMetricId('winPct');
                     }}
-                    className={`px-3 py-1 rounded-md font-semibold transition-colors ${
+                    className={`min-h-[28px] px-3 py-1 rounded-md font-semibold transition-colors ${
                       corrScope === 'teams'
                         ? 'bg-orange-500 text-slate-950'
                         : 'text-slate-300 hover:text-white'
@@ -3916,7 +3918,7 @@ export function ScatterAnalyticsView({
                       setCorrScope('players');
                       setCorrTargetMetricId('gameScore');
                     }}
-                    className={`px-3 py-1 rounded-md font-semibold transition-colors ${
+                    className={`min-h-[28px] px-3 py-1 rounded-md font-semibold transition-colors ${
                       corrScope === 'players'
                         ? 'bg-sky-500 text-slate-950'
                         : 'text-slate-300 hover:text-white'
@@ -3927,7 +3929,7 @@ export function ScatterAnalyticsView({
                 </div>
 
                 {/* Target metric selector for ranking */}
-                <div className="flex items-center gap-1.5 bg-[#0B1120] border border-[#1E293B] rounded-lg px-2.5 py-1">
+                <div className="h-9 flex items-center gap-1.5 bg-[#0B1120] border border-[#1E293B] rounded-md px-2.5">
                   <span className="text-[10px] font-bold uppercase text-slate-400">
                     Comparar vs:
                   </span>
@@ -4009,17 +4011,15 @@ export function ScatterAnalyticsView({
                       setActiveTab('teams');
                     }
                   }}
-                  className="bg-[#131C2E] hover:bg-[#182338] border border-emerald-500/30 hover:border-emerald-400/60 rounded-xl p-3.5 text-left transition-all space-y-1.5 group"
+                  className="bg-[#131C2E] hover:bg-[#182338] border border-emerald-500/30 hover:border-emerald-400/60 rounded-lg p-3.5 text-left transition-all space-y-1.5 group"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">
                       #{idx + 1} Correlación más fuerte del bloque
                     </span>
                     <span
-                      className={`font-mono text-xs font-bold px-2 py-0.5 rounded border ${
-                        pair.r >= 0
-                          ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                          : 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+                      className={`font-mono text-xs font-bold ${
+                        pair.r >= 0 ? 'text-emerald-300' : 'text-sky-300'
                       }`}
                     >
                       r = {pair.r >= 0 ? `+${pair.r.toFixed(2)}` : pair.r.toFixed(2)}
@@ -4038,7 +4038,7 @@ export function ScatterAnalyticsView({
           )}
 
           {/* Ranking of Factors Most Correlated with Target Metric */}
-          <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-4 space-y-3">
+          <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1E293B] pb-2">
               <div>
                 <h3 className="text-sm font-bold text-slate-100">
@@ -4098,9 +4098,9 @@ export function ScatterAnalyticsView({
                       </span>
                     </div>
 
-                    <div className="w-full bg-[#1E293B] h-2 rounded-full overflow-hidden">
+                    <div className="w-full bg-[#1E293B] h-1.5 rounded overflow-hidden">
                       <div
-                        className={`h-full rounded-full transition-all duration-300 ${
+                        className={`h-full rounded transition-all duration-300 ${
                           isPositiveEffect ? 'bg-emerald-500' : 'bg-rose-500'
                         }`}
                         style={{ width: `${barWidth}%` }}
@@ -4118,7 +4118,7 @@ export function ScatterAnalyticsView({
           </div>
 
           {/* Full N x N Pearson Correlation Heatmap Matrix */}
-          <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl p-4 space-y-3">
+          <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1E293B] pb-2">
               <div>
                 <h3 className="text-sm font-bold text-slate-100">

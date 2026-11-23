@@ -44,7 +44,7 @@ import {
   sortRows,
   useTableSort,
 } from '../utils/tableSort';
-import { EntityBadge, PlayerAvatar, TeamLogo } from './NbaVisuals';
+import { EntityBadge, MiniSparkline, PlayerAvatar, TeamLogo } from './NbaVisuals';
 import { ExportImageButton } from './ExportImageButton';
 import { buildTableSnapshotBlob } from '../utils/exportImageCard';
 import { UnifiedEntityFilterBar } from './UnifiedEntityFilterBar';
@@ -73,6 +73,103 @@ interface GuidedHomeViewProps {
   onToggleWatchlist: (entityKey: string) => void;
   onInspectEntity: (entityType: 'player' | 'team', entityId: string) => void;
   onNavigateSection: (section: ActiveSection) => void;
+}
+
+function getSignalSparklineValues(
+  sig: AnomalySignal,
+  playersById: Map<string, PlayerSummary>,
+  teamsById: Map<string, TeamSummary>,
+  count = 10
+): number[] | null {
+  if (sig.entityType === 'player') {
+    const p = playersById.get(sig.entityId);
+    if (!p || p.games.length < 2) return null;
+    const recent = p.games.slice(0, Math.min(count, p.games.length)).reverse();
+    const mapped = recent.map((g) => {
+      switch (sig.metricKey) {
+        case 'pts':
+          return g.points;
+        case 'reb':
+          return g.rebounds;
+        case 'oreb':
+          return g.oreb;
+        case 'dreb':
+          return g.dreb;
+        case 'ast':
+          return g.assists;
+        case 'stl':
+          return g.steals;
+        case 'blk':
+          return g.blocks;
+        case 'stocks':
+          return g.stocks;
+        case 'fg3m':
+          return g.fg3m;
+        case 'fg3Pct':
+          return g.fg3Pct;
+        case 'fgPct':
+          return g.fgPct;
+        case 'tsPct':
+          return g.tsPct;
+        case 'efgPct':
+          return g.efgPct;
+        case 'min':
+          return g.minutes;
+        case 'usgEst':
+          return g.usgEst;
+        case 'gmSc':
+          return g.gameScore;
+        case 'pra':
+          return g.pra;
+        case 'tov':
+          return g.turnovers;
+        case 'plusMinus':
+          return g.plusMinus;
+        default:
+          return NaN;
+      }
+    });
+    return mapped.every((v) => Number.isFinite(v)) ? mapped : null;
+  }
+
+  const t = teamsById.get(sig.entityId);
+  if (!t || t.games.length < 2) return null;
+  const recent = t.games.slice(0, Math.min(count, t.games.length)).reverse();
+  const mapped = recent.map((g) => {
+    switch (sig.metricKey) {
+      case 'pointsFor':
+        return g.pointsFor;
+      case 'pointsAgainst':
+        return g.pointsAgainst;
+      case 'differential':
+        return g.differential;
+      case 'offRtg':
+        return g.offRtg;
+      case 'defRtg':
+        return g.defRtg;
+      case 'netRtg':
+        return g.netRtg;
+      case 'pace':
+        return g.pace;
+      case 'efgPct':
+        return g.efgPct;
+      case 'tsPct':
+        return g.tsPct;
+      case 'orebPct':
+        return g.orebPct;
+      case 'tovPct':
+        return g.tovPct;
+      case 'reb':
+        return g.reb;
+      case 'ast':
+        return g.ast;
+      case 'fg3m':
+        return g.fg3m;
+      default:
+        return NaN;
+    }
+  });
+  return mapped.every((v) => Number.isFinite(v)) ? mapped : null;
 }
 
 export function GuidedHomeView({
@@ -111,6 +208,14 @@ export function GuidedHomeView({
   const entityLookup = useMemo(
     () => buildEntityLookupContext(players, teams),
     [players, teams]
+  );
+  const playersById = useMemo(
+    () => new Map(players.map((p) => [p.id, p])),
+    [players]
+  );
+  const teamsById = useMemo(
+    () => new Map(teams.map((t) => [t.id, t])),
+    [teams]
   );
   const unifiedActive = hasActiveUnifiedFilters(unifiedFilters, 'mixed');
 
@@ -495,7 +600,7 @@ export function GuidedHomeView({
   return (
     <div className="space-y-5 sm:space-y-6">
       {/* Row 1: 4-Column Pulse Strip — Positive Anomaly, Negative Anomaly, Active Streak & Global Radar Balance */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden [&>*:nth-child(odd)]:border-r [&>*:nth-child(odd)]:border-[#1E293B] [&>*:nth-child(-n+2)]:border-b [&>*:nth-child(-n+2)]:border-[#1E293B] lg:[&>*]:border-b-0 lg:[&>*]:border-r lg:[&>*:last-child]:border-r-0">
+      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden [&>*:nth-child(odd)]:border-r [&>*:nth-child(odd)]:border-[#1E293B] [&>*:nth-child(-n+2)]:border-b [&>*:nth-child(-n+2)]:border-[#1E293B] lg:[&>*]:border-b-0 lg:[&>*]:border-r lg:[&>*:last-child]:border-r-0">
         {/* KPI 1: Top Positive Anomaly */}
         <div
           onClick={() =>
@@ -714,7 +819,7 @@ export function GuidedHomeView({
                   key={w}
                   type="button"
                   onClick={() => onChangeWindowSize(w)}
-                  className={`px-2.5 py-1 text-xs font-mono tabular-nums rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[28px] px-2.5 py-1 text-xs font-mono tabular-nums rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     windowSize === w
                       ? 'bg-orange-500 text-slate-950 font-semibold'
                       : 'text-slate-300 hover:text-white hover:bg-[#182338]'
@@ -736,7 +841,7 @@ export function GuidedHomeView({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg divide-y md:divide-y-0 md:divide-x divide-[#1E293B]">
+        <div className="grid grid-cols-1 md:grid-cols-3 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y md:divide-y-0 md:divide-x divide-[#1E293B]">
           {breakoutAxesSummary.map((axis) => {
             const top = axis.topAlert;
             const isPos = top?.direction === 'positive';
@@ -1079,7 +1184,7 @@ export function GuidedHomeView({
           </div>
         </div>
 
-        <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden">
+        <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
           {protagonistRows.length === 0 ? (
             <div className="py-10 px-6 text-center">
               <p className="text-sm font-medium text-slate-200">
@@ -1098,9 +1203,11 @@ export function GuidedHomeView({
                   const watched = watchlistIds.has(wKey);
                   const isGood = isAnomalyPositive(sig);
                   const isUp = sig.absDelta >= 0;
+                  const higherIsGood = isUp ? isGood : !isGood;
                   const humanMag = describeZScoreHuman(sig.zScore, isGood);
                   const plainExp = plainAnomalyExplanation(sig);
                   const benchInfo = resolveSignalBenchmark(sig, benchmarks);
+                  const sparkValues = getSignalSparklineValues(sig, playersById, teamsById);
 
                   return (
                     <div
@@ -1171,19 +1278,31 @@ export function GuidedHomeView({
                               : ''}
                           </div>
                         </div>
-                        <div className="text-right font-mono tabular-nums shrink-0">
-                          <div className="text-sm font-semibold text-slate-100">
-                            {sig.windowAvg.toFixed(1)}{' '}
-                            <span className="text-[11px] font-normal text-slate-400">
-                              (era {sig.baselineAvg.toFixed(1)})
-                            </span>
-                          </div>
-                          <div
-                            className={`text-xs font-semibold ${
-                              isGood ? 'text-emerald-400' : 'text-rose-400'
-                            }`}
-                          >
-                            {isUp ? '▲' : '▼'} {formatSigned(sig.pctDelta, 0, '%')}
+                        <div className="flex items-center gap-2.5 shrink-0">
+                          {sparkValues && (
+                            <MiniSparkline
+                              values={sparkValues}
+                              referenceValue={sig.baselineAvg}
+                              width={52}
+                              height={18}
+                              positiveIsGood={higherIsGood}
+                              title={`Últimos ${sparkValues.length} PJ frente a habitual (${sig.baselineAvg.toFixed(1)})`}
+                            />
+                          )}
+                          <div className="text-right font-mono tabular-nums shrink-0">
+                            <div className="text-sm font-semibold text-slate-100">
+                              {sig.windowAvg.toFixed(1)}{' '}
+                              <span className="text-[11px] font-normal text-slate-400">
+                                (era {sig.baselineAvg.toFixed(1)})
+                              </span>
+                            </div>
+                            <div
+                              className={`text-xs font-semibold ${
+                                isGood ? 'text-emerald-400' : 'text-rose-400'
+                              }`}
+                            >
+                              {isUp ? '▲' : '▼'} {formatSigned(sig.pctDelta, 0, '%')}
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -1299,9 +1418,15 @@ export function GuidedHomeView({
                       const watched = watchlistIds.has(wKey);
                       const isGood = isAnomalyPositive(sig);
                       const isUp = sig.absDelta >= 0;
+                      const higherIsGood = isUp ? isGood : !isGood;
                       const humanMag = describeZScoreHuman(sig.zScore, isGood);
                       const plainExp = plainAnomalyExplanation(sig);
                       const benchInfo = resolveSignalBenchmark(sig, benchmarks);
+                      const sparkValues = getSignalSparklineValues(
+                        sig,
+                        playersById,
+                        teamsById
+                      );
 
                       return (
                         <tr
@@ -1377,19 +1502,33 @@ export function GuidedHomeView({
                             </div>
                           </td>
                           <td className="py-3 px-3 text-right font-mono tabular-nums whitespace-nowrap">
-                            <div className="font-semibold text-slate-100">
-                              {sig.windowAvg.toFixed(1)}{' '}
-                              <span className="text-xs font-normal text-slate-400">
-                                (era {sig.baselineAvg.toFixed(1)})
-                              </span>
-                            </div>
-                            <div
-                              className={`text-xs font-medium ${
-                                isGood ? 'text-emerald-400' : 'text-rose-400'
-                              }`}
-                            >
-                              {isUp ? '▲' : '▼'}{' '}
-                              {formatSigned(sig.pctDelta, 0, '%')}
+                            <div className="inline-flex items-center justify-end gap-2.5">
+                              {sparkValues && (
+                                <MiniSparkline
+                                  values={sparkValues}
+                                  referenceValue={sig.baselineAvg}
+                                  width={56}
+                                  height={18}
+                                  positiveIsGood={higherIsGood}
+                                  title={`Últimos ${sparkValues.length} PJ frente a habitual (${sig.baselineAvg.toFixed(1)})`}
+                                />
+                              )}
+                              <div>
+                                <div className="font-semibold text-slate-100">
+                                  {sig.windowAvg.toFixed(1)}{' '}
+                                  <span className="text-xs font-normal text-slate-400">
+                                    (era {sig.baselineAvg.toFixed(1)})
+                                  </span>
+                                </div>
+                                <div
+                                  className={`text-xs font-medium ${
+                                    isGood ? 'text-emerald-400' : 'text-rose-400'
+                                  }`}
+                                >
+                                  {isUp ? '▲' : '▼'}{' '}
+                                  {formatSigned(sig.pctDelta, 0, '%')}
+                                </div>
+                              </div>
                             </div>
                           </td>
                           <td className="py-3 px-3">
@@ -1487,11 +1626,11 @@ export function GuidedHomeView({
             </div>
 
             <div className="flex items-center gap-2">
-              <div className="inline-flex items-center gap-1 p-0.5 bg-[#131C2E] border border-[#1E293B] rounded-lg">
+              <div className="inline-flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg">
                 <button
                   type="button"
                   onClick={() => setTeamDirection('positive')}
-                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     teamDirection === 'positive'
                       ? 'bg-emerald-500 text-slate-950 font-semibold'
                       : 'text-slate-300 hover:text-white'
@@ -1502,7 +1641,7 @@ export function GuidedHomeView({
                 <button
                   type="button"
                   onClick={() => setTeamDirection('negative')}
-                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     teamDirection === 'negative'
                       ? 'bg-rose-500 text-slate-950 font-semibold'
                       : 'text-slate-300 hover:text-white'
@@ -1523,7 +1662,7 @@ export function GuidedHomeView({
             </div>
           </div>
 
-          <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden flex-1">
+          <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden flex-1">
             {featuredTeams.length === 0 ? (
               <div className="p-8 text-center text-xs text-slate-400">
                 No hay equipos disponibles con el filtro de favoritos actual.
@@ -1542,65 +1681,83 @@ export function GuidedHomeView({
                       aspectLabel,
                       helpKey,
                       benchInfo,
-                    }) => (
-                      <div
-                        key={team.id}
-                        onClick={() => onInspectEntity('team', team.id)}
-                        className="p-3.5 space-y-2.5 active:bg-[#182338] cursor-pointer transition-colors"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <TeamLogo
-                              abbr={team.abbreviation}
-                              teamId={team.id}
-                              logoUrl={team.logoUrl}
-                              size="sm"
-                              framed
-                            />
-                            <div className="min-w-0">
-                              <div className="font-semibold text-sm text-slate-100 truncate">
-                                {team.name}
-                              </div>
-                              <div className="text-xs text-slate-400 truncate">
-                                {team.wins}-{team.losses} ·{' '}
-                                <span className="text-slate-300">
-                                  {aspectLabel}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                          <div className="text-right font-mono tabular-nums shrink-0">
-                            <div
-                              className={`text-sm font-semibold ${
-                                recDiff >= 0
-                                  ? 'text-emerald-400'
-                                  : 'text-rose-400'
-                              }`}
-                            >
-                              {recWins}-{recGames - recWins} (
-                              {formatSigned(recDiff)})
-                            </div>
-                            <div className="inline-flex items-center gap-1 text-[11px] text-slate-400">
-                              <span>
-                                {experienceMode === 'advanced'
-                                  ? `NetRtg ${formatSigned(recNet)}`
-                                  : `Racha ${team.streakCode}`}
-                              </span>
-                              <MetricInfoTooltip
-                                helpKey={helpKey}
-                                align="right"
-                                iconClassName="w-3 h-3"
+                    }) => {
+                      const diffSpark = team.games
+                        .slice(0, Math.min(10, team.games.length))
+                        .reverse()
+                        .map((g) => g.differential);
+                      return (
+                        <div
+                          key={team.id}
+                          onClick={() => onInspectEntity('team', team.id)}
+                          className="p-3.5 space-y-2.5 active:bg-[#182338] cursor-pointer transition-colors"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <TeamLogo
+                                abbr={team.abbreviation}
+                                teamId={team.id}
+                                logoUrl={team.logoUrl}
+                                size="sm"
+                                framed
                               />
+                              <div className="min-w-0">
+                                <div className="font-semibold text-sm text-slate-100 truncate">
+                                  {team.name}
+                                </div>
+                                <div className="text-xs text-slate-400 truncate">
+                                  {team.wins}-{team.losses} ·{' '}
+                                  <span className="text-slate-300">
+                                    {aspectLabel}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              {diffSpark.length >= 2 && (
+                                <MiniSparkline
+                                  values={diffSpark}
+                                  width={48}
+                                  height={16}
+                                  signedZero
+                                  positiveIsGood
+                                  title="Diferencial en últimos partidos"
+                                />
+                              )}
+                              <div className="text-right font-mono tabular-nums shrink-0">
+                                <div
+                                  className={`text-sm font-semibold ${
+                                    recDiff >= 0
+                                      ? 'text-emerald-400'
+                                      : 'text-rose-400'
+                                  }`}
+                                >
+                                  {recWins}-{recGames - recWins} (
+                                  {formatSigned(recDiff)})
+                                </div>
+                                <div className="inline-flex items-center gap-1 text-[11px] text-slate-400">
+                                  <span>
+                                    {experienceMode === 'advanced'
+                                      ? `NetRtg ${formatSigned(recNet)}`
+                                      : `Racha ${team.streakCode}`}
+                                  </span>
+                                  <MetricInfoTooltip
+                                    helpKey={helpKey}
+                                    align="right"
+                                    iconClassName="w-3 h-3"
+                                  />
+                                </div>
+                              </div>
                             </div>
                           </div>
+                          <NbaComparisonBar
+                            value={benchInfo.value}
+                            benchmark={benchInfo.benchmark}
+                            showValueLabel={benchInfo.showValueLabel}
+                          />
                         </div>
-                        <NbaComparisonBar
-                          value={benchInfo.value}
-                          benchmark={benchInfo.benchmark}
-                          showValueLabel={benchInfo.showValueLabel}
-                        />
-                      </div>
-                    )
+                      );
+                    }
                   )}
                 </div>
 
@@ -1701,20 +1858,37 @@ export function GuidedHomeView({
                               </div>
                             </td>
                             <td className="py-3 px-3 text-right font-mono tabular-nums whitespace-nowrap">
-                              <div
-                                className={`font-semibold ${
-                                  recDiff >= 0
-                                    ? 'text-emerald-400'
-                                    : 'text-rose-400'
-                                }`}
-                              >
-                                {recWins}-{recGames - recWins} (
-                                {formatSigned(recDiff)} PTS)
-                              </div>
-                              <div className="text-xs text-slate-400">
-                                {experienceMode === 'advanced'
-                                  ? `NetRtg ${formatSigned(recNet)}`
-                                  : `Racha ${team.streakCode}`}
+                              <div className="inline-flex items-center justify-end gap-2">
+                                {team.games.length >= 2 && (
+                                  <MiniSparkline
+                                    values={team.games
+                                      .slice(0, Math.min(10, team.games.length))
+                                      .reverse()
+                                      .map((g) => g.differential)}
+                                    width={52}
+                                    height={16}
+                                    signedZero
+                                    positiveIsGood
+                                    title="Diferencial de puntos últimos 10 PJ"
+                                  />
+                                )}
+                                <div>
+                                  <div
+                                    className={`font-semibold ${
+                                      recDiff >= 0
+                                        ? 'text-emerald-400'
+                                        : 'text-rose-400'
+                                    }`}
+                                  >
+                                    {recWins}-{recGames - recWins} (
+                                    {formatSigned(recDiff)} PTS)
+                                  </div>
+                                  <div className="text-xs text-slate-400">
+                                    {experienceMode === 'advanced'
+                                      ? `NetRtg ${formatSigned(recNet)}`
+                                      : `Racha ${team.streakCode}`}
+                                  </div>
+                                </div>
                               </div>
                             </td>
                             <td className="py-3 pl-3 pr-4">
@@ -1747,11 +1921,11 @@ export function GuidedHomeView({
             </div>
 
             <div className="flex items-center gap-2">
-              <div className="inline-flex items-center gap-1 p-0.5 bg-[#131C2E] border border-[#1E293B] rounded-lg">
+              <div className="inline-flex items-center gap-1 p-1 bg-[#131C2E] border border-[#1E293B] rounded-lg">
                 <button
                   type="button"
                   onClick={() => setStreakDirection('all')}
-                  className={`px-2 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     streakDirection === 'all'
                       ? 'bg-orange-500 text-slate-950 font-semibold'
                       : 'text-slate-300 hover:text-white'
@@ -1762,7 +1936,7 @@ export function GuidedHomeView({
                 <button
                   type="button"
                   onClick={() => setStreakDirection('positive')}
-                  className={`px-2 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     streakDirection === 'positive'
                       ? 'bg-emerald-500 text-slate-950 font-semibold'
                       : 'text-slate-300 hover:text-white'
@@ -1773,7 +1947,7 @@ export function GuidedHomeView({
                 <button
                   type="button"
                   onClick={() => setStreakDirection('negative')}
-                  className={`px-2 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     streakDirection === 'negative'
                       ? 'bg-rose-500 text-slate-950 font-semibold'
                       : 'text-slate-300 hover:text-white'
@@ -1794,7 +1968,7 @@ export function GuidedHomeView({
             </div>
           </div>
 
-          <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden flex-1">
+          <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden flex-1">
             {featuredStreaks.length === 0 ? (
               <div className="p-8 text-center text-xs text-slate-400">
                 Sin rachas activas de este tipo con el corte actual de partidos seguidos.

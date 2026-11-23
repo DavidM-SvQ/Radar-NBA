@@ -931,7 +931,7 @@ export function LineupsExplorerView({
   return (
     <div className="space-y-5">
       {/* Row 1: Homogeneous 4-Column Summary Strip */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden [&>*:nth-child(odd)]:border-r [&>*:nth-child(odd)]:border-[#1E293B] [&>*:nth-child(-n+2)]:border-b [&>*:nth-child(-n+2)]:border-[#1E293B] lg:[&>*]:border-b-0 lg:[&>*]:border-r lg:[&>*:last-child]:border-r-0">
+      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden [&>*:nth-child(odd)]:border-r [&>*:nth-child(odd)]:border-[#1E293B] [&>*:nth-child(-n+2)]:border-b [&>*:nth-child(-n+2)]:border-[#1E293B] lg:[&>*]:border-b-0 lg:[&>*]:border-r lg:[&>*:last-child]:border-r-0">
         <div className="p-3.5 sm:p-4">
           <div className="flex items-center justify-between gap-1 text-xs text-slate-400">
             <span className="truncate">Alineaciones ({groupQuantity}-Man)</span>
@@ -1012,13 +1012,13 @@ export function LineupsExplorerView({
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <span className="text-xs text-slate-400">Formato:</span>
-            <div className="inline-flex items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg">
+            <div className="inline-flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg">
               {([5, 3, 2] as const).map((g) => (
                 <button
                   key={g}
                   type="button"
                   onClick={() => setGroupQuantity(g)}
-                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                  className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
                     groupQuantity === g
                       ? 'bg-orange-500 text-slate-950 font-semibold'
                       : 'text-slate-300 hover:text-white'
@@ -1069,7 +1069,7 @@ export function LineupsExplorerView({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Buscar jugador o franquicia en la alineación (Jokic, BOS, Doncic)..."
-              className="w-full pl-9 pr-3 py-2 sm:py-1.5 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500 transition-colors"
+              className="w-full h-9 pl-9 pr-3 text-xs bg-[#0B1120] border border-[#1E293B] rounded-md text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-orange-500 transition-colors"
             />
           </div>
 
@@ -1078,14 +1078,14 @@ export function LineupsExplorerView({
               {filtered.length} de {enrichedLineups.length} combinaciones visibles
             </span>
             <div
-              className="inline-flex items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs"
+              className="inline-flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs"
               role="group"
               aria-label="Modo de volumen estadístico"
             >
               <button
                 type="button"
                 onClick={() => setStatMode('per_game')}
-                className={`px-2.5 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap ${
+                className={`min-h-[28px] px-2.5 py-1 rounded-md font-medium transition-colors whitespace-nowrap ${
                   statMode === 'per_game'
                     ? 'bg-orange-500 text-slate-950 font-semibold'
                     : 'text-slate-400 hover:text-slate-200'
@@ -1096,7 +1096,7 @@ export function LineupsExplorerView({
               <button
                 type="button"
                 onClick={() => setStatMode('totals')}
-                className={`px-2.5 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap ${
+                className={`min-h-[28px] px-2.5 py-1 rounded-md font-medium transition-colors whitespace-nowrap ${
                   statMode === 'totals'
                     ? 'bg-orange-500 text-slate-950 font-semibold'
                     : 'text-slate-400 hover:text-slate-200'
@@ -1125,7 +1125,7 @@ export function LineupsExplorerView({
       />
 
       {errorMsg && (
-        <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-4 text-xs text-rose-300">
+        <div className="bg-rose-500/10 border border-rose-500/30 rounded-lg p-4 text-xs text-rose-300">
           {errorMsg}
         </div>
       )}

@@ -36,7 +36,7 @@ import {
   sortRows,
   useTableSort,
 } from '../utils/tableSort';
-import { PlayerAvatar } from './NbaVisuals';
+import { MiniSparkline, PlayerAvatar } from './NbaVisuals';
 import { ExportImageButton } from './ExportImageButton';
 import { buildComparisonSnapshotBlob } from '../utils/exportImageCard';
 
@@ -1500,10 +1500,25 @@ export function HeadToHeadBattleView({
       ? 'Partidos en Casa'
       : 'Partidos Fuera';
 
+  const sparkPtsA = useMemo(
+    () =>
+      playerA && playerA.games.length >= 2
+        ? playerA.games.slice(0, Math.min(10, playerA.games.length)).reverse().map((g) => g.points)
+        : [],
+    [playerA]
+  );
+  const sparkPtsB = useMemo(
+    () =>
+      playerB && playerB.games.length >= 2
+        ? playerB.games.slice(0, Math.min(10, playerB.games.length)).reverse().map((g) => g.points)
+        : [],
+    [playerB]
+  );
+
   return (
     <div className="space-y-4 sm:space-y-5">
       {/* Row 1: Homogeneous 4-Cell Summary KPI Strip */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden [&>*:nth-child(odd)]:border-r [&>*:nth-child(odd)]:border-[#1E293B] [&>*:nth-child(-n+2)]:border-b [&>*:nth-child(-n+2)]:border-[#1E293B] lg:[&>*]:border-b-0 lg:[&>*]:border-r lg:[&>*:last-child]:border-r-0">
+      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden [&>*:nth-child(odd)]:border-r [&>*:nth-child(odd)]:border-[#1E293B] [&>*:nth-child(-n+2)]:border-b [&>*:nth-child(-n+2)]:border-[#1E293B] lg:[&>*]:border-b-0 lg:[&>*]:border-r lg:[&>*:last-child]:border-r-0">
         <div className="p-3.5 sm:p-4">
           <div className="flex items-center justify-between gap-1 text-[11px] sm:text-xs text-slate-400">
             <span className="truncate">Marcador de categorías</span>
@@ -1590,7 +1605,7 @@ export function HeadToHeadBattleView({
       </div>
 
       {/* Row 2: Unified Matchup Setup Deck (Season + Sample Scope + Conditional N PJ + Players) */}
-      <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-3.5 sm:p-4 space-y-3.5">
+      <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3.5 sm:p-4 space-y-3.5">
         {/* Top Row: Unified Season + Sample Scope + Conditional Window + Actions */}
         <div className="flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex flex-wrap items-center gap-2 max-w-full">
@@ -1608,7 +1623,7 @@ export function HeadToHeadBattleView({
                   key={m.id}
                   type="button"
                   onClick={() => onChangeSeasonMode(m.id)}
-                  className={`min-h-[32px] sm:min-h-0 px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     seasonMode === m.id
                       ? 'bg-orange-500 text-slate-950 font-bold shadow-sm'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-[#1E293B]'
@@ -1634,7 +1649,7 @@ export function HeadToHeadBattleView({
                     key={opt.id}
                     type="button"
                     onClick={() => setScope(opt.id)}
-                    className={`min-h-[32px] sm:min-h-0 px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+                    className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                       scope === opt.id
                         ? 'bg-orange-500 text-slate-950 font-semibold'
                         : 'text-slate-300 hover:text-white'
@@ -1656,7 +1671,7 @@ export function HeadToHeadBattleView({
                     key={w}
                     type="button"
                     onClick={() => onChangeWindowSize(w)}
-                    className={`min-h-[30px] sm:min-h-0 px-2 py-0.5 text-xs font-mono rounded transition-colors whitespace-nowrap shrink-0 ${
+                    className={`min-h-[28px] px-2 py-0.5 text-xs font-mono rounded-md transition-colors whitespace-nowrap shrink-0 ${
                       windowSize === w
                         ? 'bg-orange-500/20 text-orange-300 font-semibold'
                         : 'text-slate-400 hover:text-white'
@@ -1673,7 +1688,7 @@ export function HeadToHeadBattleView({
             <button
               type="button"
               onClick={handleSwapPlayers}
-              className="min-h-[36px] sm:min-h-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] text-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0"
+              className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] text-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
               <ArrowLeftRight className="w-3.5 h-3.5 text-orange-400" />
               <span>Intercambiar lados</span>
@@ -1682,7 +1697,7 @@ export function HeadToHeadBattleView({
             <button
               type="button"
               onClick={handleRandomBattle}
-              className="min-h-[36px] sm:min-h-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] text-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0"
+              className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] text-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
               <Shuffle className="w-3.5 h-3.5 text-sky-400" />
               <span>Duelo aleatorio</span>
@@ -1793,7 +1808,7 @@ export function HeadToHeadBattleView({
                   type="button"
                   disabled={loadingAllPlayers}
                   onClick={onLoadAllPlayers}
-                  className="min-h-[36px] sm:min-h-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] text-orange-300 rounded-lg transition-colors whitespace-nowrap shrink-0 disabled:opacity-60"
+                  className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] text-orange-300 rounded-lg transition-colors whitespace-nowrap shrink-0 disabled:opacity-60"
                 >
                   <Users className="w-3.5 h-3.5" />
                   <span>
@@ -1904,7 +1919,7 @@ export function HeadToHeadBattleView({
           <button
             type="button"
             onClick={() => setShowNbaRing((prev) => !prev)}
-            className={`min-h-[34px] sm:min-h-0 px-2.5 py-1 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+            className={`min-h-[36px] px-2.5 py-1 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
               showNbaRing
                 ? 'bg-[#182338] border-[#283548] text-slate-200'
                 : 'bg-[#131C2E] border-[#1E293B] text-slate-400 hover:text-slate-200'
@@ -1915,7 +1930,7 @@ export function HeadToHeadBattleView({
         </div>
 
         {/* Single-Elevation Arena Container */}
-        <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden">
+        <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
           {/* Mobile Compact Side-by-Side Fighter Banner (< xl) so smartphone sees both cards + radar immediately */}
           <div className="grid grid-cols-2 divide-x divide-[#1E293B] border-b border-[#1E293B] xl:hidden">
             {/* Mobile Fighter A */}
@@ -1958,6 +1973,19 @@ export function HeadToHeadBattleView({
                 {statsA.pts.toFixed(1)} PTS · {statsA.reb.toFixed(1)} REB ·{' '}
                 {statsA.ast.toFixed(1)} AST
               </div>
+              {sparkPtsA.length >= 2 && (
+                <div className="flex items-center justify-between gap-1.5 pt-1 border-t border-[#1E293B]/60">
+                  <span className="text-[10px] text-slate-400 truncate">Últ. {sparkPtsA.length} PTS</span>
+                  <MiniSparkline
+                    values={sparkPtsA}
+                    referenceValue={statsA.pts}
+                    width={56}
+                    height={16}
+                    positiveIsGood
+                    title="Puntos últimos partidos vs media"
+                  />
+                </div>
+              )}
             </div>
 
             {/* Mobile Fighter B */}
@@ -2000,6 +2028,19 @@ export function HeadToHeadBattleView({
                 {statsB.pts.toFixed(1)} PTS · {statsB.reb.toFixed(1)} REB ·{' '}
                 {statsB.ast.toFixed(1)} AST
               </div>
+              {sparkPtsB.length >= 2 && (
+                <div className="flex items-center justify-between gap-1.5 pt-1 border-t border-[#1E293B]/60">
+                  <span className="text-[10px] text-slate-400 truncate">Últ. {sparkPtsB.length} PTS</span>
+                  <MiniSparkline
+                    values={sparkPtsB}
+                    referenceValue={statsB.pts}
+                    width={56}
+                    height={16}
+                    positiveIsGood
+                    title="Puntos últimos partidos vs media"
+                  />
+                </div>
+              )}
             </div>
           </div>
 
@@ -2062,6 +2103,22 @@ export function HeadToHeadBattleView({
                   </div>
                   <MetricInfoTooltip helpKey="duelPlayerRole" align="left" />
                 </div>
+
+                {sparkPtsA.length >= 2 && (
+                  <div className="pt-3 border-t border-[#1E293B] flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-slate-400">
+                      Ritmo anotador (últ. {sparkPtsA.length} PJ)
+                    </span>
+                    <MiniSparkline
+                      values={sparkPtsA}
+                      referenceValue={statsA.pts}
+                      width={76}
+                      height={20}
+                      positiveIsGood
+                      title={`Puntos últimos ${sparkPtsA.length} partidos vs media (${statsA.pts.toFixed(1)})`}
+                    />
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-y-3 gap-x-4 pt-3 border-t border-[#1E293B]">
                   <div>
@@ -2499,6 +2556,22 @@ export function HeadToHeadBattleView({
                   <MetricInfoTooltip helpKey="duelPlayerRole" align="right" />
                 </div>
 
+                {sparkPtsB.length >= 2 && (
+                  <div className="pt-3 border-t border-[#1E293B] flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-slate-400">
+                      Ritmo anotador (últ. {sparkPtsB.length} PJ)
+                    </span>
+                    <MiniSparkline
+                      values={sparkPtsB}
+                      referenceValue={statsB.pts}
+                      width={76}
+                      height={20}
+                      positiveIsGood
+                      title={`Puntos últimos ${sparkPtsB.length} partidos vs media (${statsB.pts.toFixed(1)})`}
+                    />
+                  </div>
+                )}
+
                 <div className="grid grid-cols-2 gap-y-3 gap-x-4 pt-3 border-t border-[#1E293B]">
                   <div>
                     <span className="inline-flex items-center gap-1 text-[11px] text-slate-400">
@@ -2652,7 +2725,7 @@ export function HeadToHeadBattleView({
                     onSwitchToAdvanced();
                   }
                 }}
-                className={`min-h-[32px] sm:min-h-0 px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+                className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                   categoryTab === tab.id
                     ? 'bg-orange-500 text-slate-950 font-semibold'
                     : 'text-slate-300 hover:text-white'
@@ -2664,7 +2737,7 @@ export function HeadToHeadBattleView({
           </div>
         </div>
 
-        <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden">
+        <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
           {/* Arcade Scoreboard Dominance Bar */}
           <div className="p-3.5 sm:p-4 bg-[#0F172A]/70 border-b border-[#1E293B] space-y-2">
             <div className="flex items-center justify-between gap-2 text-xs sm:text-sm">
@@ -3002,7 +3075,7 @@ export function HeadToHeadBattleView({
       </section>
 
       {/* Row 5: Automated Duel Verdict & Matchup Keys */}
-      <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-3">
+      <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-3">
         <div className="flex items-center gap-2">
           <Sliders className="w-4 h-4 text-orange-400 shrink-0" />
           <h2 className="text-sm font-semibold text-slate-100">

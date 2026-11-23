@@ -26,6 +26,10 @@ import type {
   PlayerSummary,
   TeamSummary,
 } from '../types/nba';
+import {
+  fetchSharedHeroicShots,
+  translatePlayDescriptionEs,
+} from '../utils/heroicShotsClient';
 import { formatShortDate, normalizeSearchText } from '../utils/analytics';
 import { MetricInfoTooltip, SortableTh } from './MetricUiHelpers';
 import { STICKY_THEAD_CLASS, sortRows, useTableSort } from '../utils/tableSort';
@@ -178,125 +182,6 @@ function formatClockLabel(clockSeconds: number, rawClock: string): string {
   if (Number.isFinite(clockSeconds) && clockSeconds <= 0.15) return '0.0s';
   if (Number.isFinite(clockSeconds)) return `${clockSeconds.toFixed(1)}s`;
   return rawClock || '—';
-}
-
-function translatePlayDescriptionEs(rawDescription: string): string {
-  const cleaned = String(rawDescription || '').replace(/\s+/g, ' ').trim();
-  if (!cleaned) return 'Canasta decisiva';
-
-  let working = cleaned;
-  let assistSegment = '';
-  const assistMatch = working.match(/\(([^()]+?)\s+(\d+)\s+AST\)\s*$/i);
-  if (assistMatch) {
-    assistSegment = ` (Asist. ${assistMatch[1].trim()} · ${assistMatch[2]} AST)`;
-    working = working.slice(0, assistMatch.index).trim();
-  }
-
-  let ptsSegment = '';
-  const ptsMatch = working.match(/\((\d+)\s+PTS\)\s*$/i);
-  if (ptsMatch) {
-    ptsSegment = ` (${ptsMatch[1]} PTS)`;
-    working = working.slice(0, ptsMatch.index).trim();
-  }
-
-  const actionMatch = working.match(
-    /^(.*?)\s+(?:(\d+')\s+)?((?:away-from-play\s+)?Free Throw\s+\d+\s+of\s+\d+|3PT(?:\s+(?:pullup|step back|bank|running|turnaround|fadeaway))*|(?:(?:turnaround|fadeaway|step back|pullup|driving|running|cutting|tip|putback|alley-oop|floating|bank|finger roll)\s+)*(?:Jump Shot|Layup|DUNK|Hook(?:\s+Shot)?))\s*$/i
-  );
-
-  if (!actionMatch) {
-    return `${working}${ptsSegment}${assistSegment}`;
-  }
-
-  const playerPart = actionMatch[1].trim();
-  const distPart = actionMatch[2] ? actionMatch[2].trim() : '';
-  const rawAction = actionMatch[3].replace(/\s+/g, ' ').trim();
-  const lower = rawAction.toLowerCase();
-
-  let actionEs = rawAction;
-
-  const ftMatch = lower.match(/^(away-from-play\s+)?free throw\s+(\d+)\s+of\s+(\d+)$/);
-  if (ftMatch) {
-    actionEs = ftMatch[1]
-      ? `tiro libre sin balón ${ftMatch[2]} de ${ftMatch[3]}`
-      : `tiro libre ${ftMatch[2]} de ${ftMatch[3]}`;
-  } else if (lower.startsWith('3pt')) {
-    if (lower.includes('pullup') && lower.includes('bank')) {
-      actionEs = 'triple a tablero tras bote';
-    } else if (lower.includes('step back')) {
-      actionEs = 'triple en step-back';
-    } else if (lower.includes('pullup')) {
-      actionEs = 'triple tras bote';
-    } else if (lower.includes('turnaround')) {
-      actionEs = 'triple a la media vuelta';
-    } else if (lower.includes('fadeaway')) {
-      actionEs = 'triple en fadeaway';
-    } else if (lower.includes('running')) {
-      actionEs = 'triple en carrera';
-    } else {
-      actionEs = 'triple';
-    }
-  } else if (lower.includes('jump shot')) {
-    if (lower.includes('turnaround') && lower.includes('fadeaway')) {
-      actionEs = 'tiro en suspensión a la media vuelta en fadeaway';
-    } else if (lower.includes('driving') && lower.includes('floating') && lower.includes('bank')) {
-      actionEs = 'bomba a tablero en penetración';
-    } else if (lower.includes('driving') && lower.includes('floating')) {
-      actionEs = 'bomba en penetración';
-    } else if (lower.includes('turnaround')) {
-      actionEs = 'tiro en suspensión a la media vuelta';
-    } else if (lower.includes('step back')) {
-      actionEs = 'tiro en suspensión en step-back';
-    } else if (lower.includes('pullup') && lower.includes('bank')) {
-      actionEs = 'tiro en suspensión a tablero tras bote';
-    } else if (lower.includes('pullup')) {
-      actionEs = 'tiro en suspensión tras bote';
-    } else if (lower.includes('fadeaway')) {
-      actionEs = 'tiro en suspensión en fadeaway';
-    } else if (lower.includes('floating')) {
-      actionEs = 'bomba en suspensión';
-    } else {
-      actionEs = 'tiro en suspensión';
-    }
-  } else if (lower.includes('layup')) {
-    if (lower.includes('driving') && lower.includes('finger roll')) {
-      actionEs = 'bandeja suave en penetración';
-    } else if (lower.includes('driving')) {
-      actionEs = 'bandeja en penetración';
-    } else if (lower.includes('running')) {
-      actionEs = 'bandeja en carrera';
-    } else if (lower.includes('cutting')) {
-      actionEs = 'bandeja tras corte';
-    } else if (lower.includes('tip')) {
-      actionEs = 'palmeo bajo el aro';
-    } else if (lower.includes('putback')) {
-      actionEs = 'bandeja tras rebote ofensivo';
-    } else if (lower.includes('alley-oop')) {
-      actionEs = 'bandeja en alley-oop';
-    } else {
-      actionEs = 'bandeja';
-    }
-  } else if (lower.includes('dunk')) {
-    if (lower.includes('alley-oop')) {
-      actionEs = 'mate en alley-oop';
-    } else if (lower.includes('cutting')) {
-      actionEs = 'mate tras corte';
-    } else if (lower.includes('driving')) {
-      actionEs = 'mate en penetración';
-    } else if (lower.includes('putback')) {
-      actionEs = 'mate tras rebote ofensivo';
-    } else if (lower.includes('running')) {
-      actionEs = 'mate en carrera';
-    } else if (lower.includes('tip')) {
-      actionEs = 'mate en palmeo';
-    } else {
-      actionEs = 'mate';
-    }
-  } else if (lower.includes('hook')) {
-    actionEs = lower.includes('turnaround') ? 'gancho a la media vuelta' : 'tiro de gancho';
-  }
-
-  const distEs = distPart ? ` desde ${distPart}` : '';
-  return `${playerPart} · ${actionEs}${distEs}${ptsSegment}${assistSegment}`;
 }
 
 function CourtDistanceMeter({
@@ -666,13 +551,7 @@ export function HeroicShotsView({
     }
     setErrorMsg(null);
     try {
-      const params = new URLSearchParams({ season: 'all' });
-      if (forceRefresh) params.set('refresh', '1');
-      const res = await fetch(`/api/nba/advanced/heroic-shots?${params.toString()}`);
-      if (!res.ok) {
-        throw new Error('No se pudo cargar el archivo histórico de Buzzer Beaters y Game Winners.');
-      }
-      const json = (await res.json()) as NbaHeroicShotsResponse;
+      const json = await fetchSharedHeroicShots('all', forceRefresh);
       setData(json);
     } catch (err) {
       setErrorMsg(
@@ -1089,7 +968,7 @@ export function HeroicShotsView({
 
   if (loading && !data) {
     return (
-      <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-8 flex flex-col items-center justify-center gap-3 text-center">
+      <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-8 flex flex-col items-center justify-center gap-3 text-center">
         <RefreshCw className="w-6 h-6 text-orange-400 animate-spin" />
         <div className="space-y-1">
           <p className="text-sm font-semibold text-slate-100">
@@ -1105,7 +984,7 @@ export function HeroicShotsView({
 
   if (errorMsg && !data) {
     return (
-      <div className="bg-[#131C2E] border border-rose-500/40 rounded-xl sm:rounded-lg p-6 flex flex-wrap items-center justify-between gap-4">
+      <div className="bg-[#131C2E] border border-rose-500/40 rounded-lg p-6 flex flex-wrap items-center justify-between gap-4">
         <div>
           <p className="text-sm font-semibold text-rose-300">
             Incidencia al cargar el módulo de Tiros Decisivos
@@ -1126,7 +1005,7 @@ export function HeroicShotsView({
   return (
     <div className="space-y-5 sm:space-y-6">
       {/* Header + Season Scope + View Switcher */}
-      <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4">
+      <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div className="space-y-1 min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -1160,7 +1039,7 @@ export function HeroicShotsView({
                   key={opt.id}
                   type="button"
                   onClick={() => setSeasonFilter(opt.id)}
-                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     seasonFilter === opt.id
                       ? 'bg-orange-500 text-slate-950 font-semibold'
                       : 'text-slate-300 hover:text-white hover:bg-[#131C2E]'
@@ -1174,7 +1053,7 @@ export function HeroicShotsView({
             <button
               type="button"
               onClick={onToggleOnlyWatchlist}
-              className={`min-h-[34px] inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+              className={`min-h-[36px] inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
                 onlyWatchlist
                   ? 'bg-orange-500/15 border-orange-500/50 text-orange-300'
                   : 'bg-[#0B1120] hover:bg-[#182338] border-[#1E293B] text-slate-300 hover:text-white'
@@ -1193,7 +1072,7 @@ export function HeroicShotsView({
               disabled={refreshing}
               onClick={() => void fetchHeroicShots(true)}
               title="Reescanear nuevos finales cerrados recientes"
-              className="min-h-[34px] inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg border bg-[#0B1120] hover:bg-[#182338] border-[#1E293B] text-slate-300 hover:text-white disabled:opacity-60 transition-colors whitespace-nowrap shrink-0"
+              className="min-h-[36px] inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg border bg-[#0B1120] hover:bg-[#182338] border-[#1E293B] text-slate-300 hover:text-white disabled:opacity-60 transition-colors whitespace-nowrap shrink-0"
             >
               <RefreshCw className={`w-3.5 h-3.5 text-orange-400 ${refreshing ? 'animate-spin' : ''}`} />
               <span className="hidden sm:inline">{refreshing ? 'Actualizando...' : 'Actualizar'}</span>
@@ -1252,7 +1131,7 @@ export function HeroicShotsView({
                 <button
                   type="button"
                   onClick={() => setArchiveDisplayMode('cards')}
-                  className={`px-2.5 py-1 text-xs font-medium rounded-md inline-flex items-center gap-1 transition-colors whitespace-nowrap ${
+                  className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md inline-flex items-center gap-1 transition-colors whitespace-nowrap ${
                     archiveDisplayMode === 'cards'
                       ? 'bg-[#1E293B] text-orange-300 font-semibold'
                       : 'text-slate-400 hover:text-slate-200'
@@ -1264,7 +1143,7 @@ export function HeroicShotsView({
                 <button
                   type="button"
                   onClick={() => setArchiveDisplayMode('table')}
-                  className={`px-2.5 py-1 text-xs font-medium rounded-md inline-flex items-center gap-1 transition-colors whitespace-nowrap ${
+                  className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md inline-flex items-center gap-1 transition-colors whitespace-nowrap ${
                     archiveDisplayMode === 'table'
                       ? 'bg-[#1E293B] text-orange-300 font-semibold'
                       : 'text-slate-400 hover:text-slate-200'
@@ -1280,7 +1159,7 @@ export function HeroicShotsView({
       </section>
 
       {/* Homogeneous 4-Column KPI Summary Strip (click cards to quick-filter!) */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden [&>*:nth-child(odd)]:border-r [&>*:nth-child(odd)]:border-[#1E293B] [&>*:nth-child(-n+2)]:border-b [&>*:nth-child(-n+2)]:border-[#1E293B] lg:[&>*]:border-b-0 lg:[&>*]:border-r lg:[&>*:last-child]:border-r-0">
+      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden [&>*:nth-child(odd)]:border-r [&>*:nth-child(odd)]:border-[#1E293B] [&>*:nth-child(-n+2)]:border-b [&>*:nth-child(-n+2)]:border-[#1E293B] lg:[&>*]:border-b-0 lg:[&>*]:border-r lg:[&>*:last-child]:border-r-0">
         <div
           onClick={() => {
             handleShotTypeFilterChange('all');
@@ -1381,7 +1260,7 @@ export function HeroicShotsView({
 
       {/* Unified Filter Bar for Archive, Players & Teams tabs */}
       {activeTab !== 'history' && (
-        <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-3.5 space-y-3">
+        <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3.5 space-y-3">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
             <div className="flex flex-wrap items-center gap-2 min-w-0 flex-1">
               <div className="relative flex-1 min-w-[200px] max-w-sm">
@@ -1395,7 +1274,7 @@ export function HeroicShotsView({
                       ? 'Buscar franquicia (BOS, Lakers...)'
                       : 'Buscar jugador, franquicia, jugada...'
                   }
-                  className="w-full pl-8 pr-8 py-1.5 bg-[#0B1120] border border-[#1E293B] focus:border-orange-500 rounded-lg text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none"
+                  className="w-full h-9 pl-8 pr-8 bg-[#0B1120] border border-[#1E293B] focus:border-orange-500 rounded-md text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none"
                 />
                 {searchQuery && (
                   <button
@@ -1413,7 +1292,7 @@ export function HeroicShotsView({
                 value={teamFilter}
                 onChange={(e) => setTeamFilter(e.target.value)}
                 aria-label="Filtrar por franquicia NBA"
-                className="px-2.5 py-1.5 bg-[#0B1120] border border-[#1E293B] focus:border-orange-500 rounded-lg text-xs text-slate-200 focus:outline-none"
+                className="h-9 px-2.5 bg-[#0B1120] border border-[#1E293B] focus:border-orange-500 rounded-md text-xs text-slate-200 focus:outline-none"
               >
                 <option value="all">Todas las franquicias (30)</option>
                 {sortedTeamsList.map((t) => (
@@ -1423,7 +1302,7 @@ export function HeroicShotsView({
                 ))}
               </select>
 
-              <div className="inline-flex items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg">
+              <div className="inline-flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg">
                 {(
                   [
                     { id: 'all', label: 'Todos los tipos' },
@@ -1436,7 +1315,7 @@ export function HeroicShotsView({
                     key={opt.id}
                     type="button"
                     onClick={() => handleShotTypeFilterChange(opt.id)}
-                    className={`px-2 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap ${
+                    className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
                       shotTypeFilter === opt.id
                         ? 'bg-orange-500 text-slate-950 font-semibold'
                         : 'text-slate-300 hover:text-white'
@@ -1448,7 +1327,7 @@ export function HeroicShotsView({
               </div>
 
               {activeTab === 'archive' && (
-                <div className="inline-flex items-center gap-1 p-0.5 bg-[#0B1120] border border-[#1E293B] rounded-lg">
+                <div className="inline-flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg">
                   {(
                     [
                       { id: 'all', label: '3P/2P/TL' },
@@ -1461,7 +1340,7 @@ export function HeroicShotsView({
                       key={opt.id}
                       type="button"
                       onClick={() => setPointsFilter(opt.id)}
-                      className={`px-2 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap ${
+                      className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
                         pointsFilter === opt.id
                           ? 'bg-[#1E293B] text-orange-300 font-semibold'
                           : 'text-slate-400 hover:text-slate-200'
@@ -1479,7 +1358,7 @@ export function HeroicShotsView({
                 <button
                   type="button"
                   onClick={() => setPlayerFilterId(null)}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-orange-500/15 border border-orange-500/40 text-xs font-semibold text-orange-300 hover:bg-orange-500/25 transition-colors whitespace-nowrap"
+                  className="min-h-[36px] inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-orange-500/15 border border-orange-500/40 text-xs font-semibold text-orange-300 hover:bg-orange-500/25 transition-colors whitespace-nowrap"
                 >
                   <Filter className="w-3 h-3" />
                   <span>Jugador: {activePlayerFilterName}</span>
@@ -1491,7 +1370,7 @@ export function HeroicShotsView({
                 <button
                   type="button"
                   onClick={clearAllFilters}
-                  className="px-2.5 py-1 text-xs font-medium text-slate-300 hover:text-white bg-[#0B1120] border border-[#1E293B] rounded-lg transition-colors whitespace-nowrap"
+                  className="min-h-[36px] px-2.5 py-1 text-xs font-medium text-slate-300 hover:text-white bg-[#0B1120] border border-[#1E293B] rounded-lg transition-colors whitespace-nowrap"
                 >
                   Restablecer
                 </button>
@@ -1628,7 +1507,7 @@ export function HeroicShotsView({
         <div className="space-y-4">
           {/* Spotlight Card of Latest / Top Buzzer Beater */}
           {spotlightShot && archiveDisplayMode === 'cards' && (
-            <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-4 sm:p-5 space-y-4">
+            <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1E293B] pb-3">
                 <div className="flex items-center gap-2 min-w-0">
                   <Sparkles className="w-4 h-4 text-orange-400 shrink-0" />
@@ -1757,7 +1636,7 @@ export function HeroicShotsView({
           )}
 
           {sortedArchiveShots.length === 0 ? (
-            <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg p-8 text-center space-y-2.5">
+            <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-8 text-center space-y-2.5">
               <p className="text-sm font-semibold text-slate-200">
                 Sin tiros decisivos con los filtros seleccionados
               </p>
@@ -1795,7 +1674,7 @@ export function HeroicShotsView({
                 return (
                   <article
                     key={shot.id}
-                    className="bg-[#131C2E] border border-[#1E293B] hover:border-[#283548] rounded-xl sm:rounded-lg p-4 space-y-3 transition-colors flex flex-col justify-between"
+                    className="bg-[#131C2E] border border-[#1E293B] hover:border-[#283548] rounded-lg p-4 space-y-3 transition-colors flex flex-col justify-between"
                   >
                     <div className="space-y-3">
                       {/* Card Top Meta Row */}
@@ -1928,7 +1807,7 @@ export function HeroicShotsView({
             </div>
           ) : (
             /* Table Mode for Archive */
-            <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden">
+            <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
               <div className="overflow-x-auto max-h-[680px]">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead className={STICKY_THEAD_CLASS}>
@@ -2094,7 +1973,7 @@ export function HeroicShotsView({
 
       {/* TAB 2: RANKING DE JUGADORES MÁS DECISIVOS */}
       {activeTab === 'players' && (
-        <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden">
+        <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
           <div className="px-4 py-3 border-b border-[#1E293B] flex flex-wrap items-center justify-between gap-2">
             <div>
               <h3 className="text-sm font-semibold text-slate-100">
@@ -2370,7 +2249,7 @@ export function HeroicShotsView({
 
       {/* TAB 3: RANKING DE FRANQUICIAS (A FAVOR VS EN CONTRA) */}
       {activeTab === 'teams' && (
-        <section className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden">
+        <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
           <div className="px-4 py-3 border-b border-[#1E293B] flex flex-wrap items-center justify-between gap-2">
             <div>
               <h3 className="text-sm font-semibold text-slate-100 flex items-center gap-1.5">
@@ -2550,7 +2429,7 @@ export function HeroicShotsView({
       {activeTab === 'history' && (
         <div className="space-y-5">
           {/* 3-Column Educational Taxonomy */}
-          <section className="grid grid-cols-1 md:grid-cols-3 bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg divide-y md:divide-y-0 md:divide-x divide-[#1E293B]">
+          <section className="grid grid-cols-1 md:grid-cols-3 bg-[#131C2E] border border-[#1E293B] rounded-lg divide-y md:divide-y-0 md:divide-x divide-[#1E293B]">
             <div className="p-4 sm:p-5 space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <span className="inline-flex items-center gap-1.5 text-sm font-bold text-orange-300">
@@ -2602,7 +2481,7 @@ export function HeroicShotsView({
 
           {/* Historical NBA Benchmarks + Live Leaders Comparison */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-            <section className="lg:col-span-7 bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden">
+            <section className="lg:col-span-7 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
               <div className="px-4 py-3 border-b border-[#1E293B] flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <Award className="w-4 h-4 text-orange-400 shrink-0" />
@@ -2644,7 +2523,7 @@ export function HeroicShotsView({
               </div>
             </section>
 
-            <section className="lg:col-span-5 bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden flex flex-col">
+            <section className="lg:col-span-5 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden flex flex-col">
               <div className="px-4 py-3 border-b border-[#1E293B] flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <Trophy className="w-4 h-4 text-emerald-400 shrink-0" />

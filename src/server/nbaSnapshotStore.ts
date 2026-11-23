@@ -182,6 +182,7 @@ export interface NbaAdvancedSnapshotPayload {
   heroicShots?: {
     season: string;
     generatedAt: string;
+    scannedGameIds?: string[];
     items: any[];
     playerCounts: Record<string, { buzzerBeaters: number; gameWinners: number; otTyingBuzzers: number }>;
     teamCounts: Record<string, { buzzerBeaters: number; gameWinners: number; otTyingBuzzers: number }>;

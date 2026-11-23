@@ -1734,5 +1734,135 @@ export interface NbaPlayerDossierAdvancedResponse {
   leagueBenchmarks?: Record<string, NbaAdvancedBenchmarkStat>;
 }
 
+export interface MilestoneNotificationsConfigValues {
+  enabled: boolean;
+  lookbackDays: number;
+  maxNotifications: number;
 
+  // Grupo 1: Actuaciones de Partido (11)
+  scoringMilestoneEnabled: boolean;
+  scoringThreshold: number;
+  seasonHighPtsEnabled: boolean;
+  seasonHighMinPts: number;
+  seasonHighMinGames: number;
+  threePointExplosionEnabled: boolean;
+  threePointThreshold: number;
+  assistExplosionEnabled: boolean;
+  assistExplosionThreshold: number;
+  reboundExplosionEnabled: boolean;
+  reboundExplosionThreshold: number;
+  orebExplosionEnabled: boolean;
+  orebExplosionThreshold: number;
+  tripleDoubleEnabled: boolean;
+  tripleDoubleMinStat: number;
+  twentyTwentyEnabled: boolean;
+  twentyTwentyPtsMin: number;
+  twentyTwentySecMin: number;
+  doubleDoubleEnabled: boolean;
+  doubleDoubleMinPts: number;
+  efficiencySniperEnabled: boolean;
+  efficiencyMinPts: number;
+  efficiencyMinFgPct: number;
+  cleanPlaymakerEnabled: boolean;
+  cleanPlaymakerMinAst: number;
+  cleanPlaymakerMinPts: number;
 
+  // Grupo 2: Defensa, Impacto y Colectivo (4)
+  defenseMilestoneEnabled: boolean;
+  defenseMinBlk: number;
+  defenseMinStl: number;
+  defenseComboMinEach: number;
+  gameScoreMilestoneEnabled: boolean;
+  gameScoreThreshold: number;
+  plusMinusMilestoneEnabled: boolean;
+  plusMinusThreshold: number;
+  teamBlowoutEnabled: boolean;
+  teamMarginThreshold: number;
+  teamPointsThreshold: number;
+
+  // Grupo 3: Clutch & Buzzer Beaters (4)
+  heroicBuzzerEnabled: boolean;
+  heroicOtTieEnabled: boolean;
+  heroicGameWinnerEnabled: boolean;
+  heroicGameWinnerMaxSec: number;
+  heroicLongRangeEnabled: boolean;
+  heroicLongRangeMinFt: number;
+
+  // Grupo 4: Barreras Acumuladas de Temporada (8)
+  cumPointsEnabled: boolean;
+  seasonPointsStep: number;
+  cum3pmEnabled: boolean;
+  season3pmStep: number;
+  cumRebEnabled: boolean;
+  seasonRebStep: number;
+  cumOrebEnabled: boolean;
+  seasonOrebStep: number;
+  cumAstEnabled: boolean;
+  seasonAstStep: number;
+  cumStlEnabled: boolean;
+  seasonStlStep: number;
+  cumBlkEnabled: boolean;
+  seasonBlkStep: number;
+  teamSeasonWinsMilestoneEnabled: boolean;
+  teamSeasonWinsStep: number;
+
+  // Grupo 5: Hitos Inminentes & Rachas (3)
+  imminentMilestonesEnabled: boolean;
+  imminentPtsWithin: number;
+  imminentOtherWithin: number;
+  streakMilestoneEnabled: boolean;
+  streakMinGames: number;
+  streakPtsThreshold: number;
+  teamWinStreakEnabled: boolean;
+  teamWinStreakMin: number;
+}
+
+export interface MilestoneNotificationsConfig extends MilestoneNotificationsConfigValues {
+  updatedAt: number;
+}
+
+export type MilestoneNotificationCategory =
+  | 'scoring'
+  | 'triple_double'
+  | 'heroic'
+  | 'streak'
+  | 'cumulative'
+  | 'imminent'
+  | 'defense'
+  | 'team';
+
+export interface MilestoneNotificationItem {
+  id: string;
+  category: MilestoneNotificationCategory;
+  severity: 'epic' | 'high' | 'info';
+  title: string;
+  detail: string;
+  badgeText: string;
+  date: string;
+  entityType: 'player' | 'team';
+  entityId: string;
+  entityName: string;
+  teamAbbr: string;
+  eventId?: string;
+  opponentAbbr?: string;
+  isImminent?: boolean;
+}
+
+export interface MilestoneNotificationsPayload {
+  enabled: boolean;
+  generatedAt: string;
+  latestDate: string;
+  notifications: MilestoneNotificationItem[];
+  summary: {
+    total: number;
+    epicCount: number;
+    imminentCount: number;
+  };
+}
+
+export interface MilestoneNotificationCountsPreview {
+  seasonCounts: Record<string, number>;
+  recentCounts: Record<string, number>;
+  totalDates: number;
+  totalEnabledRecentAlerts: number;
+}

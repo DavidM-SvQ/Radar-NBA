@@ -374,3 +374,107 @@ export const EntityBadge: React.FC<EntityBadgeProps> = ({
     />
   );
 };
+
+export interface MiniSparklineProps {
+  values: number[];
+  referenceValue?: number;
+  width?: number;
+  height?: number;
+  signedZero?: boolean;
+  positiveIsGood?: boolean;
+  title?: string;
+  className?: string;
+}
+
+export const MiniSparkline: React.FC<MiniSparklineProps> = ({
+  values,
+  referenceValue,
+  width = 72,
+  height = 22,
+  signedZero = false,
+  positiveIsGood = true,
+  title,
+  className = '',
+}) => {
+  if (!values || values.length < 2) {
+    return (
+      <span
+        className={`inline-flex items-center justify-center text-[10px] font-mono text-slate-500 ${className}`}
+        style={{ width, height }}
+        title={title || 'Datos insuficientes'}
+      >
+        —
+      </span>
+    );
+  }
+
+  const ref =
+    referenceValue !== undefined && Number.isFinite(referenceValue)
+      ? referenceValue
+      : signedZero
+      ? 0
+      : values.reduce((acc, v) => acc + v, 0) / values.length;
+
+  const allVals = [...values, ref];
+  const minVal = Math.min(...allVals);
+  const maxVal = Math.max(...allVals);
+  const span = Math.max(1e-3, maxVal - minVal);
+  const padX = 3;
+  const padY = 3;
+  const innerW = Math.max(1, width - padX * 2);
+  const innerH = Math.max(1, height - padY * 2);
+
+  const toX = (idx: number) =>
+    padX + (idx / Math.max(1, values.length - 1)) * innerW;
+  const toY = (v: number) =>
+    padY + (1 - (v - minVal) / span) * innerH;
+
+  const points = values.map((v, i) => `${toX(i).toFixed(1)},${toY(v).toFixed(1)}`);
+  const lastVal = values[values.length - 1];
+  const isFavorable = positiveIsGood ? lastVal >= ref : lastVal <= ref;
+  const strokeColor = isFavorable ? '#34D399' : '#FB7185';
+  const fillColor = isFavorable ? 'rgba(52, 211, 153, 0.14)' : 'rgba(251, 113, 133, 0.14)';
+  const refY = toY(ref);
+
+  const areaPoints = `${toX(0).toFixed(1)},${refY.toFixed(1)} ${points.join(' ')} ${toX(
+    values.length - 1
+  ).toFixed(1)},${refY.toFixed(1)}`;
+
+  return (
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      className={`overflow-visible shrink-0 select-none ${className}`}
+      role="img"
+      aria-label={title || 'Tendencia reciente'}
+    >
+      {title && <title>{title}</title>}
+      <line
+        x1={padX}
+        y1={refY}
+        x2={width - padX}
+        y2={refY}
+        stroke="#475569"
+        strokeWidth="1"
+        strokeDasharray="2 2"
+      />
+      <polygon points={areaPoints} fill={fillColor} />
+      <polyline
+        fill="none"
+        stroke={strokeColor}
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        points={points.join(' ')}
+      />
+      <circle
+        cx={toX(values.length - 1)}
+        cy={toY(lastVal)}
+        r="2.3"
+        fill={strokeColor}
+      />
+    </svg>
+  );
+};
+

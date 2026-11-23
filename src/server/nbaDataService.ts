@@ -13,7 +13,8 @@ import { applyCdnDeltaGamesTo2027, hydrateSeasonDatasetFromSnapshot, readNbaSnap
 import { buildSeasonAwardsPayload, enrichBiosWithEspnRosters } from "./seasonAwardsService.ts";
 import { executeWithCircuitBreaker, identifyProviderFromUrl, isCircuitOpen } from "./circuitBreaker.ts";
 import { STATIC_SCHEDULE_2027 } from "../utils/staticSchedule.ts";
-import { syncNbaAdvancedSnapshotToDisk } from "./nbaAdvancedStatsService.ts";
+import { getLeagueHeroicShots, syncNbaAdvancedSnapshotToDisk } from "./nbaAdvancedStatsService.ts";
+import { translateHeroicShotActionCompactEs } from "../utils/heroicPlayEs.ts";
 import { DEFAULT_PLAYER_NBA_KPI_KEYS, DEFAULT_TEAM_NBA_KPI_KEYS } from "../utils/nbaInspectorAllKpis.ts";
 
 const GAMEDAY_THRESHOLDS_FILE = path.resolve(process.cwd(), "data", "gameday-thresholds-config.json");
@@ -238,6 +239,236 @@ function resetInspectorKpiDefaultsConfig() {
     // Ignore unlink errors
   }
   return getInspectorKpiDefaultsConfig();
+}
+
+const MILESTONE_NOTIFICATIONS_FILE = path.resolve(process.cwd(), "data", "milestone-notifications-config.json");
+
+export const DEFAULT_MILESTONE_NOTIFICATIONS_CONFIG = {
+  enabled: true,
+  lookbackDays: 3,
+  maxNotifications: 40,
+
+  scoringMilestoneEnabled: true,
+  scoringThreshold: 40,
+  seasonHighPtsEnabled: true,
+  seasonHighMinPts: 26,
+  seasonHighMinGames: 4,
+  threePointExplosionEnabled: true,
+  threePointThreshold: 8,
+  assistExplosionEnabled: true,
+  assistExplosionThreshold: 14,
+  reboundExplosionEnabled: true,
+  reboundExplosionThreshold: 18,
+  orebExplosionEnabled: true,
+  orebExplosionThreshold: 7,
+  tripleDoubleEnabled: true,
+  tripleDoubleMinStat: 10,
+  twentyTwentyEnabled: true,
+  twentyTwentyPtsMin: 20,
+  twentyTwentySecMin: 15,
+  doubleDoubleEnabled: false,
+  doubleDoubleMinPts: 15,
+  efficiencySniperEnabled: true,
+  efficiencyMinPts: 25,
+  efficiencyMinFgPct: 75,
+  cleanPlaymakerEnabled: true,
+  cleanPlaymakerMinAst: 8,
+  cleanPlaymakerMinPts: 15,
+
+  defenseMilestoneEnabled: true,
+  defenseMinBlk: 5,
+  defenseMinStl: 5,
+  defenseComboMinEach: 3,
+  gameScoreMilestoneEnabled: true,
+  gameScoreThreshold: 38,
+  plusMinusMilestoneEnabled: false,
+  plusMinusThreshold: 25,
+  teamBlowoutEnabled: true,
+  teamMarginThreshold: 25,
+  teamPointsThreshold: 135,
+
+  heroicBuzzerEnabled: true,
+  heroicOtTieEnabled: true,
+  heroicGameWinnerEnabled: true,
+  heroicGameWinnerMaxSec: 10,
+  heroicLongRangeEnabled: true,
+  heroicLongRangeMinFt: 38,
+
+  cumPointsEnabled: true,
+  seasonPointsStep: 500,
+  cum3pmEnabled: true,
+  season3pmStep: 100,
+  cumRebEnabled: true,
+  seasonRebStep: 200,
+  cumOrebEnabled: true,
+  seasonOrebStep: 50,
+  cumAstEnabled: true,
+  seasonAstStep: 150,
+  cumStlEnabled: true,
+  seasonStlStep: 30,
+  cumBlkEnabled: true,
+  seasonBlkStep: 30,
+  teamSeasonWinsMilestoneEnabled: true,
+  teamSeasonWinsStep: 10,
+
+  imminentMilestonesEnabled: true,
+  imminentPtsWithin: 25,
+  imminentOtherWithin: 5,
+  streakMilestoneEnabled: true,
+  streakMinGames: 7,
+  streakPtsThreshold: 20,
+  teamWinStreakEnabled: true,
+  teamWinStreakMin: 5,
+};
+
+let activeMilestoneNotificationsConfig = {
+  ...DEFAULT_MILESTONE_NOTIFICATIONS_CONFIG,
+  updatedAt: 0,
+};
+
+let cachedMilestoneNotifications = null;
+
+function sanitizeMilestoneNotificationsConfig(values) {
+  const numClamp = (v, def, min, max) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return def;
+    return Math.min(max, Math.max(min, Math.round(n)));
+  };
+  const boolVal = (v, def) => (typeof v === "boolean" ? v : def);
+  const d = DEFAULT_MILESTONE_NOTIFICATIONS_CONFIG;
+  return {
+    enabled: boolVal(values?.enabled, d.enabled),
+    lookbackDays: numClamp(values?.lookbackDays, d.lookbackDays, 1, 14),
+    maxNotifications: numClamp(values?.maxNotifications, d.maxNotifications, 5, 100),
+
+    scoringMilestoneEnabled: boolVal(values?.scoringMilestoneEnabled, d.scoringMilestoneEnabled),
+    scoringThreshold: numClamp(values?.scoringThreshold, d.scoringThreshold, 20, 80),
+    seasonHighPtsEnabled: boolVal(values?.seasonHighPtsEnabled, d.seasonHighPtsEnabled),
+    seasonHighMinPts: numClamp(values?.seasonHighMinPts, d.seasonHighMinPts, 15, 60),
+    seasonHighMinGames: numClamp(values?.seasonHighMinGames, d.seasonHighMinGames, 2, 20),
+    threePointExplosionEnabled: boolVal(values?.threePointExplosionEnabled, d.threePointExplosionEnabled),
+    threePointThreshold: numClamp(values?.threePointThreshold, d.threePointThreshold, 4, 16),
+    assistExplosionEnabled: boolVal(values?.assistExplosionEnabled, d.assistExplosionEnabled),
+    assistExplosionThreshold: numClamp(values?.assistExplosionThreshold, d.assistExplosionThreshold, 8, 25),
+    reboundExplosionEnabled: boolVal(values?.reboundExplosionEnabled, d.reboundExplosionEnabled),
+    reboundExplosionThreshold: numClamp(values?.reboundExplosionThreshold, d.reboundExplosionThreshold, 10, 30),
+    orebExplosionEnabled: boolVal(values?.orebExplosionEnabled, d.orebExplosionEnabled),
+    orebExplosionThreshold: numClamp(values?.orebExplosionThreshold, d.orebExplosionThreshold, 4, 15),
+    tripleDoubleEnabled: boolVal(values?.tripleDoubleEnabled, d.tripleDoubleEnabled),
+    tripleDoubleMinStat: numClamp(values?.tripleDoubleMinStat, d.tripleDoubleMinStat, 8, 15),
+    twentyTwentyEnabled: boolVal(values?.twentyTwentyEnabled, d.twentyTwentyEnabled),
+    twentyTwentyPtsMin: numClamp(values?.twentyTwentyPtsMin, d.twentyTwentyPtsMin, 15, 40),
+    twentyTwentySecMin: numClamp(values?.twentyTwentySecMin, d.twentyTwentySecMin, 10, 25),
+    doubleDoubleEnabled: boolVal(values?.doubleDoubleEnabled, d.doubleDoubleEnabled),
+    doubleDoubleMinPts: numClamp(values?.doubleDoubleMinPts, d.doubleDoubleMinPts, 10, 35),
+    efficiencySniperEnabled: boolVal(values?.efficiencySniperEnabled, d.efficiencySniperEnabled),
+    efficiencyMinPts: numClamp(values?.efficiencyMinPts, d.efficiencyMinPts, 15, 45),
+    efficiencyMinFgPct: numClamp(values?.efficiencyMinFgPct, d.efficiencyMinFgPct, 60, 95),
+    cleanPlaymakerEnabled: boolVal(values?.cleanPlaymakerEnabled, d.cleanPlaymakerEnabled),
+    cleanPlaymakerMinAst: numClamp(values?.cleanPlaymakerMinAst, d.cleanPlaymakerMinAst, 5, 18),
+    cleanPlaymakerMinPts: numClamp(values?.cleanPlaymakerMinPts, d.cleanPlaymakerMinPts, 10, 35),
+
+    defenseMilestoneEnabled: boolVal(values?.defenseMilestoneEnabled, d.defenseMilestoneEnabled),
+    defenseMinBlk: numClamp(values?.defenseMinBlk, d.defenseMinBlk, 3, 12),
+    defenseMinStl: numClamp(values?.defenseMinStl, d.defenseMinStl, 3, 12),
+    defenseComboMinEach: numClamp(values?.defenseComboMinEach, d.defenseComboMinEach, 2, 6),
+    gameScoreMilestoneEnabled: boolVal(values?.gameScoreMilestoneEnabled, d.gameScoreMilestoneEnabled),
+    gameScoreThreshold: numClamp(values?.gameScoreThreshold, d.gameScoreThreshold, 25, 60),
+    plusMinusMilestoneEnabled: boolVal(values?.plusMinusMilestoneEnabled, d.plusMinusMilestoneEnabled),
+    plusMinusThreshold: numClamp(values?.plusMinusThreshold, d.plusMinusThreshold, 15, 45),
+    teamBlowoutEnabled: boolVal(values?.teamBlowoutEnabled, d.teamBlowoutEnabled),
+    teamMarginThreshold: numClamp(values?.teamMarginThreshold, d.teamMarginThreshold, 15, 50),
+    teamPointsThreshold: numClamp(values?.teamPointsThreshold, d.teamPointsThreshold, 120, 165),
+
+    heroicBuzzerEnabled: boolVal(values?.heroicBuzzerEnabled, d.heroicBuzzerEnabled),
+    heroicOtTieEnabled: boolVal(values?.heroicOtTieEnabled, d.heroicOtTieEnabled),
+    heroicGameWinnerEnabled: boolVal(values?.heroicGameWinnerEnabled, d.heroicGameWinnerEnabled),
+    heroicGameWinnerMaxSec: numClamp(values?.heroicGameWinnerMaxSec, d.heroicGameWinnerMaxSec, 1, 24),
+    heroicLongRangeEnabled: boolVal(values?.heroicLongRangeEnabled, d.heroicLongRangeEnabled),
+    heroicLongRangeMinFt: numClamp(values?.heroicLongRangeMinFt, d.heroicLongRangeMinFt, 20, 75),
+
+    cumPointsEnabled: boolVal(values?.cumPointsEnabled, d.cumPointsEnabled),
+    seasonPointsStep: numClamp(values?.seasonPointsStep, d.seasonPointsStep, 200, 1000),
+    cum3pmEnabled: boolVal(values?.cum3pmEnabled, d.cum3pmEnabled),
+    season3pmStep: numClamp(values?.season3pmStep, d.season3pmStep, 25, 200),
+    cumRebEnabled: boolVal(values?.cumRebEnabled, d.cumRebEnabled),
+    seasonRebStep: numClamp(values?.seasonRebStep, d.seasonRebStep, 100, 500),
+    cumOrebEnabled: boolVal(values?.cumOrebEnabled, d.cumOrebEnabled),
+    seasonOrebStep: numClamp(values?.seasonOrebStep, d.seasonOrebStep, 25, 200),
+    cumAstEnabled: boolVal(values?.cumAstEnabled, d.cumAstEnabled),
+    seasonAstStep: numClamp(values?.seasonAstStep, d.seasonAstStep, 100, 500),
+    cumStlEnabled: boolVal(values?.cumStlEnabled, d.cumStlEnabled),
+    seasonStlStep: numClamp(values?.seasonStlStep, d.seasonStlStep, 15, 100),
+    cumBlkEnabled: boolVal(values?.cumBlkEnabled, d.cumBlkEnabled),
+    seasonBlkStep: numClamp(values?.seasonBlkStep, d.seasonBlkStep, 15, 100),
+    teamSeasonWinsMilestoneEnabled: boolVal(values?.teamSeasonWinsMilestoneEnabled, d.teamSeasonWinsMilestoneEnabled),
+    teamSeasonWinsStep: numClamp(values?.teamSeasonWinsStep, d.teamSeasonWinsStep, 5, 25),
+
+    imminentMilestonesEnabled: boolVal(values?.imminentMilestonesEnabled, d.imminentMilestonesEnabled),
+    imminentPtsWithin: numClamp(values?.imminentPtsWithin, d.imminentPtsWithin, 5, 60),
+    imminentOtherWithin: numClamp(values?.imminentOtherWithin, d.imminentOtherWithin, 1, 15),
+    streakMilestoneEnabled: boolVal(values?.streakMilestoneEnabled, d.streakMilestoneEnabled),
+    streakMinGames: numClamp(values?.streakMinGames, d.streakMinGames, 3, 20),
+    streakPtsThreshold: numClamp(values?.streakPtsThreshold, d.streakPtsThreshold, 15, 35),
+    teamWinStreakEnabled: boolVal(values?.teamWinStreakEnabled, d.teamWinStreakEnabled),
+    teamWinStreakMin: numClamp(values?.teamWinStreakMin, d.teamWinStreakMin, 2, 20),
+  };
+}
+
+function initMilestoneNotificationsConfigFromDisk() {
+  try {
+    if (fs.existsSync(MILESTONE_NOTIFICATIONS_FILE)) {
+      const raw = fs.readFileSync(MILESTONE_NOTIFICATIONS_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        activeMilestoneNotificationsConfig = {
+          ...sanitizeMilestoneNotificationsConfig(parsed),
+          updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : 0,
+        };
+      }
+    }
+  } catch {
+    // Ignore disk read errors
+  }
+}
+initMilestoneNotificationsConfigFromDisk();
+
+function getMilestoneNotificationsConfig() {
+  return { ...activeMilestoneNotificationsConfig };
+}
+
+function updateMilestoneNotificationsConfig(values) {
+  const updated = {
+    ...sanitizeMilestoneNotificationsConfig(values),
+    updatedAt: Date.now(),
+  };
+  activeMilestoneNotificationsConfig = updated;
+  cachedMilestoneNotifications = null;
+  try {
+    const dir = path.dirname(MILESTONE_NOTIFICATIONS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(MILESTONE_NOTIFICATIONS_FILE, JSON.stringify(updated, null, 2), "utf-8");
+  } catch {
+    // Ignore disk write errors in read-only runtimes
+  }
+  return { ...activeMilestoneNotificationsConfig };
+}
+
+function resetMilestoneNotificationsConfigDefaults() {
+  const reset = {
+    ...DEFAULT_MILESTONE_NOTIFICATIONS_CONFIG,
+    updatedAt: Date.now(),
+  };
+  activeMilestoneNotificationsConfig = reset;
+  cachedMilestoneNotifications = null;
+  try {
+    if (fs.existsSync(MILESTONE_NOTIFICATIONS_FILE)) {
+      fs.unlinkSync(MILESTONE_NOTIFICATIONS_FILE);
+    }
+  } catch {
+    // Ignore unlink errors
+  }
+  return { ...activeMilestoneNotificationsConfig };
 }
 
 function isSnapshotOnlyRuntime() {
@@ -1345,7 +1576,7 @@ async function getGameDayPayload(requestedDate, forceRefresh = false) {
     const resolvedIsHome = staticSched
       ? (nightTeamAbbr === staticSched.homeAbbr || p.teamAbbr === staticSched.homeAbbr)
       : g.isHome;
-    const line = { playerId: p.id, playerName: p.name, teamAbbr: nightTeamAbbr, position: p.position, opponentAbbr: g.opponentAbbr, isHome: resolvedIsHome, result: g.result, minutes: g.minutes, points: g.points, rebounds: g.rebounds, oreb: g.oreb, assists: g.assists, steals: g.steals, blocks: g.blocks, stocks: g.stocks, turnovers: g.turnovers, fgm: g.fgm, fga: g.fga, fg3m: g.fg3m, fg3a: g.fg3a, ftm: g.ftm, fta: g.fta, plusMinus: g.plusMinus, tsPct: g.tsPct, efgPct: g.efgPct, usgEst: g.usgEst, gameScore: g.gameScore, ptsBaselineAvg: ptsAvg, ptsDelta, gmScBaselineAvg: gmScAvg };
+    const line = { playerId: p.id, playerName: p.name, teamAbbr: nightTeamAbbr, position: p.position, opponentAbbr: g.opponentAbbr, isHome: resolvedIsHome, result: g.result, isStarter: typeof g.isStarter === "boolean" ? g.isStarter : void 0, minutes: g.minutes, points: g.points, rebounds: g.rebounds, oreb: g.oreb, assists: g.assists, steals: g.steals, blocks: g.blocks, stocks: g.stocks, turnovers: g.turnovers, fgm: g.fgm, fga: g.fga, fg3m: g.fg3m, fg3a: g.fg3a, ftm: g.ftm, fta: g.fta, plusMinus: g.plusMinus, tsPct: g.tsPct, efgPct: g.efgPct, usgEst: g.usgEst, gameScore: g.gameScore, ptsBaselineAvg: ptsAvg, ptsDelta, gmScBaselineAvg: gmScAvg };
     allNightLines.push(line);
     const sideKey = `${g.eventId}:${resolvedIsHome ? "home" : "away"}`;
     const bucket = nightLinesByEventSide.get(sideKey) || [];
@@ -1710,9 +1941,66 @@ async function getGameDayPayload(requestedDate, forceRefresh = false) {
       }
     }
     if (!homeTeam || !homeLog || !awayTeam || !awayLog) continue;
+    const positionSortRank = __name((rawPos) => {
+      const pUp = String(rawPos || "").trim().toUpperCase();
+      if (pUp === "PG") return 1;
+      if (pUp === "G") return 2;
+      if (pUp === "SG") return 3;
+      if (pUp === "G-F") return 4;
+      if (pUp === "F-G") return 5;
+      if (pUp === "SF") return 6;
+      if (pUp === "F") return 7;
+      if (pUp === "PF") return 8;
+      if (pUp === "F-C") return 9;
+      if (pUp === "C-F") return 10;
+      if (pUp === "C") return 11;
+      return 12;
+    }, "positionSortRank");
+    const selectStartersAndSixthMan = __name((rotPlayers) => {
+      if (!rotPlayers || rotPlayers.length === 0) return [];
+      const explicitStarters = rotPlayers.filter((x) => x.isStarter === true);
+      let startersPool = [];
+      if (explicitStarters.length === 5) {
+        startersPool = [...explicitStarters];
+      } else if (explicitStarters.length > 5) {
+        startersPool = [...explicitStarters]
+          .sort((a, b) => b.minutes - a.minutes || b.gameScore - a.gameScore)
+          .slice(0, 5);
+      } else {
+        const pickedIds = new Set(explicitStarters.map((x) => x.playerId));
+        const fillFromMinutes = rotPlayers
+          .filter((x) => !pickedIds.has(x.playerId))
+          .sort((a, b) => b.minutes - a.minutes || b.gameScore - a.gameScore)
+          .slice(0, Math.max(0, 5 - explicitStarters.length));
+        startersPool = [...explicitStarters, ...fillFromMinutes];
+      }
+      const starterIds = new Set(startersPool.map((x) => x.playerId));
+      const orderedStarters = startersPool
+        .sort((a, b) => {
+          const ra = positionSortRank(a.position);
+          const rb = positionSortRank(b.position);
+          if (ra !== rb) return ra - rb;
+          if (ra <= 5) {
+            return b.assists - a.assists || b.gameScore - a.gameScore || b.points - a.points;
+          }
+          if (ra <= 10) {
+            return a.rebounds - b.rebounds || b.gameScore - a.gameScore || b.points - a.points;
+          }
+          return b.gameScore - a.gameScore || b.points - a.points;
+        })
+        .map((x) => ({ ...x, isStarter: true, isSixthMan: false }));
+      const benchCandidates = rotPlayers
+        .filter((x) => !starterIds.has(x.playerId))
+        .sort((a, b) => b.gameScore - a.gameScore || b.points - a.points || b.minutes - a.minutes);
+      const bestSixthMan = benchCandidates[0]
+        ? { ...benchCandidates[0], isStarter: false, isSixthMan: true }
+        : null;
+      return bestSixthMan ? [...orderedStarters, bestSixthMan] : orderedStarters;
+    }, "selectStartersAndSixthMan");
     const buildMatchSide = __name((tm, lg, role) => {
       const rot = [...nightLinesByEventSide.get(`${eventId}:${role}`) || []].sort((a, b) => b.gameScore - a.gameScore || b.points - a.points);
-      return { allRot: rot, side: { teamId: tm.id, abbr: tm.abbreviation, name: tm.name, shortName: tm.shortName, recordAfter: recordUpTo(tm), score: lg.pointsFor, isWinner: lg.result === "W", fg3m: lg.fg3m, fg3a: lg.fg3a, fg3Pct: lg.fg3Pct, efgPct: lg.efgPct, tsPct: lg.tsPct, reb: lg.reb, oreb: lg.oreb, orebPct: lg.orebPct, ast: lg.ast, tov: lg.tov, tovPct: lg.tovPct, ftm: lg.ftm, fta: lg.fta, offRtg: lg.offRtg, defRtg: lg.defRtg, netRtg: lg.netRtg, pace: lg.pace, isBackToBack: lg.isBackToBack, topPlayer: rot[0] || null, rotationPlayers: rot.slice(0, 8) } };
+      const featuredSix = selectStartersAndSixthMan(rot);
+      return { allRot: rot, side: { teamId: tm.id, abbr: tm.abbreviation, name: tm.name, shortName: tm.shortName, recordAfter: recordUpTo(tm), score: lg.pointsFor, isWinner: lg.result === "W", fg3m: lg.fg3m, fg3a: lg.fg3a, fg3Pct: lg.fg3Pct, efgPct: lg.efgPct, tsPct: lg.tsPct, reb: lg.reb, oreb: lg.oreb, orebPct: lg.orebPct, ast: lg.ast, tov: lg.tov, tovPct: lg.tovPct, ftm: lg.ftm, fta: lg.fta, offRtg: lg.offRtg, defRtg: lg.defRtg, netRtg: lg.netRtg, pace: lg.pace, isBackToBack: lg.isBackToBack, topPlayer: rot[0] || null, rotationPlayers: featuredSix } };
     }, "buildMatchSide");
     const awayBuilt = buildMatchSide(awayTeam, awayLog, "away");
     const homeBuilt = buildMatchSide(homeTeam, homeLog, "home");
@@ -1894,13 +2182,7 @@ async function getMilestonesPayload(forceRefresh = false) {
     return acc + (tens >= 2 ? 1 : 0);
   }, 0), "countDoubleDoubles");
   const countTripleDoubles = __name((gs) => gs.reduce((acc, g) => {
-    let tens = 0;
-    if (g.points >= 10) tens++;
-    if (g.rebounds >= 10) tens++;
-    if (g.assists >= 10) tens++;
-    if (g.steals >= 10) tens++;
-    if (g.blocks >= 10) tens++;
-    return acc + (tens >= 3 ? 1 : 0);
+    return acc + (g.points >= 10 && g.rebounds >= 10 && g.assists >= 10 ? 1 : 0);
   }, 0), "countTripleDoubles");
   const avgGp26 = Math.max(1, Math.round(meanNums(t26.map((t) => t.games.length))));
   const minGp27 = Math.max(2, Math.min(45, Math.floor(avgGp27 * 0.55)));
@@ -2108,6 +2390,1245 @@ async function syncNbaSnapshotToDisk(options) {
     advancedSnapshot: advancedSnapshotMeta,
   };
 }
+async function getMilestoneNotificationsPayload(forceRefresh = false) {
+  const cfg = getMilestoneNotificationsConfig();
+  if (!cfg.enabled) {
+    return {
+      enabled: false,
+      generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      latestDate: "",
+      notifications: [],
+      summary: { total: 0, epicCount: 0, imminentCount: 0 },
+    };
+  }
+  if (
+    !forceRefresh &&
+    cachedMilestoneNotifications &&
+    cachedMilestoneNotifications.expiresAt > Date.now() &&
+    cachedMilestoneNotifications.configUpdatedAt === cfg.updatedAt
+  ) {
+    return cachedMilestoneNotifications.payload;
+  }
+
+  const full = await getFullLeagueMemory(forceRefresh);
+  const s27 = full.s2027;
+  const players = [...(s27?.playersById?.values() || [])];
+  const teams = [...(s27?.teamsByAbbr?.values() || [])];
+
+  const allDatesSet = new Set();
+  for (const t of teams) {
+    for (const g of t.games || []) {
+      const d = String(g.date || "").slice(0, 10);
+      if (d) allDatesSet.add(d);
+    }
+  }
+  const sortedDates = [...allDatesSet].sort((a, b) => b.localeCompare(a));
+  const latestDate = sortedDates[0] || "";
+  const activeDatesSet = new Set(sortedDates.slice(0, cfg.lookbackDays));
+
+  const notifications = [];
+  const seenIds = new Set();
+  const pushNotif = __name((item, priority = 50) => {
+    if (!item || !item.id || seenIds.has(item.id)) return;
+    seenIds.add(item.id);
+    notifications.push({ ...item, _priority: priority });
+  }, "pushNotif");
+
+  const fmtNum = (n) => Number(n || 0).toLocaleString("es-ES");
+  const parseClockSec = (clockStr) => {
+    const clean = String(clockStr || "").trim().replace(/s$/i, "");
+    const m = clean.match(/^(\d+):(\d+(?:\.\d+)?)$/);
+    if (m) return Number(m[1]) * 60 + Number(m[2]);
+    const n = Number(clean);
+    return Number.isFinite(n) ? n : 99;
+  };
+
+  for (const p of players) {
+    const rawGames = p.games || [];
+    if (rawGames.length === 0) continue;
+    const gamesDesc = [...rawGames].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+    const chrono = [...gamesDesc].reverse();
+
+    let cumPts = 0;
+    let cum3pm = 0;
+    let cumReb = 0;
+    let cumOreb = 0;
+    let cumAst = 0;
+    let cumStl = 0;
+    let cumBlk = 0;
+    let priorMaxPts = 0;
+
+    for (let idx = 0; idx < chrono.length; idx++) {
+      const g = chrono[idx];
+      const dateIso = String(g.date || "").slice(0, 10);
+      const prevCumPts = cumPts;
+      const prevCum3pm = cum3pm;
+      const prevCumReb = cumReb;
+      const prevCumOreb = cumOreb;
+      const prevCumAst = cumAst;
+      const prevCumStl = cumStl;
+      const prevCumBlk = cumBlk;
+
+      const pts = Number(g.points || 0);
+      const reb = Number(g.rebounds || 0);
+      const oreb = Number(g.oreb || 0);
+      const ast = Number(g.assists || 0);
+      const stl = Number(g.steals || 0);
+      const blk = Number(g.blocks || 0);
+      const fg3m = Number(g.fg3m || 0);
+      const tov = Number(g.turnovers || 0);
+      const fgPct = Number(g.fgPct || 0);
+      const fga = Number(g.fga || 0);
+      const fgm = Number(g.fgm || 0);
+      const gmSc = Number(g.gameScore || 0);
+      const pm = Number(g.plusMinus || 0);
+
+      cumPts += pts;
+      cum3pm += fg3m;
+      cumReb += reb;
+      cumOreb += oreb;
+      cumAst += ast;
+      cumStl += stl;
+      cumBlk += blk;
+
+      const inWindow = activeDatesSet.has(dateIso);
+      const teamAbbr = g.teamAbbr || p.teamAbbr || "";
+      const gameCtx = `${g.isHome ? "vs" : "@"} ${g.opponentAbbr} (${g.result}${g.scoreDisplay ? ` ${g.scoreDisplay}` : ""})`;
+
+      if (inWindow) {
+        const tdMin = cfg.tripleDoubleMinStat;
+        const tdCats = [pts, reb, ast].filter((v) => v >= tdMin).length;
+        const ddCats = [pts, reb, ast, stl, blk].filter((v) => v >= 10).length;
+
+        // 7. Triples-Dobles Oficiales (solo PTS, REB y AST)
+        if (cfg.tripleDoubleEnabled && tdCats === 3) {
+          pushNotif({
+            id: `td:${p.id}:${g.eventId}`,
+            category: "triple_double",
+            severity: pts >= 35 ? "epic" : "high",
+            title: `Triple-Doble de ${p.name}`,
+            detail: `${pts} PTS · ${reb} REB · ${ast} AST · ${teamAbbr} ${gameCtx}`,
+            badgeText: "Triple-Doble",
+            date: dateIso,
+            entityType: "player",
+            entityId: p.id,
+            entityName: p.name,
+            teamAbbr,
+            eventId: g.eventId,
+            opponentAbbr: g.opponentAbbr,
+          }, 92);
+        } else if (cfg.doubleDoubleEnabled && ddCats >= 2 && pts >= cfg.doubleDoubleMinPts) {
+          // 9. Dobles-Dobles Destacados
+          pushNotif({
+            id: `dd:${p.id}:${g.eventId}`,
+            category: "triple_double",
+            severity: "info",
+            title: `Doble-Doble destacado de ${p.name}`,
+            detail: `${pts} PTS · ${reb} REB · ${ast} AST · ${teamAbbr} ${gameCtx}`,
+            badgeText: "Doble-Doble",
+            date: dateIso,
+            entityType: "player",
+            entityId: p.id,
+            entityName: p.name,
+            teamAbbr,
+            eventId: g.eventId,
+            opponentAbbr: g.opponentAbbr,
+          }, 35);
+        }
+
+        // 8. Exhibiciones Combinadas (20-20 / 20-15 configurable)
+        if (
+          cfg.twentyTwentyEnabled &&
+          pts >= cfg.twentyTwentyPtsMin &&
+          (reb >= cfg.twentyTwentySecMin || ast >= cfg.twentyTwentySecMin)
+        ) {
+          const hitReb = reb >= cfg.twentyTwentySecMin;
+          const statTag = hitReb && ast >= cfg.twentyTwentySecMin
+            ? `${pts}P + ${reb}R + ${ast}A`
+            : hitReb
+              ? `${pts}P + ${reb}R`
+              : `${pts}P + ${ast}A`;
+          pushNotif({
+            id: `2020:${p.id}:${g.eventId}`,
+            category: "triple_double",
+            severity: "epic",
+            title: `Exhibición ${cfg.twentyTwentyPtsMin}-${cfg.twentyTwentySecMin} de ${p.name}`,
+            detail: `${pts} PTS · ${reb} REB · ${ast} AST · ${teamAbbr} ${gameCtx}`,
+            badgeText: statTag,
+            date: dateIso,
+            entityType: "player",
+            entityId: p.id,
+            entityName: p.name,
+            teamAbbr,
+            eventId: g.eventId,
+            opponentAbbr: g.opponentAbbr,
+          }, 90);
+        }
+
+        // 1. Explosión Anotadora
+        if (cfg.scoringMilestoneEnabled && pts >= cfg.scoringThreshold) {
+          pushNotif({
+            id: `pts:${p.id}:${g.eventId}`,
+            category: "scoring",
+            severity: pts >= cfg.scoringThreshold + 10 ? "epic" : "high",
+            title: `${p.name} firma ${pts} puntos`,
+            detail: `${fgm}/${fga} TC · ${fg3m}/${g.fg3a} T3 · ${Number(g.tsPct || 0).toFixed(1)}% TS · ${teamAbbr} ${gameCtx}`,
+            badgeText: `${pts} PTS`,
+            date: dateIso,
+            entityType: "player",
+            entityId: p.id,
+            entityName: p.name,
+            teamAbbr,
+            eventId: g.eventId,
+            opponentAbbr: g.opponentAbbr,
+          }, 84 + Math.min(15, pts - cfg.scoringThreshold));
+        }
+
+        // 2. Récord Personal de Temporada en Puntos
+        if (
+          cfg.seasonHighPtsEnabled &&
+          idx + 1 >= cfg.seasonHighMinGames &&
+          pts >= cfg.seasonHighMinPts &&
+          pts > priorMaxPts
+        ) {
+          pushNotif({
+            id: `shpts:${p.id}:${g.eventId}`,
+            category: "scoring",
+            severity: pts >= 40 ? "epic" : "high",
+            title: `Tope de temporada para ${p.name}`,
+            detail: `Alcanza ${pts} PTS (anterior marca: ${priorMaxPts} PTS en 2026-27) · ${teamAbbr} ${gameCtx}`,
+            badgeText: `Récord ${pts} PTS`,
+            date: dateIso,
+            entityType: "player",
+            entityId: p.id,
+            entityName: p.name,
+            teamAbbr,
+            eventId: g.eventId,
+            opponentAbbr: g.opponentAbbr,
+          }, 68);
+        }
+
+        // 3. Lluvia de Triples
+        if (cfg.threePointExplosionEnabled && fg3m >= cfg.threePointThreshold) {
+          pushNotif({
+            id: `3pm:${p.id}:${g.eventId}`,
+            category: "scoring",
+            severity: fg3m >= cfg.threePointThreshold + 2 ? "epic" : "high",
+            title: `Lluvia de ${fg3m} triples de ${p.name}`,
+            detail: `${fg3m}/${g.fg3a} desde el perímetro y ${pts} PTS · ${teamAbbr} ${gameCtx}`,
+            badgeText: `${fg3m} Triples`,
+            date: dateIso,
+            entityType: "player",
+            entityId: p.id,
+            entityName: p.name,
+            teamAbbr,
+            eventId: g.eventId,
+            opponentAbbr: g.opponentAbbr,
+          }, 80);
+        }
+
+        // 4. Festival de Asistencias
+        if (cfg.assistExplosionEnabled && ast >= cfg.assistExplosionThreshold) {
+          pushNotif({
+            id: `ast:${p.id}:${g.eventId}`,
+            category: "scoring",
+            severity: ast >= cfg.assistExplosionThreshold + 4 ? "epic" : "high",
+            title: `Festival de ${ast} asistencias de ${p.name}`,
+            detail: `${pts} PTS · ${ast} AST · ${tov} PER · ${teamAbbr} ${gameCtx}`,
+            badgeText: `${ast} AST`,
+            date: dateIso,
+            entityType: "player",
+            entityId: p.id,
+            entityName: p.name,
+            teamAbbr,
+            eventId: g.eventId,
+            opponentAbbr: g.opponentAbbr,
+          }, 74);
+        }
+
+        // 5. Dominio en el Rebote Total
+        if (cfg.reboundExplosionEnabled && reb >= cfg.reboundExplosionThreshold) {
+          pushNotif({
+            id: `reb:${p.id}:${g.eventId}`,
+            category: "scoring",
+            severity: reb >= cfg.reboundExplosionThreshold + 4 ? "epic" : "high",
+            title: `Dominio en el rebote de ${p.name}: ${reb} REB`,
+            detail: `${oreb} ofensivos + ${Number(g.dreb || Math.max(0, reb - oreb))} defensivos · ${pts} PTS · ${teamAbbr} ${gameCtx}`,
+            badgeText: `${reb} REB`,
+            date: dateIso,
+            entityType: "player",
+            entityId: p.id,
+            entityName: p.name,
+            teamAbbr,
+            eventId: g.eventId,
+            opponentAbbr: g.opponentAbbr,
+          }, 73);
+        }
+
+        // 6. Rey del Rebote Ofensivo
+        if (cfg.orebExplosionEnabled && oreb >= cfg.orebExplosionThreshold) {
+          pushNotif({
+            id: `oreb:${p.id}:${g.eventId}`,
+            category: "scoring",
+            severity: oreb >= cfg.orebExplosionThreshold + 3 ? "epic" : "high",
+            title: `Recital en rebote ofensivo de ${p.name}`,
+            detail: `${oreb} rebotes ofensivos (${reb} REB totales) y ${pts} PTS · ${teamAbbr} ${gameCtx}`,
+            badgeText: `${oreb} OREB`,
+            date: dateIso,
+            entityType: "player",
+            entityId: p.id,
+            entityName: p.name,
+            teamAbbr,
+            eventId: g.eventId,
+            opponentAbbr: g.opponentAbbr,
+          }, 66);
+        }
+
+        // 10. Francotirador Letal (% TC)
+        if (
+          cfg.efficiencySniperEnabled &&
+          pts >= cfg.efficiencyMinPts &&
+          fga >= 8 &&
+          fgPct >= cfg.efficiencyMinFgPct
+        ) {
+          pushNotif({
+            id: `eff:${p.id}:${g.eventId}`,
+            category: "scoring",
+            severity: fgPct >= 85 && pts >= 30 ? "epic" : "high",
+            title: `Puntería quirúrgica de ${p.name} (${fgPct.toFixed(1)}% TC)`,
+            detail: `${pts} PTS con ${fgm}/${fga} en tiros de campo · ${teamAbbr} ${gameCtx}`,
+            badgeText: `${fgm}/${fga} (${fgPct.toFixed(0)}%)`,
+            date: dateIso,
+            entityType: "player",
+            entityId: p.id,
+            entityName: p.name,
+            teamAbbr,
+            eventId: g.eventId,
+            opponentAbbr: g.opponentAbbr,
+          }, 71);
+        }
+
+        // 11. Dirección Impecable (0 Pérdidas)
+        if (
+          cfg.cleanPlaymakerEnabled &&
+          tov === 0 &&
+          ast >= cfg.cleanPlaymakerMinAst &&
+          pts >= cfg.cleanPlaymakerMinPts
+        ) {
+          pushNotif({
+            id: `clean:${p.id}:${g.eventId}`,
+            category: "scoring",
+            severity: ast >= 12 ? "epic" : "high",
+            title: `Dirección perfecta de ${p.name}: ${ast} AST y 0 pérdidas`,
+            detail: `${pts} PTS y ${ast} asistencias sin entregar ni un balón · ${teamAbbr} ${gameCtx}`,
+            badgeText: `${ast} AST · 0 PER`,
+            date: dateIso,
+            entityType: "player",
+            entityId: p.id,
+            entityName: p.name,
+            teamAbbr,
+            eventId: g.eventId,
+            opponentAbbr: g.opponentAbbr,
+          }, 70);
+        }
+
+        // 12. Muros Defensivos (baremos configurables: BLK, STL y Combo STL+BLK)
+        const hitBlkWall = blk >= cfg.defenseMinBlk;
+        const hitStlWall = stl >= cfg.defenseMinStl;
+        const hitComboWall = stl >= cfg.defenseComboMinEach && blk >= cfg.defenseComboMinEach;
+        if (cfg.defenseMilestoneEnabled && (hitBlkWall || hitStlWall || hitComboWall)) {
+          const stocks = stl + blk;
+          pushNotif({
+            id: `def:${p.id}:${g.eventId}`,
+            category: "defense",
+            severity: stocks >= 8 || blk >= 6 || stl >= 6 ? "epic" : "high",
+            title: `Muro defensivo de ${p.name}`,
+            detail: `${stl} robos y ${blk} tapones (${stocks} stocks) · ${pts} PTS · ${teamAbbr} ${gameCtx}`,
+            badgeText: hitBlkWall && !hitStlWall ? `${blk} TAP` : hitStlWall && !hitBlkWall ? `${stl} ROB` : `${stl}R + ${blk}T`,
+            date: dateIso,
+            entityType: "player",
+            entityId: p.id,
+            entityName: p.name,
+            teamAbbr,
+            eventId: g.eventId,
+            opponentAbbr: g.opponentAbbr,
+          }, 78);
+        }
+
+        // 13. Valoración MVP de la Noche (Game Score)
+        if (cfg.gameScoreMilestoneEnabled && gmSc >= cfg.gameScoreThreshold) {
+          pushNotif({
+            id: `gmsc:${p.id}:${g.eventId}`,
+            category: "scoring",
+            severity: gmSc >= cfg.gameScoreThreshold + 8 ? "epic" : "high",
+            title: `Noche de MVP de ${p.name} (${gmSc.toFixed(1)} GmSc)`,
+            detail: `${pts} PTS · ${reb} REB · ${ast} AST · ${stl} ROB · ${blk} TAP · ${teamAbbr} ${gameCtx}`,
+            badgeText: `${gmSc.toFixed(1)} GmSc`,
+            date: dateIso,
+            entityType: "player",
+            entityId: p.id,
+            entityName: p.name,
+            teamAbbr,
+            eventId: g.eventId,
+            opponentAbbr: g.opponentAbbr,
+          }, 82);
+        }
+
+        // 14. Impacto Extremo en Pista (+/-)
+        if (cfg.plusMinusMilestoneEnabled && pm >= cfg.plusMinusThreshold) {
+          pushNotif({
+            id: `pm:${p.id}:${g.eventId}`,
+            category: "defense",
+            severity: pm >= cfg.plusMinusThreshold + 10 ? "epic" : "high",
+            title: `Impacto brutal en pista de ${p.name}: +${pm}`,
+            detail: `Balance de +${pm} con él en cancha (${pts} PTS, ${reb} REB, ${ast} AST) · ${teamAbbr} ${gameCtx}`,
+            badgeText: `+${pm} (+/-)`,
+            date: dateIso,
+            entityType: "player",
+            entityId: p.id,
+            entityName: p.name,
+            teamAbbr,
+            eventId: g.eventId,
+            opponentAbbr: g.opponentAbbr,
+          }, 64);
+        }
+
+        // 20-26. Barreras Acumuladas de Temporada (PTS, 3PM, REB, OREB, AST, STL, BLK)
+        const cumulativeChecks = [
+          {
+            enabled: cfg.cumPointsEnabled,
+            step: cfg.seasonPointsStep,
+            prev: prevCumPts,
+            curr: cumPts,
+            key: "cumpts",
+            noun: "puntos",
+            unit: "PTS",
+            epicFloor: 1500,
+            priority: 69,
+          },
+          {
+            enabled: cfg.cum3pmEnabled,
+            step: cfg.season3pmStep,
+            prev: prevCum3pm,
+            curr: cum3pm,
+            key: "cum3p",
+            noun: "triples",
+            unit: "3PM",
+            epicFloor: 200,
+            priority: 63,
+          },
+          {
+            enabled: cfg.cumRebEnabled,
+            step: cfg.seasonRebStep,
+            prev: prevCumReb,
+            curr: cumReb,
+            key: "cumreb",
+            noun: "rebotes totales",
+            unit: "REB",
+            epicFloor: 600,
+            priority: 62,
+          },
+          {
+            enabled: cfg.cumOrebEnabled,
+            step: cfg.seasonOrebStep,
+            prev: prevCumOreb,
+            curr: cumOreb,
+            key: "cumoreb",
+            noun: "rebotes ofensivos",
+            unit: "OREB",
+            epicFloor: 150,
+            priority: 60,
+          },
+          {
+            enabled: cfg.cumAstEnabled,
+            step: cfg.seasonAstStep,
+            prev: prevCumAst,
+            curr: cumAst,
+            key: "cumast",
+            noun: "asistencias",
+            unit: "AST",
+            epicFloor: 450,
+            priority: 63,
+          },
+          {
+            enabled: cfg.cumStlEnabled,
+            step: cfg.seasonStlStep,
+            prev: prevCumStl,
+            curr: cumStl,
+            key: "cumstl",
+            noun: "robos de balón",
+            unit: "STL",
+            epicFloor: 90,
+            priority: 60,
+          },
+          {
+            enabled: cfg.cumBlkEnabled,
+            step: cfg.seasonBlkStep,
+            prev: prevCumBlk,
+            curr: cumBlk,
+            key: "cumblk",
+            noun: "tapones",
+            unit: "BLK",
+            epicFloor: 90,
+            priority: 60,
+          },
+        ];
+
+        for (const ck of cumulativeChecks) {
+          if (!ck.enabled || ck.step <= 0) continue;
+          const prevB = Math.floor(ck.prev / ck.step);
+          const nextB = Math.floor(ck.curr / ck.step);
+          if (nextB > prevB && nextB >= 1) {
+            const barrier = nextB * ck.step;
+            pushNotif({
+              id: `${ck.key}:${p.id}:${barrier}`,
+              category: "cumulative",
+              severity: barrier >= ck.epicFloor ? "epic" : "high",
+              title: `${p.name} supera los ${fmtNum(barrier)} ${ck.unit} en 2026-27`,
+              detail: `Alcanza ${fmtNum(ck.curr)} ${ck.noun} acumulados en ${idx + 1} partidos (${teamAbbr}).`,
+              badgeText: `${fmtNum(barrier)} ${ck.unit}`,
+              date: dateIso,
+              entityType: "player",
+              entityId: p.id,
+              entityName: p.name,
+              teamAbbr,
+              eventId: g.eventId,
+              opponentAbbr: g.opponentAbbr,
+            }, ck.priority);
+          }
+        }
+      }
+
+      if (pts > priorMaxPts) {
+        priorMaxPts = pts;
+      }
+    }
+
+    // 28. Hitos Inminentes ("A las puertas" en todas las estadísticas habilitadas)
+    if (cfg.imminentMilestonesEnabled && latestDate) {
+      const imminentChecks = [
+        { enabled: cfg.cumPointsEnabled, curr: cumPts, step: cfg.seasonPointsStep, within: cfg.imminentPtsWithin, minBase: 100, unit: "PTS", noun: "puntos", key: "immpts" },
+        { enabled: cfg.cum3pmEnabled, curr: cum3pm, step: cfg.season3pmStep, within: cfg.imminentOtherWithin, minBase: 25, unit: "3PM", noun: "triples", key: "imm3p" },
+        { enabled: cfg.cumRebEnabled, curr: cumReb, step: cfg.seasonRebStep, within: cfg.imminentOtherWithin * 2, minBase: 60, unit: "REB", noun: "rebotes", key: "immreb" },
+        { enabled: cfg.cumOrebEnabled, curr: cumOreb, step: cfg.seasonOrebStep, within: cfg.imminentOtherWithin, minBase: 20, unit: "OREB", noun: "rebotes ofensivos", key: "immoreb" },
+        { enabled: cfg.cumAstEnabled, curr: cumAst, step: cfg.seasonAstStep, within: cfg.imminentOtherWithin * 2, minBase: 50, unit: "AST", noun: "asistencias", key: "immast" },
+        { enabled: cfg.cumStlEnabled, curr: cumStl, step: cfg.seasonStlStep, within: Math.max(1, Math.round(cfg.imminentOtherWithin * 0.5)), minBase: 12, unit: "STL", noun: "robos", key: "immstl" },
+        { enabled: cfg.cumBlkEnabled, curr: cumBlk, step: cfg.seasonBlkStep, within: Math.max(1, Math.round(cfg.imminentOtherWithin * 0.5)), minBase: 12, unit: "BLK", noun: "tapones", key: "immblk" },
+      ];
+      for (const ic of imminentChecks) {
+        if (!ic.enabled || ic.curr < ic.minBase) continue;
+        const nextBarrier = (Math.floor(ic.curr / ic.step) + 1) * ic.step;
+        const remaining = nextBarrier - ic.curr;
+        if (remaining > 0 && remaining <= ic.within) {
+          pushNotif({
+            id: `${ic.key}:${p.id}:${nextBarrier}`,
+            category: "imminent",
+            severity: "info",
+            title: `Hito inminente: ${p.name} a ${remaining} ${ic.unit} de ${fmtNum(nextBarrier)}`,
+            detail: `Acumula ${fmtNum(ic.curr)} ${ic.noun} en 2026-27 (${p.teamAbbr}); puede cruzar la barrera en su próximo encuentro.`,
+            badgeText: `-${remaining} ${ic.unit}`,
+            date: latestDate,
+            entityType: "player",
+            entityId: p.id,
+            entityName: p.name,
+            teamAbbr: p.teamAbbr,
+            isImminent: true,
+          }, 42);
+        }
+      }
+    }
+
+    // 29. Rachas Individuales Activas (Jugadores)
+    if (cfg.streakMilestoneEnabled && gamesDesc.length >= cfg.streakMinGames) {
+      const latestG = gamesDesc[0];
+      const latestGDate = String(latestG.date || "").slice(0, 10);
+      if (activeDatesSet.has(latestGDate)) {
+        const streakCheckers = [
+          { id: "ptsHigh", label: `${cfg.streakPtsThreshold + 10}+ PTS`, check: (x) => x.points >= cfg.streakPtsThreshold + 10 },
+          { id: "ptsBase", label: `${cfg.streakPtsThreshold}+ PTS`, check: (x) => x.points >= cfg.streakPtsThreshold },
+          { id: "reb10", label: "10+ REB", check: (x) => x.rebounds >= 10 },
+          { id: "ast10", label: "10+ AST", check: (x) => x.assists >= 10 },
+          { id: "3pm3", label: "3+ Triples", check: (x) => x.fg3m >= 3 },
+        ];
+        for (const sc of streakCheckers) {
+          let activeRun = 0;
+          for (const gItem of gamesDesc) {
+            if (sc.check(gItem)) activeRun++;
+            else break;
+          }
+          if (activeRun >= cfg.streakMinGames) {
+            pushNotif({
+              id: `stk:${p.id}:${sc.id}:${activeRun}`,
+              category: "streak",
+              severity: activeRun >= cfg.streakMinGames + 4 ? "epic" : "high",
+              title: `Racha vigente de ${p.name}: ${activeRun} partidos seguidos`,
+              detail: `Encadena ${activeRun} encuentros consecutivos logrando ${sc.label} (${latestG.teamAbbr || p.teamAbbr}).`,
+              badgeText: `Racha ${activeRun} PJ`,
+              date: latestGDate,
+              entityType: "player",
+              entityId: p.id,
+              entityName: p.name,
+              teamAbbr: latestG.teamAbbr || p.teamAbbr,
+              eventId: latestG.eventId,
+            }, 79 + Math.min(10, activeRun - cfg.streakMinGames));
+            break;
+          }
+          if (!sc.check(latestG)) {
+            let brokenRun = 0;
+            for (const gItem of gamesDesc.slice(1)) {
+              if (sc.check(gItem)) brokenRun++;
+              else break;
+            }
+            if (brokenRun >= cfg.streakMinGames) {
+              pushNotif({
+                id: `stkbrk:${p.id}:${sc.id}:${latestG.eventId}`,
+                category: "streak",
+                severity: "info",
+                title: `Fin de racha de ${p.name} (${brokenRun} PJ)`,
+                detail: `Se corta su serie de ${brokenRun} partidos consecutivos con ${sc.label} ante ${latestG.opponentAbbr}.`,
+                badgeText: `Fin ${brokenRun} PJ`,
+                date: latestGDate,
+                entityType: "player",
+                entityId: p.id,
+                entityName: p.name,
+                teamAbbr: latestG.teamAbbr || p.teamAbbr,
+                eventId: latestG.eventId,
+              }, 48);
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  for (const tm of teams) {
+    const rawTGames = tm.games || [];
+    if (rawTGames.length === 0) continue;
+    const tGamesDesc = [...rawTGames].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+    const tLatest = tGamesDesc[0];
+    const tLatestDate = String(tLatest.date || "").slice(0, 10);
+    const totalWins = tGamesDesc.filter((g) => g.result === "W").length;
+
+    // 15. Paliza o Exhibición Colectiva de Equipo
+    if (cfg.teamBlowoutEnabled) {
+      for (const tg of tGamesDesc) {
+        const tgDate = String(tg.date || "").slice(0, 10);
+        if (!activeDatesSet.has(tgDate)) continue;
+        const margin = Number(tg.differential || 0);
+        const ptsFor = Number(tg.pointsFor || 0);
+        if (tg.result === "W" && (margin >= cfg.teamMarginThreshold || ptsFor >= cfg.teamPointsThreshold)) {
+          const isPtsHit = ptsFor >= cfg.teamPointsThreshold;
+          const isMarginHit = margin >= cfg.teamMarginThreshold;
+          pushNotif({
+            id: `tblow:${tm.id}:${tg.eventId}`,
+            category: "team",
+            severity: margin >= cfg.teamMarginThreshold + 10 || ptsFor >= cfg.teamPointsThreshold + 10 ? "epic" : "high",
+            title: isMarginHit
+              ? `Exhibición colectiva de ${tm.name}: +${margin} PTS`
+              : `Festival ofensivo de ${tm.name}: ${ptsFor} PTS`,
+            detail: `Victoria ${tg.pointsFor}-${tg.pointsAgainst} ${tg.isHome ? "vs" : "@"} ${tg.opponentAbbr}${isPtsHit ? ` (${ptsFor} PTS anotados)` : ""}.`,
+            badgeText: isMarginHit ? `+${margin} DIF` : `${ptsFor} PTS`,
+            date: tgDate,
+            entityType: "team",
+            entityId: tm.id,
+            entityName: tm.name,
+            teamAbbr: tm.abbreviation,
+            eventId: tg.eventId,
+            opponentAbbr: tg.opponentAbbr,
+          }, 72);
+        }
+      }
+    }
+
+    // 30. Racha de Victorias Consecutivas (Equipos)
+    if (cfg.teamWinStreakEnabled && activeDatesSet.has(tLatestDate)) {
+      let winRun = 0;
+      for (const gItem of tGamesDesc) {
+        if (gItem.result === "W") winRun++;
+        else break;
+      }
+      if (winRun >= cfg.teamWinStreakMin) {
+        pushNotif({
+          id: `tstreak:${tm.id}:${winRun}`,
+          category: "streak",
+          severity: winRun >= cfg.teamWinStreakMin + 2 ? "epic" : "high",
+          title: `Racha activa: ${tm.name} suma ${winRun} victorias seguidas`,
+          detail: `Balance general de ${tm.record} tras imponerse ${tLatest.pointsFor}-${tLatest.pointsAgainst} ${tLatest.isHome ? "vs" : "@"} ${tLatest.opponentAbbr}.`,
+          badgeText: `${winRun}V seguidas`,
+          date: tLatestDate,
+          entityType: "team",
+          entityId: tm.id,
+          entityName: tm.name,
+          teamAbbr: tm.abbreviation,
+          eventId: tLatest.eventId,
+          opponentAbbr: tLatest.opponentAbbr,
+        }, 88 + Math.min(10, winRun));
+      } else if (tLatest.result === "L") {
+        let brokenTeamRun = 0;
+        for (const gItem of tGamesDesc.slice(1)) {
+          if (gItem.result === "W") brokenTeamRun++;
+          else break;
+        }
+        if (brokenTeamRun >= cfg.teamWinStreakMin) {
+          pushNotif({
+            id: `tstreakbrk:${tm.id}:${tLatest.eventId}`,
+            category: "streak",
+            severity: "info",
+            title: `Se corta la racha de ${tm.name} (${brokenTeamRun}V seguidas)`,
+            detail: `Cayó ${tLatest.pointsFor}-${tLatest.pointsAgainst} ${tLatest.isHome ? "vs" : "@"} ${tLatest.opponentAbbr} tras ${brokenTeamRun} triunfos consecutivos.`,
+            badgeText: `Fin ${brokenTeamRun}V`,
+            date: tLatestDate,
+            entityType: "team",
+            entityId: tm.id,
+            entityName: tm.name,
+            teamAbbr: tm.abbreviation,
+            eventId: tLatest.eventId,
+            opponentAbbr: tLatest.opponentAbbr,
+          }, 56);
+        }
+      }
+    }
+
+    // 27. Barrera Acumulada: Victorias de Equipo en Temporada (10, 20, 30...)
+    if (cfg.teamSeasonWinsMilestoneEnabled && cfg.teamSeasonWinsStep > 0) {
+      const tChrono = [...tGamesDesc].reverse();
+      let cumW = 0;
+      for (const tg of tChrono) {
+        const prevW = cumW;
+        if (tg.result === "W") cumW++;
+        const tgDate = String(tg.date || "").slice(0, 10);
+        if (!activeDatesSet.has(tgDate) || tg.result !== "W") continue;
+        const prevWB = Math.floor(prevW / cfg.teamSeasonWinsStep);
+        const nextWB = Math.floor(cumW / cfg.teamSeasonWinsStep);
+        if (nextWB > prevWB && nextWB >= 1) {
+          const winsBarrier = nextWB * cfg.teamSeasonWinsStep;
+          pushNotif({
+            id: `twins:${tm.id}:${winsBarrier}`,
+            category: "cumulative",
+            severity: winsBarrier >= 40 ? "epic" : "high",
+            title: `${tm.name} alcanza ${winsBarrier} victorias en 2026-27`,
+            detail: `Suma ${cumW} triunfos acumulados en la temporada (${tm.record}) tras vencer ${tg.pointsFor}-${tg.pointsAgainst} a ${tg.opponentAbbr}.`,
+            badgeText: `${winsBarrier}V temp.`,
+            date: tgDate,
+            entityType: "team",
+            entityId: tm.id,
+            entityName: tm.name,
+            teamAbbr: tm.abbreviation,
+            eventId: tg.eventId,
+          }, 61);
+        }
+      }
+    }
+
+    // Hito Inminente de Victorias de Temporada
+    if (
+      cfg.imminentMilestonesEnabled &&
+      cfg.teamSeasonWinsMilestoneEnabled &&
+      cfg.teamSeasonWinsStep > 0 &&
+      latestDate
+    ) {
+      const nextWinBarrier = (Math.floor(totalWins / cfg.teamSeasonWinsStep) + 1) * cfg.teamSeasonWinsStep;
+      if (totalWins >= Math.max(4, cfg.teamSeasonWinsStep - 2) && nextWinBarrier - totalWins === 1) {
+        pushNotif({
+          id: `immtwins:${tm.id}:${nextWinBarrier}`,
+          category: "imminent",
+          severity: "info",
+          title: `Hito colectivo inminente: ${tm.name} a 1 triunfo de ${nextWinBarrier}V`,
+          detail: `Con ${tm.record}, los ${tm.shortName} están a una victoria de sumar ${nextWinBarrier} triunfos en 2026-27.`,
+          badgeText: `A 1V de ${nextWinBarrier}`,
+          date: latestDate,
+          entityType: "team",
+          entityId: tm.id,
+          entityName: tm.name,
+          teamAbbr: tm.abbreviation,
+          isImminent: true,
+        }, 40);
+      }
+    }
+  }
+
+  // Grupo 3: Clutch & Buzzer Beaters (16. Buzzer Beater, 17. Empate OT, 18. Game Winner, 19. Canasta Lejana)
+  if (
+    cfg.heroicBuzzerEnabled ||
+    cfg.heroicOtTieEnabled ||
+    cfg.heroicGameWinnerEnabled ||
+    cfg.heroicLongRangeEnabled
+  ) {
+    try {
+      const heroicResp = await getLeagueHeroicShots("2027", false);
+      const heroicItems = Array.isArray(heroicResp?.items) ? heroicResp.items : [];
+      for (const hc of heroicItems) {
+        const hcDate = String(hc.date || "").slice(0, 10);
+        if (!activeDatesSet.has(hcDate)) continue;
+        const shotType = String(hc.shotType || "");
+        const clockSec = Number.isFinite(Number(hc.clockSeconds)) ? Number(hc.clockSeconds) : parseClockSec(hc.clock);
+        const distFt = Number(hc.shotDistance ?? hc.shotDistanceFt ?? 0);
+        const actionEs = translateHeroicShotActionCompactEs(String(hc.description || ""));
+
+        if (shotType === "buzzer_beater" && cfg.heroicBuzzerEnabled) {
+          pushNotif({
+            id: `heroic:bb:${hc.id}`,
+            category: "heroic",
+            severity: "epic",
+            title: `Buzzer Beater (0.0s) de ${hc.playerName}`,
+            detail: `${hc.teamAbbr} ${hc.finalScoreTeam}-${hc.finalScoreOpp} vs ${hc.opponentAbbr} (${hc.periodLabel}): ${actionEs}`,
+            badgeText: "⚡ Buzzer Beater",
+            date: hcDate,
+            entityType: "player",
+            entityId: hc.playerId || hc.teamId,
+            entityName: hc.playerName,
+            teamAbbr: hc.teamAbbr,
+            eventId: hc.gameId,
+            opponentAbbr: hc.opponentAbbr,
+          }, 98);
+        } else if (shotType === "ot_tie_buzzer" && cfg.heroicOtTieEnabled) {
+          pushNotif({
+            id: `heroic:ot:${hc.id}`,
+            category: "heroic",
+            severity: "epic",
+            title: `Empate sobre la bocina de ${hc.playerName}`,
+            detail: `${hc.teamAbbr} ${hc.finalScoreTeam}-${hc.finalScoreOpp} vs ${hc.opponentAbbr} (${hc.periodLabel}): ${actionEs}`,
+            badgeText: "⏱️ Empate OT",
+            date: hcDate,
+            entityType: "player",
+            entityId: hc.playerId || hc.teamId,
+            entityName: hc.playerName,
+            teamAbbr: hc.teamAbbr,
+            eventId: hc.gameId,
+            opponentAbbr: hc.opponentAbbr,
+          }, 95);
+        } else if (
+          shotType === "game_winner" &&
+          cfg.heroicGameWinnerEnabled &&
+          clockSec <= cfg.heroicGameWinnerMaxSec
+        ) {
+          pushNotif({
+            id: `heroic:gw:${hc.id}`,
+            category: "heroic",
+            severity: "epic",
+            title: `Game Winner (${hc.clock}) de ${hc.playerName}`,
+            detail: `${hc.teamAbbr} ${hc.finalScoreTeam}-${hc.finalScoreOpp} vs ${hc.opponentAbbr} (${hc.periodLabel}): ${actionEs}`,
+            badgeText: `🎯 GW ${hc.clock}`,
+            date: hcDate,
+            entityType: "player",
+            entityId: hc.playerId || hc.teamId,
+            entityName: hc.playerName,
+            teamAbbr: hc.teamAbbr,
+            eventId: hc.gameId,
+            opponentAbbr: hc.opponentAbbr,
+          }, 94);
+        }
+
+        if (cfg.heroicLongRangeEnabled && distFt >= cfg.heroicLongRangeMinFt) {
+          pushNotif({
+            id: `heroic:dist:${hc.id}`,
+            category: "heroic",
+            severity: "epic",
+            title: `Lanzamiento heroico desde ${distFt.toFixed(1)} ft de ${hc.playerName}`,
+            detail: `${hc.teamAbbr} vs ${hc.opponentAbbr} (${hc.clock} · ${hc.periodLabel}): ${actionEs}`,
+            badgeText: `📏 ${distFt.toFixed(0)} ft`,
+            date: hcDate,
+            entityType: "player",
+            entityId: hc.playerId || hc.teamId,
+            entityName: hc.playerName,
+            teamAbbr: hc.teamAbbr,
+            eventId: hc.gameId,
+            opponentAbbr: hc.opponentAbbr,
+          }, 93);
+        }
+      }
+    } catch {
+      // Non-fatal if heroic snapshot unavailable
+    }
+  }
+
+  const severityRank = { epic: 3, high: 2, info: 1 };
+  notifications.sort((a, b) => {
+    const dateCmp = String(b.date || "").localeCompare(String(a.date || ""));
+    if (dateCmp !== 0) return dateCmp;
+    const immA = a.isImminent ? 0 : 1;
+    const immB = b.isImminent ? 0 : 1;
+    if (immA !== immB) return immB - immA;
+    const sevCmp = (severityRank[b.severity] || 0) - (severityRank[a.severity] || 0);
+    if (sevCmp !== 0) return sevCmp;
+    const prioCmp = Number(b._priority || 0) - Number(a._priority || 0);
+    if (prioCmp !== 0) return prioCmp;
+    return a.title.localeCompare(b.title);
+  });
+
+  const capped = notifications.slice(0, cfg.maxNotifications).map(({ _priority, ...rest }) => rest);
+  const payload = {
+    enabled: true,
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    latestDate,
+    notifications: capped,
+    summary: {
+      total: capped.length,
+      epicCount: capped.filter((n) => n.severity === "epic").length,
+      imminentCount: capped.filter((n) => Boolean(n.isImminent)).length,
+    },
+  };
+  cachedMilestoneNotifications = {
+    expiresAt: Date.now() + 3 * 60 * 1e3,
+    configUpdatedAt: cfg.updatedAt,
+    payload,
+  };
+  return payload;
+}
+
+async function getMilestoneNotificationsSeasonCounts(rawConfig) {
+  const cfg = sanitizeMilestoneNotificationsConfig(rawConfig || activeMilestoneNotificationsConfig);
+  const full = await getFullLeagueMemory(false);
+  const s27 = full.s2027;
+  const players = [...(s27?.playersById?.values() || [])];
+  const teams = [...(s27?.teamsByAbbr?.values() || [])];
+
+  const allDatesSet = new Set();
+  for (const t of teams) {
+    for (const g of t.games || []) {
+      const d = String(g.date || "").slice(0, 10);
+      if (d) allDatesSet.add(d);
+    }
+  }
+  const sortedDates = [...allDatesSet].sort((a, b) => b.localeCompare(a));
+  const activeDatesSet = new Set(sortedDates.slice(0, cfg.lookbackDays));
+
+  const seasonCounts = {
+    scoringMilestoneEnabled: 0,
+    seasonHighPtsEnabled: 0,
+    threePointExplosionEnabled: 0,
+    assistExplosionEnabled: 0,
+    reboundExplosionEnabled: 0,
+    orebExplosionEnabled: 0,
+    tripleDoubleEnabled: 0,
+    twentyTwentyEnabled: 0,
+    doubleDoubleEnabled: 0,
+    efficiencySniperEnabled: 0,
+    cleanPlaymakerEnabled: 0,
+    defenseMilestoneEnabled: 0,
+    gameScoreMilestoneEnabled: 0,
+    plusMinusMilestoneEnabled: 0,
+    teamBlowoutEnabled: 0,
+    heroicBuzzerEnabled: 0,
+    heroicOtTieEnabled: 0,
+    heroicGameWinnerEnabled: 0,
+    heroicLongRangeEnabled: 0,
+    cumPointsEnabled: 0,
+    cum3pmEnabled: 0,
+    cumRebEnabled: 0,
+    cumOrebEnabled: 0,
+    cumAstEnabled: 0,
+    cumStlEnabled: 0,
+    cumBlkEnabled: 0,
+    teamSeasonWinsMilestoneEnabled: 0,
+    imminentMilestonesEnabled: 0,
+    streakMilestoneEnabled: 0,
+    teamWinStreakEnabled: 0,
+  };
+  const recentCounts = { ...seasonCounts };
+
+  const bump = (key, inWin) => {
+    seasonCounts[key] += 1;
+    if (inWin) recentCounts[key] += 1;
+  };
+
+  const parseClockSec = (clockStr) => {
+    const clean = String(clockStr || "").trim().replace(/s$/i, "");
+    const m = clean.match(/^(\d+):(\d+(?:\.\d+)?)$/);
+    if (m) return Number(m[1]) * 60 + Number(m[2]);
+    const n = Number(clean);
+    return Number.isFinite(n) ? n : 99;
+  };
+
+  for (const p of players) {
+    const rawGames = p.games || [];
+    if (rawGames.length === 0) continue;
+    const gamesDesc = [...rawGames].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+    const chrono = [...gamesDesc].reverse();
+
+    let cumPts = 0;
+    let cum3pm = 0;
+    let cumReb = 0;
+    let cumOreb = 0;
+    let cumAst = 0;
+    let cumStl = 0;
+    let cumBlk = 0;
+    let priorMaxPts = 0;
+
+    // Track distinct streak episodes across the season per rule
+    const streakRuns = { ptsHigh: 0, ptsBase: 0, reb10: 0, ast10: 0, three3: 0 };
+
+    for (let idx = 0; idx < chrono.length; idx++) {
+      const g = chrono[idx];
+      const dateIso = String(g.date || "").slice(0, 10);
+      const inWin = activeDatesSet.has(dateIso);
+
+      const prevCumPts = cumPts;
+      const prevCum3pm = cum3pm;
+      const prevCumReb = cumReb;
+      const prevCumOreb = cumOreb;
+      const prevCumAst = cumAst;
+      const prevCumStl = cumStl;
+      const prevCumBlk = cumBlk;
+
+      const pts = Number(g.points || 0);
+      const reb = Number(g.rebounds || 0);
+      const oreb = Number(g.oreb || 0);
+      const ast = Number(g.assists || 0);
+      const stl = Number(g.steals || 0);
+      const blk = Number(g.blocks || 0);
+      const fg3m = Number(g.fg3m || 0);
+      const tov = Number(g.turnovers || 0);
+      const fgPct = Number(g.fgPct || 0);
+      const fga = Number(g.fga || 0);
+      const gmSc = Number(g.gameScore || 0);
+      const pm = Number(g.plusMinus || 0);
+
+      cumPts += pts;
+      cum3pm += fg3m;
+      cumReb += reb;
+      cumOreb += oreb;
+      cumAst += ast;
+      cumStl += stl;
+      cumBlk += blk;
+
+      if (pts >= cfg.scoringThreshold) bump("scoringMilestoneEnabled", inWin);
+      if (idx + 1 >= cfg.seasonHighMinGames && pts >= cfg.seasonHighMinPts && pts > priorMaxPts) {
+        bump("seasonHighPtsEnabled", inWin);
+      }
+      if (fg3m >= cfg.threePointThreshold) bump("threePointExplosionEnabled", inWin);
+      if (ast >= cfg.assistExplosionThreshold) bump("assistExplosionEnabled", inWin);
+      if (reb >= cfg.reboundExplosionThreshold) bump("reboundExplosionEnabled", inWin);
+      if (oreb >= cfg.orebExplosionThreshold) bump("orebExplosionEnabled", inWin);
+
+      // Triple-Doble Oficial: solo PTS, REB y AST
+      const tdMin = cfg.tripleDoubleMinStat;
+      const isCustomTd = pts >= tdMin && reb >= tdMin && ast >= tdMin;
+      const isStdTd = pts >= 10 && reb >= 10 && ast >= 10;
+      if (isCustomTd) {
+        bump("tripleDoubleEnabled", inWin);
+      }
+      const ddCats = [pts, reb, ast, stl, blk].filter((v) => v >= 10).length;
+      if (ddCats >= 2 && pts >= cfg.doubleDoubleMinPts) {
+        if (!isStdTd) seasonCounts.doubleDoubleEnabled += 1;
+        if (inWin && !(cfg.tripleDoubleEnabled && isCustomTd)) {
+          recentCounts.doubleDoubleEnabled += 1;
+        }
+      }
+
+      if (pts >= cfg.twentyTwentyPtsMin && (reb >= cfg.twentyTwentySecMin || ast >= cfg.twentyTwentySecMin)) {
+        bump("twentyTwentyEnabled", inWin);
+      }
+      if (pts >= cfg.efficiencyMinPts && fga >= 8 && fgPct >= cfg.efficiencyMinFgPct) {
+        bump("efficiencySniperEnabled", inWin);
+      }
+      if (tov === 0 && ast >= cfg.cleanPlaymakerMinAst && pts >= cfg.cleanPlaymakerMinPts) {
+        bump("cleanPlaymakerEnabled", inWin);
+      }
+      if (blk >= cfg.defenseMinBlk || stl >= cfg.defenseMinStl || (stl >= cfg.defenseComboMinEach && blk >= cfg.defenseComboMinEach)) {
+        bump("defenseMilestoneEnabled", inWin);
+      }
+      if (gmSc >= cfg.gameScoreThreshold) bump("gameScoreMilestoneEnabled", inWin);
+      if (pm >= cfg.plusMinusThreshold) bump("plusMinusMilestoneEnabled", inWin);
+
+      if (cfg.seasonPointsStep > 0 && Math.floor(cumPts / cfg.seasonPointsStep) > Math.floor(prevCumPts / cfg.seasonPointsStep)) {
+        bump("cumPointsEnabled", inWin);
+      }
+      if (cfg.season3pmStep > 0 && Math.floor(cum3pm / cfg.season3pmStep) > Math.floor(prevCum3pm / cfg.season3pmStep)) {
+        bump("cum3pmEnabled", inWin);
+      }
+      if (cfg.seasonRebStep > 0 && Math.floor(cumReb / cfg.seasonRebStep) > Math.floor(prevCumReb / cfg.seasonRebStep)) {
+        bump("cumRebEnabled", inWin);
+      }
+      if (cfg.seasonOrebStep > 0 && Math.floor(cumOreb / cfg.seasonOrebStep) > Math.floor(prevCumOreb / cfg.seasonOrebStep)) {
+        bump("cumOrebEnabled", inWin);
+      }
+      if (cfg.seasonAstStep > 0 && Math.floor(cumAst / cfg.seasonAstStep) > Math.floor(prevCumAst / cfg.seasonAstStep)) {
+        bump("cumAstEnabled", inWin);
+      }
+      if (cfg.seasonStlStep > 0 && Math.floor(cumStl / cfg.seasonStlStep) > Math.floor(prevCumStl / cfg.seasonStlStep)) {
+        bump("cumStlEnabled", inWin);
+      }
+      if (cfg.seasonBlkStep > 0 && Math.floor(cumBlk / cfg.seasonBlkStep) > Math.floor(prevCumBlk / cfg.seasonBlkStep)) {
+        bump("cumBlkEnabled", inWin);
+      }
+
+      // Season episodes reaching streakMinGames
+      const hits = {
+        ptsHigh: pts >= cfg.streakPtsThreshold + 10,
+        ptsBase: pts >= cfg.streakPtsThreshold,
+        reb10: reb >= 10,
+        ast10: ast >= 10,
+        three3: fg3m >= 3,
+      };
+      for (const k of Object.keys(hits)) {
+        if (hits[k]) {
+          streakRuns[k] += 1;
+          if (streakRuns[k] === cfg.streakMinGames) {
+            seasonCounts.streakMilestoneEnabled += 1;
+          }
+        } else {
+          streakRuns[k] = 0;
+        }
+      }
+
+      if (pts > priorMaxPts) priorMaxPts = pts;
+    }
+
+    // Recent active/broken streaks count (matches payload logic)
+    if (gamesDesc.length >= cfg.streakMinGames) {
+      const latestG = gamesDesc[0];
+      const latestGDate = String(latestG.date || "").slice(0, 10);
+      if (activeDatesSet.has(latestGDate)) {
+        const scList = [
+          (x) => x.points >= cfg.streakPtsThreshold + 10,
+          (x) => x.points >= cfg.streakPtsThreshold,
+          (x) => x.rebounds >= 10,
+          (x) => x.assists >= 10,
+          (x) => x.fg3m >= 3,
+        ];
+        for (const fn of scList) {
+          let activeRun = 0;
+          for (const gItem of gamesDesc) {
+            if (fn(gItem)) activeRun++;
+            else break;
+          }
+          if (activeRun >= cfg.streakMinGames) {
+            recentCounts.streakMilestoneEnabled += 1;
+            break;
+          }
+          if (!fn(latestG)) {
+            let brokenRun = 0;
+            for (const gItem of gamesDesc.slice(1)) {
+              if (fn(gItem)) brokenRun++;
+              else break;
+            }
+            if (brokenRun >= cfg.streakMinGames) {
+              recentCounts.streakMilestoneEnabled += 1;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    // Current imminent player milestones
+    const immChecks = [
+      { enabled: cfg.cumPointsEnabled, curr: cumPts, step: cfg.seasonPointsStep, within: cfg.imminentPtsWithin, minBase: 100 },
+      { enabled: cfg.cum3pmEnabled, curr: cum3pm, step: cfg.season3pmStep, within: cfg.imminentOtherWithin, minBase: 25 },
+      { enabled: cfg.cumRebEnabled, curr: cumReb, step: cfg.seasonRebStep, within: cfg.imminentOtherWithin * 2, minBase: 60 },
+      { enabled: cfg.cumOrebEnabled, curr: cumOreb, step: cfg.seasonOrebStep, within: cfg.imminentOtherWithin, minBase: 20 },
+      { enabled: cfg.cumAstEnabled, curr: cumAst, step: cfg.seasonAstStep, within: cfg.imminentOtherWithin * 2, minBase: 50 },
+      { enabled: cfg.cumStlEnabled, curr: cumStl, step: cfg.seasonStlStep, within: Math.max(1, Math.round(cfg.imminentOtherWithin * 0.5)), minBase: 12 },
+      { enabled: cfg.cumBlkEnabled, curr: cumBlk, step: cfg.seasonBlkStep, within: Math.max(1, Math.round(cfg.imminentOtherWithin * 0.5)), minBase: 12 },
+    ];
+    for (const ic of immChecks) {
+      if (!ic.enabled || ic.curr < ic.minBase || ic.step <= 0) continue;
+      const nextB = (Math.floor(ic.curr / ic.step) + 1) * ic.step;
+      const rem = nextB - ic.curr;
+      if (rem > 0 && rem <= ic.within) {
+        bump("imminentMilestonesEnabled", true);
+      }
+    }
+  }
+
+  for (const tm of teams) {
+    const rawTGames = tm.games || [];
+    if (rawTGames.length === 0) continue;
+    const tGamesDesc = [...rawTGames].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+    const tChrono = [...tGamesDesc].reverse();
+    let cumW = 0;
+    let tRun = 0;
+
+    for (const tg of tChrono) {
+      const tgDate = String(tg.date || "").slice(0, 10);
+      const inWin = activeDatesSet.has(tgDate);
+      const margin = Number(tg.differential || 0);
+      const ptsFor = Number(tg.pointsFor || 0);
+      if (tg.result === "W" && (margin >= cfg.teamMarginThreshold || ptsFor >= cfg.teamPointsThreshold)) {
+        bump("teamBlowoutEnabled", inWin);
+      }
+      const prevW = cumW;
+      if (tg.result === "W") {
+        cumW += 1;
+        tRun += 1;
+        if (tRun === cfg.teamWinStreakMin) {
+          seasonCounts.teamWinStreakEnabled += 1;
+        }
+        if (cfg.teamSeasonWinsStep > 0 && Math.floor(cumW / cfg.teamSeasonWinsStep) > Math.floor(prevW / cfg.teamSeasonWinsStep)) {
+          bump("teamSeasonWinsMilestoneEnabled", inWin);
+        }
+      } else {
+        tRun = 0;
+      }
+    }
+
+    const tLatest = tGamesDesc[0];
+    const tLatestDate = String(tLatest.date || "").slice(0, 10);
+    if (activeDatesSet.has(tLatestDate)) {
+      let winRun = 0;
+      for (const gItem of tGamesDesc) {
+        if (gItem.result === "W") winRun++;
+        else break;
+      }
+      if (winRun >= cfg.teamWinStreakMin) {
+        recentCounts.teamWinStreakEnabled += 1;
+      } else if (tLatest.result === "L") {
+        let brokenRun = 0;
+        for (const gItem of tGamesDesc.slice(1)) {
+          if (gItem.result === "W") brokenRun++;
+          else break;
+        }
+        if (brokenRun >= cfg.teamWinStreakMin) {
+          recentCounts.teamWinStreakEnabled += 1;
+        }
+      }
+    }
+
+    if (cfg.teamSeasonWinsMilestoneEnabled && cfg.teamSeasonWinsStep > 0) {
+      const nextWinB = (Math.floor(cumW / cfg.teamSeasonWinsStep) + 1) * cfg.teamSeasonWinsStep;
+      if (cumW >= Math.max(4, cfg.teamSeasonWinsStep - 2) && nextWinB - cumW === 1) {
+        bump("imminentMilestonesEnabled", true);
+      }
+    }
+  }
+
+  try {
+    const heroicResp = await getLeagueHeroicShots("2027", false);
+    const heroicItems = Array.isArray(heroicResp?.items) ? heroicResp.items : [];
+    for (const hc of heroicItems) {
+      const hcDate = String(hc.date || "").slice(0, 10);
+      const inWin = activeDatesSet.has(hcDate);
+      const shotType = String(hc.shotType || "");
+      const clockSec = Number.isFinite(Number(hc.clockSeconds)) ? Number(hc.clockSeconds) : parseClockSec(hc.clock);
+      const distFt = Number(hc.shotDistance ?? hc.shotDistanceFt ?? 0);
+      if (shotType === "buzzer_beater") bump("heroicBuzzerEnabled", inWin);
+      else if (shotType === "ot_tie_buzzer") bump("heroicOtTieEnabled", inWin);
+      else if (shotType === "game_winner" && clockSec <= cfg.heroicGameWinnerMaxSec) {
+        bump("heroicGameWinnerEnabled", inWin);
+      }
+      if (distFt >= cfg.heroicLongRangeMinFt) bump("heroicLongRangeEnabled", inWin);
+    }
+  } catch {
+    // Non-fatal if heroic snapshot unavailable
+  }
+
+  let totalEnabledRecentAlerts = 0;
+  for (const key of Object.keys(recentCounts)) {
+    if (cfg[key]) {
+      totalEnabledRecentAlerts += recentCounts[key];
+    }
+  }
+
+  return {
+    seasonCounts,
+    recentCounts,
+    totalDates: sortedDates.length,
+    totalEnabledRecentAlerts,
+  };
+}
+
 export {
   buildSingleSeasonDataset,
   cachedFetchJson,
@@ -2126,6 +3647,11 @@ export {
   getInspectorKpiDefaultsConfig,
   updateInspectorKpiDefaultsConfig,
   resetInspectorKpiDefaultsConfig,
+  getMilestoneNotificationsConfig,
+  updateMilestoneNotificationsConfig,
+  resetMilestoneNotificationsConfigDefaults,
+  getMilestoneNotificationsPayload,
+  getMilestoneNotificationsSeasonCounts,
   getMilestonesPayload,
   getPlayerBiosMap,
   getPlayerInspectorDossier,

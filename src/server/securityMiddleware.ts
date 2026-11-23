@@ -554,7 +554,10 @@ __name(recordAdminLoginFailure, "recordAdminLoginFailure");
 
 async function resetAdminBruteForceForRequest(req) {
   const ipKey = resolveClientRateLimitKey(req);
-  await deleteDistributedCounter("admin_login", ipKey);
+  await Promise.all([
+    deleteDistributedCounter("admin_login", ipKey),
+    deleteDistributedCounter("admin_flood", ipKey),
+  ]);
 }
 __name(resetAdminBruteForceForRequest, "resetAdminBruteForceForRequest");
 
@@ -594,6 +597,11 @@ __name(nbaHeavyRefreshLimiter, "nbaHeavyRefreshLimiter");
 
 async function adminEndpointFloodLimiter(req, res, next) {
   try {
+    const token = extractAdminTokenFromRequest(req);
+    if (token && verifyAdminSessionToken(token).valid) {
+      next();
+      return;
+    }
     const cfg = currentSecurityConfig;
     const windowMs = cfg.adminFloodWindowMinutes * 60 * 1e3;
     const ipKey = resolveClientRateLimitKey(req);

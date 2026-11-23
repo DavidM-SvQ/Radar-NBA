@@ -4,6 +4,10 @@ import type {
   GamedayThresholdsConfig,
   GamedayThresholdsConfigValues,
   InspectorDefaultKpisConfig,
+  MilestoneNotificationCountsPreview,
+  MilestoneNotificationsConfig,
+  MilestoneNotificationsConfigValues,
+  MilestoneNotificationsPayload,
   WebFeatureFlags,
 } from '../types/nba';
 import {
@@ -1318,5 +1322,436 @@ export async function resetAdminInspectorKpiDefaults(): Promise<AdminInspectorKp
     return { ok: true, config: fallbackCfg };
   }
 }
+
+const MILESTONE_NOTIFICATIONS_BACKUP_KEY = 'radarnba_milestone_notifications_cfg_v2';
+
+export const DEFAULT_MILESTONE_NOTIFICATIONS_VALUES: MilestoneNotificationsConfigValues = {
+  enabled: true,
+  lookbackDays: 3,
+  maxNotifications: 40,
+
+  scoringMilestoneEnabled: true,
+  scoringThreshold: 40,
+  seasonHighPtsEnabled: true,
+  seasonHighMinPts: 26,
+  seasonHighMinGames: 4,
+  threePointExplosionEnabled: true,
+  threePointThreshold: 8,
+  assistExplosionEnabled: true,
+  assistExplosionThreshold: 14,
+  reboundExplosionEnabled: true,
+  reboundExplosionThreshold: 18,
+  orebExplosionEnabled: true,
+  orebExplosionThreshold: 7,
+  tripleDoubleEnabled: true,
+  tripleDoubleMinStat: 10,
+  twentyTwentyEnabled: true,
+  twentyTwentyPtsMin: 20,
+  twentyTwentySecMin: 15,
+  doubleDoubleEnabled: false,
+  doubleDoubleMinPts: 15,
+  efficiencySniperEnabled: true,
+  efficiencyMinPts: 25,
+  efficiencyMinFgPct: 75,
+  cleanPlaymakerEnabled: true,
+  cleanPlaymakerMinAst: 8,
+  cleanPlaymakerMinPts: 15,
+
+  defenseMilestoneEnabled: true,
+  defenseMinBlk: 5,
+  defenseMinStl: 5,
+  defenseComboMinEach: 3,
+  gameScoreMilestoneEnabled: true,
+  gameScoreThreshold: 38,
+  plusMinusMilestoneEnabled: false,
+  plusMinusThreshold: 25,
+  teamBlowoutEnabled: true,
+  teamMarginThreshold: 25,
+  teamPointsThreshold: 135,
+
+  heroicBuzzerEnabled: true,
+  heroicOtTieEnabled: true,
+  heroicGameWinnerEnabled: true,
+  heroicGameWinnerMaxSec: 10,
+  heroicLongRangeEnabled: true,
+  heroicLongRangeMinFt: 38,
+
+  cumPointsEnabled: true,
+  seasonPointsStep: 500,
+  cum3pmEnabled: true,
+  season3pmStep: 100,
+  cumRebEnabled: true,
+  seasonRebStep: 200,
+  cumOrebEnabled: true,
+  seasonOrebStep: 50,
+  cumAstEnabled: true,
+  seasonAstStep: 150,
+  cumStlEnabled: true,
+  seasonStlStep: 30,
+  cumBlkEnabled: true,
+  seasonBlkStep: 30,
+  teamSeasonWinsMilestoneEnabled: true,
+  teamSeasonWinsStep: 10,
+
+  imminentMilestonesEnabled: true,
+  imminentPtsWithin: 25,
+  imminentOtherWithin: 5,
+  streakMilestoneEnabled: true,
+  streakMinGames: 7,
+  streakPtsThreshold: 20,
+  teamWinStreakEnabled: true,
+  teamWinStreakMin: 5,
+};
+
+export const MILESTONE_NOTIFICATIONS_BOUNDS = {
+  lookbackDays: { min: 1, max: 14, step: 1, unit: 'días' },
+  maxNotifications: { min: 5, max: 100, step: 5, unit: 'alertas' },
+
+  scoringThreshold: { min: 20, max: 80, step: 5, unit: 'PTS' },
+  seasonHighMinPts: { min: 15, max: 60, step: 1, unit: 'PTS' },
+  seasonHighMinGames: { min: 2, max: 20, step: 1, unit: 'PJ' },
+  threePointThreshold: { min: 4, max: 16, step: 1, unit: '3PM' },
+  assistExplosionThreshold: { min: 8, max: 25, step: 1, unit: 'AST' },
+  reboundExplosionThreshold: { min: 10, max: 30, step: 1, unit: 'REB' },
+  orebExplosionThreshold: { min: 4, max: 15, step: 1, unit: 'OREB' },
+  tripleDoubleMinStat: { min: 8, max: 15, step: 1, unit: 'mín.' },
+  twentyTwentyPtsMin: { min: 15, max: 40, step: 5, unit: 'PTS' },
+  twentyTwentySecMin: { min: 10, max: 25, step: 1, unit: 'R/A' },
+  doubleDoubleMinPts: { min: 10, max: 35, step: 5, unit: 'PTS' },
+  efficiencyMinPts: { min: 15, max: 45, step: 5, unit: 'PTS' },
+  efficiencyMinFgPct: { min: 60, max: 95, step: 5, unit: '% TC' },
+  cleanPlaymakerMinAst: { min: 5, max: 18, step: 1, unit: 'AST' },
+  cleanPlaymakerMinPts: { min: 10, max: 35, step: 5, unit: 'PTS' },
+
+  defenseMinBlk: { min: 3, max: 12, step: 1, unit: 'TAP' },
+  defenseMinStl: { min: 3, max: 12, step: 1, unit: 'ROB' },
+  defenseComboMinEach: { min: 2, max: 6, step: 1, unit: 'R+T' },
+  gameScoreThreshold: { min: 25, max: 60, step: 1, unit: 'GmSc' },
+  plusMinusThreshold: { min: 15, max: 45, step: 5, unit: '+/-' },
+  teamMarginThreshold: { min: 15, max: 50, step: 5, unit: 'DIF' },
+  teamPointsThreshold: { min: 120, max: 165, step: 5, unit: 'PTS' },
+
+  heroicGameWinnerMaxSec: { min: 1, max: 24, step: 1, unit: 'seg.' },
+  heroicLongRangeMinFt: { min: 20, max: 75, step: 1, unit: 'ft' },
+
+  seasonPointsStep: { min: 200, max: 1000, step: 50, unit: 'PTS' },
+  season3pmStep: { min: 25, max: 200, step: 25, unit: '3PM' },
+  seasonRebStep: { min: 100, max: 500, step: 50, unit: 'REB' },
+  seasonOrebStep: { min: 25, max: 200, step: 25, unit: 'OREB' },
+  seasonAstStep: { min: 100, max: 500, step: 25, unit: 'AST' },
+  seasonStlStep: { min: 15, max: 100, step: 5, unit: 'STL' },
+  seasonBlkStep: { min: 15, max: 100, step: 5, unit: 'BLK' },
+  teamSeasonWinsStep: { min: 5, max: 25, step: 5, unit: 'V' },
+
+  imminentPtsWithin: { min: 5, max: 60, step: 5, unit: 'PTS' },
+  imminentOtherWithin: { min: 1, max: 15, step: 1, unit: 'ud.' },
+  streakMinGames: { min: 3, max: 20, step: 1, unit: 'PJ' },
+  streakPtsThreshold: { min: 15, max: 35, step: 5, unit: 'PTS' },
+  teamWinStreakMin: { min: 2, max: 20, step: 1, unit: 'V seg.' },
+} as const;
+
+function sanitizeClientMilestoneNotificationsConfig(
+  raw: unknown
+): MilestoneNotificationsConfig {
+  const obj = (raw && typeof raw === 'object' ? raw : {}) as Partial<MilestoneNotificationsConfig>;
+  const clampInt = (v: unknown, def: number, min: number, max: number) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return def;
+    return Math.min(max, Math.max(min, Math.round(n)));
+  };
+  const b = (v: unknown, def: boolean) => (typeof v === 'boolean' ? v : def);
+  const d = DEFAULT_MILESTONE_NOTIFICATIONS_VALUES;
+  return {
+    enabled: b(obj.enabled, d.enabled),
+    lookbackDays: clampInt(obj.lookbackDays, d.lookbackDays, 1, 14),
+    maxNotifications: clampInt(obj.maxNotifications, d.maxNotifications, 5, 100),
+
+    scoringMilestoneEnabled: b(obj.scoringMilestoneEnabled, d.scoringMilestoneEnabled),
+    scoringThreshold: clampInt(obj.scoringThreshold, d.scoringThreshold, 20, 80),
+    seasonHighPtsEnabled: b(obj.seasonHighPtsEnabled, d.seasonHighPtsEnabled),
+    seasonHighMinPts: clampInt(obj.seasonHighMinPts, d.seasonHighMinPts, 15, 60),
+    seasonHighMinGames: clampInt(obj.seasonHighMinGames, d.seasonHighMinGames, 2, 20),
+    threePointExplosionEnabled: b(obj.threePointExplosionEnabled, d.threePointExplosionEnabled),
+    threePointThreshold: clampInt(obj.threePointThreshold, d.threePointThreshold, 4, 16),
+    assistExplosionEnabled: b(obj.assistExplosionEnabled, d.assistExplosionEnabled),
+    assistExplosionThreshold: clampInt(obj.assistExplosionThreshold, d.assistExplosionThreshold, 8, 25),
+    reboundExplosionEnabled: b(obj.reboundExplosionEnabled, d.reboundExplosionEnabled),
+    reboundExplosionThreshold: clampInt(obj.reboundExplosionThreshold, d.reboundExplosionThreshold, 10, 30),
+    orebExplosionEnabled: b(obj.orebExplosionEnabled, d.orebExplosionEnabled),
+    orebExplosionThreshold: clampInt(obj.orebExplosionThreshold, d.orebExplosionThreshold, 4, 15),
+    tripleDoubleEnabled: b(obj.tripleDoubleEnabled, d.tripleDoubleEnabled),
+    tripleDoubleMinStat: clampInt(obj.tripleDoubleMinStat, d.tripleDoubleMinStat, 8, 15),
+    twentyTwentyEnabled: b(obj.twentyTwentyEnabled, d.twentyTwentyEnabled),
+    twentyTwentyPtsMin: clampInt(obj.twentyTwentyPtsMin, d.twentyTwentyPtsMin, 15, 40),
+    twentyTwentySecMin: clampInt(obj.twentyTwentySecMin, d.twentyTwentySecMin, 10, 25),
+    doubleDoubleEnabled: b(obj.doubleDoubleEnabled, d.doubleDoubleEnabled),
+    doubleDoubleMinPts: clampInt(obj.doubleDoubleMinPts, d.doubleDoubleMinPts, 10, 35),
+    efficiencySniperEnabled: b(obj.efficiencySniperEnabled, d.efficiencySniperEnabled),
+    efficiencyMinPts: clampInt(obj.efficiencyMinPts, d.efficiencyMinPts, 15, 45),
+    efficiencyMinFgPct: clampInt(obj.efficiencyMinFgPct, d.efficiencyMinFgPct, 60, 95),
+    cleanPlaymakerEnabled: b(obj.cleanPlaymakerEnabled, d.cleanPlaymakerEnabled),
+    cleanPlaymakerMinAst: clampInt(obj.cleanPlaymakerMinAst, d.cleanPlaymakerMinAst, 5, 18),
+    cleanPlaymakerMinPts: clampInt(obj.cleanPlaymakerMinPts, d.cleanPlaymakerMinPts, 10, 35),
+
+    defenseMilestoneEnabled: b(obj.defenseMilestoneEnabled, d.defenseMilestoneEnabled),
+    defenseMinBlk: clampInt(obj.defenseMinBlk, d.defenseMinBlk, 3, 12),
+    defenseMinStl: clampInt(obj.defenseMinStl, d.defenseMinStl, 3, 12),
+    defenseComboMinEach: clampInt(obj.defenseComboMinEach, d.defenseComboMinEach, 2, 6),
+    gameScoreMilestoneEnabled: b(obj.gameScoreMilestoneEnabled, d.gameScoreMilestoneEnabled),
+    gameScoreThreshold: clampInt(obj.gameScoreThreshold, d.gameScoreThreshold, 25, 60),
+    plusMinusMilestoneEnabled: b(obj.plusMinusMilestoneEnabled, d.plusMinusMilestoneEnabled),
+    plusMinusThreshold: clampInt(obj.plusMinusThreshold, d.plusMinusThreshold, 15, 45),
+    teamBlowoutEnabled: b(obj.teamBlowoutEnabled, d.teamBlowoutEnabled),
+    teamMarginThreshold: clampInt(obj.teamMarginThreshold, d.teamMarginThreshold, 15, 50),
+    teamPointsThreshold: clampInt(obj.teamPointsThreshold, d.teamPointsThreshold, 120, 165),
+
+    heroicBuzzerEnabled: b(obj.heroicBuzzerEnabled, d.heroicBuzzerEnabled),
+    heroicOtTieEnabled: b(obj.heroicOtTieEnabled, d.heroicOtTieEnabled),
+    heroicGameWinnerEnabled: b(obj.heroicGameWinnerEnabled, d.heroicGameWinnerEnabled),
+    heroicGameWinnerMaxSec: clampInt(obj.heroicGameWinnerMaxSec, d.heroicGameWinnerMaxSec, 1, 24),
+    heroicLongRangeEnabled: b(obj.heroicLongRangeEnabled, d.heroicLongRangeEnabled),
+    heroicLongRangeMinFt: clampInt(obj.heroicLongRangeMinFt, d.heroicLongRangeMinFt, 20, 75),
+
+    cumPointsEnabled: b(obj.cumPointsEnabled, d.cumPointsEnabled),
+    seasonPointsStep: clampInt(obj.seasonPointsStep, d.seasonPointsStep, 200, 1000),
+    cum3pmEnabled: b(obj.cum3pmEnabled, d.cum3pmEnabled),
+    season3pmStep: clampInt(obj.season3pmStep, d.season3pmStep, 25, 200),
+    cumRebEnabled: b(obj.cumRebEnabled, d.cumRebEnabled),
+    seasonRebStep: clampInt(obj.seasonRebStep, d.seasonRebStep, 100, 500),
+    cumOrebEnabled: b(obj.cumOrebEnabled, d.cumOrebEnabled),
+    seasonOrebStep: clampInt(obj.seasonOrebStep, d.seasonOrebStep, 25, 200),
+    cumAstEnabled: b(obj.cumAstEnabled, d.cumAstEnabled),
+    seasonAstStep: clampInt(obj.seasonAstStep, d.seasonAstStep, 100, 500),
+    cumStlEnabled: b(obj.cumStlEnabled, d.cumStlEnabled),
+    seasonStlStep: clampInt(obj.seasonStlStep, d.seasonStlStep, 15, 100),
+    cumBlkEnabled: b(obj.cumBlkEnabled, d.cumBlkEnabled),
+    seasonBlkStep: clampInt(obj.seasonBlkStep, d.seasonBlkStep, 15, 100),
+    teamSeasonWinsMilestoneEnabled: b(obj.teamSeasonWinsMilestoneEnabled, d.teamSeasonWinsMilestoneEnabled),
+    teamSeasonWinsStep: clampInt(obj.teamSeasonWinsStep, d.teamSeasonWinsStep, 5, 25),
+
+    imminentMilestonesEnabled: b(obj.imminentMilestonesEnabled, d.imminentMilestonesEnabled),
+    imminentPtsWithin: clampInt(obj.imminentPtsWithin, d.imminentPtsWithin, 5, 60),
+    imminentOtherWithin: clampInt(obj.imminentOtherWithin, d.imminentOtherWithin, 1, 15),
+    streakMilestoneEnabled: b(obj.streakMilestoneEnabled, d.streakMilestoneEnabled),
+    streakMinGames: clampInt(obj.streakMinGames, d.streakMinGames, 3, 20),
+    streakPtsThreshold: clampInt(obj.streakPtsThreshold, d.streakPtsThreshold, 15, 35),
+    teamWinStreakEnabled: b(obj.teamWinStreakEnabled, d.teamWinStreakEnabled),
+    teamWinStreakMin: clampInt(obj.teamWinStreakMin, d.teamWinStreakMin, 2, 20),
+    updatedAt: typeof obj.updatedAt === 'number' ? obj.updatedAt : 0,
+  };
+}
+
+function readLocalMilestoneNotificationsBackup(): MilestoneNotificationsConfig | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(MILESTONE_NOTIFICATIONS_BACKUP_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      return sanitizeClientMilestoneNotificationsConfig(parsed);
+    }
+  } catch {
+    // Ignore parse error
+  }
+  return null;
+}
+
+function writeLocalMilestoneNotificationsBackup(cfg: MilestoneNotificationsConfig): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(MILESTONE_NOTIFICATIONS_BACKUP_KEY, JSON.stringify(cfg));
+  } catch {
+    // Ignore storage error
+  }
+}
+
+export async function fetchPublicMilestoneNotifications(
+  forceRefresh = false
+): Promise<MilestoneNotificationsPayload | null> {
+  try {
+    const url = forceRefresh ? '/api/nba/notifications?refresh=1' : '/api/nba/notifications';
+    const res = await fetch(url, {
+      method: 'GET',
+      cache: forceRefresh ? 'no-store' : 'default',
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    if (data && typeof data.enabled === 'boolean' && Array.isArray(data.notifications)) {
+      return data as MilestoneNotificationsPayload;
+    }
+  } catch {
+    // Non-blocking fallback
+  }
+  return null;
+}
+
+export interface AdminMilestoneNotificationsResponse {
+  ok: boolean;
+  unauthorized?: boolean;
+  config?: MilestoneNotificationsConfig;
+  defaults?: MilestoneNotificationsConfigValues;
+  error?: string;
+}
+
+export async function fetchAdminMilestoneNotificationsConfig(): Promise<AdminMilestoneNotificationsResponse> {
+  try {
+    const res = await fetch('/api/admin/milestone-notifications', {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: buildAdminAuthHeaders(),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = sanitizeClientMilestoneNotificationsConfig(data.config);
+      writeLocalMilestoneNotificationsBackup(normalized);
+      return {
+        ok: true,
+        config: normalized,
+        defaults: data.defaults || DEFAULT_MILESTONE_NOTIFICATIONS_VALUES,
+      };
+    }
+  } catch {
+    // Network fallback
+  }
+  return {
+    ok: true,
+    config: readLocalMilestoneNotificationsBackup() ?? {
+      ...DEFAULT_MILESTONE_NOTIFICATIONS_VALUES,
+      updatedAt: 0,
+    },
+    defaults: DEFAULT_MILESTONE_NOTIFICATIONS_VALUES,
+  };
+}
+
+export async function updateAdminMilestoneNotificationsConfig(
+  values: MilestoneNotificationsConfigValues
+): Promise<AdminMilestoneNotificationsResponse> {
+  try {
+    const res = await fetch('/api/admin/milestone-notifications', {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(values),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = sanitizeClientMilestoneNotificationsConfig(data.config);
+      writeLocalMilestoneNotificationsBackup(normalized);
+      return {
+        ok: true,
+        config: normalized,
+        defaults: data.defaults || DEFAULT_MILESTONE_NOTIFICATIONS_VALUES,
+      };
+    }
+    return {
+      ok: false,
+      error: data?.error || 'No se pudo guardar la configuración de notificaciones.',
+    };
+  } catch {
+    const fallbackCfg: MilestoneNotificationsConfig = {
+      ...sanitizeClientMilestoneNotificationsConfig(values),
+      updatedAt: Date.now(),
+    };
+    writeLocalMilestoneNotificationsBackup(fallbackCfg);
+    return {
+      ok: true,
+      config: fallbackCfg,
+      defaults: DEFAULT_MILESTONE_NOTIFICATIONS_VALUES,
+    };
+  }
+}
+
+export async function resetAdminMilestoneNotificationsDefaults(): Promise<AdminMilestoneNotificationsResponse> {
+  try {
+    const res = await fetch('/api/admin/milestone-notifications/reset-defaults', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = sanitizeClientMilestoneNotificationsConfig(data.config);
+      writeLocalMilestoneNotificationsBackup(normalized);
+      return {
+        ok: true,
+        config: normalized,
+        defaults: data.defaults || DEFAULT_MILESTONE_NOTIFICATIONS_VALUES,
+      };
+    }
+    return {
+      ok: false,
+      error: data?.error || 'No se pudieron restablecer las notificaciones por defecto.',
+    };
+  } catch {
+    const fallbackCfg: MilestoneNotificationsConfig = {
+      ...DEFAULT_MILESTONE_NOTIFICATIONS_VALUES,
+      updatedAt: Date.now(),
+    };
+    writeLocalMilestoneNotificationsBackup(fallbackCfg);
+    return {
+      ok: true,
+      config: fallbackCfg,
+      defaults: DEFAULT_MILESTONE_NOTIFICATIONS_VALUES,
+    };
+  }
+}
+
+export interface AdminMilestoneNotificationsPreviewResponse {
+  ok: boolean;
+  unauthorized?: boolean;
+  preview?: MilestoneNotificationCountsPreview;
+  error?: string;
+}
+
+export async function previewAdminMilestoneNotificationsCounts(
+  values: MilestoneNotificationsConfigValues,
+  signal?: AbortSignal
+): Promise<AdminMilestoneNotificationsPreviewResponse> {
+  try {
+    const res = await fetch('/api/admin/milestone-notifications/preview-counts', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(values),
+      signal,
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.seasonCounts && data?.recentCounts) {
+      return {
+        ok: true,
+        preview: {
+          seasonCounts: data.seasonCounts,
+          recentCounts: data.recentCounts,
+          totalDates: Number(data.totalDates || 0),
+          totalEnabledRecentAlerts: Number(data.totalEnabledRecentAlerts || 0),
+        },
+      };
+    }
+    return {
+      ok: false,
+      error: data?.error || 'No se pudo calcular la simulación de conteos.',
+    };
+  } catch (err: unknown) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      return { ok: false };
+    }
+    return { ok: false, error: 'Error al consultar la simulación.' };
+  }
+}
+
+
 
 

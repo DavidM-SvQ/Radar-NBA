@@ -35,7 +35,7 @@ import {
   sortRows,
   useTableSort,
 } from '../utils/tableSort';
-import { EntityBadge, PlayerAvatar, TeamLogo } from './NbaVisuals';
+import { EntityBadge, MiniSparkline, PlayerAvatar, TeamLogo } from './NbaVisuals';
 import { ExportImageButton } from './ExportImageButton';
 import { buildComparisonSnapshotBlob } from '../utils/exportImageCard';
 
@@ -289,6 +289,11 @@ export function RangeComparatorView({
       const sliceB = sliceGamesByRange(activePlayer.games, rangeB);
       const { rows, insights } = comparePlayerSlices(sliceA, sliceB);
       const plainInsights = computePlainComparisonInsights('player', rows);
+      const ptsRow = rows.find((r) => r.key === 'pts');
+      const trendSeries =
+        activePlayer.games.length >= 2
+          ? activePlayer.games.slice(0, Math.min(12, activePlayer.games.length)).reverse().map((g) => g.points)
+          : [];
       return {
         name: activePlayer.name,
         subtitle: `${activePlayer.teamAbbr} · ${activePlayer.position} · Total ${activePlayer.games.length} PJ`,
@@ -303,6 +308,10 @@ export function RangeComparatorView({
           sliceB.length > 0
             ? `${formatShortDate(sliceB[sliceB.length - 1].date)} – ${formatShortDate(sliceB[0].date)}`
             : 'Sin partidos',
+        trendSeries,
+        trendRefValue: ptsRow?.rangeBValue,
+        trendLabel: 'PTS últimos 12 PJ vs Tramo B',
+        trendSignedZero: false,
         rows,
         insights,
         plainInsights,
@@ -314,6 +323,11 @@ export function RangeComparatorView({
       const sliceB = sliceGamesByRange(activeTeam.games, rangeB);
       const { rows, insights } = compareTeamSlices(sliceA, sliceB);
       const plainInsights = computePlainComparisonInsights('team', rows);
+      const diffRow = rows.find((r) => r.key === 'diff');
+      const trendSeries =
+        activeTeam.games.length >= 2
+          ? activeTeam.games.slice(0, Math.min(12, activeTeam.games.length)).reverse().map((g) => g.differential)
+          : [];
       return {
         name: activeTeam.name,
         subtitle: `Conf. ${activeTeam.conference} · Balance ${activeTeam.wins}-${activeTeam.losses}`,
@@ -328,6 +342,10 @@ export function RangeComparatorView({
           sliceB.length > 0
             ? `${formatShortDate(sliceB[sliceB.length - 1].date)} – ${formatShortDate(sliceB[0].date)}`
             : 'Sin partidos',
+        trendSeries,
+        trendRefValue: diffRow?.rangeBValue,
+        trendLabel: 'Diferencial últimos 12 PJ vs 0',
+        trendSignedZero: true,
         rows,
         insights,
         plainInsights,
@@ -504,7 +522,7 @@ export function RangeComparatorView({
   return (
     <div className="space-y-5">
       {/* Row 1: Homogeneous 4-Column Summary Strip */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden [&>*:nth-child(odd)]:border-r [&>*:nth-child(odd)]:border-[#1E293B] [&>*:nth-child(-n+2)]:border-b [&>*:nth-child(-n+2)]:border-[#1E293B] lg:[&>*]:border-b-0 lg:[&>*]:border-r lg:[&>*:last-child]:border-r-0">
+      <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden [&>*:nth-child(odd)]:border-r [&>*:nth-child(odd)]:border-[#1E293B] [&>*:nth-child(-n+2)]:border-b [&>*:nth-child(-n+2)]:border-[#1E293B] lg:[&>*]:border-b-0 lg:[&>*]:border-r lg:[&>*:last-child]:border-r-0">
         <div className="p-3.5 sm:p-4">
           <p className="text-xs text-slate-400 truncate">
             {experienceMode === 'simple' ? 'Jugador o equipo' : 'Sujeto comparado'}
@@ -568,15 +586,28 @@ export function RangeComparatorView({
             {comparison?.spanB}
           </p>
         </div>
-        <div className="p-3.5 sm:p-4 flex flex-col justify-between">
-          <p className="text-xs text-slate-400 truncate">Ficha completa</p>
+        <div className="p-3.5 sm:p-4 flex flex-col justify-between gap-2">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <p className="text-xs text-slate-400 truncate">Tendencia y Ficha</p>
+            {comparison && comparison.trendSeries.length >= 2 && (
+              <MiniSparkline
+                values={comparison.trendSeries}
+                referenceValue={comparison.trendRefValue}
+                signedZero={comparison.trendSignedZero}
+                width={62}
+                height={18}
+                positiveIsGood
+                title={comparison.trendLabel}
+              />
+            )}
+          </div>
           <button
             type="button"
             disabled={!comparison}
             onClick={() =>
               comparison && onInspectEntity(entityType, comparison.id)
             }
-            className="mt-2 px-2.5 sm:px-3 py-2 text-xs font-semibold bg-[#182338] hover:bg-[#1E293B] border border-[#283548] rounded-lg text-slate-100 transition-colors whitespace-nowrap text-center truncate"
+            className="min-h-[36px] px-2.5 sm:px-3 py-1.5 text-xs font-semibold bg-[#182338] hover:bg-[#1E293B] border border-[#283548] rounded-lg text-slate-100 transition-colors whitespace-nowrap text-center truncate"
           >
             Ver partido a partido
           </button>
@@ -591,7 +622,7 @@ export function RangeComparatorView({
               <button
                 type="button"
                 onClick={() => handleModeChange('player')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                className={`min-h-[28px] px-3 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                   entityType === 'player'
                     ? 'bg-orange-500 text-slate-950 font-semibold'
                     : 'text-slate-300 hover:text-white'
@@ -602,7 +633,7 @@ export function RangeComparatorView({
               <button
                 type="button"
                 onClick={() => handleModeChange('team')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                className={`min-h-[28px] px-3 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                   entityType === 'team'
                     ? 'bg-orange-500 text-slate-950 font-semibold'
                     : 'text-slate-300 hover:text-white'
@@ -617,7 +648,7 @@ export function RangeComparatorView({
               <button
                 type="button"
                 onClick={() => setDropdownOpen((prev) => !prev)}
-                className="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] focus:border-orange-500 rounded-lg text-slate-100 transition-colors"
+                className="w-full h-9 flex items-center justify-between gap-2 px-3 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] focus:border-orange-500 rounded-md text-slate-100 transition-colors"
               >
                 <span className="flex items-center gap-2 min-w-0">
                   {entityType === 'player' && activePlayer && (
@@ -847,7 +878,7 @@ export function RangeComparatorView({
           <button
             type="button"
             onClick={swapRanges}
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] rounded-lg text-slate-200 transition-colors whitespace-nowrap shrink-0 self-start lg:self-auto"
+            className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] rounded-lg text-slate-200 transition-colors whitespace-nowrap shrink-0 self-start lg:self-auto"
           >
             <ArrowLeftRight className="w-3.5 h-3.5 text-orange-400" />
             <span>Intercambiar Tramo A y Tramo B</span>
@@ -872,7 +903,7 @@ export function RangeComparatorView({
                   endDate: rangeA.endDate || availableDates.max,
                 });
               }}
-              className="w-full px-3 py-2 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 focus:outline-none focus:border-orange-500"
+              className="w-full h-9 px-3 text-xs bg-[#0B1120] border border-[#1E293B] rounded-md text-slate-100 focus:outline-none focus:border-orange-500"
             >
               {PRESET_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
@@ -892,7 +923,7 @@ export function RangeComparatorView({
                     onChange={(e) =>
                       setRangeA((prev) => ({ ...prev, startDate: e.target.value }))
                     }
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100"
+                    className="w-full h-9 px-2.5 text-xs font-mono bg-[#0B1120] border border-[#1E293B] rounded-md text-slate-100"
                   />
                 </div>
                 <div>
@@ -905,7 +936,7 @@ export function RangeComparatorView({
                     onChange={(e) =>
                       setRangeA((prev) => ({ ...prev, endDate: e.target.value }))
                     }
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100"
+                    className="w-full h-9 px-2.5 text-xs font-mono bg-[#0B1120] border border-[#1E293B] rounded-md text-slate-100"
                   />
                 </div>
               </div>
@@ -929,7 +960,7 @@ export function RangeComparatorView({
                   endDate: rangeB.endDate || availableDates.mid,
                 });
               }}
-              className="w-full px-3 py-2 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 focus:outline-none focus:border-orange-500"
+              className="w-full h-9 px-3 text-xs bg-[#0B1120] border border-[#1E293B] rounded-md text-slate-100 focus:outline-none focus:border-orange-500"
             >
               {PRESET_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
@@ -949,7 +980,7 @@ export function RangeComparatorView({
                     onChange={(e) =>
                       setRangeB((prev) => ({ ...prev, startDate: e.target.value }))
                     }
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100"
+                    className="w-full h-9 px-2.5 text-xs font-mono bg-[#0B1120] border border-[#1E293B] rounded-md text-slate-100"
                   />
                 </div>
                 <div>
@@ -962,7 +993,7 @@ export function RangeComparatorView({
                     onChange={(e) =>
                       setRangeB((prev) => ({ ...prev, endDate: e.target.value }))
                     }
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100"
+                    className="w-full h-9 px-2.5 text-xs font-mono bg-[#0B1120] border border-[#1E293B] rounded-md text-slate-100"
                   />
                 </div>
               </div>
@@ -1032,7 +1063,7 @@ export function RangeComparatorView({
                     key={tab.id}
                     type="button"
                     onClick={() => setMetricLayer(tab.id)}
-                    className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+                    className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                       metricLayer === tab.id
                         ? 'bg-orange-500 text-slate-950 font-semibold'
                         : 'text-slate-300 hover:text-white'
@@ -1047,7 +1078,7 @@ export function RangeComparatorView({
                 <button
                   type="button"
                   onClick={onSwitchToAdvanced}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] rounded-lg text-orange-400 transition-colors whitespace-nowrap shrink-0"
+                  className="min-h-[36px] inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] rounded-lg text-orange-400 transition-colors whitespace-nowrap shrink-0"
                 >
                   <Sliders className="w-3.5 h-3.5" />
                   <span>Pasar a Modo Avanzado</span>
@@ -1161,17 +1192,23 @@ export function RangeComparatorView({
                         </div>
                       </div>
 
-                      <div className="h-1.5 w-full bg-[#0B1120] rounded overflow-hidden">
-                        <div
-                          className={`h-full rounded transition-transform ${
-                            !significant
-                              ? 'bg-slate-600'
-                              : isGood
-                              ? 'bg-emerald-500'
-                              : 'bg-rose-500'
-                          }`}
-                          style={{ width: `${Math.max(4, barWidth)}%` }}
-                        />
+                      <div className="relative h-2 w-full bg-[#0B1120] border border-[#1E293B]/70 rounded overflow-hidden">
+                        <div className="absolute inset-y-0 left-1/2 w-px bg-slate-500/50 z-10" />
+                        {Math.abs(r.pctDiff) >= 0.5 && (
+                          <div
+                            className={`absolute inset-y-0 rounded-sm transition-all ${
+                              !significant
+                                ? 'bg-slate-500/80'
+                                : isGood
+                                ? 'bg-emerald-500'
+                                : 'bg-rose-500'
+                            }`}
+                            style={{
+                              left: isGood ? '50%' : `${50 - Math.min(48, Math.max(4, barWidth * 0.48))}%`,
+                              width: `${Math.min(48, Math.max(4, barWidth * 0.48))}%`,
+                            }}
+                          />
+                        )}
                       </div>
                     </div>
                   );
@@ -1382,17 +1419,25 @@ export function RangeComparatorView({
                             </span>
                           </td>
                           <td className="py-1.5 pl-2.5 pr-4">
-                            <div className="h-2 w-full bg-[#0B1120] rounded overflow-hidden">
-                              <div
-                                className={`h-full rounded transition-transform ${
-                                  !significant
-                                    ? 'bg-slate-600'
-                                    : isGood
-                                    ? 'bg-emerald-500'
-                                    : 'bg-rose-500'
-                                }`}
-                                style={{ width: `${Math.max(4, barWidth)}%` }}
-                              />
+                            <div className="relative h-2 w-full bg-[#0B1120] border border-[#1E293B]/70 rounded overflow-hidden">
+                              <div className="absolute inset-y-0 left-1/2 w-px bg-slate-500/55 z-10" />
+                              {Math.abs(r.pctDiff) >= 0.5 && (
+                                <div
+                                  className={`absolute inset-y-0 rounded-sm transition-all ${
+                                    !significant
+                                      ? 'bg-slate-500/80'
+                                      : isGood
+                                      ? 'bg-emerald-500'
+                                      : 'bg-rose-500'
+                                  }`}
+                                  style={{
+                                    left: isGood
+                                      ? '50%'
+                                      : `${50 - Math.min(48, Math.max(4, barWidth * 0.48))}%`,
+                                    width: `${Math.min(48, Math.max(4, barWidth * 0.48))}%`,
+                                  }}
+                                />
+                              )}
                             </div>
                           </td>
                         </tr>
