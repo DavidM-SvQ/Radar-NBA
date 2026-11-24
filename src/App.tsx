@@ -25,6 +25,7 @@ import {
   Link2,
   Lock,
   Menu,
+  Palette,
   RefreshCw,
   Search,
   Shield,
@@ -78,6 +79,7 @@ import { MetricInfoTooltip } from './components/MetricUiHelpers';
 import { TeamLogo } from './components/NbaVisuals';
 import { GuidedHomeView } from './components/GuidedHomeView';
 import { NotificationCenterPopover } from './components/NotificationCenterPopover';
+import { useThemeStyle } from './context/ThemeStyleContext';
 
 type PreloadableLazyComponent<T extends ComponentType<any>> =
   LazyExoticComponent<T> & {
@@ -461,6 +463,7 @@ function loadSavedExperienceMode(): ExperienceMode {
 }
 
 export default function App() {
+  const { isV2, toggleThemeStyle } = useThemeStyle();
   const initialRoute = useMemo(
     () =>
       parseRouteFromSearch(
@@ -1720,7 +1723,13 @@ export default function App() {
       <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 bg-[#0F172A] border-r border-[#1E293B] z-30">
         <div className="h-14 px-5 flex items-center border-b border-[#1E293B]">
           <span className="font-display text-base font-bold tracking-tight text-slate-100 whitespace-nowrap">
-            RadarNBA
+            {isV2 ? (
+              <>
+                Radar<span className="text-amber-400">NBA</span>
+              </>
+            ) : (
+              'RadarNBA'
+            )}
           </span>
         </div>
 
@@ -1863,8 +1872,14 @@ export default function App() {
           />
           <div className="relative z-10 w-72 max-w-[85vw] bg-[#0F172A] border-r border-[#1E293B] h-[100dvh] max-h-[100dvh] flex flex-col pb-safe">
             <div className="h-14 px-4 flex items-center justify-between border-b border-[#1E293B] shrink-0">
-              <span className="font-display text-base font-bold text-slate-100">
-                RadarNBA
+              <span className="font-display text-base font-bold text-slate-100 whitespace-nowrap">
+                {isV2 ? (
+                  <>
+                    Radar<span className="text-amber-400">NBA</span>
+                  </>
+                ) : (
+                  'RadarNBA'
+                )}
               </span>
               <button
                 type="button"
@@ -2081,6 +2096,35 @@ export default function App() {
                 handleNavigateSection('fantasy_espn');
               }}
             />
+
+            <button
+              type="button"
+              onClick={toggleThemeStyle}
+              aria-label={
+                isV2
+                  ? 'Cambiar a Estilo Clásico (v1)'
+                  : 'Cambiar a Estilo Pro 2.0 (Editorial Deportivo)'
+              }
+              title={
+                isV2
+                  ? 'Estilo activo: Pro 2.0 Editorial. Pulsa para volver al Clásico v1.'
+                  : 'Estilo activo: Clásico v1. Pulsa para activar Pro 2.0 Editorial.'
+              }
+              className={`inline-flex items-center justify-center gap-1.5 min-w-[38px] min-h-[36px] sm:min-w-0 px-2.5 sm:px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                isV2
+                  ? 'bg-amber-500/15 hover:bg-amber-500/25 border-amber-500/40 text-amber-300'
+                  : 'bg-[#131C2E] hover:bg-[#182338] border-[#1E293B] text-slate-300 hover:text-white'
+              }`}
+            >
+              <Palette
+                className={`w-3.5 h-3.5 shrink-0 ${
+                  isV2 ? 'text-amber-400' : 'text-slate-400'
+                }`}
+              />
+              <span className="hidden sm:inline">
+                {isV2 ? 'v2 Pro' : 'Clásico'}
+              </span>
+            </button>
 
             <button
               type="button"

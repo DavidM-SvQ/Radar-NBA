@@ -14,6 +14,105 @@
   color-scheme: dark;
 }
 
+/* Modo Pro 2.0: Editorial Deportivo Moderno con Colores Vivos e Ilustrativos */
+html.theme-v2 {
+  --background: #070B14;
+  --surface: #0E1726;
+  --surface-hover: #142138;
+  --border: #1B2B47;
+}
+
+html.theme-v2 body {
+  background-color: #070B14;
+  background-image: 
+    radial-gradient(ellipse 85% 45% at 50% -15%, rgba(245, 158, 11, 0.08), transparent),
+    radial-gradient(ellipse 55% 40% at 95% 105%, rgba(56, 189, 248, 0.06), transparent),
+    radial-gradient(ellipse 50% 35% at 0% 90%, rgba(16, 185, 129, 0.04), transparent);
+  background-attachment: fixed;
+}
+
+html.theme-v2 h1,
+html.theme-v2 h2,
+html.theme-v2 h3,
+html.theme-v2 h4,
+html.theme-v2 .font-display {
+  font-family: "Outfit", var(--font-sans);
+  letter-spacing: -0.02em;
+}
+
+/* Sidebar & Header editorial atmosphere in v2.0 */
+html.theme-v2 aside {
+  background-color: #09101E;
+  border-color: #1A2B48;
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.03);
+}
+
+html.theme-v2 header {
+  background-color: rgba(8, 13, 25, 0.88);
+  border-color: #1B2B47;
+}
+
+/* Card and surface elevation in v2.0 (homogeneous across all 14 views) */
+html.theme-v2 .bg-\[\#131C2E\] {
+  background-color: #0F182B;
+  border-color: #1D2E4E;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+html.theme-v2 .bg-\[\#0F172A\] {
+  background-color: #0B1222;
+  border-color: #1A2B48;
+}
+
+html.theme-v2 .bg-\[\#0B1120\] {
+  background-color: #070C17;
+  border-color: #182742;
+}
+
+html.theme-v2 .hover\:bg-\[\#182338\]:hover,
+html.theme-v2 .active\:bg-\[\#182338\]:active {
+  background-color: #15233D;
+}
+
+html.theme-v2 .border-\[\#1E293B\] {
+  border-color: #1C2C4A;
+}
+
+/* Vivid athletic accent gradient for primary active tabs & buttons */
+html.theme-v2 .bg-orange-500 {
+  background-image: linear-gradient(135deg, #FB923C 0%, #F59E0B 100%);
+  box-shadow: 0 4px 14px -3px rgba(245, 158, 11, 0.32);
+}
+
+/* Clean sports editorial tables */
+html.theme-v2 table thead th {
+  background-color: #0A1120;
+  color: #CBD5E1;
+  border-color: #1D2E4E;
+}
+
+html.theme-v2 table tbody tr:hover {
+  background-color: rgba(245, 158, 11, 0.045);
+}
+
+/* Subtle broadcast card glow and transitions */
+html.theme-v2 article {
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+html.theme-v2 article:hover {
+  border-color: rgba(245, 158, 11, 0.45);
+  box-shadow: 0 8px 28px -6px rgba(245, 158, 11, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* Modo Clásico (v1 Original) */
+html.theme-classic {
+  --background: #0B1120;
+  --surface: #131C2E;
+  --surface-hover: #182338;
+  --border: #1E293B;
+}
+
 body {
   font-family: var(--font-sans);
   background-color: var(--background);
@@ -21,6 +120,7 @@ body {
   letter-spacing: 0.01em;
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior-y: none;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 h1, h2, h3, h4, .font-display {

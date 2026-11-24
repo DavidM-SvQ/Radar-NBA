@@ -47,7 +47,8 @@ import {
   sortRows,
   useTableSort,
 } from '../utils/tableSort';
-import { PlayerAvatar, TeamLogo } from './NbaVisuals';
+import { PlayerAvatar, TeamLogo, getTeamBrandColors } from './NbaVisuals';
+import { useThemeStyle } from '../context/ThemeStyleContext';
 
 interface GameDayAnalyzerViewProps {
   players?: PlayerSummary[];
@@ -113,6 +114,7 @@ export function GameDayAnalyzerView({
   selectedReportEventIdProp,
   onChangeReportEventId,
 }: GameDayAnalyzerViewProps) {
+  const { isV2 } = useThemeStyle();
   const [selectedDate, setSelectedDate] = useState<string>(
     () => selectedDateParam || ''
   );
@@ -699,11 +701,23 @@ export function GameDayAnalyzerView({
       ...m.home.rotationPlayers.map((p) => p.playerName),
     ].filter((x): x is string => Boolean(x));
 
+    const awayBrand = getTeamBrandColors(m.away.abbr, m.away.teamId);
+    const homeBrand = getTeamBrandColors(m.home.abbr, m.home.teamId);
+
     return (
       <article
         key={m.eventId}
         className="bg-[#131C2E] border border-[#1E293B] hover:border-orange-500/40 rounded-xl sm:rounded-lg overflow-hidden flex flex-col justify-between transition-colors"
       >
+        {isV2 && (
+          <div
+            aria-hidden="true"
+            className="h-[3px] w-full shrink-0"
+            style={{
+              background: `linear-gradient(90deg, ${awayBrand.primary} 0%, ${awayBrand.primary} 45%, ${homeBrand.primary} 55%, ${homeBrand.primary} 100%)`,
+            }}
+          />
+        )}
         <div
           role="button"
           tabIndex={0}
@@ -1965,10 +1979,23 @@ export function GameDayAnalyzerView({
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2.5">
             {data.idealFive.map((p, idx) => {
               const watched = watchlistIds.has(`player:${p.playerId}`);
+              const playerBrand = getTeamBrandColors(p.teamAbbr, null);
               return (
                 <div
                   key={p.playerId}
                   onClick={() => onInspectEntity('player', p.playerId)}
+                  style={
+                    isV2
+                      ? {
+                          borderTopColor: idx === 0 ? '#F59E0B' : `${playerBrand.primary}88`,
+                          borderTopWidth: '2px',
+                          background:
+                            idx === 0
+                              ? 'linear-gradient(180deg, rgba(245, 158, 11, 0.08) 0%, #0F182B 55%)'
+                              : `linear-gradient(180deg, ${playerBrand.primary}14 0%, #0F182B 50%)`,
+                        }
+                      : undefined
+                  }
                   className="min-w-0 bg-[#131C2E] border border-[#1E293B] hover:border-orange-500/40 hover:bg-[#182338] active:bg-[#182338] rounded-lg p-3 cursor-pointer transition-colors flex flex-col justify-between gap-2.5"
                 >
                   <div className="min-w-0">

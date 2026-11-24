@@ -12,6 +12,7 @@ import {
   Minus,
   Plus,
   Radio,
+  Palette,
   RefreshCw,
   RotateCcw,
   Save,
@@ -25,6 +26,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
+import { useThemeStyle } from '../context/ThemeStyleContext';
 import type {
   AdminSecurityConfig,
   AdminSecurityConfigValues,
@@ -128,6 +130,7 @@ export function AdminSecurityConfigPanel({
   inspectorDefaultKpis,
   onInspectorDefaultKpisChange,
 }: AdminSecurityConfigPanelProps) {
+  const { themeStyle, setThemeStyle } = useThemeStyle();
   const [expanded, setExpanded] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
@@ -665,6 +668,86 @@ export function AdminSecurityConfigPanel({
                   <span className="text-[11px] font-mono text-orange-400 font-medium">
                     Sincronizado en tiempo real
                   </span>
+                </div>
+
+                {/* Visual Style Switcher: Editorial Pro 2.0 vs Clásico v1 */}
+                <div className="bg-[#0B1120] border border-[#1E293B] rounded-lg p-3.5 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Palette className="w-4 h-4 text-amber-400 shrink-0" />
+                      <div>
+                        <p className="text-xs font-semibold text-slate-100">
+                          Estilo Visual de la Plataforma (Modo Dual)
+                        </p>
+                        <p className="text-[11px] text-slate-400">
+                          Alterna al instante entre el rediseño Editorial Deportivo 2.0 y el formato Clásico original v1 sin perder ninguna función.
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-[11px] font-mono text-amber-300 font-medium">
+                      {themeStyle === 'v2_editorial' ? 'Pro 2.0 activo' : 'Clásico v1 activo'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setThemeStyle('v2_editorial')}
+                      className={`text-left p-3 rounded-lg border transition-all flex flex-col justify-between gap-2.5 ${
+                        themeStyle === 'v2_editorial'
+                          ? 'bg-[#142138] border-amber-400/70 shadow-md ring-1 ring-amber-400/30'
+                          : 'bg-[#131C2E]/60 hover:bg-[#131C2E] border-[#1E293B]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-slate-100">
+                          Modo Pro 2.0 — Editorial Deportivo Ilustrado
+                        </span>
+                        {themeStyle === 'v2_editorial' && (
+                          <Check className="w-4 h-4 text-amber-400 shrink-0" />
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-300 leading-relaxed">
+                        Lienzo medianoche profundo, tarjetas satinadas con relieve deportivo, tipografía Outfit y acentos vivos de cancha para un uso más atractivo y didáctico.
+                      </p>
+                      <div className="flex items-center gap-1.5 pt-0.5" aria-hidden="true">
+                        <span className="w-4 h-4 rounded bg-[#070B14] border border-slate-700" title="Lienzo #070B14" />
+                        <span className="w-4 h-4 rounded bg-[#0E1726] border border-slate-600" title="Tarjeta #0E1726" />
+                        <span className="w-4 h-4 rounded bg-amber-400" title="Oro NBA" />
+                        <span className="w-4 h-4 rounded bg-emerald-400" title="Esmeralda" />
+                        <span className="w-4 h-4 rounded bg-sky-400" title="Cian táctico" />
+                        <span className="w-4 h-4 rounded bg-rose-400" title="Rubí alerta" />
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setThemeStyle('classic')}
+                      className={`text-left p-3 rounded-lg border transition-all flex flex-col justify-between gap-2.5 ${
+                        themeStyle === 'classic'
+                          ? 'bg-[#182338] border-orange-400/70 shadow-md ring-1 ring-orange-400/30'
+                          : 'bg-[#131C2E]/60 hover:bg-[#131C2E] border-[#1E293B]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-slate-100">
+                          Modo Clásico — RadarNBA v1 Original
+                        </span>
+                        {themeStyle === 'classic' && (
+                          <Check className="w-4 h-4 text-orange-400 shrink-0" />
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-300 leading-relaxed">
+                        Preserva íntegramente la estética analítica original en tonos slate (#0B1120 / #131C2E) y tipografía estándar Plus Jakarta Sans.
+                      </p>
+                      <div className="flex items-center gap-1.5 pt-0.5" aria-hidden="true">
+                        <span className="w-4 h-4 rounded bg-[#0B1120] border border-slate-700" title="Lienzo #0B1120" />
+                        <span className="w-4 h-4 rounded bg-[#131C2E] border border-slate-600" title="Tarjeta #131C2E" />
+                        <span className="w-4 h-4 rounded bg-[#1E293B]" title="Borde #1E293B" />
+                        <span className="w-4 h-4 rounded bg-orange-500" title="Naranja clásico" />
+                      </div>
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

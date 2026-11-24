@@ -1,45 +1,48 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useThemeStyle } from '../context/ThemeStyleContext';
 
 export type VisualSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 export type VisualAccentTone = 'default' | 'orange' | 'sky' | 'emerald';
 
-interface NbaTeamVisualMeta {
+export interface NbaTeamVisualMeta {
   canonical: string;
   nbaId: string;
   espnSlug: string;
+  primaryHex: string;
+  secondaryHex: string;
 }
 
 const NBA_TEAM_META: Record<string, NbaTeamVisualMeta> = {
-  ATL: { canonical: 'ATL', nbaId: '1610612737', espnSlug: 'atl' },
-  BOS: { canonical: 'BOS', nbaId: '1610612738', espnSlug: 'bos' },
-  CLE: { canonical: 'CLE', nbaId: '1610612739', espnSlug: 'cle' },
-  NOP: { canonical: 'NOP', nbaId: '1610612740', espnSlug: 'no' },
-  CHI: { canonical: 'CHI', nbaId: '1610612741', espnSlug: 'chi' },
-  DAL: { canonical: 'DAL', nbaId: '1610612742', espnSlug: 'dal' },
-  DEN: { canonical: 'DEN', nbaId: '1610612743', espnSlug: 'den' },
-  GSW: { canonical: 'GSW', nbaId: '1610612744', espnSlug: 'gs' },
-  HOU: { canonical: 'HOU', nbaId: '1610612745', espnSlug: 'hou' },
-  LAC: { canonical: 'LAC', nbaId: '1610612746', espnSlug: 'lac' },
-  LAL: { canonical: 'LAL', nbaId: '1610612747', espnSlug: 'lal' },
-  MIA: { canonical: 'MIA', nbaId: '1610612748', espnSlug: 'mia' },
-  MIL: { canonical: 'MIL', nbaId: '1610612749', espnSlug: 'mil' },
-  MIN: { canonical: 'MIN', nbaId: '1610612750', espnSlug: 'min' },
-  BKN: { canonical: 'BKN', nbaId: '1610612751', espnSlug: 'bkn' },
-  NYK: { canonical: 'NYK', nbaId: '1610612752', espnSlug: 'ny' },
-  ORL: { canonical: 'ORL', nbaId: '1610612753', espnSlug: 'orl' },
-  IND: { canonical: 'IND', nbaId: '1610612754', espnSlug: 'ind' },
-  PHI: { canonical: 'PHI', nbaId: '1610612755', espnSlug: 'phi' },
-  PHX: { canonical: 'PHX', nbaId: '1610612756', espnSlug: 'phx' },
-  POR: { canonical: 'POR', nbaId: '1610612757', espnSlug: 'por' },
-  SAC: { canonical: 'SAC', nbaId: '1610612758', espnSlug: 'sac' },
-  SAS: { canonical: 'SAS', nbaId: '1610612759', espnSlug: 'sa' },
-  OKC: { canonical: 'OKC', nbaId: '1610612760', espnSlug: 'okc' },
-  TOR: { canonical: 'TOR', nbaId: '1610612761', espnSlug: 'tor' },
-  UTA: { canonical: 'UTA', nbaId: '1610612762', espnSlug: 'utah' },
-  MEM: { canonical: 'MEM', nbaId: '1610612763', espnSlug: 'mem' },
-  WAS: { canonical: 'WAS', nbaId: '1610612764', espnSlug: 'wsh' },
-  DET: { canonical: 'DET', nbaId: '1610612765', espnSlug: 'det' },
-  CHA: { canonical: 'CHA', nbaId: '1610612766', espnSlug: 'cha' },
+  ATL: { canonical: 'ATL', nbaId: '1610612737', espnSlug: 'atl', primaryHex: '#E03A3E', secondaryHex: '#C1D32F' },
+  BOS: { canonical: 'BOS', nbaId: '1610612738', espnSlug: 'bos', primaryHex: '#007A33', secondaryHex: '#BA9653' },
+  CLE: { canonical: 'CLE', nbaId: '1610612739', espnSlug: 'cle', primaryHex: '#860038', secondaryHex: '#FDBB30' },
+  NOP: { canonical: 'NOP', nbaId: '1610612740', espnSlug: 'no', primaryHex: '#0C2340', secondaryHex: '#C8102E' },
+  CHI: { canonical: 'CHI', nbaId: '1610612741', espnSlug: 'chi', primaryHex: '#CE1141', secondaryHex: '#FFFFFF' },
+  DAL: { canonical: 'DAL', nbaId: '1610612742', espnSlug: 'dal', primaryHex: '#00538C', secondaryHex: '#B8C4CA' },
+  DEN: { canonical: 'DEN', nbaId: '1610612743', espnSlug: 'den', primaryHex: '#0E2240', secondaryHex: '#FEC524' },
+  GSW: { canonical: 'GSW', nbaId: '1610612744', espnSlug: 'gs', primaryHex: '#1D428A', secondaryHex: '#FFC72C' },
+  HOU: { canonical: 'HOU', nbaId: '1610612745', espnSlug: 'hou', primaryHex: '#CE1141', secondaryHex: '#C4CED4' },
+  LAC: { canonical: 'LAC', nbaId: '1610612746', espnSlug: 'lac', primaryHex: '#C8102E', secondaryHex: '#1D428A' },
+  LAL: { canonical: 'LAL', nbaId: '1610612747', espnSlug: 'lal', primaryHex: '#552583', secondaryHex: '#FDB927' },
+  MIA: { canonical: 'MIA', nbaId: '1610612748', espnSlug: 'mia', primaryHex: '#98002E', secondaryHex: '#F9A01B' },
+  MIL: { canonical: 'MIL', nbaId: '1610612749', espnSlug: 'mil', primaryHex: '#00471B', secondaryHex: '#EEE1C6' },
+  MIN: { canonical: 'MIN', nbaId: '1610612750', espnSlug: 'min', primaryHex: '#0C2340', secondaryHex: '#78BE20' },
+  BKN: { canonical: 'BKN', nbaId: '1610612751', espnSlug: 'bkn', primaryHex: '#94A3B8', secondaryHex: '#FFFFFF' },
+  NYK: { canonical: 'NYK', nbaId: '1610612752', espnSlug: 'ny', primaryHex: '#006BB6', secondaryHex: '#F58426' },
+  ORL: { canonical: 'ORL', nbaId: '1610612753', espnSlug: 'orl', primaryHex: '#0077C0', secondaryHex: '#C4CED4' },
+  IND: { canonical: 'IND', nbaId: '1610612754', espnSlug: 'ind', primaryHex: '#002D62', secondaryHex: '#FDBB30' },
+  PHI: { canonical: 'PHI', nbaId: '1610612755', espnSlug: 'phi', primaryHex: '#006BB6', secondaryHex: '#ED174C' },
+  PHX: { canonical: 'PHX', nbaId: '1610612756', espnSlug: 'phx', primaryHex: '#E56020', secondaryHex: '#1D1160' },
+  POR: { canonical: 'POR', nbaId: '1610612757', espnSlug: 'por', primaryHex: '#E03A3E', secondaryHex: '#FFFFFF' },
+  SAC: { canonical: 'SAC', nbaId: '1610612758', espnSlug: 'sac', primaryHex: '#5A2D81', secondaryHex: '#63727A' },
+  SAS: { canonical: 'SAS', nbaId: '1610612759', espnSlug: 'sa', primaryHex: '#C4CED4', secondaryHex: '#94A3B8' },
+  OKC: { canonical: 'OKC', nbaId: '1610612760', espnSlug: 'okc', primaryHex: '#007AC1', secondaryHex: '#EF3B24' },
+  TOR: { canonical: 'TOR', nbaId: '1610612761', espnSlug: 'tor', primaryHex: '#CE1141', secondaryHex: '#A1A1AA' },
+  UTA: { canonical: 'UTA', nbaId: '1610612762', espnSlug: 'utah', primaryHex: '#F9A01B', secondaryHex: '#002B5C' },
+  MEM: { canonical: 'MEM', nbaId: '1610612763', espnSlug: 'mem', primaryHex: '#5D76A9', secondaryHex: '#12173F' },
+  WAS: { canonical: 'WAS', nbaId: '1610612764', espnSlug: 'wsh', primaryHex: '#E31837', secondaryHex: '#002B5C' },
+  DET: { canonical: 'DET', nbaId: '1610612765', espnSlug: 'det', primaryHex: '#C8102E', secondaryHex: '#1D42BA' },
+  CHA: { canonical: 'CHA', nbaId: '1610612766', espnSlug: 'cha', primaryHex: '#00788C', secondaryHex: '#1D1160' },
 };
 
 const ABBR_ALIASES: Record<string, string> = {
@@ -81,6 +84,17 @@ function resolveTeamMeta(abbr?: string | null, teamId?: string | null): NbaTeamV
     }
   }
   return null;
+}
+
+export function getTeamBrandColors(
+  abbr?: string | null,
+  teamId?: string | null
+): { primary: string; secondary: string } {
+  const meta = resolveTeamMeta(abbr, teamId);
+  return {
+    primary: meta?.primaryHex || '#F59E0B',
+    secondary: meta?.secondaryHex || '#38BDF8',
+  };
 }
 
 function getInitials(name: string): string {
@@ -153,6 +167,7 @@ export const TeamLogo: React.FC<TeamLogoProps> = ({
   className = '',
   title,
 }) => {
+  const { isV2 } = useThemeStyle();
   const meta = useMemo(() => resolveTeamMeta(abbr, teamId), [abbr, teamId]);
 
   const candidates = useMemo(() => {
@@ -178,16 +193,26 @@ export const TeamLogo: React.FC<TeamLogoProps> = ({
   const activeSrc = srcIndex < candidates.length ? candidates[srcIndex] : null;
   const fallbackLabel = (meta?.canonical || abbr || 'NBA').trim().slice(0, 3).toUpperCase();
 
+  const v2FramedStyle =
+    isV2 && framed && meta && accentTone === 'default'
+      ? {
+          borderColor: `${meta.primaryHex}66`,
+          background: `radial-gradient(circle at 30% 25%, ${meta.primaryHex}26, #070C17 75%)`,
+        }
+      : undefined;
+
   if (framed) {
     return (
       <span
         title={title || meta?.canonical || abbr || undefined}
+        style={v2FramedStyle}
         className={`inline-flex items-center justify-center shrink-0 border overflow-hidden select-none ${FRAMED_SIZE_CLASSES[size]} ${FRAMED_LOGO_PADDING[size]} ${TONE_BORDER_CLASSES[accentTone]} ${className}`}
       >
         {activeSrc ? (
           <img
             src={activeSrc}
             alt={fallbackLabel}
+            referrerPolicy="no-referrer"
             loading="lazy"
             decoding="async"
             onError={() => setSrcIndex((prev) => prev + 1)}
@@ -256,6 +281,9 @@ export const PlayerAvatar: React.FC<PlayerAvatarProps> = ({
   accentTone = 'default',
   className = '',
 }) => {
+  const { isV2 } = useThemeStyle();
+  const teamMeta = useMemo(() => resolveTeamMeta(teamAbbr, null), [teamAbbr]);
+
   const candidates = useMemo(() => {
     const urls: string[] = [];
     if (headshotUrl && headshotUrl.trim()) {
@@ -282,18 +310,28 @@ export const PlayerAvatar: React.FC<PlayerAvatarProps> = ({
   const activeSrc = srcIndex < candidates.length ? candidates[srcIndex] : null;
   const initials = useMemo(() => getInitials(name), [name]);
 
+  const v2AvatarStyle =
+    isV2 && teamMeta && accentTone === 'default'
+      ? {
+          borderColor: `${teamMeta.primaryHex}66`,
+          background: `radial-gradient(circle at 50% 20%, ${teamMeta.primaryHex}33, #070C17 78%)`,
+        }
+      : undefined;
+
   return (
     <span
       title={name}
       className={`relative inline-flex shrink-0 select-none ${className}`}
     >
       <span
+        style={v2AvatarStyle}
         className={`inline-flex items-center justify-center overflow-hidden border ${FRAMED_SIZE_CLASSES[size]} ${TONE_BORDER_CLASSES[accentTone]}`}
       >
         {activeSrc ? (
           <img
             src={activeSrc}
             alt={name}
+            referrerPolicy="no-referrer"
             loading="lazy"
             decoding="async"
             onError={() => setSrcIndex((prev) => prev + 1)}
