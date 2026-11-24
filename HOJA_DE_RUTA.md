@@ -18,6 +18,7 @@ Plan maestro permanente de arquitectura, analítica avanzada, rendimiento, dise�
 - **Fase 10 (Propuesta): Refactorización Modular, Virtualización y Carga Progresiva** — 💡 **PROPUESTA**
 - **Fase 11 (Propuesta): Mi NBA Personalizada, Play-In/Playoffs Bracket y Exportación Editorial** — 💡 **PROPUESTA**
 - **Fase 12 (Propuesta): Radar de Bajas / Partes de Lesiones y Simulador Multi-Era** — 💡 **PROPUESTA**
+- **Fase 13 (Prioritaria): Rediseño Integral de la Aplicación para Hacerla Más Bonita Visualmente y con Mayor Impacto** — 🎨 **PLANIFICADA / PRIORITARIA**
 
 ---
 
@@ -69,3 +70,17 @@ Plan maestro permanente de arquitectura, analítica avanzada, rendimiento, dise�
 3. **Radar de Bajas, Lesiones y Rotaciones de Última Hora**: Cruce automático con *Fantasy*, *Alineaciones* y *Jornadas* indicando qué jugador absorbe minutos y uso.
 4. **Comparador Multi-Temporada & Era-Adjusted (Extensión Fase 6)**: Comparar años distintos de un jugador o leyendas ajustando por ritmo (*Pace*).
 5. **Generador de Tarjetas / Hilos Editoriales Exportables**: Exportación en alta resolución (vertical móvil y 16:9) de actuaciones heroicas, duelos 1v1 e hitos recién batidos.
+
+---
+
+### 4. Fase 13: Rediseño Integral de la Aplicación para Hacerla Más Bonita Visualmente y con Mayor Impacto (🎨 Prioritaria)
+1. **Identidad Visual Premium & Estética Deportiva Moderna**:
+   - Tratamiento visual de alta gama inspirado en el diseño editorial y broadcast de la NBA contemporánea: elevación de contraste con fondos azabache profundos (`#070B14`, `#0B1120`, `#131C2E`), bordes con sutil gradiente luminiscente (`border-slate-800/80` y acentos neón controlados) y microiluminación ambiental (*subtle radial glow*).
+   - Tipografía refinada: consolidación de fuentes display deportivas contundentes para marcadores y titulares de impacto, emparejadas con números tabulares monoespaciados (`tabular-nums`) para un escaneo analítico inmediato.
+2. **Homogeneidad Absoluta en Todas las Zonas**:
+   - Estandarización de componentes transversales: tarjetas de partido, filas de jugadores, tablas analíticas, drawer de inspección de entidades, crónicas y paneles de administración comparten exactamente la misma cuadrícula de espaciado, radios de curvatura (`rounded-lg`), paleta de tonos contextuales y jerarquía de botones de acción.
+   - Eliminación de cualquier disparidad visual entre apartados para que la navegación sea intuitiva, uniforme y fluida en cualquier rincón del juego y plataforma.
+3. **Infografía Interactiva de Mayor Impacto**:
+   - Rediseño de componentes visuales clave (tarjetas de MVP, quintetos de protagonistas, campanas de Gauss con halos interactivos, visualizador de dispersión 2D con logos hipernítidos y mapas de tiro con diagramas de calor estilizados).
+   - Microinteracciones dinámicas y fluidas: transiciones elegantes al desplegar quintetos, alternar favoritos o inspeccionar estadísticas avanzadas, creando una experiencia inmersiva tanto en móvil como en escritorio.
+

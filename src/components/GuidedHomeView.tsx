@@ -1228,7 +1228,10 @@ export function GuidedHomeView({
                             size="sm"
                           />
                           <div className="min-w-0">
-                            <div className="font-semibold text-sm text-slate-100 truncate">
+                            <div
+                              title={sig.entityName}
+                              className="font-semibold text-sm text-slate-100 break-words leading-tight"
+                            >
                               {sig.entityName}
                             </div>
                             <div className="text-xs text-slate-400 truncate">

@@ -536,73 +536,141 @@ export function GameDayAnalyzerView({
   const showRotationBlock =
     mobileSectionTab === 'all' || mobileSectionTab === 'rotation';
 
+  const getPositionSortRank = (rawPos: string): number => {
+    const p = String(rawPos || '').trim().toUpperCase();
+    if (p === 'PG' || p === 'B' || p === 'BASE') return 1;
+    if (p === 'G') return 2;
+    if (p === 'SG' || p === 'E' || p === 'ESCOLTA') return 3;
+    if (p === 'G-F') return 4;
+    if (p === 'F-G') return 5;
+    if (p === 'SF' || p === 'A' || p === 'ALERO') return 6;
+    if (p === 'F') return 7;
+    if (p === 'PF' || p === 'AP' || p === 'ALA-PIVOT' || p === 'ALA-PÍVOT') return 8;
+    if (p === 'F-C') return 9;
+    if (p === 'C-F') return 10;
+    if (p === 'C' || p === 'P' || p === 'PIVOT' || p === 'PÍVOT') return 11;
+    return 12;
+  };
+
+  const getOrderedProtagonists = (players: GameDayPlayerLine[]): GameDayPlayerLine[] => {
+    if (!players || players.length === 0) return [];
+    const explicitStarters = players.filter((p) => p.isStarter === true);
+    let starters: GameDayPlayerLine[] = [];
+    let bench: GameDayPlayerLine[] = [];
+
+    if (explicitStarters.length >= 5) {
+      starters = explicitStarters.slice(0, 5);
+      const starterIds = new Set(starters.map((s) => s.playerId));
+      bench = players.filter((p) => !starterIds.has(p.playerId));
+    } else {
+      const sortedByMins = [...players].sort(
+        (a, b) => b.minutes - a.minutes || b.gameScore - a.gameScore
+      );
+      starters = sortedByMins.slice(0, 5);
+      const starterIds = new Set(starters.map((s) => s.playerId));
+      bench = players.filter((p) => !starterIds.has(p.playerId));
+    }
+
+    const sortedStarters = [...starters].sort((a, b) => {
+      const ra = getPositionSortRank(a.position);
+      const rb = getPositionSortRank(b.position);
+      if (ra !== rb) return ra - rb;
+      return b.gameScore - a.gameScore || b.minutes - a.minutes;
+    });
+
+    const sortedBench = [...bench].sort(
+      (a, b) => b.gameScore - a.gameScore || b.points - a.points || b.minutes - a.minutes
+    );
+    const bestSixthMan = sortedBench[0];
+
+    return bestSixthMan ? [...sortedStarters.slice(0, 5), bestSixthMan] : sortedStarters.slice(0, 5);
+  };
+
   const renderPlayerQuickRow = (p: GameDayPlayerLine) => {
     const watched = watchlistIds.has(`player:${p.playerId}`);
-    const isSixth = Boolean(p.isSixthMan) || p.isStarter === false;
     const posLabel = String(p.position || '').trim();
     return (
       <div
         key={p.playerId}
         onClick={() => onInspectEntity('player', p.playerId)}
-        className={`px-3 py-2 flex items-center justify-between gap-2 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors text-xs ${
-          isSixth ? 'bg-[#101A2F]/80 border-t border-slate-700/80' : ''
-        }`}
+        className="px-2.5 py-1.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors text-xs space-y-0.5"
       >
-        <div className="min-w-0 flex items-center gap-2">
-          <button
-            type="button"
-            aria-label="Alternar favorito"
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleWatchlist(`player:${p.playerId}`);
-            }}
-            className="min-w-[32px] min-h-[32px] -ml-1 flex items-center justify-center rounded text-slate-500 hover:text-orange-400 shrink-0"
-          >
-            <Star
-              className={`w-3.5 h-3.5 ${
-                watched ? 'fill-orange-400 text-orange-400' : ''
-              }`}
+        {/* Línea 1 (Identidad) & Línea 2 (Box score principal con salto si en ancho no cabe) */}
+        <div className="flex items-baseline justify-between gap-x-2 gap-y-0.5 flex-wrap">
+          <div className="flex items-center gap-1.5 min-w-0 flex-1">
+            <button
+              type="button"
+              aria-label={`Alternar favorito ${p.playerName}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleWatchlist(`player:${p.playerId}`);
+              }}
+              className="w-5 h-5 -ml-0.5 flex items-center justify-center rounded text-slate-500 hover:text-orange-400 shrink-0"
+            >
+              <Star
+                className={`w-3 h-3 ${
+                  watched ? 'fill-orange-400 text-orange-400' : ''
+                }`}
+              />
+            </button>
+            <PlayerAvatar
+              playerId={p.playerId}
+              name={p.playerName}
+              teamAbbr={p.teamAbbr}
+              size="xs"
             />
-          </button>
-          <PlayerAvatar
-            playerId={p.playerId}
-            name={p.playerName}
-            teamAbbr={p.teamAbbr}
-            size="xs"
-          />
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5 min-w-0">
+            <div className="flex items-center gap-1 min-w-0 flex-1">
               {posLabel && (
-                <span className="font-mono text-[10px] font-semibold text-slate-400 shrink-0 w-7">
+                <span className="font-mono text-[10px] font-semibold text-slate-400 shrink-0">
                   {posLabel}
                 </span>
               )}
-              <p className="font-medium text-slate-100 truncate">{p.playerName}</p>
-              {isSixth && (
-                <span className="font-mono text-[10px] font-semibold text-orange-400 shrink-0">
-                  6º hombre
-                </span>
-              )}
+              <span
+                title={p.playerName}
+                className="font-semibold text-slate-100 text-xs leading-tight break-words"
+              >
+                {p.playerName}
+              </span>
             </div>
-            <p className="text-[11px] text-slate-400 font-mono tabular-nums whitespace-nowrap">
-              {p.minutes.toFixed(0)}m · {p.fgm}/{p.fga} TC
-              {p.fg3m > 0 ? ` · ${p.fg3m} T3` : ''}
-            </p>
+          </div>
+
+          <div className="font-mono tabular-nums text-xs font-bold text-slate-100 whitespace-nowrap pl-6 sm:pl-0 shrink-0 ml-auto">
+            {p.points}P · {p.rebounds}R · {p.assists}A
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5 shrink-0">
-          <div className="text-right font-mono tabular-nums whitespace-nowrap">
-            <p className="font-semibold text-slate-100">
-              {p.points}P · {p.rebounds}R · {p.assists}A
-            </p>
-            <p className="text-[11px] text-slate-400">
-              {experienceMode === 'advanced'
-                ? `GmSc ${p.gameScore.toFixed(1)} · ${p.tsPct.toFixed(0)}% TS`
-                : `${p.plusMinus >= 0 ? '+' : ''}${p.plusMinus} en pista${
-                    p.stocks >= 2 ? ` · ${p.stocks} ROB+TAP` : ''
-                  }`}
-            </p>
+        {/* Línea 3: El resto de los datos (minutos, tiro e impacto / valoración) */}
+        <div className="pl-6 sm:pl-7 flex items-center justify-between gap-2 text-[11px] font-mono tabular-nums text-slate-400">
+          <div className="truncate min-w-0 text-slate-400">
+            <span>{p.minutes.toFixed(0)}m</span>
+            <span className="text-slate-600" aria-hidden="true"> · </span>
+            <span>{p.fgm}/{p.fga} TC</span>
+            {p.fg3m > 0 && (
+              <>
+                <span className="text-slate-600" aria-hidden="true"> · </span>
+                <span>{p.fg3m} T3</span>
+              </>
+            )}
+          </div>
+
+          <div className="shrink-0 text-right whitespace-nowrap">
+            {experienceMode === 'advanced' ? (
+              <span className="text-orange-300 font-medium">
+                GmSc {p.gameScore.toFixed(1)}
+              </span>
+            ) : (
+              <span
+                className={
+                  p.plusMinus > 0
+                    ? 'text-emerald-400 font-medium'
+                    : p.plusMinus < 0
+                    ? 'text-rose-400 font-medium'
+                    : 'text-slate-400 font-medium'
+                }
+              >
+                {p.plusMinus >= 0 ? `+${p.plusMinus}` : p.plusMinus} +/-
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -861,7 +929,7 @@ export function GameDayAnalyzerView({
             >
               <span>
                 {isExpanded
-                  ? 'Ocultar quintetos'
+                  ? 'Ocultar protagonistas'
                   : `Protagonistas (${
                       m.away.rotationPlayers.length +
                       m.home.rotationPlayers.length
@@ -878,30 +946,30 @@ export function GameDayAnalyzerView({
           {isExpanded && (
             <div className="border-t border-[#1E293B] bg-[#0B1120]/60 grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-[#1E293B]">
               {[m.away, m.home].map((side) => (
-                <div key={side.abbr} className="divide-y divide-[#1E293B]/70">
-                  <div className="px-3 py-2 bg-[#0F172A]/80 flex items-center justify-between text-[11px] text-slate-300">
+                <div key={side.abbr} className="divide-y divide-[#1E293B]/70 min-w-0">
+                  <div className="px-2.5 py-1.5 bg-[#0F172A]/80 flex items-center justify-between text-[11px] text-slate-300 gap-2 min-w-0">
                     <button
                       type="button"
                       onClick={() => onInspectEntity('team', side.teamId)}
-                      className="inline-flex items-center gap-2 font-semibold hover:text-orange-300 transition-colors min-w-0"
+                      className="inline-flex items-center gap-1.5 font-semibold hover:text-orange-300 transition-colors min-w-0 truncate"
                     >
                       <TeamLogo abbr={side.abbr} teamId={side.teamId} size="xs" />
                       <span className="truncate">
-                        {side.name} ({side.score})
+                        {side.shortName || side.name} ({side.score})
                       </span>
                     </button>
-                    <span className="font-mono tabular-nums text-slate-400">
+                    <span className="font-mono tabular-nums text-slate-400 whitespace-nowrap shrink-0">
                       {experienceMode === 'advanced'
                         ? `OffRtg ${side.offRtg.toFixed(1)}`
                         : `${side.ast} AST · ${side.reb} REB`}
                     </span>
                   </div>
                   {side.rotationPlayers.length === 0 ? (
-                    <p className="p-3 text-xs text-slate-500">
+                    <p className="p-2.5 text-xs text-slate-500">
                       Sin desglose individual registrado en esta fecha.
                     </p>
                   ) : (
-                    side.rotationPlayers.slice(0, 6).map(renderPlayerQuickRow)
+                    getOrderedProtagonists(side.rotationPlayers).map(renderPlayerQuickRow)
                   )}
                 </div>
               ))}
@@ -2090,9 +2158,9 @@ export function GameDayAnalyzerView({
                 </span>
               </div>
 
-              <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-y-auto max-h-[850px] flex-1 divide-y divide-[#1E293B]">
+              <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-y-auto max-h-[500px] xl:max-h-[620px] flex-1 divide-y divide-[#1E293B]">
                 {data.explosions.length === 0 ? (
-                  <div className="p-8 text-center text-xs text-slate-400">
+                  <div className="p-6 text-center text-xs text-slate-400">
                     Ningún jugador superó el umbral de explosión atípica en esta jornada.
                   </div>
                 ) : (
@@ -2100,10 +2168,10 @@ export function GameDayAnalyzerView({
                     <div
                       key={item.playerId}
                       onClick={() => onInspectEntity('player', item.playerId)}
-                      className="p-3.5 sm:px-4 sm:py-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-2"
+                      className="p-2.5 sm:px-3.5 sm:py-2.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-1.5"
                     >
-                      <div className="flex items-start justify-between gap-2.5">
-                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
                           <PlayerAvatar
                             playerId={item.playerId}
                             name={item.playerName}
@@ -2112,8 +2180,13 @@ export function GameDayAnalyzerView({
                             size="sm"
                           />
                           <div className="min-w-0 flex-1">
-                            <div className="font-semibold text-sm text-slate-100 truncate">
-                              {item.playerName}
+                            <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                              <span className="font-semibold text-sm text-slate-100 truncate">
+                                {item.playerName}
+                              </span>
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 whitespace-nowrap shrink-0">
+                                {item.driverTag}
+                              </span>
                             </div>
                             <div className="mt-0.5 text-xs text-slate-400 whitespace-nowrap truncate">
                               {item.teamAbbr} · {item.position} ·{' '}
@@ -2123,28 +2196,21 @@ export function GameDayAnalyzerView({
                         </div>
 
                         <div className="text-right font-mono tabular-nums shrink-0">
-                          <div className="text-sm sm:text-base font-bold text-emerald-400 whitespace-nowrap">
+                          <div className="text-sm font-bold text-emerald-400 whitespace-nowrap">
                             {item.triggerNightDisplay || `${item.points} PTS`}
                           </div>
-                          <div className="hidden sm:block text-xs font-semibold text-emerald-300/90 whitespace-nowrap">
-                            ▲ {item.triggerDeltaDisplay?.startsWith('+') ? item.triggerDeltaDisplay : `+${item.triggerDeltaDisplay || formatSigned(item.ptsDelta, 1)}`} vs media ({item.triggerBaselineDisplay || item.ptsAvg.toFixed(1)})
+                          <div className="text-[11px] font-semibold text-emerald-300/90 whitespace-nowrap">
+                            ▲ {item.triggerDeltaDisplay?.startsWith('+') ? item.triggerDeltaDisplay : `+${item.triggerDeltaDisplay || formatSigned(item.ptsDelta, 1)}`}{' '}
+                            <span className="text-slate-400 font-normal hidden sm:inline">
+                              vs {item.triggerBaselineDisplay || item.ptsAvg.toFixed(1)}
+                            </span>
                           </div>
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 whitespace-nowrap">
-                          {item.driverTag}
-                        </span>
-                        <span className="sm:hidden text-[11px] font-semibold font-mono tabular-nums text-emerald-300/90 whitespace-nowrap">
-                          ▲ {item.triggerDeltaDisplay?.startsWith('+') ? item.triggerDeltaDisplay : `+${item.triggerDeltaDisplay || formatSigned(item.ptsDelta, 1)}`} vs media ({item.triggerBaselineDisplay || item.ptsAvg.toFixed(1)})
-                        </span>
-                      </div>
-
                       {/* Fila compacta de estadísticas de partido sin solapamiento */}
-                      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-slate-300 bg-slate-900/60 px-2.5 py-1.5 rounded-lg border border-slate-800 font-mono tabular-nums">
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <span className="text-slate-400 text-[11px] font-sans">Aportación:</span>
+                      <div className="flex items-center justify-between gap-2 text-xs text-slate-300 bg-[#0B1120]/70 px-2.5 py-1 rounded border border-[#1E293B]/80 font-mono tabular-nums">
+                        <div className="flex items-center gap-1.5 min-w-0 truncate">
                           <span className="font-semibold text-slate-100 whitespace-nowrap">
                             {item.points} PTS · {item.rebounds} REB · {item.assists} AST
                           </span>
@@ -2156,7 +2222,7 @@ export function GameDayAnalyzerView({
                         </div>
                         {item.gameScore !== undefined && (
                           <div className="text-[11px] text-slate-400 shrink-0 font-sans whitespace-nowrap">
-                            Impacto: <span className="font-semibold font-mono text-slate-200">{item.gameScore.toFixed(1)} GmSc</span>
+                            GmSc <span className="font-semibold font-mono text-slate-200">{item.gameScore.toFixed(1)}</span>
                           </div>
                         )}
                       </div>
@@ -2185,9 +2251,9 @@ export function GameDayAnalyzerView({
                 </span>
               </div>
 
-              <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-y-auto max-h-[850px] flex-1 divide-y divide-[#1E293B]">
+              <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-y-auto max-h-[500px] xl:max-h-[620px] flex-1 divide-y divide-[#1E293B]">
                 {data.slumps.length === 0 ? (
-                  <div className="p-8 text-center text-xs text-slate-400">
+                  <div className="p-6 text-center text-xs text-slate-400">
                     Los titulares principales cumplieron con su suelo estadístico en esta fecha.
                   </div>
                 ) : (
@@ -2195,10 +2261,10 @@ export function GameDayAnalyzerView({
                     <div
                       key={item.playerId}
                       onClick={() => onInspectEntity('player', item.playerId)}
-                      className="p-3.5 sm:px-4 sm:py-3.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-2"
+                      className="p-2.5 sm:px-3.5 sm:py-2.5 hover:bg-[#182338] active:bg-[#182338] cursor-pointer transition-colors space-y-1.5"
                     >
-                      <div className="flex items-start justify-between gap-2.5">
-                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
                           <PlayerAvatar
                             playerId={item.playerId}
                             name={item.playerName}
@@ -2207,8 +2273,13 @@ export function GameDayAnalyzerView({
                             size="sm"
                           />
                           <div className="min-w-0 flex-1">
-                            <div className="font-semibold text-sm text-slate-100 truncate">
-                              {item.playerName}
+                            <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                              <span className="font-semibold text-sm text-slate-100 truncate">
+                                {item.playerName}
+                              </span>
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20 whitespace-nowrap shrink-0">
+                                {item.driverTag}
+                              </span>
                             </div>
                             <div className="mt-0.5 text-xs text-slate-400 whitespace-nowrap truncate">
                               {item.teamAbbr} · {item.position} ·{' '}
@@ -2218,28 +2289,21 @@ export function GameDayAnalyzerView({
                         </div>
 
                         <div className="text-right font-mono tabular-nums shrink-0">
-                          <div className="text-sm sm:text-base font-bold text-rose-400 whitespace-nowrap">
+                          <div className="text-sm font-bold text-rose-400 whitespace-nowrap">
                             {item.triggerNightDisplay || `${item.points} PTS`}
                           </div>
-                          <div className="hidden sm:block text-xs font-semibold text-rose-300/90 whitespace-nowrap">
-                            ▼ {item.triggerDeltaDisplay?.startsWith('-') ? item.triggerDeltaDisplay : `-${item.triggerDeltaDisplay || formatSigned(item.ptsDelta, 1)}`} vs media ({item.triggerBaselineDisplay || item.ptsAvg.toFixed(1)})
+                          <div className="text-[11px] font-semibold text-rose-300/90 whitespace-nowrap">
+                            ▼ {item.triggerDeltaDisplay?.startsWith('-') ? item.triggerDeltaDisplay : `-${item.triggerDeltaDisplay || formatSigned(item.ptsDelta, 1)}`}{' '}
+                            <span className="text-slate-400 font-normal hidden sm:inline">
+                              vs {item.triggerBaselineDisplay || item.ptsAvg.toFixed(1)}
+                            </span>
                           </div>
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20 whitespace-nowrap">
-                          {item.driverTag}
-                        </span>
-                        <span className="sm:hidden text-[11px] font-semibold font-mono tabular-nums text-rose-300/90 whitespace-nowrap">
-                          ▼ {item.triggerDeltaDisplay?.startsWith('-') ? item.triggerDeltaDisplay : `-${item.triggerDeltaDisplay || formatSigned(item.ptsDelta, 1)}`} vs media ({item.triggerBaselineDisplay || item.ptsAvg.toFixed(1)})
-                        </span>
-                      </div>
-
                       {/* Fila compacta de estadísticas de partido sin solapamiento */}
-                      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-slate-300 bg-slate-900/60 px-2.5 py-1.5 rounded-lg border border-slate-800 font-mono tabular-nums">
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <span className="text-slate-400 text-[11px] font-sans">Aportación:</span>
+                      <div className="flex items-center justify-between gap-2 text-xs text-slate-300 bg-[#0B1120]/70 px-2.5 py-1 rounded border border-[#1E293B]/80 font-mono tabular-nums">
+                        <div className="flex items-center gap-1.5 min-w-0 truncate">
                           <span className="font-semibold text-slate-100 whitespace-nowrap">
                             {item.points} PTS · {item.rebounds} REB · {item.assists} AST
                           </span>
@@ -2251,7 +2315,7 @@ export function GameDayAnalyzerView({
                         </div>
                         {item.gameScore !== undefined && (
                           <div className="text-[11px] text-slate-400 shrink-0 font-sans whitespace-nowrap">
-                            Impacto: <span className="font-semibold font-mono text-slate-200">{item.gameScore.toFixed(1)} GmSc</span>
+                            GmSc <span className="font-semibold font-mono text-slate-200">{item.gameScore.toFixed(1)}</span>
                           </div>
                         )}
                       </div>
