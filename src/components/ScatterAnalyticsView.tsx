@@ -78,6 +78,7 @@ import {
   type PresetThemeId,
   type CorrelationPackId,
 } from '../utils/scatterPresets';
+import { useExperienceMetrics } from '../context/ExperienceMetricsContext';
 
 export { TEAM_PRESETS };
 
@@ -342,6 +343,7 @@ export function ScatterAnalyticsView({
   seasonToken = '2027',
   onInspectEntity,
 }: ScatterAnalyticsViewProps) {
+  const { isMetricAllowed } = useExperienceMetrics();
   // Main view segment: 'teams' | 'players' | 'correlation'
   const [activeTab, setActiveTab] = useState<'teams' | 'players' | 'correlation'>('teams');
 
@@ -437,11 +439,102 @@ export function ScatterAnalyticsView({
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
   const [tooltipDismissed, setTooltipDismissed] = useState(false);
 
-  // Grouped 10-layer catalogs for dropdown <optgroup>
-  const groupedTeamMetrics = useMemo(() => getGroupedScatterMetrics('team'), []);
-  const groupedPlayerMetrics = useMemo(() => getGroupedScatterMetrics('player'), []);
-  const teamCatalogMetrics = useMemo(() => getScatterMetricsForScope('team'), []);
-  const playerCatalogMetrics = useMemo(() => getScatterMetricsForScope('player'), []);
+  // Grouped 10-layer catalogs for dropdown <optgroup>, filtered by active ExperienceMode
+  const groupedTeamMetrics = useMemo(
+    () =>
+      getGroupedScatterMetrics('team')
+        .map((g) => ({
+          ...g,
+          metrics: g.metrics.filter((m) => isMetricAllowed(m.id)),
+        }))
+        .filter((g) => g.metrics.length > 0),
+    [isMetricAllowed]
+  );
+  const groupedPlayerMetrics = useMemo(
+    () =>
+      getGroupedScatterMetrics('player')
+        .map((g) => ({
+          ...g,
+          metrics: g.metrics.filter((m) => isMetricAllowed(m.id)),
+        }))
+        .filter((g) => g.metrics.length > 0),
+    [isMetricAllowed]
+  );
+  const teamCatalogMetrics = useMemo(
+    () => getScatterMetricsForScope('team').filter((m) => isMetricAllowed(m.id)),
+    [isMetricAllowed]
+  );
+  const playerCatalogMetrics = useMemo(
+    () => getScatterMetricsForScope('player').filter((m) => isMetricAllowed(m.id)),
+    [isMetricAllowed]
+  );
+
+  // Auto-fallback active X/Y/Size/Correlation metrics whenever Modo Sencillo hides an advanced metric
+  useEffect(() => {
+    if (teamCatalogMetrics.length > 0) {
+      if (!isMetricAllowed(teamMetricXId)) {
+        const fbX =
+          teamCatalogMetrics.find((m) => m.id === 'avgPointsFor')?.id ||
+          teamCatalogMetrics[0].id;
+        setTeamMetricXId(fbX);
+        setTeamPresetId('');
+      }
+      if (!isMetricAllowed(teamMetricYId)) {
+        const fbY =
+          teamCatalogMetrics.find((m) => m.id === 'avgPointsAgainst')?.id ||
+          teamCatalogMetrics.find((m) => m.id === 'differential')?.id ||
+          teamCatalogMetrics[Math.min(1, teamCatalogMetrics.length - 1)].id;
+        setTeamMetricYId(fbY);
+        setTeamPresetId('');
+      }
+      if (teamMetricSizeId !== 'none' && !isMetricAllowed(teamMetricSizeId)) {
+        setTeamMetricSizeId(
+          isMetricAllowed('winPct') ? 'winPct' : 'none'
+        );
+      }
+    }
+    if (playerCatalogMetrics.length > 0) {
+      if (!isMetricAllowed(playerMetricXId)) {
+        const fbX =
+          playerCatalogMetrics.find((m) => m.id === 'points')?.id ||
+          playerCatalogMetrics[0].id;
+        setPlayerMetricXId(fbX);
+        setPlayerPresetId('');
+      }
+      if (!isMetricAllowed(playerMetricYId)) {
+        const fbY =
+          playerCatalogMetrics.find((m) => m.id === 'rebounds')?.id ||
+          playerCatalogMetrics.find((m) => m.id === 'assists')?.id ||
+          playerCatalogMetrics[Math.min(1, playerCatalogMetrics.length - 1)].id;
+        setPlayerMetricYId(fbY);
+        setPlayerPresetId('');
+      }
+      if (playerMetricSizeId !== 'none' && !isMetricAllowed(playerMetricSizeId)) {
+        setPlayerMetricSizeId(
+          isMetricAllowed('minutes') ? 'minutes' : 'none'
+        );
+      }
+    }
+    if (!isMetricAllowed(corrTargetMetricId)) {
+      const targetPool =
+        corrScope === 'players' ? playerCatalogMetrics : teamCatalogMetrics;
+      if (targetPool.length > 0) {
+        setCorrTargetMetricId(targetPool[0].id);
+      }
+    }
+  }, [
+    isMetricAllowed,
+    teamCatalogMetrics,
+    playerCatalogMetrics,
+    teamMetricXId,
+    teamMetricYId,
+    teamMetricSizeId,
+    playerMetricXId,
+    playerMetricYId,
+    playerMetricSizeId,
+    corrTargetMetricId,
+    corrScope,
+  ]);
 
   // Fetch Heroic Shots (BB / GW) for active seasonToken via shared deduplicated client cache
   useEffect(() => {
@@ -1310,12 +1403,23 @@ export function ScatterAnalyticsView({
     [teamPresetId]
   );
 
+  const allowedTeamPresets = useMemo(
+    () =>
+      TEAM_PRESETS.filter(
+        (p) =>
+          isMetricAllowed(p.xMetric) &&
+          isMetricAllowed(p.yMetric) &&
+          (p.sizeMetric === 'none' || isMetricAllowed(p.sizeMetric))
+      ),
+    [isMetricAllowed]
+  );
+
   const visibleTeamPresets = useMemo(
     () =>
       teamPresetTheme === 'all'
-        ? TEAM_PRESETS
-        : TEAM_PRESETS.filter((p) => p.theme === teamPresetTheme),
-    [teamPresetTheme]
+        ? allowedTeamPresets
+        : allowedTeamPresets.filter((p) => p.theme === teamPresetTheme),
+    [teamPresetTheme, allowedTeamPresets]
   );
 
   const activePlayerPreset = useMemo(
@@ -1323,12 +1427,23 @@ export function ScatterAnalyticsView({
     [playerPresetId]
   );
 
+  const allowedPlayerPresets = useMemo(
+    () =>
+      PLAYER_PRESETS.filter(
+        (p) =>
+          isMetricAllowed(p.xMetric) &&
+          isMetricAllowed(p.yMetric) &&
+          (p.sizeMetric === 'none' || isMetricAllowed(p.sizeMetric))
+      ),
+    [isMetricAllowed]
+  );
+
   const visiblePlayerPresets = useMemo(
     () =>
       playerPresetTheme === 'all'
-        ? PLAYER_PRESETS
-        : PLAYER_PRESETS.filter((p) => p.theme === playerPresetTheme),
-    [playerPresetTheme]
+        ? allowedPlayerPresets
+        : allowedPlayerPresets.filter((p) => p.theme === playerPresetTheme),
+    [playerPresetTheme, allowedPlayerPresets]
   );
 
   // Live Pearson r for Teams scatter
@@ -1412,7 +1527,17 @@ export function ScatterAnalyticsView({
 
     if (entityStatsRows.length < 3) return null;
 
-    const metricDefs = activePack.metricIds.map((id) => {
+    const allowedPackMetricIds = activePack.metricIds.filter((id) =>
+      isMetricAllowed(id)
+    );
+    const effectivePackMetricIds =
+      allowedPackMetricIds.length >= 2
+        ? allowedPackMetricIds
+        : (isPlayers ? playerCatalogMetrics : teamCatalogMetrics)
+            .slice(0, 8)
+            .map((m) => m.id);
+
+    const metricDefs = effectivePackMetricIds.map((id) => {
       const def = findScatterMetric(id, isPlayers ? 'player' : 'team');
       return {
         id: def.id,
@@ -2762,6 +2887,31 @@ export function ScatterAnalyticsView({
                             categoryTag: 'CAMPANA DE GAUSS · EQUIPOS NBA',
                             title: `Distribución Normal: ${teamMetricX.shortLabel}`,
                             subtitle: `${teamGaussianSummary.ranked.length} franquicias · Media μ=${formatScatterMetricValue(teamGaussianSummary.mu, teamMetricX)}${teamMetricX.unit} · σ=±${formatScatterMetricValue(teamGaussianSummary.sigma, teamMetricX)}`,
+                            editorialVerdictLabel: 'VEREDICTO DISTRIBUCIÓN · CAMPANA DE GAUSS',
+                            editorialVerdictTone: 'positive',
+                            editorialVerdict: (() => {
+                              const top = teamGaussianSummary.ranked[0];
+                              const selIdx = selectedTeamId
+                                ? teamGaussianSummary.ranked.findIndex(
+                                    (r) => r.team.id === selectedTeamId
+                                  )
+                                : -1;
+                              const sel =
+                                selIdx >= 0
+                                  ? teamGaussianSummary.ranked[selIdx]
+                                  : null;
+                              const eliteTotal =
+                                teamGaussianSummary.zoneCounts.elite_2s +
+                                teamGaussianSummary.zoneCounts.above_1s;
+                              const topPart = top
+                                ? `Líder #1: ${top.team.name} (${formatScatterMetricValue(top.value, teamMetricX)}${teamMetricX.unit}, ${formatSignedZ(top.perfZ)} · P${top.percentile})`
+                                : `Media NBA μ=${formatScatterMetricValue(teamGaussianSummary.mu, teamMetricX)}${teamMetricX.unit}`;
+                              const selPart =
+                                sel && (!top || sel.team.id !== top.team.id)
+                                  ? ` · Foco: ${sel.team.shortName} (#${selIdx + 1}, ${formatSignedZ(sel.perfZ)}, P${sel.percentile})`
+                                  : '';
+                              return `${topPart}${selPart} · ${eliteTotal} franquicias superan el umbral +1σ en ${teamMetricX.shortLabel}.`;
+                            })(),
                             kpis: [
                               { label: 'Media (μ)', value: `${formatScatterMetricValue(teamGaussianSummary.mu, teamMetricX)}${teamMetricX.unit}` },
                               { label: 'Desv. típica (σ)', value: `±${formatScatterMetricValue(teamGaussianSummary.sigma, teamMetricX)}${teamMetricX.unit}` },
@@ -2806,11 +2956,29 @@ export function ScatterAnalyticsView({
                             categoryTag: 'EXPLORADOR ANALÍTICO · EQUIPOS NBA',
                             title: `${teamMetricY.shortLabel} vs ${teamMetricX.shortLabel}`,
                             subtitle: `${filteredTeams.length} franquicias analizadas · Ejes: ${teamMetricY.label} vs ${teamMetricX.label}`,
+                            editorialVerdictLabel: 'VEREDICTO CORRELACIÓN 2D · EQUIPOS NBA',
+                            editorialVerdictTone: 'accent',
+                            editorialVerdict: (() => {
+                              const rStr =
+                                teamLivePearson.r >= 0
+                                  ? `+${teamLivePearson.r.toFixed(2)}`
+                                  : teamLivePearson.r.toFixed(2);
+                              const presetTitle = activeTeamPreset
+                                ? activeTeamPreset.label
+                                : `${teamMetricY.shortLabel} vs ${teamMetricX.shortLabel}`;
+                              const sel = selectedTeamId
+                                ? filteredTeams.find((t) => t.id === selectedTeamId)
+                                : null;
+                              const selPart = sel
+                                ? ` · Foco: ${sel.name} (${teamMetricX.shortLabel} ${formatScatterMetricValue(sel.stats[teamMetricX.id], teamMetricX)}${teamMetricX.unit}, ${teamMetricY.shortLabel} ${formatScatterMetricValue(sel.stats[teamMetricY.id], teamMetricY)}${teamMetricY.unit})`
+                                : '';
+                              return `${presetTitle} (r = ${rStr} · ${teamLivePearson.info.strengthLabel}): ${teamLivePearson.info.summaryText}${selPart}`;
+                            })(),
                             kpis: [
                               { label: 'Eje X (Horizontal)', value: `${formatScatterMetricValue(teamMeanX, teamMetricX)}${teamMetricX.unit}`, sublabel: teamMetricX.shortLabel },
                               { label: 'Eje Y (Vertical)', value: `${formatScatterMetricValue(teamMeanY, teamMetricY)}${teamMetricY.unit}`, sublabel: teamMetricY.shortLabel },
-                              { label: 'Franquicias', value: String(filteredTeams.length) },
-                              { label: 'Ámbito media', value: effectiveTeamMeanScope === 'filtered' ? 'Selección' : 'Liga (26-27)' },
+                              { label: 'Correlación (r)', value: teamLivePearson.r >= 0 ? `+${teamLivePearson.r.toFixed(2)}` : teamLivePearson.r.toFixed(2), sublabel: teamLivePearson.info.strengthLabel, tone: 'accent' },
+                              { label: 'Ámbito media', value: effectiveTeamMeanScope === 'filtered' ? `Selección (${filteredTeams.length})` : 'Liga (26-27)' },
                             ],
                             fallbackTable: {
                               filename: `RadarNBA-Equipos-${teamMetricY.shortLabel}-vs-${teamMetricX.shortLabel}`,
@@ -3477,6 +3645,31 @@ export function ScatterAnalyticsView({
                             categoryTag: 'CAMPANA DE GAUSS · JUGADORES NBA',
                             title: `Distribución Normal: ${playerMetricX.shortLabel}`,
                             subtitle: `${playerGaussianSummary.ranked.length} jugadores · Media μ=${formatScatterMetricValue(playerGaussianSummary.mu, playerMetricX)}${playerMetricX.unit} · σ=±${formatScatterMetricValue(playerGaussianSummary.sigma, playerMetricX)}`,
+                            editorialVerdictLabel: 'VEREDICTO DISTRIBUCIÓN · CAMPANA DE GAUSS',
+                            editorialVerdictTone: 'sky',
+                            editorialVerdict: (() => {
+                              const top = playerGaussianSummary.ranked[0];
+                              const selIdx = selectedPlayerId
+                                ? playerGaussianSummary.ranked.findIndex(
+                                    (r) => r.player.id === selectedPlayerId
+                                  )
+                                : -1;
+                              const sel =
+                                selIdx >= 0
+                                  ? playerGaussianSummary.ranked[selIdx]
+                                  : null;
+                              const eliteTotal =
+                                playerGaussianSummary.zoneCounts.elite_2s +
+                                playerGaussianSummary.zoneCounts.above_1s;
+                              const topPart = top
+                                ? `Líder #1: ${top.player.name} (${top.player.teamAbbr} · ${formatScatterMetricValue(top.value, playerMetricX)}${playerMetricX.unit}, ${formatSignedZ(top.perfZ)}, P${top.percentile})`
+                                : `Media μ=${formatScatterMetricValue(playerGaussianSummary.mu, playerMetricX)}${playerMetricX.unit}`;
+                              const selPart =
+                                sel && (!top || sel.player.id !== top.player.id)
+                                  ? ` · Foco: ${sel.player.name} (#${selIdx + 1}, ${formatSignedZ(sel.perfZ)}, P${sel.percentile})`
+                                  : '';
+                              return `${topPart}${selPart} · ${eliteTotal} jugadores en zona élite (≥ +1σ) sobre n=${playerGaussianSummary.ranked.length}.`;
+                            })(),
                             kpis: [
                               { label: 'Media (μ)', value: `${formatScatterMetricValue(playerGaussianSummary.mu, playerMetricX)}${playerMetricX.unit}` },
                               { label: 'Desv. típica (σ)', value: `±${formatScatterMetricValue(playerGaussianSummary.sigma, playerMetricX)}${playerMetricX.unit}` },
@@ -3523,10 +3716,28 @@ export function ScatterAnalyticsView({
                             categoryTag: 'EXPLORADOR ANALÍTICO · JUGADORES NBA',
                             title: `${playerMetricY.shortLabel} vs ${playerMetricX.shortLabel}`,
                             subtitle: `${filteredPlayers.length} jugadores · Ejes: ${playerMetricY.label} vs ${playerMetricX.label}`,
+                            editorialVerdictLabel: 'VEREDICTO CORRELACIÓN 2D · JUGADORES NBA',
+                            editorialVerdictTone: 'sky',
+                            editorialVerdict: (() => {
+                              const rStr =
+                                playerLivePearson.r >= 0
+                                  ? `+${playerLivePearson.r.toFixed(2)}`
+                                  : playerLivePearson.r.toFixed(2);
+                              const presetTitle = activePlayerPreset
+                                ? activePlayerPreset.label
+                                : `${playerMetricY.shortLabel} vs ${playerMetricX.shortLabel}`;
+                              const sel = selectedPlayerId
+                                ? filteredPlayers.find((p) => p.id === selectedPlayerId)
+                                : null;
+                              const selPart = sel
+                                ? ` · Foco: ${sel.name} (${sel.teamAbbr} · ${playerMetricX.shortLabel} ${formatScatterMetricValue(sel.x, playerMetricX)}${playerMetricX.unit}, ${playerMetricY.shortLabel} ${formatScatterMetricValue(sel.y, playerMetricY)}${playerMetricY.unit})`
+                                : '';
+                              return `${presetTitle} (r = ${rStr} · ${playerLivePearson.info.strengthLabel}, n=${playerLivePearson.n}): ${playerLivePearson.info.summaryText}${selPart}`;
+                            })(),
                             kpis: [
                               { label: 'Eje X (Horizontal)', value: `${formatScatterMetricValue(playerMeanX, playerMetricX)}${playerMetricX.unit}`, sublabel: playerMetricX.shortLabel },
                               { label: 'Eje Y (Vertical)', value: `${formatScatterMetricValue(playerMeanY, playerMetricY)}${playerMetricY.unit}`, sublabel: playerMetricY.shortLabel },
-                              { label: 'Jugadores', value: String(filteredPlayers.length) },
+                              { label: 'Correlación (r)', value: playerLivePearson.r >= 0 ? `+${playerLivePearson.r.toFixed(2)}` : playerLivePearson.r.toFixed(2), sublabel: `${playerLivePearson.info.strengthLabel} (n=${playerLivePearson.n})`, tone: 'sky' },
                               { label: 'Mínimo PJ', value: String(minGames) },
                             ],
                             fallbackTable: {

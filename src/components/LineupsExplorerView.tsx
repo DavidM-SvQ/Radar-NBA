@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import type {
+  InjuriesRotationPayload,
+  InjuryPlayerReportItem,
   NbaClutchEntry,
   NbaDefenseHustleEntry,
   NbaFourFactorsEntry,
@@ -29,10 +31,17 @@ import {
   type TableSnapshotCell,
 } from '../utils/exportImageCard';
 
+import {
+  buildInjuriesLookupIndex,
+  normalizeInjuryLookupName,
+} from '../utils/injuriesClient';
+import { InjuryStatusBadge } from './InjuryStatusBadge';
+
 interface LineupsExplorerViewProps {
   teams: TeamSummary[];
   seasonToken: string;
   onInspectEntity: (entityType: 'player' | 'team', entityId: string) => void;
+  injuriesData?: InjuriesRotationPayload | null;
 }
 
 type LineupTableView =
@@ -457,7 +466,13 @@ export function LineupsExplorerView({
   teams,
   seasonToken,
   onInspectEntity,
+  injuriesData = null,
 }: LineupsExplorerViewProps) {
+  const injuriesIndex = useMemo(
+    () => buildInjuriesLookupIndex(injuriesData),
+    [injuriesData]
+  );
+  const [onlyAvailableLineups, setOnlyAvailableLineups] = useState<boolean>(false);
   const [groupQuantity, setGroupQuantity] = useState<2 | 3 | 5>(5);
   const [viewMode, setViewMode] = useState<LineupTableView>('advanced');
   const [statMode, setStatMode] = useState<StatScaleMode>(loadLineupStatMode);
@@ -475,6 +490,45 @@ export function LineupsExplorerView({
 
   const [sortKey, setSortKey] = useState<string>('netRtg');
   const [sortAsc, setSortAsc] = useState<boolean>(false);
+
+  const findLineupMemberInjury = useMemo(() => {
+    return (
+      part: { id?: string | null; name: string },
+      teamAbbr: string
+    ): InjuryPlayerReportItem | null => {
+      if (part.id) {
+        const byId = injuriesIndex.byPlayerId.get(part.id);
+        if (byId) return byId;
+      }
+      const normPart = normalizeInjuryLookupName(part.name);
+      if (!normPart) return null;
+      const byExact = injuriesIndex.byNormName.get(normPart);
+      if (byExact && byExact.teamAbbr.toUpperCase() === teamAbbr.toUpperCase()) {
+        return byExact;
+      }
+
+      const teamInj = injuriesIndex.byTeamAbbr.get(teamAbbr.toUpperCase());
+      if (!teamInj) return null;
+      // Match NBA.com abbreviated format "J. Tatum" -> initial "j" + last name "tatum"
+      const tokens = normPart.split(' ').filter(Boolean);
+      if (tokens.length >= 2) {
+        const initial = tokens[0][0];
+        const surname = tokens.slice(1).join(' ');
+        for (const inj of teamInj.injuries) {
+          const injNorm = normalizeInjuryLookupName(inj.name);
+          const injTokens = injNorm.split(' ').filter(Boolean);
+          if (injTokens.length >= 2) {
+            const injInitial = injTokens[0][0];
+            const injSurname = injTokens.slice(1).join(' ');
+            if (injSurname === surname && injInitial === initial) {
+              return inj;
+            }
+          }
+        }
+      }
+      return null;
+    };
+  }, [injuriesIndex]);
 
   useEffect(() => {
     try {
@@ -761,6 +815,19 @@ export function LineupsExplorerView({
     return enrichedLineups
       .filter((item) => {
         if (!matchesLineupUnifiedFilters(item, unifiedFilters)) return false;
+        if (onlyAvailableLineups) {
+          const parts = parseLineupPlayers(item.groupId, item.groupName);
+          const hasOutMember = parts.some((p) => {
+            const inj = findLineupMemberInjury(p, item.teamAbbr);
+            return Boolean(
+              inj &&
+                (inj.statusCode === 'out' ||
+                  inj.statusCode === 'ir' ||
+                  inj.statusCode === 'suspended')
+            );
+          });
+          if (hasOutMember) return false;
+        }
         if (q) {
           const hay = normalizeSearchText(`${item.groupName} ${item.teamAbbr}`);
           if (!hay.includes(q)) return false;
@@ -790,7 +857,7 @@ export function LineupsExplorerView({
         const vb = Number((b as any)[sortKey] ?? 0);
         return sortAsc ? va - vb : vb - va;
       });
-  }, [enrichedLineups, unifiedFilters, query, sortKey, sortAsc, activeSortColDef]);
+  }, [enrichedLineups, unifiedFilters, query, sortKey, sortAsc, activeSortColDef, onlyAvailableLineups, findLineupMemberInjury]);
 
   const cohortColStats = useMemo(() => {
     const source = filtered.length > 0 ? filtered : enrichedLineups;
@@ -1077,6 +1144,19 @@ export function LineupsExplorerView({
             <span className="text-[11px] font-mono text-slate-400">
               {filtered.length} de {enrichedLineups.length} combinaciones visibles
             </span>
+            {injuriesData && injuriesData.entries.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setOnlyAvailableLineups((prev) => !prev)}
+                className={`min-h-[34px] px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors whitespace-nowrap ${
+                  onlyAvailableLineups
+                    ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-200 font-semibold'
+                    : 'bg-[#0B1120] border-[#1E293B] text-slate-300 hover:text-white hover:border-slate-600'
+                }`}
+              >
+                Solo disponibles (sin Out/IR)
+              </button>
+            )}
             <div
               className="inline-flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs"
               role="group"
@@ -1189,23 +1269,27 @@ export function LineupsExplorerView({
                             <TeamLogo abbr={l.teamAbbr} teamId={matchTeam?.id} logoUrl={matchTeam?.logoUrl} size="sm" framed />
                           </button>
                           <div className="min-w-0">
-                            <div className="text-xs font-medium text-slate-100 leading-snug flex flex-wrap gap-x-1">
-                              {playerParts.map((part, pIdx) => (
-                                <span key={`${part.name}-${pIdx}`} className="inline-flex items-center">
-                                  {part.id ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => onInspectEntity('player', part.id!)}
-                                      className="hover:text-orange-400 hover:underline text-left"
-                                    >
-                                      {part.name}
-                                    </button>
-                                  ) : (
-                                    <span>{part.name}</span>
-                                  )}
-                                  {pIdx < playerParts.length - 1 && <span className="text-slate-600 ml-1">·</span>}
-                                </span>
-                              ))}
+                            <div className="text-xs font-medium text-slate-100 leading-snug flex flex-wrap gap-x-1 gap-y-0.5">
+                              {playerParts.map((part, pIdx) => {
+                                const partInj = findLineupMemberInjury(part, l.teamAbbr);
+                                return (
+                                  <span key={`${part.name}-${pIdx}`} className="inline-flex items-center gap-1">
+                                    {part.id ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => onInspectEntity('player', part.id!)}
+                                        className="hover:text-orange-400 hover:underline text-left"
+                                      >
+                                        {part.name}
+                                      </button>
+                                    ) : (
+                                      <span>{part.name}</span>
+                                    )}
+                                    {partInj && <InjuryStatusBadge injury={partInj} compact />}
+                                    {pIdx < playerParts.length - 1 && <span className="text-slate-600">·</span>}
+                                  </span>
+                                );
+                              })}
                             </div>
                             <div className="text-[11px] text-slate-400 mt-0.5 font-mono">
                               {l.teamAbbr} · {l.gp} PJ · {l.minPg.toFixed(1)} min/p
@@ -1315,25 +1399,29 @@ export function LineupsExplorerView({
                         </td>
                         <td className="py-2.5 px-3 font-sans font-medium text-slate-100 min-w-[240px]">
                           <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
-                            {playerParts.map((part, pIdx) => (
-                              <span key={`${part.name}-${pIdx}`} className="inline-flex items-center">
-                                {part.id ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => onInspectEntity('player', part.id!)}
-                                    className="hover:text-orange-400 hover:underline transition-colors text-left"
-                                    title={`Abrir ficha de ${part.name}`}
-                                  >
-                                    {part.name}
-                                  </button>
-                                ) : (
-                                  <span>{part.name}</span>
-                                )}
-                                {pIdx < playerParts.length - 1 && (
-                                  <span className="text-slate-600 ml-1">·</span>
-                                )}
-                              </span>
-                            ))}
+                            {playerParts.map((part, pIdx) => {
+                              const partInj = findLineupMemberInjury(part, l.teamAbbr);
+                              return (
+                                <span key={`${part.name}-${pIdx}`} className="inline-flex items-center gap-1">
+                                  {part.id ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => onInspectEntity('player', part.id!)}
+                                      className="hover:text-orange-400 hover:underline transition-colors text-left"
+                                      title={`Abrir ficha de ${part.name}`}
+                                    >
+                                      {part.name}
+                                    </button>
+                                  ) : (
+                                    <span>{part.name}</span>
+                                  )}
+                                  {partInj && <InjuryStatusBadge injury={partInj} compact />}
+                                  {pIdx < playerParts.length - 1 && (
+                                    <span className="text-slate-600">·</span>
+                                  )}
+                                </span>
+                              );
+                            })}
                           </div>
                         </td>
                         {activeLayerColumns.map((col, cIdx) => {

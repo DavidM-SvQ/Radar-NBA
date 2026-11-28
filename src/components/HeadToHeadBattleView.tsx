@@ -3,6 +3,8 @@ import {
   ArrowLeftRight,
   Check,
   ChevronDown,
+  History,
+  Loader2,
   Plus,
   Search,
   Shuffle,
@@ -13,7 +15,9 @@ import {
   Users,
 } from 'lucide-react';
 import type {
+  CareerScope,
   ExperienceMode,
+  PlayerCareerProfile,
   PlayerGameLog,
   PlayerSummary,
   SearchPlayerResult,
@@ -36,9 +40,14 @@ import {
   sortRows,
   useTableSort,
 } from '../utils/tableSort';
-import { MiniSparkline, PlayerAvatar } from './NbaVisuals';
+import { MiniSparkline, PlayerAvatar, getTeamBrandColors } from './NbaVisuals';
+import { useThemeStyle } from '../context/ThemeStyleContext';
+import { useExperienceMetrics } from '../context/ExperienceMetricsContext';
 import { ExportImageButton } from './ExportImageButton';
-import { buildComparisonSnapshotBlob } from '../utils/exportImageCard';
+import {
+  buildComparisonSnapshotBlob,
+  buildSvgChartSnapshotBlob,
+} from '../utils/exportImageCard';
 
 interface HeadToHeadBattleViewProps {
   players: PlayerSummary[];
@@ -62,8 +71,10 @@ interface HeadToHeadBattleViewProps {
   onLoadAllPlayers: () => void;
 }
 
-type BattleSampleScope = 'season' | 'recent' | 'home' | 'away';
+type BattleSampleScope = 'season' | 'recent' | 'home' | 'away' | 'career' | 'peak';
 type CategoryFilterTab = 'all' | 'basic' | 'advanced';
+
+const h2hCareerCache = new Map<string, PlayerCareerProfile>();
 
 interface ComputedPlayerBattleStats {
   gamesCount: number;
@@ -209,35 +220,87 @@ function sliceGamesForBattle(
   return games;
 }
 
-function computeBattleStats(
-  player: PlayerSummary | undefined,
-  scope: BattleSampleScope,
-  windowSize: WindowSize
+function emptyBattleStats(): ComputedPlayerBattleStats {
+  return {
+    gamesCount: 0,
+    min: 0,
+    pts: 0,
+    reb: 0,
+    oreb: 0,
+    dreb: 0,
+    ast: 0,
+    stl: 0,
+    blk: 0,
+    stocks: 0,
+    fg3m: 0,
+    fgPct: 0,
+    fg3Pct: 0,
+    ftPct: 0,
+    tov: 0,
+    pra: 0,
+    plusMinus: 0,
+    tsPct: 0,
+    efgPct: 0,
+    usgPct: 0,
+    astTo: 0,
+    gmSc: 0,
+    pie: null,
+    defRtg: null,
+    ptsPaint: null,
+    deflections: null,
+    contestedShots: null,
+    hustleActions: null,
+  };
+}
+
+function computeBattleStatsFromCareer(
+  profile: PlayerCareerProfile | null,
+  mode: 'career' | 'peak',
+  careerScope: CareerScope
 ): ComputedPlayerBattleStats {
-  if (!player) {
+  if (!profile) return emptyBattleStats();
+  const bucket = careerScope === 'playoffs' ? profile.playoffs : profile.regular;
+  if (!bucket || bucket.totals.gp <= 0) return emptyBattleStats();
+
+  if (mode === 'peak') {
+    const peak = bucket.peakSeason;
+    if (!peak || peak.gp <= 0) return emptyBattleStats();
+    const gp = Math.max(1, peak.gp);
+    const fgaPg = peak.fga / gp;
+    const ftaPg = peak.fta / gp;
+    const estUsg = round1(
+      clampNum(
+        9.5 + ((fgaPg + 0.44 * ftaPg + peak.tovPg) / Math.max(12, peak.minPg)) * 34.5,
+        10,
+        42
+      )
+    );
+    const astTo = peak.tov > 0 ? round1((peak.ast / peak.tov) * 10) / 10 : peak.astPg;
+    const orebPg = round1(peak.oreb / gp);
+    const drebPg = round1(peak.dreb / gp);
     return {
-      gamesCount: 0,
-      min: 0,
-      pts: 0,
-      reb: 0,
-      oreb: 0,
-      dreb: 0,
-      ast: 0,
-      stl: 0,
-      blk: 0,
-      stocks: 0,
-      fg3m: 0,
-      fgPct: 0,
-      fg3Pct: 0,
-      ftPct: 0,
-      tov: 0,
-      pra: 0,
+      gamesCount: peak.gp,
+      min: round1(peak.minPg),
+      pts: round1(peak.ptsPg),
+      reb: round1(peak.rebPg),
+      oreb: orebPg,
+      dreb: drebPg,
+      ast: round1(peak.astPg),
+      stl: round1(peak.stlPg),
+      blk: round1(peak.blkPg),
+      stocks: round1(peak.stlPg + peak.blkPg),
+      fg3m: round1(peak.fg3m / gp),
+      fgPct: round1(peak.fgPct),
+      fg3Pct: round1(peak.fg3Pct),
+      ftPct: round1(peak.ftPct),
+      tov: round1(peak.tovPg),
+      pra: round1(peak.ptsPg + peak.rebPg + peak.astPg),
       plusMinus: 0,
-      tsPct: 0,
-      efgPct: 0,
-      usgPct: 0,
-      astTo: 0,
-      gmSc: 0,
+      tsPct: round1(peak.tsPct),
+      efgPct: round1(peak.efgPct),
+      usgPct: estUsg,
+      astTo: Number(astTo.toFixed(2)),
+      gmSc: round1(peak.gmScPg),
       pie: null,
       defRtg: null,
       ptsPaint: null,
@@ -245,6 +308,59 @@ function computeBattleStats(
       contestedShots: null,
       hustleActions: null,
     };
+  }
+
+  const avg = bucket.averages;
+  const tot = bucket.totals;
+  const gp = Math.max(1, tot.gp);
+  const fgaPg = tot.fga / gp;
+  const ftaPg = tot.fta / gp;
+  const estUsg = round1(
+    clampNum(
+      9.5 + ((fgaPg + 0.44 * ftaPg + avg.tovPg) / Math.max(12, avg.minPg)) * 34.5,
+      10,
+      42
+    )
+  );
+  return {
+    gamesCount: tot.gp,
+    min: round1(avg.minPg),
+    pts: round1(avg.ptsPg),
+    reb: round1(avg.rebPg),
+    oreb: round1(tot.oreb / gp),
+    dreb: round1(tot.dreb / gp),
+    ast: round1(avg.astPg),
+    stl: round1(avg.stlPg),
+    blk: round1(avg.blkPg),
+    stocks: round1(avg.stlPg + avg.blkPg),
+    fg3m: round1(tot.fg3m / gp),
+    fgPct: round1(avg.fgPct),
+    fg3Pct: round1(avg.fg3Pct),
+    ftPct: round1(avg.ftPct),
+    tov: round1(avg.tovPg),
+    pra: round1(avg.ptsPg + avg.rebPg + avg.astPg),
+    plusMinus: 0,
+    tsPct: round1(avg.tsPct),
+    efgPct: round1(avg.efgPct),
+    usgPct: estUsg,
+    astTo: Number((tot.tov > 0 ? tot.ast / tot.tov : avg.astPg).toFixed(2)),
+    gmSc: round1(avg.gmScPg),
+    pie: null,
+    defRtg: null,
+    ptsPaint: null,
+    deflections: null,
+    contestedShots: null,
+    hustleActions: null,
+  };
+}
+
+function computeBattleStats(
+  player: PlayerSummary | undefined,
+  scope: BattleSampleScope,
+  windowSize: WindowSize
+): ComputedPlayerBattleStats {
+  if (!player) {
+    return emptyBattleStats();
   }
 
   const slice = sliceGamesForBattle(player.games, scope, windowSize);
@@ -672,6 +788,8 @@ export function HeadToHeadBattleView({
   totalLeaguePlayersAvailable,
   onLoadAllPlayers,
 }: HeadToHeadBattleViewProps) {
+  const { isV2, isV3 } = useThemeStyle();
+  const { isMetricAllowed } = useExperienceMetrics();
   const defaultPair = useMemo(() => {
     const findStar = (ids: string[], fallbackIdx: number) => {
       for (const id of ids) {
@@ -703,6 +821,10 @@ export function HeadToHeadBattleView({
   });
 
   const [scope, setScope] = useState<BattleSampleScope>('season');
+  const [careerScope, setCareerScope] = useState<CareerScope>('regular');
+  const [careerA, setCareerA] = useState<PlayerCareerProfile | null>(null);
+  const [careerB, setCareerB] = useState<PlayerCareerProfile | null>(null);
+  const [loadingCareer, setLoadingCareer] = useState(false);
   const [showNbaRing, setShowNbaRing] = useState(true);
   const [selectedAxisIndex, setSelectedAxisIndex] = useState<number | null>(null);
   const [categoryTab, setCategoryTab] = useState<CategoryFilterTab>(
@@ -752,6 +874,9 @@ export function HeadToHeadBattleView({
       onPairChange(playerA.id, playerB.id);
     }
   }, [playerA?.id, playerB?.id, onPairChange]);
+
+  const brandA = getTeamBrandColors(playerA?.teamAbbr);
+  const brandB = getTeamBrandColors(playerB?.teamAbbr);
 
   // Curated 1-click marquee duels built dynamically from loaded NBA roster
   const quickMatchups = useMemo(() => {
@@ -827,13 +952,68 @@ export function HeadToHeadBattleView({
     setPlayerBId(pool[idxB].id);
   };
 
+  const isHistoricalBattle = scope === 'career' || scope === 'peak';
+
+  useEffect(() => {
+    if (!isHistoricalBattle) return;
+    const idA = playerA?.id;
+    const idB = playerB?.id;
+    if (!idA || !idB) return;
+
+    const cachedA = h2hCareerCache.get(idA) ?? null;
+    const cachedB = h2hCareerCache.get(idB) ?? null;
+    if (cachedA) setCareerA(cachedA);
+    if (cachedB) setCareerB(cachedB);
+    if (cachedA && cachedB) {
+      setLoadingCareer(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingCareer(true);
+
+    const fetchOne = async (id: string): Promise<PlayerCareerProfile | null> => {
+      const hit = h2hCareerCache.get(id);
+      if (hit) return hit;
+      try {
+        const res = await fetch(`/api/nba/history/player/${encodeURIComponent(id)}`);
+        if (!res.ok) return null;
+        const json = (await res.json()) as PlayerCareerProfile;
+        h2hCareerCache.set(id, json);
+        return json;
+      } catch {
+        return null;
+      }
+    };
+
+    Promise.all([fetchOne(idA), fetchOne(idB)])
+      .then(([resA, resB]) => {
+        if (cancelled) return;
+        setCareerA(resA);
+        setCareerB(resB);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingCareer(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isHistoricalBattle, playerA?.id, playerB?.id]);
+
   const statsA = useMemo(
-    () => computeBattleStats(playerA, scope, windowSize),
-    [playerA, scope, windowSize]
+    () =>
+      scope === 'career' || scope === 'peak'
+        ? computeBattleStatsFromCareer(careerA, scope, careerScope)
+        : computeBattleStats(playerA, scope, windowSize),
+    [playerA, scope, windowSize, careerA, careerScope]
   );
   const statsB = useMemo(
-    () => computeBattleStats(playerB, scope, windowSize),
-    [playerB, scope, windowSize]
+    () =>
+      scope === 'career' || scope === 'peak'
+        ? computeBattleStatsFromCareer(careerB, scope, careerScope)
+        : computeBattleStats(playerB, scope, windowSize),
+    [playerB, scope, windowSize, careerB, careerScope]
   );
 
   // 6 Radar Axes Calculation (Normalized 25..99 where 50 = Empirical NBA Rotation Mean, SD = 1)
@@ -940,8 +1120,14 @@ export function HeadToHeadBattleView({
         helpKey: 'duelAxisEfficiency',
         scoreA: calcEfficiency(statsA),
         scoreB: calcEfficiency(statsB),
-        rawTextA: `${statsA.tsPct.toFixed(1)}% TS · ${statsA.usgPct.toFixed(0)}% USG`,
-        rawTextB: `${statsB.tsPct.toFixed(1)}% TS · ${statsB.usgPct.toFixed(0)}% USG`,
+        rawTextA:
+          isMetricAllowed('tsPct') && isMetricAllowed('usgEst')
+            ? `${statsA.tsPct.toFixed(1)}% TS · ${statsA.usgPct.toFixed(0)}% USG`
+            : `${statsA.fgPct.toFixed(1)}% TC`,
+        rawTextB:
+          isMetricAllowed('tsPct') && isMetricAllowed('usgEst')
+            ? `${statsB.tsPct.toFixed(1)}% TS · ${statsB.usgPct.toFixed(0)}% USG`
+            : `${statsB.fgPct.toFixed(1)}% TC`,
       },
       {
         key: 'playmaking',
@@ -960,8 +1146,12 @@ export function HeadToHeadBattleView({
         helpKey: 'duelAxisImpact',
         scoreA: calcImpact(statsA),
         scoreB: calcImpact(statsB),
-        rawTextA: `${statsA.gmSc.toFixed(1)} GmSc`,
-        rawTextB: `${statsB.gmSc.toFixed(1)} GmSc`,
+        rawTextA: isMetricAllowed('gameScore')
+          ? `${statsA.gmSc.toFixed(1)} GmSc`
+          : `${statsA.plusMinus >= 0 ? '+' : ''}${statsA.plusMinus.toFixed(1)} +/-`,
+        rawTextB: isMetricAllowed('gameScore')
+          ? `${statsB.gmSc.toFixed(1)} GmSc`
+          : `${statsB.plusMinus >= 0 ? '+' : ''}${statsB.plusMinus.toFixed(1)} +/-`,
       },
       {
         key: 'defense',
@@ -971,13 +1161,17 @@ export function HeadToHeadBattleView({
         scoreA: calcDefense(statsA),
         scoreB: calcDefense(statsB),
         rawTextA:
-          statsA.defRtg !== null
+          isMetricAllowed('defRtg') && isMetricAllowed('stocks') && statsA.defRtg !== null
             ? `${statsA.stocks.toFixed(1)} STK · ${statsA.defRtg.toFixed(1)} DefRtg`
-            : `${statsA.stocks.toFixed(1)} STK`,
+            : isMetricAllowed('stocks')
+            ? `${statsA.stocks.toFixed(1)} STK`
+            : `${statsA.stl.toFixed(1)} ROB · ${statsA.blk.toFixed(1)} TAP`,
         rawTextB:
-          statsB.defRtg !== null
+          isMetricAllowed('defRtg') && isMetricAllowed('stocks') && statsB.defRtg !== null
             ? `${statsB.stocks.toFixed(1)} STK · ${statsB.defRtg.toFixed(1)} DefRtg`
-            : `${statsB.stocks.toFixed(1)} STK`,
+            : isMetricAllowed('stocks')
+            ? `${statsB.stocks.toFixed(1)} STK`
+            : `${statsB.stl.toFixed(1)} ROB · ${statsB.blk.toFixed(1)} TAP`,
       },
       {
         key: 'rebounding',
@@ -1301,6 +1495,43 @@ export function HeadToHeadBattleView({
       );
     }
 
+    if (scope === 'career' && careerA && careerB) {
+      const bA = careerScope === 'playoffs' ? careerA.playoffs : careerA.regular;
+      const bB = careerScope === 'playoffs' ? careerB.playoffs : careerB.regular;
+      if (bA && bB && (bA.totals.pts > 0 || bB.totals.pts > 0)) {
+        rows.push(
+          buildRow({
+            id: 'careerTotalPts',
+            label: `Puntos Acumulados (${careerScope === 'playoffs' ? 'Playoffs' : 'Carrera NBA'})`,
+            simpleLabel: `Puntos totales en ${careerScope === 'playoffs' ? 'Playoffs' : 'su carrera'}`,
+            shortUnit: 'PTS Tot',
+            helpKey: 'ptsBase',
+            group: 'basic',
+            valA: bA.totals.pts,
+            valB: bB.totals.pts,
+            decimals: 0,
+            tieEpsilon: 25,
+          })
+        );
+      }
+      if (bA?.careerHighs.pts && bB?.careerHighs.pts) {
+        rows.push(
+          buildRow({
+            id: 'careerHighPts',
+            label: `Máximo de Carrera en 1 Partido (Career High PTS)`,
+            simpleLabel: 'Tope histórico de puntos en un partido',
+            shortUnit: 'CH PTS',
+            helpKey: 'ptsBase',
+            group: 'basic',
+            valA: bA.careerHighs.pts.value,
+            valB: bB.careerHighs.pts.value,
+            decimals: 0,
+            tieEpsilon: 0,
+          })
+        );
+      }
+    }
+
     if (statsA.hustleActions !== null && statsB.hustleActions !== null) {
       rows.push(
         buildRow({
@@ -1318,8 +1549,8 @@ export function HeadToHeadBattleView({
       );
     }
 
-    return rows;
-  }, [statsA, statsB]);
+    return rows.filter((row) => isMetricAllowed(row.id));
+  }, [statsA, statsB, scope, careerA, careerB, careerScope, isMetricAllowed]);
 
   const {
     sortKey: duelSortKey,
@@ -1498,7 +1729,11 @@ export function HeadToHeadBattleView({
       ? `Últimos ${windowSize} PJ`
       : scope === 'home'
       ? 'Partidos en Casa'
-      : 'Partidos Fuera';
+      : scope === 'away'
+      ? 'Partidos Fuera'
+      : scope === 'career'
+      ? `Carrera NBA (${careerScope === 'playoffs' ? 'Playoffs' : 'Temporada Regular'})`
+      : `Mejor Temporada / Peak (${careerScope === 'playoffs' ? 'Playoffs' : 'Temporada Regular'})`;
 
   const sparkPtsA = useMemo(
     () =>
@@ -1643,6 +1878,8 @@ export function HeadToHeadBattleView({
                     { id: 'recent', label: `Últimos ${windowSize} PJ` },
                     { id: 'home', label: 'En Casa' },
                     { id: 'away', label: 'Visitante' },
+                    { id: 'career', label: 'Carrera' },
+                    { id: 'peak', label: 'Peak (Mejor Año)' },
                   ] as const
                 ).map((opt) => (
                   <button
@@ -1682,6 +1919,31 @@ export function HeadToHeadBattleView({
                 ))}
               </div>
             )}
+
+            {/* Conditional Regular / Playoffs Sub-Selector (shown when 'career' or 'peak' is active) */}
+            {isHistoricalBattle && (
+              <div className="flex items-center gap-1 p-1 bg-[#0B1120] border border-orange-500/35 rounded-lg shrink-0">
+                {(
+                  [
+                    { id: 'regular', label: 'Temporada Regular' },
+                    { id: 'playoffs', label: 'Playoffs' },
+                  ] as const
+                ).map((cs) => (
+                  <button
+                    key={cs.id}
+                    type="button"
+                    onClick={() => setCareerScope(cs.id)}
+                    className={`min-h-[28px] px-2.5 py-0.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                      careerScope === cs.id
+                        ? 'bg-orange-500/20 text-orange-300 font-semibold'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {cs.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2 overflow-x-auto no-scrollbar max-w-full">
@@ -1713,6 +1975,16 @@ export function HeadToHeadBattleView({
                   categoryTag: 'Duelo Directo 1v1 · Cara a Cara',
                   title: `${playerA?.name || shortA} vs ${playerB?.name || shortB}`,
                   subtitle: `Muestra: ${scopeLabel} · Valoración Radar: ${ovrA} vs ${ovrB} · Categorías: ${scoreboard.winsA}-${scoreboard.winsB}`,
+                  editorialVerdictLabel: 'VEREDICTO EDITORIAL · DUELO 1V1',
+                  editorialVerdictTone:
+                    scoreboard.winsA > scoreboard.winsB
+                      ? 'accent'
+                      : scoreboard.winsB > scoreboard.winsA
+                      ? 'sky'
+                      : 'neutral',
+                  editorialVerdict: [verdictNotes[0], verdictNotes[1]]
+                    .filter(Boolean)
+                    .join(' '),
                   verdictLabel: 'Marcador Global del Duelo:',
                   verdictPrimary:
                     scoreboard.winsA > scoreboard.winsB
@@ -1825,6 +2097,80 @@ export function HeadToHeadBattleView({
           </div>
         </div>
 
+        {/* Historical Career / Peak Context Bar */}
+        {isHistoricalBattle && (
+          <div className="px-3.5 py-2.5 bg-[#0B1120] border border-[#1E293B] rounded-lg">
+            {loadingCareer ? (
+              <div className="flex items-center gap-2 text-xs text-slate-300">
+                <Loader2 className="w-3.5 h-3.5 text-orange-400 animate-spin" />
+                <span>Cargando trayectorias históricas y Career Highs desde el archivo NBA...</span>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-xs">
+                {[
+                  {
+                    side: 'A' as const,
+                    player: playerA,
+                    profile: careerA,
+                    accentClass: 'text-orange-400',
+                    borderClass: 'border-l-orange-500',
+                  },
+                  {
+                    side: 'B' as const,
+                    player: playerB,
+                    profile: careerB,
+                    accentClass: 'text-sky-400',
+                    borderClass: 'border-l-sky-400',
+                  },
+                ].map(({ side, player, profile, accentClass, borderClass }) => {
+                  const bucket = profile
+                    ? careerScope === 'playoffs'
+                      ? profile.playoffs
+                      : profile.regular
+                    : null;
+                  const peak = bucket?.peakSeason;
+                  const chPts = bucket?.careerHighs.pts;
+                  return (
+                    <div
+                      key={side}
+                      className={`pl-3 border-l-2 ${borderClass} flex flex-col gap-0.5 min-w-0`}
+                    >
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <History className={`w-3.5 h-3.5 shrink-0 ${accentClass}`} />
+                        <span className="font-semibold text-white truncate">
+                          {player?.name}
+                        </span>
+                        {profile && bucket && bucket.totals.gp > 0 ? (
+                          <span className="text-[11px] font-mono tabular-nums text-slate-400">
+                            · {bucket.totals.seasonsCount}{' '}
+                            {bucket.totals.seasonsCount === 1 ? 'temp.' : 'temps.'} (
+                            {bucket.seasons[0]?.season}–{bucket.seasons[bucket.seasons.length - 1]?.season})
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-amber-300">
+                            · Sin partidos en {careerScope === 'playoffs' ? 'Playoffs' : 'archivo histórico'}
+                          </span>
+                        )}
+                      </div>
+                      {bucket && bucket.totals.gp > 0 && (
+                        <p className="text-[11px] text-slate-400 font-mono tabular-nums truncate">
+                          {scope === 'peak' && peak
+                            ? `Peak: ${peak.season} (${peak.teamAbbr}) · ${peak.gp} PJ · ${peak.ptsPg.toFixed(1)} PTS · ${peak.tsPct.toFixed(1)}% TS · GmSc ${peak.gmScPg.toFixed(1)}`
+                            : `${bucket.totals.gp.toLocaleString('es-ES')} PJ · ${bucket.totals.pts.toLocaleString('es-ES')} PTS totales${
+                                chPts
+                                  ? ` · Career High: ${chPts.value} PTS vs ${chPts.opponentAbbr} (${chPts.season})`
+                                  : ''
+                              }`}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Contextual Small-Sample Banner when 'Solo 2026-27' has very few games played */}
         {seasonMode === '2027' &&
           scope === 'season' &&
@@ -1916,17 +2262,94 @@ export function HeadToHeadBattleView({
             <MetricInfoTooltip helpKey="duelRadarRating" align="left" />
           </div>
 
-          <button
-            type="button"
-            onClick={() => setShowNbaRing((prev) => !prev)}
-            className={`min-h-[36px] px-2.5 py-1 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
-              showNbaRing
-                ? 'bg-[#182338] border-[#283548] text-slate-200'
-                : 'bg-[#131C2E] border-[#1E293B] text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            {showNbaRing ? 'Ocultar anillo Media NBA (50)' : 'Mostrar anillo Media NBA (50)'}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowNbaRing((prev) => !prev)}
+              className={`min-h-[34px] px-2.5 py-1 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                showNbaRing
+                  ? 'bg-[#182338] border-[#283548] text-slate-200'
+                  : 'bg-[#131C2E] border-[#1E293B] text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {showNbaRing ? 'Ocultar anillo Media NBA (50)' : 'Mostrar anillo Media NBA (50)'}
+            </button>
+
+            <ExportImageButton
+              label="Exportar Radar 1v1"
+              disabled={!playerA || !playerB}
+              title="Exportar gráfico Radar Superpuesto 1v1 con veredicto editorial en PNG"
+              onBuildImage={() =>
+                buildSvgChartSnapshotBlob({
+                  containerId: 'duel-radar-1v1-container',
+                  filename: `radarnba-radar-1v1-${shortA}-vs-${shortB}`,
+                  categoryTag: 'RADAR SUPERPUESTO 6 EJES · DUELO 1V1',
+                  title: `Radar 1v1: ${playerA?.name || shortA} vs ${playerB?.name || shortB}`,
+                  subtitle: `Muestra: ${scopeLabel} · Valoración Radar: ${shortA} ${ovrA}/99 (${tierA.label}) vs ${shortB} ${ovrB}/99 (${tierB.label})`,
+                  editorialVerdictLabel: 'VEREDICTO RADAR 1V1 · SCOUTING NBA',
+                  editorialVerdictTone:
+                    ovrA > ovrB ? 'accent' : ovrB > ovrA ? 'sky' : 'neutral',
+                  editorialVerdict: [verdictNotes[0], verdictNotes[1]]
+                    .filter(Boolean)
+                    .join(' '),
+                  kpis: [
+                    {
+                      label: `${playerA?.name || shortA} (${playerA?.teamAbbr || 'NBA'})`,
+                      value: `OVR ${ovrA}/99`,
+                      sublabel: `${statsA.pts.toFixed(1)} PTS · ${statsA.reb.toFixed(1)} REB · ${statsA.ast.toFixed(1)} AST`,
+                      tone: 'accent',
+                    },
+                    {
+                      label: `${playerB?.name || shortB} (${playerB?.teamAbbr || 'NBA'})`,
+                      value: `OVR ${ovrB}/99`,
+                      sublabel: `${statsB.pts.toFixed(1)} PTS · ${statsB.reb.toFixed(1)} REB · ${statsB.ast.toFixed(1)} AST`,
+                      tone: 'sky',
+                    },
+                    {
+                      label: 'Marcador Categorías',
+                      value: `${scoreboard.winsA} - ${scoreboard.winsB}`,
+                      sublabel:
+                        scoreboard.winsA > scoreboard.winsB
+                          ? `Domina ${shortA}`
+                          : scoreboard.winsB > scoreboard.winsA
+                          ? `Domina ${shortB}`
+                          : 'Empate técnico',
+                      tone:
+                        scoreboard.winsA > scoreboard.winsB
+                          ? 'accent'
+                          : scoreboard.winsB > scoreboard.winsA
+                          ? 'sky'
+                          : 'neutral',
+                    },
+                    {
+                      label: 'Muestra Analizada',
+                      value: scopeLabel,
+                      sublabel: `${statsA.gamesCount} PJ vs ${statsB.gamesCount} PJ`,
+                    },
+                  ],
+                  footerBadges: [...radarAxes]
+                    .sort(
+                      (a, b) =>
+                        Math.abs(b.scoreA - b.scoreB) -
+                        Math.abs(a.scoreA - a.scoreB)
+                    )
+                    .slice(0, 4)
+                    .map((ax) => ({
+                      title: ax.label,
+                      text: `${shortA} ${ax.scoreA}/99 (${ax.rawTextA}) vs ${shortB} ${ax.scoreB}/99 (${ax.rawTextB})`,
+                      tone:
+                        ax.scoreA > ax.scoreB
+                          ? 'accent'
+                          : ax.scoreB > ax.scoreA
+                          ? 'sky'
+                          : 'neutral',
+                    })),
+                  footerNote:
+                    'RadarNBA · Comparador Radar 1v1 Superpuesto (6 Ejes NBA)',
+                })
+              }
+            />
+          </div>
         </div>
 
         {/* Single-Elevation Arena Container */}
@@ -1934,7 +2357,22 @@ export function HeadToHeadBattleView({
           {/* Mobile Compact Side-by-Side Fighter Banner (< xl) so smartphone sees both cards + radar immediately */}
           <div className="grid grid-cols-2 divide-x divide-[#1E293B] border-b border-[#1E293B] xl:hidden">
             {/* Mobile Fighter A */}
-            <div className="p-3 space-y-2">
+            <div
+              className="p-3 space-y-2"
+              style={
+                isV3
+                  ? {
+                      borderTop: `2px solid ${brandA.primary}`,
+                      background: `radial-gradient(circle at 18% 0%, ${brandA.primary}28 0%, transparent 72%)`,
+                    }
+                  : isV2
+                  ? {
+                      borderTop: `2px solid ${brandA.primary}`,
+                      background: `radial-gradient(circle at 20% 0%, ${brandA.primary}1a 0%, transparent 72%)`,
+                    }
+                  : undefined
+              }
+            >
               <div className="flex items-start justify-between gap-1.5">
                 <div className="flex items-center gap-2 min-w-0">
                   <PlayerAvatar
@@ -1989,7 +2427,22 @@ export function HeadToHeadBattleView({
             </div>
 
             {/* Mobile Fighter B */}
-            <div className="p-3 space-y-2">
+            <div
+              className="p-3 space-y-2"
+              style={
+                isV3
+                  ? {
+                      borderTop: `2px solid ${brandB.primary}`,
+                      background: `radial-gradient(circle at 82% 0%, ${brandB.primary}28 0%, transparent 72%)`,
+                    }
+                  : isV2
+                  ? {
+                      borderTop: `2px solid ${brandB.primary}`,
+                      background: `radial-gradient(circle at 80% 0%, ${brandB.primary}1a 0%, transparent 72%)`,
+                    }
+                  : undefined
+              }
+            >
               <div className="flex items-start justify-between gap-1.5">
                 <div className="flex items-center gap-2 min-w-0">
                   <PlayerAvatar
@@ -2046,7 +2499,22 @@ export function HeadToHeadBattleView({
 
           <div className="grid grid-cols-1 xl:grid-cols-12 divide-y xl:divide-y-0 xl:divide-x divide-[#1E293B]">
             {/* Desktop Left Column: Player A Battle Card (xl:col-span-3) */}
-            <div className="hidden xl:flex xl:col-span-3 p-5 flex-col justify-between gap-5">
+            <div
+              className="hidden xl:flex xl:col-span-3 p-5 flex-col justify-between gap-5"
+              style={
+                isV3
+                  ? {
+                      borderTop: `3px solid ${brandA.primary}`,
+                      background: `radial-gradient(circle at 24% 8%, ${brandA.primary}26 0%, transparent 65%), radial-gradient(circle at 88% 12%, ${brandA.secondary}14 0%, transparent 55%)`,
+                    }
+                  : isV2
+                  ? {
+                      borderTop: `3px solid ${brandA.primary}`,
+                      background: `radial-gradient(circle at 24% 8%, ${brandA.primary}18 0%, transparent 65%)`,
+                    }
+                  : undefined
+              }
+            >
               <div className="space-y-4">
                 <div className="space-y-3">
                   <div className="flex items-center justify-between gap-3">
@@ -2256,7 +2724,10 @@ export function HeadToHeadBattleView({
               </div>
 
               {/* Responsive SVG Spider/Radar Chart */}
-              <div className="w-full max-w-[440px] mx-auto my-1">
+              <div
+                id="duel-radar-1v1-container"
+                className="w-full max-w-[440px] mx-auto my-1"
+              >
                 <svg
                   viewBox={`0 0 ${svgW} ${svgH}`}
                   className="w-full h-auto select-none overflow-visible"
@@ -2498,7 +2969,22 @@ export function HeadToHeadBattleView({
             </div>
 
             {/* Desktop Right Column: Player B Battle Card (xl:col-span-3) */}
-            <div className="hidden xl:flex xl:col-span-3 p-5 flex-col justify-between gap-5">
+            <div
+              className="hidden xl:flex xl:col-span-3 p-5 flex-col justify-between gap-5"
+              style={
+                isV3
+                  ? {
+                      borderTop: `3px solid ${brandB.primary}`,
+                      background: `radial-gradient(circle at 76% 8%, ${brandB.primary}26 0%, transparent 65%), radial-gradient(circle at 14% 12%, ${brandB.secondary}14 0%, transparent 55%)`,
+                    }
+                  : isV2
+                  ? {
+                      borderTop: `3px solid ${brandB.primary}`,
+                      background: `radial-gradient(circle at 76% 8%, ${brandB.primary}18 0%, transparent 65%)`,
+                    }
+                  : undefined
+              }
+            >
               <div className="space-y-4">
                 <div className="space-y-3">
                   <div className="flex items-center justify-between gap-3">
@@ -2708,12 +3194,16 @@ export function HeadToHeadBattleView({
                     allCategories.filter((c) => c.group === 'basic').length
                   })`,
                 },
-                {
-                  id: 'advanced',
-                  label: `Avanzadas (${
-                    allCategories.filter((c) => c.group === 'advanced').length
-                  })`,
-                },
+                ...(allCategories.some((c) => c.group === 'advanced')
+                  ? [
+                      {
+                        id: 'advanced' as const,
+                        label: `Avanzadas (${
+                          allCategories.filter((c) => c.group === 'advanced').length
+                        })`,
+                      },
+                    ]
+                  : []),
               ] as const
             ).map((tab) => (
               <button

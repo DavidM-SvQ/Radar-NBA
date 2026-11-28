@@ -42,7 +42,52 @@ export interface TableSnapshotRow {
   cells: Record<string, TableSnapshotCell | string>;
 }
 
-export interface TableSnapshotConfig {
+export interface EditorialVerdictOptions {
+  /** Titular o insight editorial de 1 línea incrustado en el pie de la imagen exportada */
+  editorialVerdict?: string;
+  /** Etiqueta de cabecera del bloque editorial (por defecto: 'VEREDICTO EDITORIAL · RADARNBA') */
+  editorialVerdictLabel?: string;
+  /** Tono cromático del acento lateral del pie editorial */
+  editorialVerdictTone?: SnapshotCellTone;
+  /** Si se define, fuerza mostrar u ocultar el pie editorial; por defecto lee la preferencia del usuario */
+  includeEditorialVerdict?: boolean;
+}
+
+export const EDITORIAL_VERDICT_STORAGE_KEY =
+  'radarnba_export_editorial_verdict_v1';
+export const EDITORIAL_VERDICT_TOGGLE_EVENT =
+  'radarnba:editorial-verdict-toggle';
+export const RADARNBA_SIGNATURE_DOMAIN = 'radar-nba.vercel.app';
+
+export function getExportEditorialVerdictEnabled(): boolean {
+  if (typeof window === 'undefined') return true;
+  try {
+    const raw = window.localStorage.getItem(EDITORIAL_VERDICT_STORAGE_KEY);
+    if (raw === null) return true;
+    return raw !== 'false' && raw !== '0';
+  } catch {
+    return true;
+  }
+}
+
+export function setExportEditorialVerdictEnabled(enabled: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      EDITORIAL_VERDICT_STORAGE_KEY,
+      enabled ? 'true' : 'false'
+    );
+    window.dispatchEvent(
+      new CustomEvent(EDITORIAL_VERDICT_TOGGLE_EVENT, {
+        detail: { enabled },
+      })
+    );
+  } catch {
+    // Ignore storage quota or private mode restrictions
+  }
+}
+
+export interface TableSnapshotConfig extends EditorialVerdictOptions {
   filename: string;
   categoryTag?: string;
   title: string;
@@ -85,7 +130,7 @@ export interface ComparisonMetricRow {
   shareA?: number; // 0..100 visual bar proportion for Side A
 }
 
-export interface ComparisonSnapshotConfig {
+export interface ComparisonSnapshotConfig extends EditorialVerdictOptions {
   filename: string;
   categoryTag?: string;
   title: string;
@@ -111,7 +156,7 @@ export interface SvgChartFooterBadge {
   tone?: SnapshotCellTone;
 }
 
-export interface SvgChartSnapshotConfig {
+export interface SvgChartSnapshotConfig extends EditorialVerdictOptions {
   containerId: string;
   filename: string;
   categoryTag?: string;
@@ -316,7 +361,7 @@ function drawCommonHeader(
 
   let y = 28;
 
-  // Brand + Category Tag + Date
+  // Brand + Category Tag + Domain & Date
   ctx.textBaseline = 'alphabetic';
   ctx.textAlign = 'left';
   ctx.font = `700 12px ${FONT_MONO}`;
@@ -333,7 +378,7 @@ function drawCommonHeader(
   ctx.font = `500 12px ${FONT_MONO}`;
   ctx.fillStyle = PALETTE.textMuted;
   ctx.textAlign = 'right';
-  ctx.fillText(dateText, width - padX, y);
+  ctx.fillText(`${RADARNBA_SIGNATURE_DOMAIN}  ·  ${dateText}`, width - padX, y);
 
   // Main Title
   y += 30;
@@ -413,41 +458,257 @@ function drawKpiStrip(
   return y + h + 16;
 }
 
+function cleanOneLineVerdict(raw?: string): string {
+  return String(raw || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function synthesizeEditorialVerdictFromTable(
+  config: TableSnapshotConfig
+): string {
+  const explicit = cleanOneLineVerdict(config.editorialVerdict);
+  if (explicit) return explicit;
+
+  const topRow = config.rows[0];
+  const firstCol = config.columns[0];
+  const secondCol = config.columns[1];
+
+  if (topRow && firstCol) {
+    const rawFirst = topRow.cells[firstCol.key];
+    const firstVal =
+      typeof rawFirst === 'string' ? rawFirst : rawFirst?.text || '';
+    const rawSecond = secondCol ? topRow.cells[secondCol.key] : undefined;
+    const secondVal =
+      typeof rawSecond === 'string' ? rawSecond : rawSecond?.text || '';
+    const teamTag = topRow.teamAbbr ? ` (${topRow.teamAbbr})` : '';
+    const kpiSummary =
+      config.kpis && config.kpis[0]
+        ? ` · ${config.kpis[0].label}: ${config.kpis[0].value}`
+        : '';
+    const secondarySummary =
+      secondCol && secondVal ? ` y ${secondCol.label}: ${secondVal}` : '';
+
+    return `Liderato en ${config.title}: #1 ${topRow.entityName}${teamTag} marca la pauta con ${firstCol.label} ${firstVal}${secondarySummary}${kpiSummary}.`;
+  }
+
+  if (config.kpis && config.kpis.length > 0) {
+    const leadKpis = config.kpis
+      .slice(0, 3)
+      .map((k) => `${k.label}: ${k.value}`)
+      .join(' · ');
+    return `Veredicto ${config.title}: ${leadKpis}.`;
+  }
+
+  return `${config.title} · Radiografía estadística oficial procesada por el motor analítico de RadarNBA.`;
+}
+
+export function synthesizeEditorialVerdictFromSvgChart(
+  config: SvgChartSnapshotConfig
+): string {
+  const explicit = cleanOneLineVerdict(config.editorialVerdict);
+  if (explicit) return explicit;
+
+  if (config.footerBadges && config.footerBadges.length > 0) {
+    const primaryBadge = config.footerBadges[0];
+    const secondaryBadge = config.footerBadges[1];
+    const kpiLead =
+      config.kpis && config.kpis[0]
+        ? ` (${config.kpis[0].label}: ${config.kpis[0].value})`
+        : '';
+    if (secondaryBadge) {
+      return `${primaryBadge.title}: ${primaryBadge.text} · ${secondaryBadge.title}: ${secondaryBadge.text}${kpiLead}.`;
+    }
+    return `${primaryBadge.title}: ${primaryBadge.text}${kpiLead}.`;
+  }
+
+  if (config.kpis && config.kpis.length > 0) {
+    const kpiSummary = config.kpis
+      .slice(0, 3)
+      .map((k) => `${k.label}: ${k.value}${k.sublabel ? ` (${k.sublabel})` : ''}`)
+      .join(' · ');
+    return `Lectura del gráfico (${config.title}): ${kpiSummary}.`;
+  }
+
+  if (config.fallbackTable) {
+    return synthesizeEditorialVerdictFromTable(config.fallbackTable);
+  }
+
+  return `${config.title} · Distribución y posicionamiento estadístico verificados en RadarNBA.`;
+}
+
+export function synthesizeEditorialVerdictFromComparison(
+  config: ComparisonSnapshotConfig
+): string {
+  const explicit = cleanOneLineVerdict(config.editorialVerdict);
+  if (explicit) return explicit;
+
+  const winsA = config.rows.filter((r) => r.winner === 'A').length;
+  const winsB = config.rows.filter((r) => r.winner === 'B').length;
+  const totalCompared = config.rows.length;
+
+  if (config.verdictPrimary) {
+    const secondary = config.verdictSecondary
+      ? ` · ${config.verdictSecondary}`
+      : '';
+    const catBalance =
+      totalCompared > 0
+        ? ` (Balance de apartados: ${config.colALabel} ${winsA}–${winsB} ${config.colBLabel})`
+        : '';
+    return `${config.verdictLabel ? `${config.verdictLabel}: ` : ''}${config.verdictPrimary}${secondary}${catBalance}.`;
+  }
+
+  if (totalCompared > 0) {
+    const leaderName =
+      winsA > winsB
+        ? config.sideA.headlineTitle
+        : winsB > winsA
+        ? config.sideB.headlineTitle
+        : 'Equilibrio técnico';
+    return `${leaderName} domina la comparativa (${config.colALabel} ${winsA}–${winsB} ${config.colBLabel} en ${totalCompared} métricas evaluadas).`;
+  }
+
+  return `${config.sideA.headlineTitle} vs ${config.sideB.headlineTitle} · Comparativa directa verificada en RadarNBA.`;
+}
+
+interface DrawFooterConfig {
+  footerNote?: string;
+  includeEditorialVerdict: boolean;
+  editorialVerdictText?: string;
+  editorialVerdictLabel?: string;
+  editorialVerdictTone?: SnapshotCellTone;
+}
+
+function resolveEditorialFooterHeight(includeEditorialVerdict: boolean): number {
+  return includeEditorialVerdict ? 74 : 44;
+}
+
 function drawCommonFooter(
   ctx: CanvasRenderingContext2D,
   width: number,
   y: number,
   padX: number,
-  footerNote?: string
+  footerConfig: DrawFooterConfig
 ): void {
-  ctx.beginPath();
-  ctx.moveTo(padX, y);
-  ctx.lineTo(width - padX, y);
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = PALETTE.border;
-  ctx.stroke();
+  const innerW = width - padX * 2;
+  const noteText =
+    footerConfig.footerNote ||
+    'RadarNBA · Analítica avanzada, rachas y scouting NBA';
 
-  const textY = y + 22;
-  ctx.textBaseline = 'alphabetic';
-  ctx.textAlign = 'left';
-  ctx.font = `500 11px ${FONT_SANS}`;
-  ctx.fillStyle = PALETTE.textDim;
-  ctx.fillText(
-    footerNote || 'RadarNBA · Analítica avanzada, rachas y scouting NBA',
-    padX,
-    textY
+  if (!footerConfig.includeEditorialVerdict) {
+    ctx.beginPath();
+    ctx.moveTo(padX, y);
+    ctx.lineTo(width - padX, y);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = PALETTE.border;
+    ctx.stroke();
+
+    const textY = y + 22;
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+    ctx.font = `500 11px ${FONT_SANS}`;
+    ctx.fillStyle = PALETTE.textDim;
+    ctx.fillText(truncateCanvasText(ctx, noteText, innerW - 220), padX, textY);
+
+    ctx.textAlign = 'right';
+    ctx.font = `700 11.5px ${FONT_MONO}`;
+    ctx.fillStyle = PALETTE.orangeText;
+    ctx.fillText(RADARNBA_SIGNATURE_DOMAIN, width - padX, textY);
+    return;
+  }
+
+  // Editorial Verdict Card Block (Pie Editorial Integrado)
+  const cardH = 62;
+  const cardY = y + 2;
+  const accentColor = resolveToneColor(
+    footerConfig.editorialVerdictTone || 'accent'
   );
 
-  ctx.textAlign = 'right';
-  ctx.font = `600 11px ${FONT_MONO}`;
+  drawRoundedRect(ctx, padX, cardY, innerW, cardH, 10);
+  ctx.fillStyle = '#0E1729';
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = PALETTE.borderStrong;
+  ctx.stroke();
+
+  // Left vertical editorial accent bar inside rounded card
+  ctx.save();
+  drawRoundedRect(ctx, padX, cardY, innerW, cardH, 10);
+  ctx.clip();
+  ctx.fillStyle = accentColor;
+  ctx.fillRect(padX, cardY, 4, cardH);
+  ctx.restore();
+
+  // Top meta row: VEREDICTO EDITORIAL tag + context note on left, radar-nba.vercel.app pill on right
+  const labelText = (
+    footerConfig.editorialVerdictLabel || 'VEREDICTO EDITORIAL · INSIGHT'
+  ).toUpperCase();
+
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+  ctx.font = `700 10.5px ${FONT_MONO}`;
+  ctx.fillStyle = accentColor;
+  ctx.fillText(labelText, padX + 16, cardY + 21);
+  const labelW = ctx.measureText(labelText).width;
+
+  // Signature pill on top-right
+  const domainLabel = RADARNBA_SIGNATURE_DOMAIN;
+  ctx.font = `700 11px ${FONT_MONO}`;
+  const domainTextW = ctx.measureText(domainLabel).width;
+  const pillW = domainTextW + 20;
+  const pillH = 20;
+  const pillX = width - padX - pillW - 12;
+  const pillY = cardY + 7;
+
+  drawRoundedRect(ctx, pillX, pillY, pillW, pillH, 5);
+  ctx.fillStyle = '#131F36';
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = hexToRgba(PALETTE.orange, 0.45);
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
   ctx.fillStyle = PALETTE.orangeText;
-  ctx.fillText('RadarNBA', width - padX, textY);
+  ctx.fillText(domainLabel, pillX + pillW / 2, pillY + pillH / 2 + 0.5);
+
+  // Context note next to VEREDICTO EDITORIAL tag
+  const maxNoteW = pillX - (padX + 16 + labelW + 18);
+  if (maxNoteW > 80) {
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = `500 10.5px ${FONT_SANS}`;
+    ctx.fillStyle = PALETTE.textDim;
+    ctx.fillText(
+      truncateCanvasText(ctx, `·  ${noteText}`, maxNoteW),
+      padX + 16 + labelW + 8,
+      cardY + 21
+    );
+  }
+
+  // Main 1-Line Editorial Verdict / Headline
+  const verdictLine =
+    cleanOneLineVerdict(footerConfig.editorialVerdictText) ||
+    'Radiografía estadística oficial procesada por el motor analítico de RadarNBA.';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = `600 13.5px ${FONT_SANS}`;
+  ctx.fillStyle = PALETTE.textPrimary;
+  ctx.fillText(
+    truncateCanvasText(ctx, verdictLine, innerW - 32),
+    padX + 16,
+    cardY + 46
+  );
 }
 
 export async function buildTableSnapshotBlob(
   config: TableSnapshotConfig
 ): Promise<{ blob: Blob; filename: string }> {
   await ensureFontsReady();
+
+  const includeEditorialVerdict =
+    config.includeEditorialVerdict ?? getExportEditorialVerdictEnabled();
+  const resolvedVerdict = synthesizeEditorialVerdictFromTable(config);
 
   const W = 1200;
   const PAD_X = 32;
@@ -458,7 +719,7 @@ export async function buildTableSnapshotBlob(
   const tableHeaderH = 40;
   const rowH = 48;
   const tableH = tableHeaderH + Math.max(1, rows.length) * rowH;
-  const footerH = 44;
+  const footerH = resolveEditorialFooterHeight(includeEditorialVerdict);
   const H = headerBlockH + tableH + footerH + 20;
 
   const scale = 2;
@@ -689,7 +950,13 @@ export async function buildTableSnapshotBlob(
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  drawCommonFooter(ctx, W, tableTop + tableH + 16, PAD_X, config.footerNote);
+  drawCommonFooter(ctx, W, tableTop + tableH + 16, PAD_X, {
+    footerNote: config.footerNote,
+    includeEditorialVerdict,
+    editorialVerdictText: resolvedVerdict,
+    editorialVerdictLabel: config.editorialVerdictLabel,
+    editorialVerdictTone: config.editorialVerdictTone,
+  });
 
   const blob = await canvasToPngBlob(canvas);
   return {
@@ -903,11 +1170,15 @@ export async function buildSvgChartSnapshotBlob(
   );
   const chartCardH = chartTargetH + chartInnerPad * 2;
 
+  const includeEditorialVerdict =
+    config.includeEditorialVerdict ?? getExportEditorialVerdictEnabled();
+  const resolvedVerdict = synthesizeEditorialVerdictFromSvgChart(config);
+
   const hasKpis = Boolean(config.kpis && config.kpis.length > 0);
   const badges = (config.footerBadges || []).slice(0, 4);
   const badgesH = badges.length > 0 ? 64 : 0;
   const headerBlockH = (config.subtitle ? 100 : 78) + (hasKpis ? 90 : 0);
-  const footerH = 44;
+  const footerH = resolveEditorialFooterHeight(includeEditorialVerdict);
   const H =
     headerBlockH +
     chartCardH +
@@ -942,6 +1213,28 @@ export async function buildSvgChartSnapshotBlob(
     .font-semibold { font-weight: 600; }
   `;
   svgClone.insertBefore(styleNode, svgClone.firstChild);
+
+  // Inject discrete SVG watermark signature inside the SVG graphic layer itself
+  if (includeEditorialVerdict) {
+    try {
+      const watermarkText = svgClone.ownerDocument.createElementNS(
+        'http://www.w3.org/2000/svg',
+        'text'
+      );
+      watermarkText.setAttribute('x', String(Math.round(srcW - 10)));
+      watermarkText.setAttribute('y', String(Math.round(srcH - 6)));
+      watermarkText.setAttribute('text-anchor', 'end');
+      watermarkText.setAttribute('fill', '#64748B');
+      watermarkText.setAttribute('fill-opacity', '0.65');
+      watermarkText.setAttribute('font-size', '10');
+      watermarkText.setAttribute('font-weight', '600');
+      watermarkText.setAttribute('class', 'font-mono');
+      watermarkText.textContent = RADARNBA_SIGNATURE_DOMAIN;
+      svgClone.appendChild(watermarkText);
+    } catch {
+      // Ignore if SVG DOM mutation fails
+    }
+  }
 
   await inlineSvgExternalImages(svgClone);
 
@@ -1041,13 +1334,13 @@ export async function buildSvgChartSnapshotBlob(
     cursorY += badgesH;
   }
 
-  drawCommonFooter(
-    ctx,
-    W,
-    cursorY + 16,
-    PAD_X,
-    config.footerNote || 'RadarNBA · Explorador Analítico Avanzado'
-  );
+  drawCommonFooter(ctx, W, cursorY + 16, PAD_X, {
+    footerNote: config.footerNote || 'RadarNBA · Explorador Analítico Avanzado',
+    includeEditorialVerdict,
+    editorialVerdictText: resolvedVerdict,
+    editorialVerdictLabel: config.editorialVerdictLabel,
+    editorialVerdictTone: config.editorialVerdictTone,
+  });
 
   const blob = await canvasToPngBlob(canvas);
   return {
@@ -1209,13 +1502,17 @@ export async function buildComparisonSnapshotBlob(
     clampedItems * 46 +
     (hasCallout ? 36 : 8);
 
+  const includeEditorialVerdict =
+    config.includeEditorialVerdict ?? getExportEditorialVerdictEnabled();
+  const resolvedVerdict = synthesizeEditorialVerdictFromComparison(config);
+
   const hasVerdict = Boolean(config.verdictPrimary || config.verdictSecondary);
   const verdictH = hasVerdict ? 50 : 0;
   const tableHeaderH = 40;
   const rowH = 44;
   const tableH = tableHeaderH + Math.max(1, rows.length) * rowH;
   const headerBlockH = config.subtitle ? 100 : 78;
-  const footerH = 44;
+  const footerH = resolveEditorialFooterHeight(includeEditorialVerdict);
 
   const H =
     headerBlockH +
@@ -1448,7 +1745,669 @@ export async function buildComparisonSnapshotBlob(
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  drawCommonFooter(ctx, W, tableTop + tableH + 16, PAD_X, config.footerNote);
+  drawCommonFooter(ctx, W, tableTop + tableH + 16, PAD_X, {
+    footerNote: config.footerNote,
+    includeEditorialVerdict,
+    editorialVerdictText: resolvedVerdict,
+    editorialVerdictLabel: config.editorialVerdictLabel,
+    editorialVerdictTone: config.editorialVerdictTone,
+  });
+
+  const blob = await canvasToPngBlob(canvas);
+  return {
+    blob,
+    filename: sanitizeExportFilename(config.filename),
+  };
+}
+
+export interface TradeMachineSnapshotAsset {
+  name: string;
+  meta?: string;
+  valueText: string;
+  isPick?: boolean;
+}
+
+export interface TradeMachineSnapshotTeam {
+  teamAbbr: string;
+  teamName: string;
+  preTierLabel: string;
+  postTierLabel: string;
+  tierChanged: boolean;
+  postPayrollText: string;
+  salaryDeltaText: string;
+  salaryDeltaTone?: SnapshotCellTone;
+  taxDeltaText: string;
+  taxDeltaTone?: SnapshotCellTone;
+  isValid: boolean;
+  statusLabel: string;
+  incomingAssets: TradeMachineSnapshotAsset[];
+  outgoingCountLabel: string;
+  outgoingSalaryText: string;
+  picksBalanceText?: string;
+  ptsDeltaText: string;
+  ptsDeltaTone?: SnapshotCellTone;
+  rebDeltaText: string;
+  astDeltaText: string;
+  impactDeltaText: string;
+  impactDeltaTone?: SnapshotCellTone;
+  primaryViolation?: string;
+}
+
+export interface TradeMachineSnapshotConfig extends EditorialVerdictOptions {
+  filename: string;
+  categoryTag?: string;
+  title: string;
+  subtitle?: string;
+  verdictBadgeText: string;
+  verdictBadgeTone: SnapshotCellTone;
+  kpis: SnapshotKpiItem[];
+  teams: TradeMachineSnapshotTeam[];
+  footerNote?: string;
+  showWatermark?: boolean;
+}
+
+function drawRadarEmblemVector(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radius: number,
+  strokeColor: string,
+  accentColor: string
+): void {
+  ctx.save();
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = Math.max(1.2, radius * 0.14);
+
+  // Outer radar ring
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Inner radar ring
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 0.56, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Crosshair / basketball seam lines
+  ctx.beginPath();
+  ctx.moveTo(cx - radius, cy);
+  ctx.lineTo(cx + radius, cy);
+  ctx.moveTo(cx, cy - radius);
+  ctx.lineTo(cx, cy + radius);
+  ctx.stroke();
+
+  // Radar sweep needle & core dot
+  ctx.strokeStyle = accentColor;
+  ctx.lineWidth = Math.max(1.4, radius * 0.16);
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(cx + radius * 0.72, cy - radius * 0.62);
+  ctx.stroke();
+
+  ctx.fillStyle = accentColor;
+  ctx.beginPath();
+  ctx.arc(cx, cy, Math.max(1.6, radius * 0.2), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawRadarNbaWatermarkLayer(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number
+): void {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, width, height);
+  ctx.clip();
+
+  // Subtle diagonal repeating watermark pattern across the entire image
+  ctx.translate(width / 2, height / 2);
+  ctx.rotate((-20 * Math.PI) / 180);
+
+  const stepX = 360;
+  const stepY = 175;
+  const cols = Math.ceil((width + height) / stepX) + 2;
+  const rows = Math.ceil((width + height) / stepY) + 2;
+
+  for (let r = -rows; r <= rows; r++) {
+    for (let c = -cols; c <= cols; c++) {
+      const offsetX = r % 2 === 0 ? 0 : stepX / 2;
+      const x = c * stepX + offsetX;
+      const y = r * stepY;
+
+      drawRadarEmblemVector(
+        ctx,
+        x - 92,
+        y - 4,
+        10,
+        'rgba(249, 115, 22, 0.09)',
+        'rgba(251, 146, 60, 0.12)'
+      );
+
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.font = `800 16px ${FONT_MONO}`;
+      ctx.fillStyle = 'rgba(248, 250, 252, 0.055)';
+      ctx.fillText('RADARNBA', x - 74, y - 7);
+
+      ctx.font = `600 10.5px ${FONT_MONO}`;
+      ctx.fillStyle = 'rgba(251, 146, 60, 0.075)';
+      ctx.fillText(RADARNBA_SIGNATURE_DOMAIN, x - 74, y + 9);
+    }
+  }
+
+  ctx.restore();
+}
+
+function drawCornerWatermarkSeal(
+  ctx: CanvasRenderingContext2D,
+  rightX: number,
+  y: number
+): void {
+  const sealH = 30;
+  ctx.save();
+  ctx.font = `700 10.5px ${FONT_MONO}`;
+  const brandW = ctx.measureText('RADARNBA').width;
+  ctx.font = `600 10px ${FONT_MONO}`;
+  const domainText = ` · ${RADARNBA_SIGNATURE_DOMAIN}`;
+  const domainW = ctx.measureText(domainText).width;
+  const sealW = Math.ceil(32 + brandW + domainW + 14);
+  const x = rightX - sealW;
+
+  drawRoundedRect(ctx, x, y, sealW, sealH, 7);
+  ctx.fillStyle = 'rgba(11, 17, 32, 0.9)';
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = hexToRgba(PALETTE.orange, 0.45);
+  ctx.stroke();
+
+  drawRadarEmblemVector(
+    ctx,
+    x + 17,
+    y + sealH / 2,
+    8,
+    hexToRgba(PALETTE.orange, 0.65),
+    PALETTE.orangeText
+  );
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.font = `700 10.5px ${FONT_MONO}`;
+  ctx.fillStyle = PALETTE.textPrimary;
+  ctx.fillText('RADARNBA', x + 31, y + sealH / 2 + 0.5);
+
+  ctx.font = `600 10px ${FONT_MONO}`;
+  ctx.fillStyle = PALETTE.orangeText;
+  ctx.fillText(domainText, x + 31 + brandW, y + sealH / 2 + 0.5);
+  ctx.restore();
+}
+
+function loadCanvasImageFromDataUri(
+  dataUri: string
+): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    if (!dataUri) {
+      resolve(null);
+      return;
+    }
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = dataUri;
+  });
+}
+
+export async function buildTradeMachineSnapshotBlob(
+  config: TradeMachineSnapshotConfig
+): Promise<{ blob: Blob; filename: string }> {
+  await ensureFontsReady();
+
+  const includeEditorialVerdict =
+    config.includeEditorialVerdict ?? getExportEditorialVerdictEnabled();
+  const showWatermark = config.showWatermark ?? true;
+  const teams = config.teams.slice(0, 4);
+
+  // Preload official logos for participating teams (safe 4-tier fallback via same-origin proxy / SVG)
+  const logoMap = new Map<string, HTMLImageElement | null>();
+  await Promise.all(
+    teams.map(async (t) => {
+      try {
+        const uri = await getTeamLogoDataUri(t.teamAbbr);
+        const img = await loadCanvasImageFromDataUri(uri);
+        logoMap.set(t.teamAbbr, img);
+      } catch {
+        logoMap.set(t.teamAbbr, null);
+      }
+    })
+  );
+
+  const W = 1200;
+  const PAD_X = 32;
+  const innerW = W - PAD_X * 2;
+  const colCount = teams.length === 3 ? 3 : 2;
+  const rowCount = Math.ceil(teams.length / colCount);
+  const gridGap = 16;
+  const cardW = (innerW - gridGap * (colCount - 1)) / colCount;
+
+  const maxVisibleAssets = 6;
+  const computeCardHeight = (rowTeams: TradeMachineSnapshotTeam[]): number => {
+    let maxAssets = 1;
+    let anyPickBalance = false;
+    let anyViolation = false;
+    for (const t of rowTeams) {
+      maxAssets = Math.max(
+        maxAssets,
+        Math.min(maxVisibleAssets, Math.max(1, t.incomingAssets.length)) +
+          (t.incomingAssets.length > maxVisibleAssets ? 1 : 0)
+      );
+      if (t.picksBalanceText) anyPickBalance = true;
+      if (t.primaryViolation) anyViolation = true;
+    }
+    // Header (64) + Recibe header (24) + asset rows (25 each) + Envia strip (34) + picks balance (26?) + metrics strip (54) + violation (30?) + padding (18)
+    return (
+      64 +
+      24 +
+      maxAssets * 25 +
+      34 +
+      (anyPickBalance ? 26 : 0) +
+      54 +
+      (anyViolation ? 30 : 0) +
+      18
+    );
+  };
+
+  const rowHeights: number[] = [];
+  for (let r = 0; r < rowCount; r++) {
+    const slice = teams.slice(r * colCount, (r + 1) * colCount);
+    rowHeights.push(computeCardHeight(slice));
+  }
+
+  const headerBlockH = config.subtitle ? 102 : 80;
+  const kpiBlockH = config.kpis.length > 0 ? 90 : 0;
+  const totalGridH =
+    rowHeights.reduce((sum, h) => sum + h, 0) +
+    Math.max(0, rowCount - 1) * gridGap;
+  const watermarkSealBlockH = showWatermark ? 34 : 0;
+  const footerH = resolveEditorialFooterHeight(includeEditorialVerdict);
+  const H =
+    headerBlockH +
+    kpiBlockH +
+    totalGridH +
+    gridGap +
+    watermarkSealBlockH +
+    footerH +
+    14;
+
+  const scale = 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = W * scale;
+  canvas.height = H * scale;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Contexto 2D no disponible en este navegador.');
+  }
+  ctx.scale(scale, scale);
+
+  // Base Canvas Background + Subtle Frame
+  ctx.fillStyle = PALETTE.bgCanvas;
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = PALETTE.border;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, 1, W - 2, H - 2);
+
+  // Subtle ambient background watermark across canvas
+  if (showWatermark) {
+    drawRadarNbaWatermarkLayer(ctx, W, H);
+  }
+
+  // Top Orange Bar
+  ctx.fillStyle = PALETTE.orange;
+  ctx.fillRect(0, 0, W, 4);
+
+  // Header Brand + Radar Emblem + Right Watermark/Date
+  let y = 28;
+  drawRadarEmblemVector(ctx, PAD_X + 8, y - 4, 8, PALETTE.orange, PALETTE.orangeText);
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+  ctx.font = `700 12px ${FONT_MONO}`;
+  ctx.fillStyle = PALETTE.orangeText;
+  const brandLabel = 'RADARNBA';
+  ctx.fillText(brandLabel, PAD_X + 22, y);
+  const brandW = ctx.measureText(brandLabel).width;
+
+  ctx.font = `600 12px ${FONT_SANS}`;
+  ctx.fillStyle = PALETTE.textMuted;
+  ctx.fillText(
+    `  ·  ${(config.categoryTag || 'TRADE MACHINE CBA 2026-27').toUpperCase()}`,
+    PAD_X + 22 + brandW,
+    y
+  );
+
+  const dateText = formatExportTimestamp();
+  ctx.font = `600 12px ${FONT_MONO}`;
+  ctx.fillStyle = PALETTE.textMuted;
+  ctx.textAlign = 'right';
+  ctx.fillText(`${RADARNBA_SIGNATURE_DOMAIN}  ·  ${dateText}`, W - PAD_X, y);
+
+  // Title + Right Verdict Stamp
+  y += 32;
+  const badgeColor = resolveToneColor(config.verdictBadgeTone);
+  ctx.font = `700 11.5px ${FONT_MONO}`;
+  const badgeTextW = ctx.measureText(config.verdictBadgeText).width;
+  const badgeW = badgeTextW + 24;
+  const badgeH = 26;
+  const badgeX = W - PAD_X - badgeW;
+  const badgeY = y - 19;
+
+  drawRoundedRect(ctx, badgeX, badgeY, badgeW, badgeH, 6);
+  ctx.fillStyle = hexToRgba(badgeColor, 0.14);
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = hexToRgba(badgeColor, 0.55);
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = badgeColor;
+  ctx.fillText(config.verdictBadgeText, badgeX + badgeW / 2, badgeY + badgeH / 2 + 0.5);
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = `700 23px ${FONT_SANS}`;
+  ctx.fillStyle = PALETTE.textPrimary;
+  ctx.fillText(
+    truncateCanvasText(ctx, config.title, badgeX - PAD_X - 18),
+    PAD_X,
+    y
+  );
+
+  if (config.subtitle) {
+    y += 22;
+    ctx.font = `400 13px ${FONT_SANS}`;
+    ctx.fillStyle = PALETTE.textMuted;
+    ctx.fillText(truncateCanvasText(ctx, config.subtitle, innerW), PAD_X, y);
+  }
+
+  let cursorY = y + 20;
+
+  // KPI Strip
+  if (config.kpis.length > 0) {
+    cursorY = drawKpiStrip(ctx, PAD_X, cursorY, innerW, config.kpis);
+  }
+
+  // Team Trade Cards Grid
+  for (let r = 0; r < rowCount; r++) {
+    const rowH = rowHeights[r];
+    for (let c = 0; c < colCount; c++) {
+      const idx = r * colCount + c;
+      const t = teams[idx];
+      if (!t) continue;
+
+      const cx = PAD_X + c * (cardW + gridGap);
+      const cy = cursorY;
+      const pal = getTeamDarkUiPalette(t.teamAbbr);
+
+      // Card surface (slightly translucent so subtle watermark integrates naturally)
+      drawRoundedRect(ctx, cx, cy, cardW, rowH, 10);
+      ctx.fillStyle = 'rgba(19, 28, 46, 0.91)';
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = t.isValid
+        ? hexToRgba(PALETTE.emerald, 0.35)
+        : hexToRgba(PALETTE.rose, 0.45);
+      ctx.stroke();
+
+      // Subtle top team color accent hairline inside card
+      ctx.save();
+      drawRoundedRect(ctx, cx, cy, cardW, rowH, 10);
+      ctx.clip();
+      ctx.fillStyle = hexToRgba(pal.primary, 0.85);
+      ctx.fillRect(cx, cy, cardW, 3);
+      ctx.restore();
+
+      // Team Header Row (Logo + Name + Tier + Status)
+      const logoImg = logoMap.get(t.teamAbbr);
+      const logoSize = 34;
+      const logoX = cx + 14;
+      const logoY = cy + 15;
+      if (logoImg) {
+        drawRoundedRect(ctx, logoX, logoY, logoSize, logoSize, 7);
+        ctx.fillStyle = '#0B1120';
+        ctx.fill();
+        ctx.strokeStyle = PALETTE.borderStrong;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.drawImage(logoImg, logoX + 3, logoY + 3, logoSize - 6, logoSize - 6);
+      } else {
+        drawTeamChip(ctx, t.teamAbbr, logoX, logoY + 6, 40, 22);
+      }
+
+      const nameX = logoX + (logoImg ? logoSize + 10 : 48);
+      const statusRightX = cx + cardW - 14;
+
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'alphabetic';
+      ctx.font = `700 11px ${FONT_MONO}`;
+      ctx.fillStyle = t.isValid ? PALETTE.emeraldText : PALETTE.roseText;
+      ctx.fillText(t.statusLabel, statusRightX, cy + 29);
+
+      ctx.font = `500 10.5px ${FONT_MONO}`;
+      ctx.fillStyle = PALETTE.textMuted;
+      ctx.fillText(`Post ${t.postPayrollText}`, statusRightX, cy + 45);
+
+      const maxNameW = statusRightX - nameX - 108;
+      ctx.textAlign = 'left';
+      ctx.font = `700 14.5px ${FONT_SANS}`;
+      ctx.fillStyle = PALETTE.textPrimary;
+      ctx.fillText(truncateCanvasText(ctx, t.teamName, maxNameW), nameX, cy + 29);
+
+      const tierLine = t.tierChanged
+        ? `${t.preTierLabel} → ${t.postTierLabel}`
+        : t.postTierLabel;
+      ctx.font = `500 11px ${FONT_SANS}`;
+      ctx.fillStyle = PALETTE.textMuted;
+      ctx.fillText(truncateCanvasText(ctx, tierLine, maxNameW), nameX, cy + 45);
+
+      // Divider below card header
+      let iy = cy + 60;
+      ctx.beginPath();
+      ctx.moveTo(cx + 14, iy);
+      ctx.lineTo(cx + cardW - 14, iy);
+      ctx.strokeStyle = PALETTE.border;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // RECIBE label
+      iy += 18;
+      ctx.textAlign = 'left';
+      ctx.font = `700 10.5px ${FONT_MONO}`;
+      ctx.fillStyle = PALETTE.emeraldText;
+      ctx.fillText('RECIBE', cx + 14, iy);
+
+      ctx.textAlign = 'right';
+      ctx.font = `500 10.5px ${FONT_MONO}`;
+      ctx.fillStyle = PALETTE.textMuted;
+      ctx.fillText(
+        `${t.incomingAssets.length} activo${t.incomingAssets.length === 1 ? '' : 's'}`,
+        cx + cardW - 14,
+        iy
+      );
+
+      iy += 20;
+      if (t.incomingAssets.length === 0) {
+        ctx.textAlign = 'left';
+        ctx.font = `400 12px ${FONT_SANS}`;
+        ctx.fillStyle = PALETTE.textDim;
+        ctx.fillText('Sin activos entrantes en esta simulación', cx + 14, iy);
+        iy += 25;
+      } else {
+        const shown = t.incomingAssets.slice(0, maxVisibleAssets);
+        shown.forEach((asset) => {
+          ctx.textAlign = 'right';
+          ctx.font = `600 11.5px ${FONT_MONO}`;
+          ctx.fillStyle = asset.isPick ? PALETTE.amberText : PALETTE.textSecondary;
+          const valW = ctx.measureText(asset.valueText).width;
+          ctx.fillText(asset.valueText, cx + cardW - 14, iy);
+
+          ctx.textAlign = 'left';
+          ctx.font = asset.isPick
+            ? `600 11.5px ${FONT_MONO}`
+            : `600 12.5px ${FONT_SANS}`;
+          ctx.fillStyle = asset.isPick ? '#FDE68A' : PALETTE.textPrimary;
+          const label = asset.meta ? `${asset.name} (${asset.meta})` : asset.name;
+          ctx.fillText(
+            truncateCanvasText(ctx, label, cardW - 38 - valW),
+            cx + 14,
+            iy
+          );
+          iy += 25;
+        });
+
+        if (t.incomingAssets.length > maxVisibleAssets) {
+          ctx.textAlign = 'left';
+          ctx.font = `500 11px ${FONT_SANS}`;
+          ctx.fillStyle = PALETTE.textMuted;
+          ctx.fillText(
+            `+${t.incomingAssets.length - maxVisibleAssets} activos adicionales`,
+            cx + 14,
+            iy
+          );
+          iy += 25;
+        }
+      }
+
+      // Bottom-anchored summary blocks inside the card
+      let bottomCursor = cy + rowH - 12;
+
+      if (t.primaryViolation) {
+        const vBoxH = 24;
+        bottomCursor -= vBoxH;
+        drawRoundedRect(ctx, cx + 12, bottomCursor, cardW - 24, vBoxH, 5);
+        ctx.fillStyle = 'rgba(244, 63, 94, 0.12)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(244, 63, 94, 0.35)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.font = `600 10.5px ${FONT_SANS}`;
+        ctx.fillStyle = PALETTE.roseText;
+        ctx.fillText(
+          truncateCanvasText(ctx, `CBA: ${t.primaryViolation}`, cardW - 38),
+          cx + 20,
+          bottomCursor + vBoxH / 2 + 0.5
+        );
+        bottomCursor -= 8;
+      }
+
+      // Metrics Strip (Delta 26-27 | Tax est. | PTS | IMPACTO)
+      const stripH = 44;
+      bottomCursor -= stripH;
+      drawRoundedRect(ctx, cx + 12, bottomCursor, cardW - 24, stripH, 7);
+      ctx.fillStyle = 'rgba(11, 17, 32, 0.78)';
+      ctx.fill();
+      ctx.strokeStyle = PALETTE.border;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      const stripItems: Array<{ label: string; val: string; tone: SnapshotCellTone }> = [
+        { label: 'DELTA 26-27', val: t.salaryDeltaText, tone: t.salaryDeltaTone || 'neutral' },
+        { label: 'DELTA TAX', val: t.taxDeltaText, tone: t.taxDeltaTone || 'muted' },
+        { label: 'PTS / REB / AST', val: `${t.ptsDeltaText} / ${t.rebDeltaText} / ${t.astDeltaText}`, tone: t.ptsDeltaTone || 'neutral' },
+        { label: 'IMPACTO', val: t.impactDeltaText, tone: t.impactDeltaTone || 'neutral' },
+      ];
+      const cellW = (cardW - 24) / stripItems.length;
+      stripItems.forEach((m, mIdx) => {
+        const mx = cx + 12 + mIdx * cellW;
+        if (mIdx > 0) {
+          ctx.beginPath();
+          ctx.moveTo(mx, bottomCursor + 7);
+          ctx.lineTo(mx, bottomCursor + stripH - 7);
+          ctx.strokeStyle = PALETTE.border;
+          ctx.stroke();
+        }
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'alphabetic';
+        ctx.font = `500 9px ${FONT_MONO}`;
+        ctx.fillStyle = PALETTE.textDim;
+        ctx.fillText(
+          truncateCanvasText(ctx, m.label, cellW - 8),
+          mx + cellW / 2,
+          bottomCursor + 15
+        );
+        ctx.font = `700 11px ${FONT_MONO}`;
+        ctx.fillStyle = resolveToneColor(m.tone);
+        ctx.fillText(
+          truncateCanvasText(ctx, m.val, cellW - 8),
+          mx + cellW / 2,
+          bottomCursor + 34
+        );
+      });
+
+      bottomCursor -= 8;
+
+      // Optional Picks Net Balance Row
+      if (t.picksBalanceText) {
+        const pH = 20;
+        bottomCursor -= pH;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.font = `600 10.5px ${FONT_MONO}`;
+        ctx.fillStyle = PALETTE.amberText;
+        ctx.fillText(
+          truncateCanvasText(ctx, t.picksBalanceText, cardW - 28),
+          cx + 14,
+          bottomCursor + pH / 2
+        );
+        bottomCursor -= 4;
+      }
+
+      // Envía compact bar
+      const sendH = 24;
+      bottomCursor -= sendH;
+      ctx.beginPath();
+      ctx.moveTo(cx + 14, bottomCursor);
+      ctx.lineTo(cx + cardW - 14, bottomCursor);
+      ctx.strokeStyle = hexToRgba(PALETTE.border, 0.85);
+      ctx.stroke();
+
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      ctx.font = `600 10.5px ${FONT_SANS}`;
+      ctx.fillStyle = PALETTE.roseText;
+      ctx.fillText(
+        truncateCanvasText(ctx, `Envía: ${t.outgoingCountLabel}`, cardW - 130),
+        cx + 14,
+        bottomCursor + sendH / 2 + 2
+      );
+      ctx.textAlign = 'right';
+      ctx.font = `600 10.5px ${FONT_MONO}`;
+      ctx.fillStyle = PALETTE.textMuted;
+      ctx.fillText(t.outgoingSalaryText, cx + cardW - 14, bottomCursor + sendH / 2 + 2);
+    }
+    cursorY += rowH + gridGap;
+  }
+
+  // Visible Corner Brand Seal right above footer (cannot be missed when shared)
+  if (showWatermark) {
+    drawCornerWatermarkSeal(ctx, W - PAD_X, cursorY - 4);
+    cursorY += 34;
+  }
+
+  drawCommonFooter(ctx, W, cursorY, PAD_X, {
+    footerNote:
+      config.footerNote ||
+      'RadarNBA · Trade Machine CBA 2026-27 + Regla Ted Stepien',
+    includeEditorialVerdict,
+    editorialVerdictText:
+      cleanOneLineVerdict(config.editorialVerdict) ||
+      `${config.title} · Simulación verificada bajo las reglas salariales del CBA 2026-27 en RadarNBA.`,
+    editorialVerdictLabel:
+      config.editorialVerdictLabel || 'VEREDICTO TRADE MACHINE · RADARNBA',
+    editorialVerdictTone: config.editorialVerdictTone || config.verdictBadgeTone,
+  });
 
   const blob = await canvasToPngBlob(canvas);
   return {
@@ -1487,5 +2446,27 @@ export async function copyPngBlobToClipboard(blob: Blob): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+export async function copyPngPromiseToClipboard(
+  blobPromise: Promise<Blob>
+): Promise<boolean> {
+  if (!canCopyImageToClipboard()) return false;
+  // Pass Promise<Blob> directly to preserve user activation gesture on Safari/Chromium
+  try {
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        'image/png': blobPromise,
+      }),
+    ]);
+    return true;
+  } catch {
+    try {
+      const blob = await blobPromise;
+      return await copyPngBlobToClipboard(blob);
+    } catch {
+      return false;
+    }
   }
 }

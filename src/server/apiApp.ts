@@ -3,12 +3,13 @@ import "dotenv/config";
 import express from "express";
 import helmet from "helmet";
 import zlib from "zlib";
-import { DEFAULT_GAMEDAY_THRESHOLDS, DEFAULT_INSPECTOR_KPI_CONFIG, DEFAULT_MILESTONE_NOTIFICATIONS_CONFIG, DEFAULT_WEB_FEATURE_FLAGS, getBootstrapPayload, getBootstrapWireBuffers, getFantasyEspnSyncPayload, getGameDayPayload, getGamedayThresholdsConfig, getInspectorKpiDefaultsConfig, getMilestoneNotificationsConfig, getMilestoneNotificationsPayload, getMilestoneNotificationsSeasonCounts, getMilestonesPayload, getPlayerInspectorDossier, getSeasonAwardsPayload, getScoreboardDeltaPayload, getSinglePlayerSummary, getTeamRoster, getWebFeatureFlags, resetGamedayThresholdsConfigDefaults, resetInspectorKpiDefaultsConfig, resetMilestoneNotificationsConfigDefaults, scoutingEngine, searchLeaguePlayers, updateGamedayThresholdsConfig, updateInspectorKpiDefaultsConfig, updateMilestoneNotificationsConfig, updateWebFeatureFlags } from "./nbaDataService.ts";
+import { DEFAULT_AUTO_STREAKS_CONFIG_VALUES, DEFAULT_EXPERIENCE_METRICS_CONFIG_VALUES, DEFAULT_GAMEDAY_THRESHOLDS, DEFAULT_INSPECTOR_KPI_CONFIG, DEFAULT_MILESTONE_NOTIFICATIONS_CONFIG, DEFAULT_SIDEBAR_MENU_CONFIG_VALUES, DEFAULT_WEB_FEATURE_FLAGS, getAutoStreaksConfig, getBootstrapPayload, getBootstrapWireBuffers, getCareerLeadersPayload, getContractsPayload, getDraftHistoryPayload, getExperienceMetricsConfig, getFantasyEspnSyncPayload, getFutureDraftPicksPayload, getGameDayPayload, getGamedayThresholdsConfig, getInjuriesReportPayload, getInspectorKpiDefaultsConfig, getMilestoneNotificationsConfig, getMilestoneNotificationsPayload, getMilestoneNotificationsSeasonCounts, getMilestonesPayload, getPlayerCareerHistoryPayload, getPlayerInspectorDossier, getSeasonAwardsPayload, getScoreboardDeltaPayload, getSidebarMenuConfig, getSinglePlayerSummary, getTeamCareerHistoryPayload, getTeamRoster, getWebFeatureFlags, resetAutoStreaksConfigDefaults, resetExperienceMetricsConfigDefaults, resetGamedayThresholdsConfigDefaults, resetInspectorKpiDefaultsConfig, resetMilestoneNotificationsConfigDefaults, resetSidebarMenuConfigDefaults, scoutingEngine, searchLeaguePlayers, updateAutoStreaksConfig, updateExperienceMetricsConfig, updateGamedayThresholdsConfig, updateInspectorKpiDefaultsConfig, updateMilestoneNotificationsConfig, updateSidebarMenuConfig, updateWebFeatureFlags } from "./nbaDataService.ts";
 import { getLeagueShotZonesAdvanced, getLeagueClutchAdvanced, getLeagueDefenseHustleAdvanced, getLeagueTrackingAdvanced, getLeaguePlaytypesAdvanced, getLeagueScoringSplitsAdvanced, getLeagueFourFactorsAdvanced, getLeagueViolationsAdvanced, getLeagueLineups, getLeagueHeroicShots, getTeamAdvancedDossier, getPlayerAdvancedDossier } from "./nbaAdvancedStatsService.ts";
-import { readNbaSnapshotFromDisk } from "./nbaSnapshotStore.ts";
+import { readNbaSnapshotMetadataFromDisk } from "./nbaSnapshotStore.ts";
 import { getFantasyStorageBackendInfo, readManualFantasyState, writeManualFantasyState } from "./fantasyEspnService.ts";
 import { DEFAULT_ADMIN_SECURITY_VALUES, adminBruteForceLimiter, adminEndpointFloodLimiter, buildAdminSessionCookieHeader, buildClearAdminSessionCookieHeader, extractAdminTokenFromRequest, getAdminAuthReadiness, getAdminSecurityConfig, getRateLimitBackendInfo, issueAdminSessionToken, nbaApiRateLimiter, nbaHeavyRefreshLimiter, recordAdminLoginFailure, requireAdminAuth, requireAdminCsrfProtection, resetAdminBruteForceForRequest, resetAdminSecurityConfigToDefaults, resetAllRateLimitCounters, saveAdminSecurityConfig, verifyAdminPasscodeConstantTime, verifyAdminSessionToken } from "./securityMiddleware.ts";
-import { ADMIN_SECURITY_BOUNDS, adminLoginBodySchema, adminSecurityConfigBodySchema, awardsQuerySchema, bootstrapQuerySchema, emptyQuerySchema, gameEventParamsSchema, gamedayQuerySchema, gamedayThresholdsBodySchema, getValidated, inspectorKpiDefaultsBodySchema, manualFantasyStateBodySchema, milestoneNotificationsBodySchema, playerParamsSchema, playerSummaryQuerySchema, refreshOnlyQuerySchema, searchQuerySchema, teamParamsSchema, validateRequest, advancedLeagueQuerySchema, advancedLineupsQuerySchema, advancedEntityQuerySchema, advancedHeroicShotsQuerySchema, webFeatureFlagsBodySchema } from "./validationSchemas.ts";
+import { DEFAULT_EDITORIAL_CONFIG_VALUES, buildEditorialDirectivesPromptBlock, getEditorialStorageInfo, loadEditorialConfig, resetEditorialConfigToDefaults, saveEditorialConfig } from "./editorialConfigService.ts";
+import { ADMIN_SECURITY_BOUNDS, adminLoginBodySchema, adminSecurityConfigBodySchema, autoStreaksConfigBodySchema, awardsQuerySchema, bootstrapQuerySchema, editorialConfigBodySchema, emptyQuerySchema, experienceMetricsConfigBodySchema, gameEventParamsSchema, gamedayQuerySchema, gamedayThresholdsBodySchema, getValidated, historyLeadersQuerySchema, inspectorKpiDefaultsBodySchema, manualFantasyStateBodySchema, milestoneNotificationsBodySchema, playerParamsSchema, playerSummaryQuerySchema, purgeChronicleCacheBodySchema, refreshOnlyQuerySchema, searchQuerySchema, sidebarMenuConfigBodySchema, teamParamsSchema, validateRequest, advancedLeagueQuerySchema, advancedLineupsQuerySchema, advancedEntityQuerySchema, advancedHeroicShotsQuerySchema, webFeatureFlagsBodySchema } from "./validationSchemas.ts";
 import { getAllCircuitMetrics, resetCircuit } from "./circuitBreaker.ts";
 import { expressTelemetryMiddleware, getTelemetrySummary } from "./telemetryLogger.ts";
 import { getEasternTodayIso } from "../utils/staticSchedule.ts";
@@ -103,8 +104,8 @@ app.get("/admin", adminEndpointFloodLimiter, (_req, _res, next) => {
   next();
 });
 app.get("/api/health", (_req, res) => {
-  const snap = readNbaSnapshotFromDisk();
-  res.json({ status: "ok", name: "RadarNBA", runtime: process.env.VERCEL ? "vercel-serverless" : "node-server", snapshotLoaded: Boolean(snap), snapshotGeneratedAt: snap?.generatedAt || null, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
+  const snapMeta = readNbaSnapshotMetadataFromDisk();
+  res.json({ status: "ok", name: "RadarNBA", runtime: process.env.VERCEL ? "vercel-serverless" : "node-server", snapshotLoaded: snapMeta.snapshotLoaded, modularSnapshots: snapMeta.modularSnapshots, heroicMicroSnapshot: snapMeta.heroicMicroSnapshot, snapshotGeneratedAt: snapMeta.snapshotGeneratedAt, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
 });
 app.post("/api/admin/login", requireAdminCsrfProtection, adminBruteForceLimiter, validateRequest({ query: emptyQuerySchema, body: adminLoginBodySchema }), async (req, res) => {
   try {
@@ -279,6 +280,93 @@ app.post("/api/admin/inspector-kpi-defaults/reset-defaults", requireAdminCsrfPro
     res.status(500).json({ ok: false, error: "No se pudieron restablecer los KPIs por defecto." });
   }
 });
+app.get("/api/nba/streaks-config", validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true, config: getAutoStreaksConfig() });
+});
+app.get("/api/admin/streaks-config", requireAdminAuth, validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true, config: getAutoStreaksConfig(), defaults: DEFAULT_AUTO_STREAKS_CONFIG_VALUES });
+});
+app.put("/api/admin/streaks-config", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema, body: autoStreaksConfigBodySchema }), (req, res) => {
+  try {
+    const { body } = getValidated(req);
+    const updated = updateAutoStreaksConfig(body);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, config: updated, defaults: DEFAULT_AUTO_STREAKS_CONFIG_VALUES });
+  } catch (err) {
+    console.error("Error in PUT /api/admin/streaks-config:", err);
+    res.status(500).json({ ok: false, error: "No se pudo guardar la configuración de rachas automáticas." });
+  }
+});
+app.post("/api/admin/streaks-config/reset-defaults", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+  try {
+    const restored = resetAutoStreaksConfigDefaults();
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, config: restored, defaults: DEFAULT_AUTO_STREAKS_CONFIG_VALUES });
+  } catch (err) {
+    console.error("Error in POST /api/admin/streaks-config/reset-defaults:", err);
+    res.status(500).json({ ok: false, error: "No se pudieron restablecer las rachas por defecto." });
+  }
+});
+app.get("/api/nba/experience-metrics-config", validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true, config: getExperienceMetricsConfig() });
+});
+app.get("/api/admin/experience-metrics-config", requireAdminAuth, validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true, config: getExperienceMetricsConfig(), defaults: DEFAULT_EXPERIENCE_METRICS_CONFIG_VALUES });
+});
+app.put("/api/admin/experience-metrics-config", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema, body: experienceMetricsConfigBodySchema }), (req, res) => {
+  try {
+    const { body } = getValidated(req);
+    const updated = updateExperienceMetricsConfig(body);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, config: updated, defaults: DEFAULT_EXPERIENCE_METRICS_CONFIG_VALUES });
+  } catch (err) {
+    console.error("Error in PUT /api/admin/experience-metrics-config:", err);
+    res.status(500).json({ ok: false, error: "No se pudo guardar la distribución de estadísticas Sencillo/Avanzado." });
+  }
+});
+app.post("/api/admin/experience-metrics-config/reset-defaults", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+  try {
+    const restored = resetExperienceMetricsConfigDefaults();
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, config: restored, defaults: DEFAULT_EXPERIENCE_METRICS_CONFIG_VALUES });
+  } catch (err) {
+    console.error("Error in POST /api/admin/experience-metrics-config/reset-defaults:", err);
+    res.status(500).json({ ok: false, error: "No se pudo restablecer la distribución por defecto." });
+  }
+});
+app.get("/api/nba/sidebar-menu-config", validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true, config: getSidebarMenuConfig() });
+});
+app.get("/api/admin/sidebar-menu-config", requireAdminAuth, validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true, config: getSidebarMenuConfig(), defaults: DEFAULT_SIDEBAR_MENU_CONFIG_VALUES });
+});
+app.put("/api/admin/sidebar-menu-config", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema, body: sidebarMenuConfigBodySchema }), (req, res) => {
+  try {
+    const { body } = getValidated(req);
+    const updated = updateSidebarMenuConfig(body);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, config: updated, defaults: DEFAULT_SIDEBAR_MENU_CONFIG_VALUES });
+  } catch (err) {
+    console.error("Error in PUT /api/admin/sidebar-menu-config:", err);
+    res.status(500).json({ ok: false, error: "No se pudo guardar la organización del menú lateral." });
+  }
+});
+app.post("/api/admin/sidebar-menu-config/reset-defaults", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema }), (_req, res) => {
+  try {
+    const restored = resetSidebarMenuConfigDefaults();
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, config: restored, defaults: DEFAULT_SIDEBAR_MENU_CONFIG_VALUES });
+  } catch (err) {
+    console.error("Error in POST /api/admin/sidebar-menu-config/reset-defaults:", err);
+    res.status(500).json({ ok: false, error: "No se pudo restablecer el menú lateral por defecto." });
+  }
+});
 app.get("/api/admin/milestone-notifications", requireAdminAuth, validateRequest({ query: emptyQuerySchema }), (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.json({ ok: true, config: getMilestoneNotificationsConfig(), defaults: DEFAULT_MILESTONE_NOTIFICATIONS_CONFIG });
@@ -313,6 +401,90 @@ app.post("/api/admin/milestone-notifications/preview-counts", requireAdminCsrfPr
   } catch (err) {
     console.error("Error in POST /api/admin/milestone-notifications/preview-counts:", err);
     res.status(500).json({ ok: false, error: "No se pudo calcular la simulación de conteos." });
+  }
+});
+app.get("/api/admin/editorial-config", requireAdminAuth, validateRequest({ query: emptyQuerySchema }), async (_req, res) => {
+  try {
+    const config = await loadEditorialConfig(true);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      ok: true,
+      config,
+      defaults: DEFAULT_EDITORIAL_CONFIG_VALUES,
+      storage: getEditorialStorageInfo(),
+      previewBlock: {
+        game: buildEditorialDirectivesPromptBlock(config, "game"),
+        daily: buildEditorialDirectivesPromptBlock(config, "daily"),
+      },
+    });
+  } catch (err) {
+    console.error("Error in GET /api/admin/editorial-config:", err);
+    res.status(500).json({ ok: false, error: "No se pudo cargar la configuración editorial." });
+  }
+});
+app.put("/api/admin/editorial-config", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema, body: editorialConfigBodySchema }), async (req, res) => {
+  try {
+    const { body } = getValidated(req);
+    const { invalidateCacheOnSave, ...values } = body;
+    let updated = await saveEditorialConfig(values, { invalidateCache: false });
+    let cachePurgeResult = null;
+    if (invalidateCacheOnSave) {
+      cachePurgeResult = await scoutingEngine.purgeNarrativeCache({ scope: "all" });
+      updated = await loadEditorialConfig(true);
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      ok: true,
+      config: updated,
+      defaults: DEFAULT_EDITORIAL_CONFIG_VALUES,
+      storage: getEditorialStorageInfo(),
+      cachePurgeResult,
+      previewBlock: {
+        game: buildEditorialDirectivesPromptBlock(updated, "game"),
+        daily: buildEditorialDirectivesPromptBlock(updated, "daily"),
+      },
+    });
+  } catch (err) {
+    console.error("Error in PUT /api/admin/editorial-config:", err);
+    res.status(500).json({ ok: false, error: "No se pudo guardar la configuración editorial." });
+  }
+});
+app.post("/api/admin/editorial-config/reset-defaults", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema }), async (_req, res) => {
+  try {
+    const restored = await resetEditorialConfigToDefaults({ invalidateCache: false });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      ok: true,
+      config: restored,
+      defaults: DEFAULT_EDITORIAL_CONFIG_VALUES,
+      storage: getEditorialStorageInfo(),
+      previewBlock: {
+        game: buildEditorialDirectivesPromptBlock(restored, "game"),
+        daily: buildEditorialDirectivesPromptBlock(restored, "daily"),
+      },
+    });
+  } catch (err) {
+    console.error("Error in POST /api/admin/editorial-config/reset-defaults:", err);
+    res.status(500).json({ ok: false, error: "No se pudo restablecer el perfil editorial por defecto." });
+  }
+});
+app.post("/api/admin/chronicles/purge-cache", requireAdminCsrfProtection, requireAdminAuth, validateRequest({ query: emptyQuerySchema, body: purgeChronicleCacheBodySchema }), async (req, res) => {
+  try {
+    const { body } = getValidated(req);
+    if (body.scope === "date" && !body.date) {
+      res.status(400).json({ ok: false, error: "Debes indicar una fecha (AAAA-MM-DD) para purgar una jornada concreta." });
+      return;
+    }
+    if (body.scope === "game" && !body.eventId) {
+      res.status(400).json({ ok: false, error: "Debes indicar el ID de partido (eventId) para purgar una crónica concreta." });
+      return;
+    }
+    const result = await scoutingEngine.purgeNarrativeCache(body);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error("Error in POST /api/admin/chronicles/purge-cache:", err);
+    res.status(500).json({ ok: false, error: "No se pudo purgar la caché de crónicas." });
   }
 });
 app.get("/api/nba/notifications", validateRequest({ query: refreshOnlyQuerySchema }), async (req, res) => {
@@ -691,6 +863,110 @@ app.get("/api/nba/advanced/heroic-shots", validateRequest({ query: advancedHeroi
   } catch (err) {
     console.error("Error in /api/nba/advanced/heroic-shots:", err);
     res.status(500).json({ error: err?.message || "Error al cargar buzzer beaters y game winners." });
+  }
+});
+
+app.get("/api/nba/history/player/:playerId", validateRequest({ params: playerParamsSchema, query: emptyQuerySchema }), async (req, res) => {
+  try {
+    const { params } = getValidated(req);
+    const profile = await getPlayerCareerHistoryPayload(params.playerId);
+    if (!profile) {
+      res.status(404).json({ error: "No se encontró historial de carrera para este jugador." });
+      return;
+    }
+    res.setHeader("Cache-Control", "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400");
+    res.json(profile);
+  } catch (err) {
+    console.error("Error in /api/nba/history/player/:playerId:", err);
+    res.status(500).json({ error: err?.message || "Error al cargar trayectoria histórica del jugador." });
+  }
+});
+
+app.get("/api/nba/history/team/:teamId", validateRequest({ params: teamParamsSchema, query: emptyQuerySchema }), async (req, res) => {
+  try {
+    const { params } = getValidated(req);
+    const history = await getTeamCareerHistoryPayload(params.teamId);
+    if (!history) {
+      res.status(404).json({ error: "No se encontró historial de franquicia para este equipo." });
+      return;
+    }
+    res.setHeader("Cache-Control", "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400");
+    res.json(history);
+  } catch (err) {
+    console.error("Error in /api/nba/history/team/:teamId:", err);
+    res.status(500).json({ error: err?.message || "Error al cargar historial de franquicia NBA." });
+  }
+});
+
+app.get("/api/nba/history/leaders", validateRequest({ query: historyLeadersQuerySchema }), async (req, res) => {
+  try {
+    const { query } = getValidated(req);
+    const payload = await getCareerLeadersPayload(query.scope);
+    res.setHeader("Cache-Control", "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400");
+    res.json(payload);
+  } catch (err) {
+    console.error("Error in /api/nba/history/leaders:", err);
+    res.status(500).json({ error: err?.message || "Error al cargar líderes históricos de carrera." });
+  }
+});
+
+app.get("/api/nba/injuries", validateRequest({ query: refreshOnlyQuerySchema }), async (req, res) => {
+  try {
+    const { query } = getValidated(req);
+    res.setHeader(
+      "Cache-Control",
+      query.refresh ? "no-store" : "public, max-age=180, s-maxage=600, stale-while-revalidate=1800"
+    );
+    const payload = await getInjuriesReportPayload(Boolean(query.refresh));
+    res.json(payload);
+  } catch (err) {
+    console.error("Error in /api/nba/injuries:", err);
+    res.status(500).json({ error: err?.message || "Error al cargar el parte oficial de lesiones y rotaciones." });
+  }
+});
+
+app.get("/api/nba/contracts", validateRequest({ query: refreshOnlyQuerySchema }), async (req, res) => {
+  try {
+    const { query } = getValidated(req);
+    res.setHeader(
+      "Cache-Control",
+      query.refresh ? "no-store" : "public, max-age=300, s-maxage=1800, stale-while-revalidate=7200"
+    );
+    const payload = await getContractsPayload(Boolean(query.refresh));
+    res.json(payload);
+  } catch (err) {
+    console.error("Error in /api/nba/contracts:", err);
+    res.status(500).json({ error: err?.message || "Error al cargar las nóminas y contratos NBA." });
+  }
+});
+
+app.get("/api/nba/draft/history", nbaApiRateLimiter, validateRequest({ query: refreshOnlyQuerySchema }), async (req, res) => {
+  try {
+    const { query } = getValidated(req);
+    res.setHeader(
+      "Cache-Control",
+      query.refresh ? "no-store" : "public, max-age=600, s-maxage=3600, stale-while-revalidate=14400"
+    );
+    const payload = await getDraftHistoryPayload(Boolean(query.refresh));
+    res.json(payload);
+  } catch (err) {
+    console.error("Error in /api/nba/draft/history:", err);
+    res.status(500).json({ error: err?.message || "Error al cargar el archivo histórico del Draft NBA." });
+  }
+});
+
+app.get("/api/nba/draft/future-picks", nbaApiRateLimiter, validateRequest({ query: refreshOnlyQuerySchema }), async (req, res) => {
+  try {
+    const { query } = getValidated(req);
+    res.setHeader(
+      "Cache-Control",
+      query.refresh ? "no-store" : "public, max-age=600, s-maxage=3600, stale-while-revalidate=14400"
+    );
+    const payload = await getFutureDraftPicksPayload(Boolean(query.refresh));
+    res.json(payload);
+  } catch (err) {
+    console.error("Error in /api/nba/draft/future-picks:", err);
+    res.status(500).json({ error: err?.message || "Error al cargar el inventario de rondas futuras del Draft NBA." });
   }
 });
 

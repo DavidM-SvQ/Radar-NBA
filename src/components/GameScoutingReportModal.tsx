@@ -6,12 +6,15 @@ import {
   Check,
   Clock,
   Copy,
+  ExternalLink,
   FileSpreadsheet,
   FileText,
   MapPin,
+  MessageSquareQuote,
   Newspaper,
   RefreshCw,
   Scale,
+  Shield,
   X,
   Zap,
 } from 'lucide-react';
@@ -33,6 +36,7 @@ import {
 } from '../utils/tableSort';
 import { MetricInfoTooltip, SortableTh } from './MetricUiHelpers';
 import { PlayerAvatar, TeamLogo } from './NbaVisuals';
+import { useThemeStyle } from '../context/ThemeStyleContext';
 
 type TeamStatsSortCol = 'label' | 'away' | 'home' | 'diff' | 'pulse';
 
@@ -124,6 +128,14 @@ function buildCompletePasoBMarkdown(
   }
   lines.push('');
 
+  if (narrative?.tacticalKeys && narrative.tacticalKeys.length > 0) {
+    lines.push('## 3 CLAVES TÁCTICAS DEL PARTIDO');
+    for (const tk of narrative.tacticalKeys) {
+      lines.push(`- **${tk.title}**: ${tk.summary}`);
+    }
+    lines.push('');
+  }
+
   if (report.periods.length > 0) {
     const qHeaders = report.periods.map((p) => p.label).join(' | ');
     const awayQs = report.periods.map((p) => p.awayScore).join(' | ');
@@ -155,6 +167,18 @@ function buildCompletePasoBMarkdown(
   );
   lines.push('');
 
+  if (narrative?.defensiveMatchupsSection) {
+    lines.push('## EMPAREJAMIENTOS Y PIZARRA DEFENSIVA');
+    lines.push(narrative.defensiveMatchupsSection);
+    if (narrative.tacticalProfile) {
+      const tp = narrative.tacticalProfile;
+      lines.push(
+        `Four Factors: ${tp.away.abbr} (eFG ${tp.away.efgPct}% · TOV ${tp.away.tovPct}% · OREB ${tp.away.orebPct}% · FTr ${tp.away.ftRate}%) vs ${tp.home.abbr} (eFG ${tp.home.efgPct}% · TOV ${tp.home.tovPct}% · OREB ${tp.home.orebPct}% · FTr ${tp.home.ftRate}%). Factor decisivo: ${tp.decisiveFactorLabel}.`
+      );
+    }
+    lines.push('');
+  }
+
   if (narrative?.dynamicSpotlight) {
     lines.push(`## ${narrative.dynamicSpotlight.title.toUpperCase()}`);
     lines.push(narrative.dynamicSpotlight.body);
@@ -172,6 +196,16 @@ function buildCompletePasoBMarkdown(
     narrative?.spanishSection || report.spanishPlayersReport.summaryLine
   );
   lines.push('');
+
+  if (narrative?.postgameQuotes && narrative.postgameQuotes.length > 0) {
+    lines.push('## VOCES DEL VESTUARIO');
+    for (const q of narrative.postgameQuotes) {
+      lines.push(
+        `> «${q.quoteEs}» — **${q.speaker}**${q.teamAbbr ? ` (${q.teamAbbr})` : ''}${q.sourceTitle ? ` · ${q.sourceTitle}` : ''}`
+      );
+    }
+    lines.push('');
+  }
 
   lines.push('## CARA A CARA: EQUIPOS');
   lines.push(
@@ -481,6 +515,7 @@ export function GameScoutingReportModal({
   onClose,
   onInspectEntity,
 }: GameScoutingReportModalProps) {
+  const { isV3 } = useThemeStyle();
   const [activeTab, setActiveTab] = useState<ModalTabId>('scouting');
   const [boxTeamFilter, setBoxTeamFilter] = useState<'both' | 'away' | 'home'>('both');
   const [absenceFilter, setAbsenceFilter] = useState<
@@ -2107,7 +2142,22 @@ export function GameScoutingReportModal({
         className="w-full max-w-6xl h-[94vh] sm:h-auto sm:max-h-[92vh] bg-[#0B1120] border border-[#1E293B] rounded-t-2xl sm:rounded-xl overflow-hidden flex flex-col"
       >
         {/* TOP STICKY BAR: Compact 2-row header on mobile, full scouting bar on desktop */}
-        <div className="px-3.5 sm:px-6 py-2.5 sm:py-3.5 bg-[#131C2E] border-b border-[#1E293B] flex flex-col gap-1.5 shrink-0">
+        <div
+          style={
+            isV3 && report
+              ? {
+                  backgroundImage: `linear-gradient(90deg, ${hexToRgba(
+                    matchupColors.awayColor,
+                    0.16
+                  )} 0%, transparent 45%, ${hexToRgba(
+                    matchupColors.homeColor,
+                    0.16
+                  )} 100%)`,
+                }
+              : undefined
+          }
+          className="px-3.5 sm:px-6 py-2.5 sm:py-3.5 bg-[#131C2E] border-b border-[#1E293B] flex flex-col gap-1.5 shrink-0"
+        >
           <div className="flex items-center justify-between gap-2 min-w-0">
             <div className="text-[11px] text-slate-400 truncate min-w-0">
               <span className="font-semibold text-orange-400 sm:hidden">RadarNBA</span>
@@ -2606,6 +2656,23 @@ export function GameScoutingReportModal({
                               <span>{narrative.generationTimeMs ? `${(narrative.generationTimeMs / 1000).toFixed(1)}s` : '0.9s'}</span>
                             </span>
 
+                            {narrative.chronicleVersion && (
+                              <span className="text-[11px] font-mono text-slate-400">
+                                <span aria-hidden="true" className="mr-1.5 text-slate-600">·</span>
+                                <span
+                                  className={
+                                    narrative.chronicleVersion === 'v2_tactical'
+                                      ? 'text-orange-300 font-semibold'
+                                      : 'text-slate-300'
+                                  }
+                                >
+                                  {narrative.chronicleVersion === 'v2_tactical'
+                                    ? 'v2 Táctica'
+                                    : 'v1 Clásica'}
+                                </span>
+                              </span>
+                            )}
+
                             <span className="hidden md:inline text-slate-400 font-mono text-[11px] ml-auto">
                               {report.arenaName}, {report.arenaCity} · {report.attendanceFormatted}
                             </span>
@@ -2621,6 +2688,39 @@ export function GameScoutingReportModal({
                               gameHighlightEntities
                             )}
                           </p>
+
+                          {/* NEW v2 BLOCK: 3 CLAVES TÁCTICAS DEL PARTIDO */}
+                          {Array.isArray(narrative.tacticalKeys) &&
+                            narrative.tacticalKeys.length > 0 && (
+                              <div className="pt-3 space-y-2">
+                                <p className="text-[11px] font-medium text-orange-400 tracking-wide">
+                                  3 Claves Tácticas · Por qué se decidió el partido
+                                </p>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                  {narrative.tacticalKeys.slice(0, 3).map((tk, idx) => (
+                                    <div
+                                      key={`${tk.title}-${idx}`}
+                                      className="rounded-lg bg-[#0B1120]/90 border border-[#1E293B] p-3.5 space-y-1.5"
+                                    >
+                                      <div className="flex items-baseline gap-2">
+                                        <span className="font-mono tabular-nums text-[10px] font-bold text-orange-400 shrink-0">
+                                          0{idx + 1}
+                                        </span>
+                                        <h5 className="text-xs font-bold text-slate-100 leading-snug">
+                                          {tk.title}
+                                        </h5>
+                                      </div>
+                                      <p className="text-xs text-slate-300 leading-relaxed">
+                                        {renderHighlightedInline(
+                                          tk.summary,
+                                          gameHighlightEntities
+                                        )}
+                                      </p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                         </header>
                       )}
 
@@ -2630,7 +2730,7 @@ export function GameScoutingReportModal({
                           id="match-sec-flow"
                           className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start"
                         >
-                          <div className="lg:col-span-8 space-y-2.5">
+                          <div className={`lg:col-span-8 space-y-2.5 ${isV3 ? 'v3-editorial-prose' : ''}`}>
                             <p className="text-[11px] font-medium text-orange-400 tracking-wide">
                               01 · Desarrollo del Encuentro
                             </p>
@@ -2934,6 +3034,192 @@ export function GameScoutingReportModal({
                         </section>
                       )}
 
+                      {/* NEW v2 SECTION 02B: EMPAREJAMIENTOS, PIZARRA DEFENSIVA & FOUR FACTORS */}
+                      {narrative &&
+                        (narrative.defensiveMatchupsSection || narrative.tacticalProfile) && (
+                          <section
+                            id="match-sec-defensive-matchups"
+                            className="pt-6 border-t border-[#1E293B] grid grid-cols-1 lg:grid-cols-12 gap-6 items-start"
+                          >
+                            <div className="lg:col-span-8 space-y-3">
+                              <div className="flex items-center gap-2">
+                                <Shield className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+                                <p className="text-[11px] font-medium text-orange-400 tracking-wide">
+                                  02B · Emparejamientos y Pizarra Defensiva
+                                </p>
+                              </div>
+                              <h4 className="font-display text-base sm:text-lg font-bold text-slate-100">
+                                Esquemas Defensivos, Emparejamientos y Quintetos de Cierre
+                              </h4>
+                              {narrative.defensiveMatchupsSection &&
+                                renderEditorialParagraphs(narrative.defensiveMatchupsSection, {
+                                  highlightEntities: gameHighlightEntities,
+                                })}
+
+                              {narrative.tacticalProfile &&
+                                narrative.tacticalProfile.defensiveDuels.length > 0 && (
+                                  <div className="pt-2 border-t border-[#1E293B]/70 space-y-2">
+                                    <p className="text-[11px] font-semibold text-slate-300">
+                                      Duelos defensivos directos detectados en el Play-by-Play
+                                    </p>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                      {narrative.tacticalProfile.defensiveDuels
+                                        .slice(0, 6)
+                                        .map((duel, idx) => (
+                                          <div
+                                            key={`${duel}-${idx}`}
+                                            className="rounded-md bg-[#0B1120]/80 border border-[#1E293B] px-3 py-2 text-[11px] text-slate-300 leading-snug"
+                                          >
+                                            {duel}
+                                          </div>
+                                        ))}
+                                    </div>
+                                  </div>
+                                )}
+                            </div>
+
+                            {narrative.tacticalProfile && (
+                              <aside className="lg:col-span-4 bg-[#0B1120]/80 border border-[#1E293B] rounded-lg p-4 space-y-3.5">
+                                <div className="flex items-center justify-between gap-2 border-b border-[#1E293B] pb-2">
+                                  <span className="text-xs font-semibold text-slate-100">
+                                    Four Factors y Perfil de Tiro
+                                  </span>
+                                  <span className="font-mono tabular-nums text-[11px] text-slate-400">
+                                    {narrative.tacticalProfile.away.abbr} vs{' '}
+                                    {narrative.tacticalProfile.home.abbr}
+                                  </span>
+                                </div>
+
+                                <div className="divide-y divide-[#1E293B]/70 text-xs">
+                                  {[
+                                    {
+                                      label: 'eFG% (Tiro efectivo)',
+                                      awayVal: narrative.tacticalProfile.away.efgPct,
+                                      homeVal: narrative.tacticalProfile.home.efgPct,
+                                      suffix: '%',
+                                      lowerIsBetter: false,
+                                    },
+                                    {
+                                      label: 'TOV% (% Pérdidas)',
+                                      awayVal: narrative.tacticalProfile.away.tovPct,
+                                      homeVal: narrative.tacticalProfile.home.tovPct,
+                                      suffix: '%',
+                                      lowerIsBetter: true,
+                                    },
+                                    {
+                                      label: 'OREB% (Reb. ofensivo)',
+                                      awayVal: narrative.tacticalProfile.away.orebPct,
+                                      homeVal: narrative.tacticalProfile.home.orebPct,
+                                      suffix: '%',
+                                      lowerIsBetter: false,
+                                    },
+                                    {
+                                      label: 'FTr (Ratio tiro libre)',
+                                      awayVal: narrative.tacticalProfile.away.ftRate,
+                                      homeVal: narrative.tacticalProfile.home.ftRate,
+                                      suffix: '%',
+                                      lowerIsBetter: false,
+                                    },
+                                    {
+                                      label: 'AST% (Canastas asist.)',
+                                      awayVal: narrative.tacticalProfile.away.astPct,
+                                      homeVal: narrative.tacticalProfile.home.astPct,
+                                      suffix: '%',
+                                      lowerIsBetter: false,
+                                    },
+                                    {
+                                      label: '3PAr (Volumen triple)',
+                                      awayVal: narrative.tacticalProfile.away.threePointRatePct,
+                                      homeVal: narrative.tacticalProfile.home.threePointRatePct,
+                                      suffix: '%',
+                                      lowerIsBetter: false,
+                                      neutral: true,
+                                    },
+                                  ].map((row) => {
+                                    const awayBetter =
+                                      !row.neutral &&
+                                      (row.lowerIsBetter
+                                        ? row.awayVal < row.homeVal - 0.05
+                                        : row.awayVal > row.homeVal + 0.05);
+                                    const homeBetter =
+                                      !row.neutral &&
+                                      (row.lowerIsBetter
+                                        ? row.homeVal < row.awayVal - 0.05
+                                        : row.homeVal > row.awayVal + 0.05);
+                                    return (
+                                      <div
+                                        key={row.label}
+                                        className="py-1.5 first:pt-0 last:pb-0 flex items-center justify-between gap-2"
+                                      >
+                                        <span className="text-[11px] text-slate-400">
+                                          {row.label}
+                                        </span>
+                                        <div className="flex items-center gap-2 font-mono tabular-nums text-[11px]">
+                                          <span
+                                            className={
+                                              awayBetter
+                                                ? 'text-emerald-300 font-semibold'
+                                                : 'text-slate-300'
+                                            }
+                                          >
+                                            {row.awayVal.toFixed(1)}
+                                            {row.suffix}
+                                          </span>
+                                          <span className="text-slate-600">/</span>
+                                          <span
+                                            className={
+                                              homeBetter
+                                                ? 'text-emerald-300 font-semibold'
+                                                : 'text-slate-300'
+                                            }
+                                          >
+                                            {row.homeVal.toFixed(1)}
+                                            {row.suffix}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+
+                                <div className="pt-2 border-t border-[#1E293B] space-y-2 text-[11px]">
+                                  <div>
+                                    <span className="text-slate-400">Factor decisivo: </span>
+                                    <span className="font-semibold text-orange-300">
+                                      {narrative.tacticalProfile.decisiveFactorLabel}
+                                    </span>
+                                  </div>
+
+                                  {(narrative.tacticalProfile.closingLineupAway.length > 0 ||
+                                    narrative.tacticalProfile.closingLineupHome.length > 0) && (
+                                    <div className="space-y-1 pt-1 border-t border-[#1E293B]/60">
+                                      <p className="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">
+                                        Quintetos de cierre
+                                      </p>
+                                      {narrative.tacticalProfile.closingLineupAway.length > 0 && (
+                                        <p className="text-slate-300 leading-snug">
+                                          <span className="font-mono font-semibold text-orange-300 mr-1.5">
+                                            {narrative.tacticalProfile.away.abbr}:
+                                          </span>
+                                          {narrative.tacticalProfile.closingLineupAway.join(', ')}
+                                        </p>
+                                      )}
+                                      {narrative.tacticalProfile.closingLineupHome.length > 0 && (
+                                        <p className="text-slate-300 leading-snug">
+                                          <span className="font-mono font-semibold text-sky-300 mr-1.5">
+                                            {narrative.tacticalProfile.home.abbr}:
+                                          </span>
+                                          {narrative.tacticalProfile.closingLineupHome.join(', ')}
+                                        </p>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              </aside>
+                            )}
+                          </section>
+                        )}
+
                       {/* SECTION 03: FACTOR X Y DUELO DE LÍDERES */}
                       {narrative && (
                         <section
@@ -3081,6 +3367,57 @@ export function GameScoutingReportModal({
                           )
                         )}
                       </section>
+
+                      {/* NEW v2 SECTION 04B (CONDITIONAL): VOCES DEL VESTUARIO */}
+                      {narrative &&
+                        Array.isArray(narrative.postgameQuotes) &&
+                        narrative.postgameQuotes.length > 0 && (
+                          <section
+                            id="match-sec-quotes"
+                            className="pt-6 border-t border-[#1E293B] space-y-3"
+                          >
+                            <div className="flex items-center gap-2">
+                              <MessageSquareQuote className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+                              <p className="text-[11px] font-medium text-orange-400 tracking-wide">
+                                04B · Declaraciones Post-Partido Verificadas
+                              </p>
+                            </div>
+                            <h4 className="font-display text-base sm:text-lg font-bold text-slate-100">
+                              Voces del Vestuario
+                            </h4>
+                            <div
+                              className={`grid grid-cols-1 ${
+                                narrative.postgameQuotes.length > 1 ? 'md:grid-cols-2' : ''
+                              } gap-3`}
+                            >
+                              {narrative.postgameQuotes.slice(0, 2).map((q, idx) => (
+                                <blockquote
+                                  key={`${q.speaker}-${idx}`}
+                                  className="rounded-lg bg-[#0B1120]/85 border border-[#1E293B] p-4 flex flex-col justify-between gap-3"
+                                >
+                                  <p className="text-xs sm:text-[13px] text-slate-200 italic leading-relaxed">
+                                    «{q.quoteEs}»
+                                  </p>
+                                  <footer className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#1E293B]/70 text-[11px]">
+                                    <span className="font-semibold text-slate-100">
+                                      {q.speaker}
+                                      {q.teamAbbr && (
+                                        <span className="font-mono text-orange-400 ml-1.5">
+                                          {q.teamAbbr}
+                                        </span>
+                                      )}
+                                    </span>
+                                    {q.sourceTitle && (
+                                      <span className="text-slate-400 font-mono text-[10px]">
+                                        Vía {q.sourceTitle}
+                                      </span>
+                                    )}
+                                  </footer>
+                                </blockquote>
+                              ))}
+                            </div>
+                          </section>
+                        )}
                     </>
                   )}
 
@@ -3427,6 +3764,31 @@ export function GameScoutingReportModal({
                       })}
                     </div>
                   </section>
+
+                  {/* VERIFIED SOURCES & GROUNDING FOOTER */}
+                  {narrative &&
+                    Array.isArray(narrative.sources) &&
+                    narrative.sources.length > 0 && (
+                      <footer className="pt-5 border-t border-[#1E293B] space-y-2">
+                        <p className="text-[11px] font-medium text-slate-400 tracking-wide">
+                          Fuentes y referencias verificadas
+                        </p>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px]">
+                          {narrative.sources.slice(0, 8).map((src, idx) => (
+                            <a
+                              key={`${src.uri}-${idx}`}
+                              href={src.uri}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-slate-300 hover:text-orange-300 transition-colors underline decoration-slate-600/70 underline-offset-2"
+                            >
+                              <span className="truncate max-w-[260px]">{src.title}</span>
+                              <ExternalLink className="w-3 h-3 shrink-0 text-slate-500" />
+                            </a>
+                          ))}
+                        </div>
+                      </footer>
+                    )}
                 </article>
               )}
 

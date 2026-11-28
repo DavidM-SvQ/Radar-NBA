@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Award,
   Bell,
   CalendarDays,
   CheckCheck,
+  Crown,
   Flame,
+  Search,
   Shield,
   SlidersHorizontal,
   Star,
@@ -17,8 +20,10 @@ import {
   Zap,
 } from 'lucide-react';
 import type {
+  MilestoneGroupedSubItem,
   MilestoneNotificationCategory,
   MilestoneNotificationItem,
+  MilestoneNotificationMinSeverity,
   MilestoneNotificationsPayload,
 } from '../types/nba';
 
@@ -32,7 +37,7 @@ interface NotificationCenterPopoverProps {
 
 const READ_STORAGE_KEY = 'radarnba_read_notifications_v1';
 
-type CategoryFilter = 'all' | 'gameday' | 'heroic' | 'milestones' | 'streaks';
+type CategoryFilter = 'all' | 'records' | 'gameday' | 'heroic' | 'milestones' | 'streaks';
 type EntityFilter = 'all' | 'player' | 'team';
 
 function loadReadSet(): Set<string> {
@@ -69,6 +74,8 @@ function formatShortDateEs(isoDate: string): string {
 
 function getCategoryIcon(category: MilestoneNotificationCategory) {
   switch (category) {
+    case 'record':
+      return Crown;
     case 'heroic':
       return Zap;
     case 'triple_double':
@@ -94,6 +101,7 @@ function matchesCategoryFilter(
   filter: CategoryFilter
 ): boolean {
   if (filter === 'all') return true;
+  if (filter === 'records') return category === 'record';
   if (filter === 'gameday') {
     return (
       category === 'scoring' ||
@@ -119,11 +127,51 @@ export function NotificationCenterPopover({
   const [onlyWatchlist, setOnlyWatchlist] = useState(false);
   const [entityFilter, setEntityFilter] = useState<EntityFilter>('all');
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all');
+  const [severityFilter, setSeverityFilter] =
+    useState<MilestoneNotificationMinSeverity>('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const [readIds, setReadIds] = useState<Set<string>>(() => loadReadSet());
+  const [hoveredMerged, setHoveredMerged] = useState<{
+    item: MilestoneNotificationItem;
+    top: number;
+    left: number;
+    placement: 'above' | 'below';
+  } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
+  const showMergedTooltip = useCallback(
+    (item: MilestoneNotificationItem, el: HTMLElement) => {
+      const rect = el.getBoundingClientRect();
+      const tooltipWidth = 312;
+      const estimatedHeight = Math.min(
+        260,
+        56 + Math.max(1, item.mergedItems?.length ?? (item.mergedCount ? item.mergedCount - 1 : 1)) * 58
+      );
+      const margin = 12;
+      let left = rect.left + rect.width / 2 - tooltipWidth / 2;
+      if (left < margin) left = margin;
+      if (left + tooltipWidth > window.innerWidth - margin) {
+        left = Math.max(margin, window.innerWidth - tooltipWidth - margin);
+      }
+      const spaceAbove = rect.top - margin;
+      const spaceBelow = window.innerHeight - rect.bottom - margin;
+      const placement: 'above' | 'below' =
+        spaceBelow >= estimatedHeight || spaceBelow >= spaceAbove ? 'below' : 'above';
+      const top = placement === 'below' ? rect.bottom + 8 : rect.top - 8;
+      setHoveredMerged({ item, top, left, placement });
+    },
+    []
+  );
+
+  const hideMergedTooltip = useCallback(() => {
+    setHoveredMerged(null);
+  }, []);
+
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setHoveredMerged(null);
+      return;
+    }
     const handleOutside = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setOpen(false);
@@ -170,14 +218,39 @@ export function NotificationCenterPopover({
     };
   }, [scopedNotifications]);
 
+  const recordCount = useMemo(() => {
+    return scopedNotifications.filter((item) => item.category === 'record').length;
+  }, [scopedNotifications]);
+
   const visibleItems = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
     return scopedNotifications.filter((item) => {
       if (entityFilter !== 'all' && item.entityType !== entityFilter) {
         return false;
       }
-      return matchesCategoryFilter(item.category, categoryFilter);
+      if (!matchesCategoryFilter(item.category, categoryFilter)) {
+        return false;
+      }
+      if (severityFilter === 'epic' && item.severity !== 'epic') {
+        return false;
+      }
+      if (
+        severityFilter === 'high' &&
+        item.severity !== 'epic' &&
+        item.severity !== 'high'
+      ) {
+        return false;
+      }
+      if (q) {
+        const mergedHay = item.mergedItems
+          ? item.mergedItems.map((m) => `${m.title} ${m.detail} ${m.badgeText}`).join(' ')
+          : '';
+        const hay = `${item.title} ${item.detail} ${item.entityName} ${item.teamAbbr} ${item.badgeText} ${mergedHay}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
     });
-  }, [scopedNotifications, entityFilter, categoryFilter]);
+  }, [scopedNotifications, entityFilter, categoryFilter, severityFilter, searchQuery]);
 
   if (!payload || !payload.enabled) {
     return null;
@@ -268,7 +341,10 @@ export function NotificationCenterPopover({
               </div>
               {payload.latestDate && (
                 <p className="text-[11px] text-slate-400 mt-0.5 truncate">
-                  Última jornada analizada: {formatShortDateEs(payload.latestDate)}
+                  Última jornada: {formatShortDateEs(payload.latestDate)}
+                  {payload.summary?.consolidatedCount
+                    ? ` · ${payload.summary.consolidatedCount} agrupadas`
+                    : ''}
                 </p>
               )}
             </div>
@@ -362,10 +438,62 @@ export function NotificationCenterPopover({
               })}
             </div>
 
+            {/* Buscador rápido + Relevancia */}
+            <div className="flex items-center gap-1.5">
+              <div className="relative flex-1 min-w-0">
+                <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Buscar jugador, equipo o hito..."
+                  aria-label="Buscar notificaciones"
+                  className="w-full h-7 pl-7 pr-6 bg-[#131C2E] border border-[#1E293B] focus:border-orange-500/60 rounded-md text-[11px] text-slate-200 placeholder:text-slate-500 focus:outline-none"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    aria-label="Limpiar búsqueda"
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+
+              <div className="inline-flex items-center bg-[#131C2E] border border-[#1E293B] p-0.5 rounded-md shrink-0">
+                {(
+                  [
+                    { id: 'all', label: 'Todas' },
+                    { id: 'high', label: 'Top+' },
+                    { id: 'epic', label: 'Épicas' },
+                  ] as const
+                ).map((sev) => (
+                  <button
+                    key={sev.id}
+                    type="button"
+                    onClick={() => setSeverityFilter(sev.id)}
+                    className={`px-1.5 py-0.5 text-[10px] font-medium rounded transition-colors ${
+                      severityFilter === sev.id
+                        ? 'bg-[#1E293B] text-orange-300 border border-orange-500/40 font-semibold'
+                        : 'text-slate-400 hover:text-slate-200 border border-transparent'
+                    }`}
+                  >
+                    {sev.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="flex items-center gap-1 overflow-x-auto pb-0.5">
               {(
                 [
                   { id: 'all', label: 'Todas' },
+                  {
+                    id: 'records',
+                    label: recordCount > 0 ? `Récords (${recordCount})` : 'Récords',
+                  },
                   { id: 'gameday', label: 'Jornada' },
                   { id: 'heroic', label: 'Clutch/BB' },
                   { id: 'milestones', label: 'Barreras' },
@@ -389,7 +517,10 @@ export function NotificationCenterPopover({
           </div>
 
           {/* Notification Feed */}
-          <div className="flex-1 overflow-y-auto divide-y divide-[#1E293B]/70">
+          <div
+            onScroll={hideMergedTooltip}
+            className="flex-1 overflow-y-auto divide-y divide-[#1E293B]/70"
+          >
             {visibleItems.length === 0 ? (
               <div className="p-6 text-center space-y-1.5">
                 <Bell className="w-6 h-6 text-slate-600 mx-auto" />
@@ -411,8 +542,10 @@ export function NotificationCenterPopover({
                 const isWatched = watchlistIds.has(`${item.entityType}:${item.entityId}`);
                 const hasExactDate = /^\d{4}-\d{2}-\d{2}$/.test(item.date);
 
-                const iconTone =
-                  item.severity === 'epic'
+                const isCareerHigh = item.category === 'record' && item.id.startsWith('ch:');
+                const iconTone = isCareerHigh
+                  ? 'text-amber-300 bg-amber-500/15 border-amber-500/40'
+                  : item.severity === 'epic'
                     ? 'text-orange-400 bg-orange-500/10 border-orange-500/30'
                     : item.severity === 'high'
                       ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30'
@@ -474,9 +607,32 @@ export function NotificationCenterPopover({
                           >
                             {item.entityType === 'team' ? 'Equipo' : 'Jugador'}
                           </span>
-                          <span className="text-[10px] font-mono tabular-nums font-semibold text-orange-300 truncate">
+                          <span
+                            className={`text-[10px] font-mono tabular-nums font-semibold truncate ${
+                              isCareerHigh ? 'text-amber-300' : 'text-orange-300'
+                            }`}
+                          >
                             {item.badgeText}
                           </span>
+                          {item.mergedCount && item.mergedCount > 1 && (
+                            <span
+                              tabIndex={0}
+                              role="note"
+                              aria-label={`Ver ${item.mergedCount - 1} ${item.mergedCount - 1 === 1 ? 'hito agrupado' : 'hitos agrupados'}`}
+                              onMouseEnter={(e) => showMergedTooltip(item, e.currentTarget)}
+                              onMouseLeave={hideMergedTooltip}
+                              onFocus={(e) => showMergedTooltip(item, e.currentTarget)}
+                              onBlur={hideMergedTooltip}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                showMergedTooltip(item, e.currentTarget);
+                              }}
+                              className="text-[9px] font-mono tabular-nums px-1.5 py-0.5 rounded bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/35 hover:border-sky-400/60 text-sky-300 shrink-0 cursor-help transition-colors"
+                            >
+                              +{item.mergedCount - 1}{' '}
+                              {item.mergedCount - 1 === 1 ? 'hito' : 'hitos'}
+                            </span>
+                          )}
                         </div>
                         {hasExactDate && onOpenGamedayDate && (
                           <button
@@ -515,6 +671,110 @@ export function NotificationCenterPopover({
           )}
         </div>
       )}
+
+      {open &&
+        hoveredMerged &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          (() => {
+            const target = hoveredMerged.item;
+            const extraCount = Math.max(1, (target.mergedCount ?? 2) - 1);
+            const subItems: MilestoneGroupedSubItem[] =
+              target.mergedItems && target.mergedItems.length > 0
+                ? target.mergedItems
+                : (() => {
+                    const marker = ' · También: ';
+                    const idx = target.detail.indexOf(marker);
+                    if (idx === -1) return [];
+                    return target.detail
+                      .slice(idx + marker.length)
+                      .split(' · ')
+                      .filter(Boolean)
+                      .map((badge, i) => ({
+                        id: `${target.id}:fallback:${i}`,
+                        category: target.category,
+                        severity: target.severity,
+                        title: badge,
+                        detail: `Logro agrupado en el mismo partido (${target.teamAbbr} · ${formatShortDateEs(target.date)}).`,
+                        badgeText: badge,
+                      }));
+                  })();
+
+            return (
+              <div
+                role="tooltip"
+                style={{
+                  position: 'fixed',
+                  top: `${hoveredMerged.top}px`,
+                  left: `${hoveredMerged.left}px`,
+                  transform:
+                    hoveredMerged.placement === 'above' ? 'translateY(-100%)' : undefined,
+                  width: '312px',
+                }}
+                className="pointer-events-none z-[90] bg-[#0B1120] border border-sky-500/40 rounded-lg shadow-2xl overflow-hidden"
+              >
+                <div className="px-3 py-2 bg-[#131C2E] border-b border-[#1E293B] flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-bold text-sky-300 truncate">
+                    {extraCount === 1 ? 'Hito agrupado' : `${extraCount} hitos agrupados`} · {target.entityName}
+                  </span>
+                  <span className="text-[10px] font-mono tabular-nums text-slate-400 shrink-0">
+                    {formatShortDateEs(target.date)}
+                  </span>
+                </div>
+                <div className="p-2.5 space-y-2 max-h-[240px] overflow-hidden">
+                  {subItems.length > 0 ? (
+                    subItems.map((sub) => {
+                      const SubIcon = getCategoryIcon(sub.category);
+                      const isSubCareerHigh =
+                        sub.category === 'record' && sub.id.startsWith('ch:');
+                      const subTone = isSubCareerHigh
+                        ? 'text-amber-300 bg-amber-500/15 border-amber-500/40'
+                        : sub.severity === 'epic'
+                          ? 'text-orange-400 bg-orange-500/10 border-orange-500/30'
+                          : sub.severity === 'high'
+                            ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30'
+                            : 'text-sky-400 bg-sky-500/10 border-sky-500/30';
+                      return (
+                        <div
+                          key={sub.id}
+                          className="flex items-start gap-2 bg-[#131C2E]/70 border border-[#1E293B] rounded-md p-2"
+                        >
+                          <div
+                            className={`w-6 h-6 rounded border flex items-center justify-center shrink-0 mt-0.5 ${subTone}`}
+                          >
+                            <SubIcon className="w-3.5 h-3.5" />
+                          </div>
+                          <div className="min-w-0 flex-1 space-y-0.5">
+                            <div className="flex items-center justify-between gap-1.5">
+                              <span className="text-[11px] font-semibold text-slate-100 truncate">
+                                {sub.title}
+                              </span>
+                              <span
+                                className={`text-[9px] font-mono tabular-nums font-semibold shrink-0 ${
+                                  isSubCareerHigh ? 'text-amber-300' : 'text-orange-300'
+                                }`}
+                              >
+                                {sub.badgeText}
+                              </span>
+                            </div>
+                            <p className="text-[10px] text-slate-400 leading-snug">
+                              {sub.detail}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <p className="text-[11px] text-slate-300 leading-snug">
+                      Incluye {target.mergedCount} logros destacados del mismo partido consolidados en esta alerta.
+                    </p>
+                  )}
+                </div>
+              </div>
+            );
+          })(),
+          document.body
+        )}
     </div>
   );
 }

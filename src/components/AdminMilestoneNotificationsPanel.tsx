@@ -5,7 +5,10 @@ import {
   Bell,
   BellOff,
   Check,
+  Crown,
+  Filter,
   Flame,
+  Layers,
   Loader2,
   Minus,
   Plus,
@@ -21,6 +24,7 @@ import {
 } from 'lucide-react';
 import type {
   MilestoneNotificationCountsPreview,
+  MilestoneNotificationMinSeverity,
   MilestoneNotificationsConfig,
   MilestoneNotificationsConfigValues,
 } from '../types/nba';
@@ -49,6 +53,7 @@ type NotificationGroupTab =
   | 'streaks';
 
 type EntityScopeFilter = 'all' | 'player' | 'team';
+type TriggerStatusFilter = 'all' | 'active' | 'off' | 'noisy';
 
 const TEAM_ONLY_TRIGGER_KEYS = new Set<string>([
   'teamBlowoutEnabled',
@@ -74,6 +79,8 @@ type BooleanTriggerKey = {
     : never;
 }[keyof MilestoneNotificationsConfigValues];
 
+type TriggerToggleKey = Exclude<BooleanTriggerKey, 'enabled' | 'dedupePlayerGame'>;
+
 type NumericTriggerKey = keyof typeof MILESTONE_NOTIFICATIONS_BOUNDS;
 
 interface NumericBaremoSpec {
@@ -84,7 +91,7 @@ interface NumericBaremoSpec {
 
 interface TriggerCardMeta {
   index: number;
-  toggleKey: Exclude<BooleanTriggerKey, 'enabled'>;
+  toggleKey: TriggerToggleKey;
   group: Exclude<NotificationGroupTab, 'all'>;
   title: string;
   description: string;
@@ -105,13 +112,13 @@ const makeHelp = (
 
 const MENU_TAB_HELP: Record<NotificationGroupTab, ColumnHelpEntry> = {
   all: makeHelp(
-    'Catálogo completo (30 disparadores)',
-    'Muestra juntos los 30 disparadores configurables del motor de notificaciones de RadarNBA.',
+    'Catálogo completo (31 disparadores)',
+    'Muestra juntos los 31 disparadores configurables del motor de notificaciones de RadarNBA.',
     'Puedes activar o apagar cada uno de forma independiente y ajustar sus baremos numéricos exactos.'
   ),
   gameday: makeHelp(
-    'Actuaciones de Partido (11)',
-    'Alertas basadas en estadísticas ofensivas, asistencias, rebotes, triples-dobles y precisión individual en un encuentro.',
+    'Actuaciones de Partido (12)',
+    'Alertas basadas en estadísticas ofensivas, asistencias, rebotes, triples-dobles, récords personales de carrera y precisión individual.',
     'Útil para detectar noches históricas y exhibiciones de anotación, dirección o dominio en el rebote.'
   ),
   defense_team: makeHelp(
@@ -162,24 +169,89 @@ const TRIGGER_ITEMS: TriggerCardMeta[] = [
     index: 2,
     toggleKey: 'seasonHighPtsEnabled',
     group: 'gameday',
-    title: 'Tope Personal de Temporada',
-    description: 'Avisa cuando un jugador bate su mejor marca anotadora del curso.',
+    title: 'Máximo de Temporada (Season High)',
+    description: 'Avisa cuando un jugador bate su mejor marca del curso 2026-27 en PTS, REB, AST, 3PM, ROB o TAP superando los baremos destacados.',
     badgePreview: 'MAX TEMP',
     help: makeHelp(
-      'Disparador #2 · Tope Personal de Temporada',
-      'Compara la anotación de la noche con todas sus actuaciones previas en la campaña 2026-27.',
-      'Exige un mínimo de partidos previos para evitar falsos récords en los dos primeros encuentros del año.'
+      'Disparador #2 · Máximo de Temporada Multi-Estadística',
+      'Compara la actuación de la noche con todos los partidos previos del jugador en 2026-27 en las 6 grandes estadísticas.',
+      'Exige un mínimo de partidos previos y umbrales altos para destacar solo topes realmente llamativos. Si además bate su Career High en esa misma estadística, evita duplicar el aviso.'
     ),
     baremos: [
       {
-        key: 'seasonHighMinPts',
-        label: 'Puntos mínimos para contar tope',
-        help: makeHelp('Mínimo de puntos', 'Evita alertas por topes personales discretos de jugadores con poco uso (ej. 12 PTS).', 'Por defecto: 26 PTS.'),
+        key: 'seasonHighMinGames',
+        label: 'PJ mínimos previos en temporada',
+        help: makeHelp('Muestra mínima previa', 'Partidos ya disputados en 2026-27 antes de emitir alertas de máximo de temporada.', 'Por defecto: 8 PJ (rango 2–30).'),
       },
       {
-        key: 'seasonHighMinGames',
-        label: 'Partidos mínimos jugados antes',
-        help: makeHelp('Muestra mínima previa', 'Número de partidos ya disputados en la temporada antes de empezar a emitir topes personales.', 'Por defecto: 4 PJ.'),
+        key: 'seasonHighMinPts',
+        label: 'Mínimo PTS para Season High',
+        help: makeHelp('Suelo de puntos', 'Evita avisos por topes discretos (ej. 16 PTS). Súbelo a 35-40 para solo actuaciones top.', 'Por defecto: 35 PTS.'),
+      },
+      {
+        key: 'seasonHighMinReb',
+        label: 'Mínimo REB para Season High',
+        help: makeHelp('Suelo de rebotes', 'Rebotes mínimos exigidos para notificar un máximo personal de temporada.', 'Por defecto: 16 REB.'),
+      },
+      {
+        key: 'seasonHighMinAst',
+        label: 'Mínimo AST para Season High',
+        help: makeHelp('Suelo de asistencias', 'Asistencias mínimas exigidas para notificar un máximo personal de temporada.', 'Por defecto: 13 AST.'),
+      },
+      {
+        key: 'seasonHighMin3pm',
+        label: 'Mínimo 3PM para Season High',
+        help: makeHelp('Suelo de triples', 'Triples anotados mínimos para notificar un máximo personal de temporada.', 'Por defecto: 7 3PM.'),
+      },
+      {
+        key: 'seasonHighMinStlBlk',
+        label: 'Mínimo ROB/TAP para Season High',
+        help: makeHelp('Suelo de robos o tapones', 'Mínimo en robos o tapones para notificar un máximo personal de temporada.', 'Por defecto: 5.'),
+      },
+    ],
+  },
+  {
+    index: 31,
+    toggleKey: 'careerHighEnabled',
+    group: 'gameday',
+    title: 'Máximo de Carrera (Career High)',
+    description: 'Alerta épica verificada contra toda la carrera NBA del jugador (desde 2003-04) en PTS, REB, AST, 3PM, ROB o TAP.',
+    badgePreview: 'CAREER HIGH',
+    help: makeHelp(
+      'Disparador #31 · Máximo de Carrera Histórico',
+      'Contrasta cada actuación de 2026-27 frente al histórico completo de carrera NBA del jugador.',
+      'Exige un mínimo de partidos acumulados en carrera para evitar récords triviales de debutantes y umbrales destacados por estadística.'
+    ),
+    baremos: [
+      {
+        key: 'careerHighMinGames',
+        label: 'PJ mínimos previos en carrera',
+        help: makeHelp('Experiencia mínima NBA', 'Partidos oficiales previos exigidos en la carrera del jugador antes de lanzar avisos de Career High.', 'Por defecto: 30 PJ (rango 5–150).'),
+      },
+      {
+        key: 'careerHighMinPts',
+        label: 'Mínimo PTS para Career High',
+        help: makeHelp('Mínimo puntos', 'Suelo de puntos para considerar destacado un nuevo récord personal de carrera.', 'Por defecto: 32 PTS.'),
+      },
+      {
+        key: 'careerHighMinReb',
+        label: 'Mínimo REB para Career High',
+        help: makeHelp('Mínimo rebotes', 'Suelo de rebotes para activar la alerta de récord personal.', 'Por defecto: 15 REB.'),
+      },
+      {
+        key: 'careerHighMinAst',
+        label: 'Mínimo AST para Career High',
+        help: makeHelp('Mínimo asistencias', 'Suelo de asistencias para activar la alerta de récord personal.', 'Por defecto: 12 AST.'),
+      },
+      {
+        key: 'careerHighMin3pm',
+        label: 'Mínimo 3PM para Career High',
+        help: makeHelp('Mínimo triples', 'Suelo de triples anotados para activar la alerta de récord personal.', 'Por defecto: 7 3PM.'),
+      },
+      {
+        key: 'careerHighMinStlBlk',
+        label: 'Mínimo ROB/TAP para Career High',
+        help: makeHelp('Mínimo robos o tapones', 'Suelo en robos o tapones para activar la alerta de récord personal.', 'Por defecto: 5.'),
       },
     ],
   },
@@ -782,7 +854,7 @@ const TRIGGER_ITEMS: TriggerCardMeta[] = [
 ];
 
 function getLiveBadgePreview(
-  toggleKey: Exclude<BooleanTriggerKey, 'enabled'>,
+  toggleKey: TriggerToggleKey,
   cfg: MilestoneNotificationsConfigValues,
   fallback: string
 ): string {
@@ -790,7 +862,9 @@ function getLiveBadgePreview(
     case 'scoringMilestoneEnabled':
       return `${cfg.scoringThreshold}+ PTS`;
     case 'seasonHighPtsEnabled':
-      return `MAX ≥${cfg.seasonHighMinPts}P`;
+      return `MÁX ${cfg.seasonHighMinPts}P/${cfg.seasonHighMinReb}R/${cfg.seasonHighMinAst}A`;
+    case 'careerHighEnabled':
+      return `CH ${cfg.careerHighMinPts}P/${cfg.careerHighMinReb}R/${cfg.careerHighMinAst}A`;
     case 'threePointExplosionEnabled':
       return `${cfg.threePointThreshold}+ 3PM`;
     case 'assistExplosionEnabled':
@@ -938,6 +1012,7 @@ export function AdminMilestoneNotificationsPanel({
   const [activeGroup, setActiveGroup] = useState<NotificationGroupTab>('all');
   const [entityScopeFilter, setEntityScopeFilter] =
     useState<EntityScopeFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<TriggerStatusFilter>('all');
 
   const [savedConfig, setSavedConfig] = useState<MilestoneNotificationsConfigValues>(
     DEFAULT_MILESTONE_NOTIFICATIONS_VALUES
@@ -1014,22 +1089,48 @@ export function AdminMilestoneNotificationsPanel({
     return TRIGGER_ITEMS.filter((item) => draft[item.toggleKey]).length;
   }, [draft]);
 
+  const topNoiseTriggers = useMemo(() => {
+    if (!previewCounts?.recentCounts) return [];
+    return TRIGGER_ITEMS.filter((item) => draft[item.toggleKey])
+      .map((item) => ({
+        item,
+        recent: Number(previewCounts.recentCounts[item.toggleKey] || 0),
+        season: Number(previewCounts.seasonCounts[item.toggleKey] || 0),
+      }))
+      .filter((entry) => entry.recent > 0)
+      .sort((a, b) => b.recent - a.recent || b.season - a.season)
+      .slice(0, 4);
+  }, [draft, previewCounts]);
+
   const filteredItems = useMemo(() => {
     return TRIGGER_ITEMS.filter((item) => {
       if (activeGroup !== 'all' && item.group !== activeGroup) return false;
       const scope = getTriggerEntityScope(item.toggleKey);
-      if (entityScopeFilter === 'player') {
-        return scope === 'player' || scope === 'both';
+      if (entityScopeFilter === 'player' && scope !== 'player' && scope !== 'both') {
+        return false;
       }
-      if (entityScopeFilter === 'team') {
-        return scope === 'team' || scope === 'both';
+      if (entityScopeFilter === 'team' && scope !== 'team' && scope !== 'both') {
+        return false;
+      }
+      if (statusFilter === 'active' && !draft[item.toggleKey]) return false;
+      if (statusFilter === 'off' && draft[item.toggleKey]) return false;
+      if (statusFilter === 'noisy') {
+        const sCount = previewCounts?.seasonCounts?.[item.toggleKey] ?? 0;
+        const rCount = previewCounts?.recentCounts?.[item.toggleKey] ?? 0;
+        const threshold = item.toggleKey === 'imminentMilestonesEnabled' ? 12 : 40;
+        if (sCount <= threshold && rCount < 4) return false;
       }
       return true;
     });
-  }, [activeGroup, entityScopeFilter]);
+  }, [activeGroup, entityScopeFilter, statusFilter, draft, previewCounts]);
 
   const toggleBool = (key: BooleanTriggerKey) => {
     setDraft((prev) => ({ ...prev, [key]: !prev[key] }));
+    setFeedback(null);
+  };
+
+  const setMinSeverity = (next: MilestoneNotificationMinSeverity) => {
+    setDraft((prev) => ({ ...prev, minSeverity: next }));
     setFeedback(null);
   };
 
@@ -1046,6 +1147,8 @@ export function AdminMilestoneNotificationsPanel({
       setDraft({
         ...DEFAULT_MILESTONE_NOTIFICATIONS_VALUES,
         enabled: true,
+        minSeverity: 'all',
+        dedupePlayerGame: true,
       });
     } else if (preset === 'epic') {
       setDraft({
@@ -1053,8 +1156,17 @@ export function AdminMilestoneNotificationsPanel({
         enabled: true,
         lookbackDays: 5,
         maxNotifications: 25,
+        minSeverity: 'epic',
+        dedupePlayerGame: true,
         scoringThreshold: 50,
         seasonHighPtsEnabled: false,
+        careerHighEnabled: true,
+        careerHighMinGames: 50,
+        careerHighMinPts: 40,
+        careerHighMinReb: 18,
+        careerHighMinAst: 15,
+        careerHighMin3pm: 8,
+        careerHighMinStlBlk: 6,
         threePointThreshold: 9,
         assistExplosionThreshold: 16,
         reboundExplosionThreshold: 20,
@@ -1079,6 +1191,7 @@ export function AdminMilestoneNotificationsPanel({
         seasonStlStep: 50,
         seasonBlkStep: 50,
         teamSeasonWinsStep: 20,
+        imminentMilestonesEnabled: false,
         streakMinGames: 10,
         teamWinStreakMin: 7,
       });
@@ -1088,6 +1201,8 @@ export function AdminMilestoneNotificationsPanel({
         enabled: true,
         lookbackDays: 4,
         maxNotifications: 70,
+        minSeverity: 'all',
+        dedupePlayerGame: false,
         doubleDoubleEnabled: true,
         plusMinusMilestoneEnabled: true,
         scoringThreshold: 35,
@@ -1119,7 +1234,7 @@ export function AdminMilestoneNotificationsPanel({
       setFeedback({
         kind: 'success',
         text: clean.enabled
-          ? 'Los 30 disparadores y baremos se han guardado. La bandeja ya aplica las nuevas reglas.'
+          ? 'Los 31 disparadores y baremos se han guardado. La bandeja ya aplica las nuevas reglas.'
           : 'Notificaciones desactivadas globalmente. La campana permanece oculta en la cabecera.',
       });
       onConfigSaved?.();
@@ -1147,7 +1262,7 @@ export function AdminMilestoneNotificationsPanel({
       setUpdatedAt(res.config.updatedAt || Date.now());
       setFeedback({
         kind: 'success',
-        text: 'Los 30 disparadores y baremos se han restablecido a sus valores recomendados.',
+        text: 'Los 31 disparadores y baremos se han restablecido a sus valores recomendados.',
       });
       onConfigSaved?.();
     } else {
@@ -1211,7 +1326,7 @@ export function AdminMilestoneNotificationsPanel({
   if (loading) {
     return (
       <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-6 text-xs text-slate-400">
-        Cargando configuración de los 30 disparadores de notificaciones...
+        Cargando configuración de los 31 disparadores de notificaciones...
       </div>
     );
   }
@@ -1229,20 +1344,20 @@ export function AdminMilestoneNotificationsPanel({
                 <BellOff className="w-4 h-4 text-slate-500 shrink-0" />
               )}
               <h2 className="text-base font-display font-semibold text-slate-100">
-                Notificaciones Inteligentes de Hitos (30 Disparadores)
+                Notificaciones Inteligentes de Hitos (31 Disparadores)
               </h2>
               <MetricInfoTooltip
                 customHelp={makeHelp(
                   'Motor de Notificaciones Inteligentes',
-                  'Permite controlar de forma centralizada si se muestran avisos de hitos en la web y personalizar cada uno de los 30 disparadores con sus propios baremos.',
+                  'Permite controlar de forma centralizada si se muestran avisos de hitos en la web y personalizar cada uno de los 31 disparadores con sus propios baremos y reglas anti-ruido.',
                   'Al pulsar Guardar cambios la nueva configuración se aplica al instante en la campana superior.'
                 )}
                 align="left"
               />
             </div>
             <p className="text-xs text-slate-400 leading-relaxed max-w-2xl">
-              Activa o desactiva la campana pública y define tus propios baremos en los 30
-              disparadores de actuaciones, defensas, cierres clutch, barreras acumuladas y rachas.
+              Activa o desactiva la campana pública, ajusta los baremos destacados de Career High y
+              Season High y controla el volumen de avisos con filtros anti-ruido.
             </p>
           </div>
 
@@ -1304,7 +1419,7 @@ export function AdminMilestoneNotificationsPanel({
             makeHelp(
               'Ventana de días / jornadas',
               'Cuántas fechas de partidos recientes explora el motor al buscar actuaciones, cierres y barreras superadas.',
-              'Por defecto 3 días para ver las últimas jornadas sin acumular avisos antiguos.'
+              'Por defecto 2 días para ver las últimas jornadas con señal alta sin saturar el tope de la bandeja.'
             )
           )}
           {renderNumericControl(
@@ -1323,8 +1438,8 @@ export function AdminMilestoneNotificationsPanel({
               <MetricInfoTooltip
                 customHelp={makeHelp(
                   'Perfiles de configuración rápida',
-                  'Aplica una combinación preajustada de disparadores y baremos con un clic antes de guardar.',
-                  'Equilibrado = estándar recomendado; Solo Épicas = filtros exigentes; Radar Total = activa los 30 disparadores.'
+                  'Aplica una combinación preajustada de disparadores, baremos y filtro anti-ruido con un clic antes de guardar.',
+                  'Equilibrado = estándar selectivo con agrupación; Solo Épicas = únicamente hitos históricos; Radar Total = activa los 31 disparadores sin agrupar.'
                 )}
                 align="right"
               />
@@ -1349,8 +1464,95 @@ export function AdminMilestoneNotificationsPanel({
                 onClick={() => applyPreset('total')}
                 className="px-2 py-1 text-[11px] font-medium rounded bg-[#131C2E] hover:bg-[#1E293B] text-emerald-300 border border-[#1E293B]"
               >
-                Radar Total (30)
+                Radar Total (31)
               </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Control Anti-Ruido y Filtrado Inteligente */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-[#1E293B]/80">
+          <div className="flex items-center justify-between gap-3 bg-[#0B1120] border border-[#1E293B] rounded-md px-3 py-2">
+            <div className="min-w-0 space-y-0.5">
+              <div className="flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                <span className="text-xs font-medium text-slate-200">
+                  Agrupar 1 alerta por jugador y partido
+                </span>
+                <MetricInfoTooltip
+                  customHelp={makeHelp(
+                    'Consolidación anti-duplicados por partido',
+                    'Cuando un jugador firma una exhibición que activa varios disparadores la misma noche (ej. 45 PTS + Career High + Triple-Doble + 8 Triples), conserva solo la alerta de mayor rango y añade el resto en el detalle.',
+                    'Evita que una misma actuación ocupe 4 o 5 huecos del límite máximo de la campana.'
+                  )}
+                  align="left"
+                  iconClassName="w-3.5 h-3.5"
+                />
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Evita que una misma noche histórica genere 4–6 alertas repetidas del mismo jugador.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={draft.dedupePlayerGame}
+              aria-label="Agrupar una alerta por jugador y partido"
+              onClick={() => toggleBool('dedupePlayerGame')}
+              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${
+                draft.dedupePlayerGame ? 'bg-orange-500' : 'bg-[#131C2E] border-[#283548]'
+              }`}
+            >
+              <span
+                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${
+                  draft.dedupePlayerGame ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 bg-[#0B1120] border border-[#1E293B] rounded-md px-3 py-2">
+            <div className="min-w-0 space-y-0.5">
+              <div className="flex items-center gap-1.5">
+                <Filter className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+                <span className="text-xs font-medium text-slate-200">
+                  Relevancia mínima publicada
+                </span>
+                <MetricInfoTooltip
+                  customHelp={makeHelp(
+                    'Filtro global de relevancia mínima',
+                    'Descarta automáticamente avisos informativos menores antes de llenar la campana pública.',
+                    'Todas = Épicas, Destacadas e Info (inminentes/dobles-dobles); Destacadas+ = oculta Info; Solo Épicas = únicamente actuaciones históricas y Career Highs.'
+                  )}
+                  align="right"
+                  iconClassName="w-3.5 h-3.5"
+                />
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Filtra el nivel mínimo de impacto antes de aplicar el tope de la bandeja.
+              </p>
+            </div>
+            <div className="inline-flex items-center bg-[#131C2E] border border-[#1E293B] p-0.5 rounded-md shrink-0">
+              {(
+                [
+                  { id: 'all', label: 'Todas' },
+                  { id: 'high', label: 'Destacadas+' },
+                  { id: 'epic', label: 'Solo Épicas' },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setMinSeverity(opt.id)}
+                  className={`px-2 py-1 text-[11px] font-medium rounded transition-colors ${
+                    draft.minSeverity === opt.id
+                      ? 'bg-orange-500 text-slate-950 font-semibold'
+                      : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
           </div>
         </div>
@@ -1370,44 +1572,70 @@ export function AdminMilestoneNotificationsPanel({
         )}
       </section>
 
-      {/* Entity Split (Jugador / Equipos) + Group Tabs + Live Simulation Summary */}
+      {/* Entity Split (Jugador / Equipos) + Status Filter + Live Simulation Summary */}
       <div className="space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="inline-flex items-center gap-1 bg-[#131C2E] border border-[#1E293B] p-1 rounded-lg">
-            {(
-              [
-                { id: 'all', label: 'Todos (30)', icon: Sparkles },
-                { id: 'player', label: 'Jugador (27)', icon: User },
-                { id: 'team', label: 'Equipos (4)', icon: Users },
-              ] as const
-            ).map((scopeTab) => {
-              const ScopeIcon = scopeTab.icon;
-              const active = entityScopeFilter === scopeTab.id;
-              return (
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex items-center gap-1 bg-[#131C2E] border border-[#1E293B] p-1 rounded-lg">
+              {(
+                [
+                  { id: 'all', label: 'Todos (31)', icon: Sparkles },
+                  { id: 'player', label: 'Jugador (28)', icon: User },
+                  { id: 'team', label: 'Equipos (4)', icon: Users },
+                ] as const
+              ).map((scopeTab) => {
+                const ScopeIcon = scopeTab.icon;
+                const active = entityScopeFilter === scopeTab.id;
+                return (
+                  <button
+                    key={scopeTab.id}
+                    type="button"
+                    onClick={() => setEntityScopeFilter(scopeTab.id)}
+                    className={`min-h-[28px] px-2.5 py-1 rounded-md text-xs font-medium inline-flex items-center gap-1.5 transition-colors ${
+                      active
+                        ? 'bg-[#1E293B] text-orange-300 border border-orange-500/40 font-semibold'
+                        : 'text-slate-300 hover:text-white hover:bg-[#1E293B]/60 border border-transparent'
+                    }`}
+                  >
+                    <ScopeIcon className="w-3.5 h-3.5 shrink-0" />
+                    <span>{scopeTab.label}</span>
+                  </button>
+                );
+              })}
+              <MetricInfoTooltip
+                customHelp={makeHelp(
+                  'División Jugador y Equipos',
+                  'Separa las reglas entre alertas individuales de Jugador y alertas colectivas de Equipos.',
+                  'El disparador de Hitos Inminentes ("A las puertas") aparece en ambos bloques porque vigila tanto marcas de jugadores como victorias acumuladas de franquicia.'
+                )}
+                align="left"
+                iconClassName="w-3.5 h-3.5"
+              />
+            </div>
+
+            <div className="inline-flex items-center gap-0.5 bg-[#131C2E] border border-[#1E293B] p-1 rounded-lg">
+              {(
+                [
+                  { id: 'all', label: 'Todos' },
+                  { id: 'active', label: 'Activos' },
+                  { id: 'off', label: 'Apagados' },
+                  { id: 'noisy', label: 'Muy frecuentes' },
+                ] as const
+              ).map((st) => (
                 <button
-                  key={scopeTab.id}
+                  key={st.id}
                   type="button"
-                  onClick={() => setEntityScopeFilter(scopeTab.id)}
-                  className={`min-h-[28px] px-2.5 py-1 rounded-md text-xs font-medium inline-flex items-center gap-1.5 transition-colors ${
-                    active
-                      ? 'bg-[#1E293B] text-orange-300 border border-orange-500/40 font-semibold'
-                      : 'text-slate-300 hover:text-white hover:bg-[#1E293B]/60 border border-transparent'
+                  onClick={() => setStatusFilter(st.id)}
+                  className={`min-h-[28px] px-2 py-1 rounded-md text-[11px] font-medium transition-colors ${
+                    statusFilter === st.id
+                      ? 'bg-[#1E293B] text-sky-300 border border-sky-500/40 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200 border border-transparent'
                   }`}
                 >
-                  <ScopeIcon className="w-3.5 h-3.5 shrink-0" />
-                  <span>{scopeTab.label}</span>
+                  {st.label}
                 </button>
-              );
-            })}
-            <MetricInfoTooltip
-              customHelp={makeHelp(
-                'División Jugador y Equipos',
-                'Separa las reglas entre alertas individuales de Jugador y alertas colectivas de Equipos.',
-                'El disparador de Hitos Inminentes ("A las puertas") aparece en ambos bloques porque vigila tanto marcas de jugadores como victorias acumuladas de franquicia.'
-              )}
-              align="left"
-              iconClassName="w-3.5 h-3.5"
-            />
+              ))}
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400 font-mono tabular-nums">
@@ -1418,23 +1646,41 @@ export function AdminMilestoneNotificationsPanel({
                 <Activity className="w-3.5 h-3.5 text-orange-400 shrink-0" />
               )}
               <span className="font-sans text-[11px] text-slate-300">
-                Simulación en vivo (2026-27):{' '}
-                <strong className="font-mono text-orange-300">
-                  {previewCounts ? `~${previewCounts.totalEnabledRecentAlerts}` : '—'}
+                Bandeja estimada ({draft.lookbackDays}d):{' '}
+                <strong
+                  className={`font-mono ${
+                    previewCounts &&
+                    (previewCounts.estimatedFinalAlerts ?? previewCounts.totalEnabledRecentAlerts) >
+                      draft.maxNotifications
+                      ? 'text-amber-300'
+                      : 'text-emerald-300'
+                  }`}
+                >
+                  {previewCounts
+                    ? `${previewCounts.estimatedFinalAlerts ?? previewCounts.totalEnabledRecentAlerts}`
+                    : '—'}
                 </strong>{' '}
-                alertas activas en los últimos {draft.lookbackDays}d
+                alertas netas
               </span>
               {previewCounts &&
-                previewCounts.totalEnabledRecentAlerts > draft.maxNotifications && (
+                typeof previewCounts.estimatedFinalAlerts === 'number' &&
+                previewCounts.totalEnabledRecentAlerts > previewCounts.estimatedFinalAlerts && (
+                  <span className="font-sans text-[10px] text-slate-500">
+                    (de {previewCounts.totalEnabledRecentAlerts} brutos)
+                  </span>
+                )}
+              {previewCounts &&
+                (previewCounts.estimatedFinalAlerts ?? previewCounts.totalEnabledRecentAlerts) >
+                  draft.maxNotifications && (
                   <span className="font-sans text-[10px] text-amber-300">
-                    (tope {draft.maxNotifications})
+                    · tope {draft.maxNotifications}
                   </span>
                 )}
               <MetricInfoTooltip
                 customHelp={makeHelp(
                   'Simulación en vivo de temporada 2026-27',
-                  'Recalcula en tiempo real cuántos avisos produciría cada disparador con tus baremos actuales sobre los partidos reales disputados esta temporada.',
-                  'El resumen superior suma únicamente los disparadores activados dentro de la ventana reciente seleccionada.'
+                  'Calcula exactamente cuántas alertas netas aparecerán en la campana pública tras aplicar agrupación por partido y relevancia mínima.',
+                  'Si el número supera tu tope de bandeja, silencia alguno de los disparadores más ruidosos o sube sus baremos.'
                 )}
                 align="right"
                 iconClassName="w-3.5 h-3.5"
@@ -1453,11 +1699,51 @@ export function AdminMilestoneNotificationsPanel({
           </div>
         </div>
 
+        {/* Top Noise Generators Strip */}
+        {topNoiseTriggers.length > 0 && (
+          <div className="bg-[#0B1120] border border-[#1E293B] rounded-lg px-3 py-2 flex flex-wrap items-center gap-2">
+            <div className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-300 shrink-0">
+              <Flame className="w-3.5 h-3.5 text-amber-400" />
+              <span>Mayor volumen en {draft.lookbackDays}d:</span>
+              <MetricInfoTooltip
+                customHelp={makeHelp(
+                  'Diagnóstico rápido de volumen',
+                  'Lista los disparadores activos que más alertas están generando ahora mismo en la ventana reciente.',
+                  'Puedes apagar cualquiera con un clic o subir su baremo en su tarjeta inferior para reducir ruido y evitar llenar el tope.'
+                )}
+                align="left"
+                iconClassName="w-3 h-3"
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {topNoiseTriggers.map(({ item, recent }) => (
+                <div
+                  key={item.toggleKey}
+                  className="inline-flex items-center gap-1.5 bg-[#131C2E] border border-[#1E293B] rounded-md px-2 py-0.5 text-[11px]"
+                >
+                  <span className="text-slate-200 truncate max-w-[170px]">{item.title}</span>
+                  <span className="font-mono tabular-nums font-semibold text-amber-300">
+                    {recent}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => toggleBool(item.toggleKey)}
+                    className="ml-0.5 px-1.5 py-0.5 text-[10px] font-medium rounded bg-[#0B1120] hover:bg-rose-500/15 border border-[#283548] hover:border-rose-500/40 text-slate-400 hover:text-rose-300 transition-colors"
+                    title={`Apagar ${item.title}`}
+                  >
+                    Apagar
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="inline-flex flex-wrap items-center gap-1 bg-[#131C2E] border border-[#1E293B] p-1 rounded-lg">
           {(
             [
               { id: 'all', label: 'Todas categorías', icon: Sparkles },
-              { id: 'gameday', label: 'Actuaciones (11)', icon: Flame },
+              { id: 'gameday', label: 'Actuaciones (12)', icon: Flame },
               { id: 'defense_team', label: 'Defensa y Equipo (4)', icon: Shield },
               { id: 'heroic', label: 'Clutch y BB (4)', icon: Zap },
               { id: 'cumulative', label: 'Barreras Acumuladas (8)', icon: Award },
@@ -1529,17 +1815,19 @@ export function AdminMilestoneNotificationsPanel({
                     };
 
           const IconComponent =
-            item.group === 'heroic'
-              ? Zap
-              : item.group === 'cumulative'
-                ? Award
-                : item.group === 'streaks'
-                  ? item.toggleKey === 'imminentMilestonesEnabled'
-                    ? Target
-                    : TrendingUp
-                  : item.group === 'defense_team'
-                    ? Shield
-                    : Flame;
+            item.toggleKey === 'careerHighEnabled' || item.toggleKey === 'seasonHighPtsEnabled'
+              ? Crown
+              : item.group === 'heroic'
+                ? Zap
+                : item.group === 'cumulative'
+                  ? Award
+                  : item.group === 'streaks'
+                    ? item.toggleKey === 'imminentMilestonesEnabled'
+                      ? Target
+                      : TrendingUp
+                    : item.group === 'defense_team'
+                      ? Shield
+                      : Flame;
 
           const liveBadge = getLiveBadgePreview(
             item.toggleKey,

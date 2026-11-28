@@ -7,7 +7,13 @@ import { STATIC_SCHEDULE_2027 } from "../utils/staticSchedule.ts";
 import { ESPN_TEAM_IDS, NBA_TEAMS_MAP } from "../utils/teamLogos.ts";
 import { executeUpstashCommand, getRedisRestConfig } from "./upstashRedis.ts";
 import { analyzeGamePlayByPlayHeroicShots, getLeagueHeroicShots } from "./nbaAdvancedStatsService.ts";
+import { getPlayerPriorCareerBaseline } from "./nbaCareerHistoryService.ts";
 import { translateHeroicShotActionCompactEs } from "../utils/heroicPlayEs.ts";
+import {
+  buildEditorialDirectivesPromptBlock,
+  bumpEditorialCacheEpoch,
+  loadEditorialConfig,
+} from "./editorialConfigService.ts";
 const NBA_LIVE_HEADERS = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36", Referer: "https://www.nba.com/", Origin: "https://www.nba.com", Accept: "application/json" };
 const NBA_TEAM_ARENAS = { ATL: { arenaName: "State Farm Arena", arenaCity: "Atlanta" }, BOS: { arenaName: "TD Garden", arenaCity: "Boston" }, BKN: { arenaName: "Barclays Center", arenaCity: "Brooklyn" }, CHA: { arenaName: "Spectrum Center", arenaCity: "Charlotte" }, CHI: { arenaName: "United Center", arenaCity: "Chicago" }, CLE: { arenaName: "Rocket Arena", arenaCity: "Cleveland" }, DAL: { arenaName: "American Airlines Center", arenaCity: "Dallas" }, DEN: { arenaName: "Ball Arena", arenaCity: "Denver" }, DET: { arenaName: "Little Caesars Arena", arenaCity: "Detroit" }, GSW: { arenaName: "Chase Center", arenaCity: "San Francisco" }, HOU: { arenaName: "Toyota Center", arenaCity: "Houston" }, IND: { arenaName: "Gainbridge Fieldhouse", arenaCity: "Indianapolis" }, LAC: { arenaName: "Intuit Dome", arenaCity: "Inglewood" }, LAL: { arenaName: "Crypto.com Arena", arenaCity: "Los \xC1ngeles" }, MEM: { arenaName: "FedExForum", arenaCity: "Memphis" }, MIA: { arenaName: "Kaseya Center", arenaCity: "Miami" }, MIL: { arenaName: "Fiserv Forum", arenaCity: "Milwaukee" }, MIN: { arenaName: "Target Center", arenaCity: "Minneapolis" }, NOP: { arenaName: "Smoothie King Center", arenaCity: "Nueva Orleans" }, NYK: { arenaName: "Madison Square Garden", arenaCity: "Nueva York" }, OKC: { arenaName: "Paycom Center", arenaCity: "Oklahoma City" }, ORL: { arenaName: "Kia Center", arenaCity: "Orlando" }, PHI: { arenaName: "Wells Fargo Center", arenaCity: "Filadelfia" }, PHX: { arenaName: "Footprint Center", arenaCity: "Phoenix" }, POR: { arenaName: "Moda Center", arenaCity: "Portland" }, SAC: { arenaName: "Golden 1 Center", arenaCity: "Sacramento" }, SAS: { arenaName: "Frost Bank Center", arenaCity: "San Antonio" }, TOR: { arenaName: "Scotiabank Arena", arenaCity: "Toronto" }, UTA: { arenaName: "Delta Center", arenaCity: "Salt Lake City" }, WAS: { arenaName: "Capital One Arena", arenaCity: "Washington" } };
 const KNOWN_SPANISH_NBA_PLAYERS = /* @__PURE__ */ new Set(["santi aldama", "santiago aldama", "hugo gonzalez", "usman garuba", "eli ndiaye", "eli john ndiaye", "juan nunez", "aday mara", "izan almansa", "baba miller", "great osobor", "willy hernangomez", "juancho hernangomez", "ricky rubio", "alex abrines"]);
@@ -116,6 +122,100 @@ async function writeSharedPersistedNarrative(cacheKey: string, data: any, ttlMs:
     } catch {
     }
   }
+}
+
+async function purgeSharedPersistedNarrativeCache(opts: {
+  scope: "all" | "date" | "game";
+  date?: string;
+  eventId?: string;
+}) {
+  const scope = opts.scope;
+  const redisCfg = getRedisRestConfig();
+  const diskStore = loadDiskNarrativeStore();
+  let clearedLocalKeys = 0;
+
+  if (scope === "all") {
+    for (const k of [...reportMemoryCache.keys()]) {
+      if (k.startsWith("game_narrative_") || k.startsWith("gameday_chronicle_")) {
+        reportMemoryCache.delete(k);
+        clearedLocalKeys += 1;
+      }
+    }
+    for (const k of Object.keys(diskStore)) {
+      if (k.startsWith("game_narrative_") || k.startsWith("gameday_chronicle_")) {
+        delete diskStore[k];
+      }
+    }
+    scheduleDiskNarrativeFlush();
+    const updatedCfg = await bumpEditorialCacheEpoch();
+    return {
+      clearedScope: "all" as const,
+      cacheEpoch: updatedCfg.cacheEpoch,
+      clearedLocalKeys,
+      clearedAt: Date.now(),
+    };
+  }
+
+  const currentCfg = await loadEditorialConfig(true);
+  const targetKeys: string[] = [];
+  if (scope === "date" && opts.date) {
+    targetKeys.push(
+      `gameday_chronicle_v18:e${currentCfg.cacheEpoch}:${opts.date}`,
+      `gameday_chronicle_v17:e${currentCfg.cacheEpoch}:${opts.date}`,
+      `gameday_chronicle_v16:${opts.date}`
+    );
+    for (const k of [...reportMemoryCache.keys()]) {
+      if (k.startsWith("gameday_chronicle_") && k.endsWith(`:${opts.date}`)) {
+        reportMemoryCache.delete(k);
+        clearedLocalKeys += 1;
+      }
+    }
+    for (const k of Object.keys(diskStore)) {
+      if (k.startsWith("gameday_chronicle_") && k.endsWith(`:${opts.date}`)) {
+        delete diskStore[k];
+      }
+    }
+  } else if (scope === "game" && opts.eventId) {
+    targetKeys.push(
+      `game_narrative_v18:v2_tactical:e${currentCfg.cacheEpoch}:${opts.eventId}`,
+      `game_narrative_v18:v1_classic:e${currentCfg.cacheEpoch}:${opts.eventId}`,
+      `game_narrative_v18:e${currentCfg.cacheEpoch}:${opts.eventId}`,
+      `game_narrative_v17:e${currentCfg.cacheEpoch}:${opts.eventId}`,
+      `game_narrative_v16:${opts.eventId}`
+    );
+    for (const k of [...reportMemoryCache.keys()]) {
+      if (k.startsWith("game_narrative_") && k.endsWith(`:${opts.eventId}`)) {
+        reportMemoryCache.delete(k);
+        clearedLocalKeys += 1;
+      }
+    }
+    for (const k of Object.keys(diskStore)) {
+      if (k.startsWith("game_narrative_") && k.endsWith(`:${opts.eventId}`)) {
+        delete diskStore[k];
+      }
+    }
+  }
+
+  scheduleDiskNarrativeFlush();
+  if (redisCfg && targetKeys.length > 0) {
+    try {
+      await executeUpstashCommand(
+        redisCfg,
+        ["DEL", ...targetKeys.map((k) => `radarnba:nar:${k}`)],
+        3000
+      );
+    } catch {
+      // Ignore transient Redis delete errors
+    }
+  }
+
+  return {
+    clearedScope: scope,
+    target: opts.date || opts.eventId || null,
+    cacheEpoch: currentCfg.cacheEpoch,
+    clearedLocalKeys,
+    clearedAt: Date.now(),
+  };
 }
 function round1(val) {
   return Math.round((Number(val) || 0) * 10) / 10;
@@ -486,22 +586,31 @@ function extractGroundingSources(response, seedSources = []) {
   const links = [];
   const pushLink = __name((uri, title) => {
     const cleanUri = (uri || "").trim();
-    if (!cleanUri || seen.has(cleanUri)) return;
+    if (!cleanUri || !/^https?:\/\//i.test(cleanUri) || seen.has(cleanUri)) return;
     seen.add(cleanUri);
     links.push({ uri: cleanUri, title: (title || "").trim() || "Fuente actualidad NBA" });
   }, "pushLink");
   const chunks = response?.candidates?.[0]?.groundingMetadata?.groundingChunks;
+  let webCount = 0;
   if (Array.isArray(chunks)) {
     for (const ch of chunks) {
-      pushLink(String(ch?.web?.uri || ""), String(ch?.web?.title || ""));
-      if (links.length >= 6) return links;
+      const uri = String(ch?.web?.uri || "").trim();
+      if (!uri) continue;
+      const prevLen = links.length;
+      pushLink(uri, String(ch?.web?.title || ""));
+      if (links.length > prevLen) webCount++;
+      if (webCount >= 4) break;
     }
   }
   for (const s of seedSources) {
     pushLink(s.uri, s.title);
-    if (links.length >= 6) break;
+    if (links.length >= 8) break;
   }
   return links;
+}
+function hasLiveGroundingChunks(response): boolean {
+  const chunks = response?.candidates?.[0]?.groundingMetadata?.groundingChunks;
+  return Array.isArray(chunks) && chunks.some((ch) => Boolean(String(ch?.web?.uri || "").trim()));
 }
 const modelCooldownMap = new Map<string, number>();
 const deprecatedModelsSet = new Set<string>();
@@ -650,14 +759,9 @@ async function generateWithGeminiCascade(params: {
   seedSources?: Array<{ uri: string; title: string }>;
   isServerless?: boolean;
   budgetMs?: number;
+  enableGoogleSearch?: boolean;
 }) {
-  const isServerless =
-    Boolean(params.isServerless) ||
-    Boolean(process.env.VERCEL) ||
-    Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME) ||
-    process.env.NBA_SNAPSHOT_ONLY === "1";
-
-  const totalBudgetMs = Math.max(8000, params.budgetMs ?? 40000);
+  const totalBudgetMs = Math.max(10000, params.budgetMs ?? 48000);
   const deadlineAt = Date.now() + totalBudgetMs;
 
   const ai = getGeminiClient(totalBudgetMs);
@@ -665,37 +769,38 @@ async function generateWithGeminiCascade(params: {
     throw new Error("GEMINI_API_KEY unavailable");
   }
 
-  // Active free-tier models first (no deprecated 2.x models), followed by cached live-discovered models
+  // Stick strictly to active, low-latency free-tier text models (no deprecated 2.x or overloaded preview discovery on 503/timeout)
   const seedNames = [
     process.env.GEMINI_MODEL_PRIMARY,
     process.env.GEMINI_MODEL_SECONDARY,
     process.env.GEMINI_MODEL_TERTIARY,
     "gemini-4-hydrogen",
     "gemini-3.1-flash-lite",
-    ...(discoveredModelsCache.expiresAt > Date.now()
-      ? discoveredModelsCache.models.filter((m) => isSuitableAutoTextModel(m))
-      : []),
   ].filter((n): n is string => Boolean(n && n.trim()));
 
-  const getPreferredModelCapMs = (modelName: string): number => {
+  const getPreferredModelCapMs = (modelName: string, isRetryPass = false): number => {
     const low = modelName.toLowerCase();
     if (low.includes("lite")) {
-      return 13000;
+      return isRetryPass ? 16000 : 20000;
     }
     if (low.includes("hydrogen")) {
-      return 18000;
+      return isRetryPass ? 20000 : 26000;
     }
-    return 14000;
+    return isRetryPass ? 16000 : 20000;
   };
 
-  const buildOrderedQueue = (names: string[], excludeSet: Set<string>): Array<{ name: string; capMs: number }> => {
+  const buildOrderedQueue = (
+    names: string[],
+    excludeSet: Set<string>,
+    isRetryPass = false
+  ): Array<{ name: string; capMs: number }> => {
     const unique: Array<{ name: string; capMs: number }> = [];
     const seen = new Set<string>();
     for (const rawName of names) {
       const name = rawName.trim();
       if (name && !seen.has(name) && !excludeSet.has(name) && !deprecatedModelsSet.has(name)) {
         seen.add(name);
-        unique.push({ name, capMs: getPreferredModelCapMs(name) });
+        unique.push({ name, capMs: getPreferredModelCapMs(name, isRetryPass) });
       }
     }
     const now = Date.now();
@@ -710,6 +815,78 @@ async function generateWithGeminiCascade(params: {
   let sawDeprecatedError = false;
   let sawAuthError = false;
 
+  // Optional Pass 0: Google Search Grounding (used exclusively by Game Chronicles v2_tactical).
+  // Automatically falls back to the non-search cascade if search grounding times out or errors.
+  if (params.enableGoogleSearch) {
+    const searchCandidates = buildOrderedQueue(
+      seedNames.filter((n) => !n.toLowerCase().includes("lite")),
+      new Set(),
+      false
+    );
+    const primarySearchModel = searchCandidates[0]?.name || "gemini-4-hydrogen";
+    const remainingForSearch = deadlineAt - Date.now();
+    if (remainingForSearch >= 12000) {
+      const searchTimeoutMs = Math.min(25000, Math.floor(remainingForSearch * 0.58));
+      const searchController = new AbortController();
+      let searchTimer: ReturnType<typeof setTimeout> | null = null;
+      try {
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          searchTimer = setTimeout(() => {
+            searchController.abort();
+            reject(new Error(`Timeout ${searchTimeoutMs}ms en búsqueda web (${primarySearchModel})`));
+          }, searchTimeoutMs);
+        });
+        const lowModel = primarySearchModel.toLowerCase();
+        const searchConfig: Record<string, any> = {
+          systemInstruction: params.systemInstruction,
+          abortSignal: searchController.signal,
+          tools: [{ googleSearch: {} }],
+        };
+        if (/^gemini-(?:3|4)(?:[.-]|$)/i.test(lowModel)) {
+          searchConfig.thinkingConfig = {
+            thinkingLevel: ThinkingLevel.LOW,
+          };
+        }
+        const searchCall = ai.models.generateContent({
+          model: primarySearchModel,
+          contents: params.contents,
+          config: searchConfig,
+        });
+        const searchResp = (await Promise.race([searchCall, timeoutPromise])) as any;
+        const searchText = (searchResp?.text || "").trim();
+        if (searchText && searchText.length > 80) {
+          modelCooldownMap.delete(primarySearchModel);
+          return {
+            text: searchText,
+            model: primarySearchModel,
+            sources: extractGroundingSources(searchResp, params.seedSources),
+            groundingUsed: hasLiveGroundingChunks(searchResp) || true,
+          };
+        }
+        attemptErrors.push(`${primarySearchModel}+search: empty_or_short_response`);
+      } catch (err) {
+        lastErr = err;
+        if (isAuthOrKeyError(err)) {
+          sawAuthError = true;
+          attemptErrors.push(`${primarySearchModel}+search: clave_o_permiso_invalido`);
+        } else {
+          const rawMsg = err instanceof Error ? err.message : String(err || "");
+          const tag = isQuotaExhaustedError(err)
+            ? "cuota_agotada_429"
+            : isTransientOverloadError(err)
+            ? "alta_demanda_503"
+            : rawMsg.toLowerCase().includes("timeout") || rawMsg.toLowerCase().includes("abort")
+            ? "timeout_busqueda_web"
+            : "busqueda_web_no_disponible";
+          attemptErrors.push(`${primarySearchModel}+search: ${tag}`);
+          console.info(`[RadarNBA] Grounding web (${primarySearchModel}) -> ${tag}; continuando con dossier táctico + AP/ESPN`);
+        }
+      } finally {
+        if (searchTimer) clearTimeout(searchTimer);
+      }
+    }
+  }
+
   const tryQueue = async (
     queue: Array<{ name: string; capMs: number }>,
     options: { isRetryPass?: boolean } = {}
@@ -717,28 +894,39 @@ async function generateWithGeminiCascade(params: {
     for (const { name: model, capMs } of queue) {
       if (sawAuthError) break;
       const remainingMs = deadlineAt - Date.now();
-      if (remainingMs < 2500) {
+      if (remainingMs < 3500) {
         attemptErrors.push(`budget_exhausted_before_${model}`);
         break;
       }
       const timeoutMs = Math.min(capMs, remainingMs);
       triedNames.add(model);
+
+      const attemptController = new AbortController();
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
       try {
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`Timeout ${timeoutMs}ms for ${model}`)), timeoutMs)
-        );
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            attemptController.abort();
+            reject(new Error(`Timeout ${timeoutMs}ms for ${model}`));
+          }, timeoutMs);
+        });
+
+        const lowModel = model.toLowerCase();
         const genConfig: Record<string, any> = {
           systemInstruction: params.systemInstruction,
+          abortSignal: attemptController.signal,
         };
-        // Balanced MEDIUM thinking on primary pass of gemini-4-hydrogen; fast LOW thinking on retries or secondary Gemini 3/4 non-lite models
-        if (/^gemini-(?:3|4)(?:[.-]|$)/i.test(model) && !model.toLowerCase().includes("lite")) {
+        // Fast ThinkingLevel.LOW on Gemini 4 / Gemini 3 non-lite; ThinkingLevel.MINIMAL on flash-lite to eliminate thinking stalls
+        if (/^gemini-3\.1-flash-lite/i.test(lowModel) || (lowModel.startsWith("gemini-3") && lowModel.includes("lite"))) {
           genConfig.thinkingConfig = {
-            thinkingLevel:
-              !options.isRetryPass && model.toLowerCase().includes("hydrogen")
-                ? ThinkingLevel.MEDIUM
-                : ThinkingLevel.LOW,
+            thinkingLevel: ThinkingLevel.MINIMAL,
+          };
+        } else if (/^gemini-(?:3|4)(?:[.-]|$)/i.test(lowModel)) {
+          genConfig.thinkingConfig = {
+            thinkingLevel: ThinkingLevel.LOW,
           };
         }
+
         const callPromise = ai.models.generateContent({
           model,
           contents: params.contents,
@@ -754,6 +942,7 @@ async function generateWithGeminiCascade(params: {
             text,
             model,
             sources: extractGroundingSources(response, params.seedSources),
+            groundingUsed: false,
           };
         }
         attemptErrors.push(`${model}: empty_or_short_response`);
@@ -773,53 +962,55 @@ async function generateWithGeminiCascade(params: {
           reasonTag = "cuota_agotada_429";
         } else if (isTransientOverloadError(err)) {
           transientFailedModels.add(model);
-          modelCooldownMap.set(model, Date.now() + 15 * 1000);
+          modelCooldownMap.set(model, Date.now() + 8 * 1000);
           reasonTag = "alta_demanda_503";
         } else {
           transientFailedModels.add(model);
           const rawMsg = err instanceof Error ? err.message : String(err || "");
-          reasonTag = rawMsg.toLowerCase().includes("timeout") ? "timeout" : "error_transitorio";
+          const isAbort =
+            (err instanceof Error && err.name === "AbortError") ||
+            attemptController.signal.aborted ||
+            rawMsg.toLowerCase().includes("timeout") ||
+            rawMsg.toLowerCase().includes("aborted");
+          reasonTag = isAbort ? "timeout" : "error_transitorio";
         }
         attemptErrors.push(`${model}: ${reasonTag}`);
         console.info(`[RadarNBA] Transición de modelo ${model} -> ${reasonTag}`);
         if (sawAuthError) break;
+      } finally {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
       }
     }
     return null;
   };
 
-  const initialQueue = buildOrderedQueue(seedNames, triedNames);
+  const initialQueue = buildOrderedQueue(seedNames, triedNames, false);
   const firstResult = await tryQueue(initialQueue, { isRetryPass: false });
   if (firstResult) {
-    if (sawDeprecatedError || discoveredModelsCache.expiresAt <= Date.now()) {
-      void discoverLiveGeminiTextModels(ai, sawDeprecatedError);
-    }
     return firstResult;
   }
 
   if (!sawAuthError) {
-    // Discover active models if needed before retry rounds
+    // Only run live model discovery if a seed model actually returned 404/NOT_FOUND
     let liveDiscovered: string[] = [];
-    if ((sawDeprecatedError || discoveredModelsCache.expiresAt <= Date.now()) && deadlineAt - Date.now() >= 5500) {
+    if (sawDeprecatedError && deadlineAt - Date.now() >= 6000) {
       liveDiscovered = await discoverLiveGeminiTextModels(ai, true);
-    } else if (discoveredModelsCache.models.length > 0) {
-      liveDiscovered = discoveredModelsCache.models.filter((m) => isSuitableAutoTextModel(m));
-    }
-
-    // Try any newly discovered models that were not in the initial queue
-    const unseenDiscoveredQueue = buildOrderedQueue(liveDiscovered, triedNames);
-    if (unseenDiscoveredQueue.length > 0 && deadlineAt - Date.now() >= 3000) {
-      const discoveredResult = await tryQueue(unseenDiscoveredQueue, { isRetryPass: true });
-      if (discoveredResult) {
-        return discoveredResult;
+      const unseenDiscoveredQueue = buildOrderedQueue(liveDiscovered, triedNames, true);
+      if (unseenDiscoveredQueue.length > 0 && deadlineAt - Date.now() >= 4000) {
+        const discoveredResult = await tryQueue(unseenDiscoveredQueue, { isRetryPass: true });
+        if (discoveredResult) {
+          return discoveredResult;
+        }
       }
     }
 
-    // Exponential backoff with jitter for transient 503 / timeout spikes
+    // Exponential backoff with jitter for transient 503 / timeout spikes on active seed models
     const retryCandidates = [
       ...new Set([
-        ...liveDiscovered.filter((m) => !deprecatedModelsSet.has(m)),
         ...seedNames.filter((m) => !deprecatedModelsSet.has(m) && transientFailedModels.has(m)),
+        ...liveDiscovered.filter((m) => !deprecatedModelsSet.has(m)),
       ]),
     ].filter((m) => {
       const cooldownUntil = modelCooldownMap.get(m) || 0;
@@ -831,11 +1022,11 @@ async function generateWithGeminiCascade(params: {
     for (let round = 1; round <= maxBackoffRounds; round++) {
       if (retryCandidates.length === 0 || sawAuthError) break;
       const remainingBeforeWait = deadlineAt - Date.now();
-      if (remainingBeforeWait < 5500) break;
+      if (remainingBeforeWait < 6000) break;
 
-      const baseDelay = round === 1 ? 1200 : 2600;
-      const jitter = Math.floor(Math.random() * 600);
-      const waitMs = Math.min(baseDelay + jitter, remainingBeforeWait - 4000);
+      const baseDelay = round === 1 ? 1100 : 2400;
+      const jitter = Math.floor(Math.random() * 500);
+      const waitMs = Math.min(baseDelay + jitter, remainingBeforeWait - 4500);
       if (waitMs > 200) {
         await new Promise((resolve) => setTimeout(resolve, waitMs));
       }
@@ -847,7 +1038,7 @@ async function generateWithGeminiCascade(params: {
         }
       }
 
-      const retryQueue = buildOrderedQueue(retryCandidates, new Set());
+      const retryQueue = buildOrderedQueue(retryCandidates, new Set(), true);
       const retryResult = await tryQueue(retryQueue, { isRetryPass: true });
       if (retryResult) {
         return retryResult;
@@ -894,7 +1085,8 @@ function parseDynamicChapters(raw, fallback) {
   const normalizedSeparators = raw.replace(/^\s*---+\s*$/gm, "\n---\n").replace(/\n{2,}(?=[^\n:]{4,95}\s*::\s*\S)/g, "\n---\n").trim();
   const rawChunks = normalizedSeparators.split(/\n\s*(?:---+\s*\n?\s*)+/).map((c) => c.trim()).filter((c) => c.length > 40);
   const chapters = [];
-  for (const chunk of rawChunks.slice(0, 2)) {
+  const chapterKickers = ["Foco Principal", "Segundo Foco", "Panorama de la Cartelera"];
+  for (const chunk of rawChunks.slice(0, 3)) {
     let title = "";
     let body = "";
     const doubleColonIdx = chunk.indexOf("::");
@@ -909,7 +1101,11 @@ function parseDynamicChapters(raw, fallback) {
       }
     }
     if (title && body.length >= 45) {
-      chapters.push({ kicker: chapters.length === 0 ? "Foco Principal" : "Segundo Foco", title: sanitizeEditorialSpanishGrammar(title), body: sanitizeEditorialSpanishGrammar(body) });
+      chapters.push({
+        kicker: chapterKickers[chapters.length] || "Panorama de la Cartelera",
+        title: sanitizeEditorialSpanishGrammar(title),
+        body: sanitizeEditorialSpanishGrammar(body),
+      });
     }
   }
   return chapters.length > 0 ? chapters : fallback;
@@ -974,6 +1170,208 @@ function parseSpotlight(raw, fallback) {
   }
   return fallback;
 }
+function stripHtmlToPlainText(rawHtml: string, maxChars = 3200): string {
+  if (!rawHtml) return "";
+  const cleaned = String(rawHtml)
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<(?:\/p|br|\/div|\/li|\/h[1-6])\b[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;|&#x27;/gi, "'")
+    .replace(/&ldquo;|&rdquo;/gi, '"')
+    .replace(/&lsquo;|&rsquo;/gi, "'")
+    .replace(/&mdash;/gi, " — ")
+    .replace(/&ndash;/gi, "–")
+    .replace(/&#(\d+);/g, (_m, dec) => {
+      const code = Number(dec);
+      return Number.isFinite(code) && code >= 32 && code <= 126 ? String.fromCharCode(code) : " ";
+    })
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (cleaned.length <= maxChars) return cleaned;
+  const cut = cleaned.slice(0, maxChars);
+  const lastPeriod = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("\n"));
+  return (lastPeriod > maxChars * 0.7 ? cut.slice(0, lastPeriod + 1) : cut).trim();
+}
+function parseTacticalKeys(raw: string, fallback: Array<{ title: string; summary: string }>) {
+  if (!raw || raw.trim().length < 25) return fallback;
+  const lines = raw
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 16);
+  const items: Array<{ title: string; summary: string }> = [];
+  for (const line of lines.slice(0, 4)) {
+    let title = "";
+    let summary = "";
+    const pipeIdx = line.indexOf("||");
+    const colonDoubleIdx = line.indexOf("::");
+    const sepIdx =
+      pipeIdx > 2 && pipeIdx < 90
+        ? pipeIdx
+        : colonDoubleIdx > 2 && colonDoubleIdx < 90
+        ? colonDoubleIdx
+        : -1;
+    if (sepIdx !== -1) {
+      title = stripInlineWrapper(line.slice(0, sepIdx));
+      summary = line.slice(sepIdx + 2).trim();
+    } else {
+      const colonIdx = line.indexOf(":");
+      if (colonIdx > 3 && colonIdx < 75) {
+        title = stripInlineWrapper(line.slice(0, colonIdx));
+        summary = line.slice(colonIdx + 1).trim();
+      }
+    }
+    if (/^\*\*[^*]+\*\*$/.test(summary)) {
+      summary = summary.slice(2, -2).trim();
+    }
+    if (title && summary.length >= 18) {
+      items.push({
+        title: sanitizeEditorialSpanishGrammar(title),
+        summary: sanitizeEditorialSpanishGrammar(summary),
+      });
+    }
+    if (items.length >= 3) break;
+  }
+  return items.length >= 2 ? items : fallback;
+}
+function parsePostgameQuotes(raw: string): Array<{ speaker: string; teamAbbr?: string; quoteEs: string; sourceTitle?: string }> {
+  if (!raw) return [];
+  const trimmed = raw.trim();
+  if (
+    !trimmed ||
+    /^(?:ningun[ao]|no aplica|sin declaraciones|sin citas|n\/a|none)\b/i.test(trimmed)
+  ) {
+    return [];
+  }
+  const lines = trimmed
+    .split(/\n+/)
+    .map((l) => l.replace(/^[-•*\d.)\s]+/, "").trim())
+    .filter((l) => l.length > 20);
+  const quotes: Array<{ speaker: string; teamAbbr?: string; quoteEs: string; sourceTitle?: string }> = [];
+  for (const line of lines) {
+    const parts = line.split("|").map((p) => p.trim());
+    if (parts.length < 3) continue;
+    const speaker = stripInlineWrapper(parts[0]);
+    const maybeTeam = stripInlineWrapper(parts[1]).toUpperCase();
+    const hasTeamAbbr = /^[A-Z]{2,4}$/.test(maybeTeam);
+    const quoteRaw = hasTeamAbbr ? parts[2] : parts[1];
+    const sourceRaw = hasTeamAbbr ? parts[3] || "" : parts[2] || "";
+    const quoteClean = quoteRaw
+      .replace(/^[«"“'‘]+|[»"”'’]+$/g, "")
+      .replace(/\*\*/g, "")
+      .trim();
+    if (!speaker || speaker.length < 3 || /^(?:autor|jugador|nombre|protagonista|n\/a)$/i.test(speaker)) {
+      continue;
+    }
+    if (!quoteClean || quoteClean.length < 18 || /^ningun[ao]\b/i.test(quoteClean)) {
+      continue;
+    }
+    quotes.push({
+      speaker: sanitizeEditorialSpanishGrammar(speaker),
+      teamAbbr: hasTeamAbbr ? maybeTeam : undefined,
+      quoteEs: sanitizeEditorialSpanishGrammar(quoteClean),
+      sourceTitle: sourceRaw ? stripInlineWrapper(sourceRaw).slice(0, 70) : undefined,
+    });
+    if (quotes.length >= 2) break;
+  }
+  return quotes;
+}
+function computeGameTacticalProfile(report: any) {
+  const computeSide = (side: any, opp: any) => {
+    const t = side.totals || {};
+    const ot = opp.totals || {};
+    const fga = Number(t.fga || 0);
+    const fgm = Number(t.fgm || 0);
+    const fg3a = Number(t.fg3a || 0);
+    const ftm = Number(t.ftm || 0);
+    const fta = Number(t.fta || 0);
+    const tov = Number(t.tov || 0);
+    const oreb = Number(t.oreb || 0);
+    const ast = Number(t.ast || 0);
+    const oppReb = Number(ot.reb || 0);
+    const oppOreb = Number(ot.oreb || 0);
+    const oppDreb = Math.max(0, oppReb - oppOreb);
+    const efgPct = Number(
+      typeof t.efgPct === "number" && Number.isFinite(t.efgPct)
+        ? t.efgPct
+        : fga > 0
+        ? ((fgm + 0.5 * Number(t.fg3m || 0)) / fga) * 100
+        : 0
+    );
+    const tovPct = (tov / Math.max(1, fga + 0.44 * fta + tov)) * 100;
+    const orebPct = (oreb / Math.max(1, oreb + oppDreb)) * 100;
+    const ftRate = (ftm / Math.max(1, fga)) * 100;
+    const astPct = (ast / Math.max(1, fgm)) * 100;
+    const threePointRatePct = (fg3a / Math.max(1, fga)) * 100;
+    const ptsPaint = typeof t.ptsPaint === "number" && Number.isFinite(t.ptsPaint) ? t.ptsPaint : null;
+    const paintSharePct = ptsPaint !== null && Number(side.score || 0) > 0 ? (ptsPaint / Number(side.score)) * 100 : null;
+    return {
+      abbr: String(side.abbr || ""),
+      efgPct: Number(efgPct.toFixed(1)),
+      tovPct: Number(tovPct.toFixed(1)),
+      orebPct: Number(orebPct.toFixed(1)),
+      ftRate: Number(ftRate.toFixed(1)),
+      astPct: Number(astPct.toFixed(1)),
+      paintSharePct: paintSharePct !== null ? Number(paintSharePct.toFixed(1)) : null,
+      threePointRatePct: Number(threePointRatePct.toFixed(1)),
+      ptsPaint,
+      ptsFastBreak: typeof t.ptsFastBreak === "number" ? t.ptsFastBreak : null,
+      ptsOffTov: typeof t.ptsOffTov === "number" ? t.ptsOffTov : null,
+      ptsSecondChance: typeof t.ptsSecondChance === "number" ? t.ptsSecondChance : null,
+    };
+  };
+
+  const awayMetrics = computeSide(report.away, report.home);
+  const homeMetrics = computeSide(report.home, report.away);
+  const winnerSide = report.away.isWinner ? awayMetrics : homeMetrics;
+  const loserSide = report.away.isWinner ? homeMetrics : awayMetrics;
+
+  const factorImpacts = [
+    {
+      label: "Acierto efectivo (eFG%)",
+      score: (winnerSide.efgPct - loserSide.efgPct) * 0.4,
+      summary: `${winnerSide.abbr} ${winnerSide.efgPct.toFixed(1)}% frente a ${loserSide.abbr} ${loserSide.efgPct.toFixed(1)}% en tiro efectivo`,
+    },
+    {
+      label: "Cuidado del balón (TOV%)",
+      score: (loserSide.tovPct - winnerSide.tovPct) * 0.25,
+      summary: `${winnerSide.abbr} limitó sus pérdidas al ${winnerSide.tovPct.toFixed(1)}% de posesiones frente al ${loserSide.tovPct.toFixed(1)}% de ${loserSide.abbr}`,
+    },
+    {
+      label: "Rebote ofensivo (OREB%)",
+      score: (winnerSide.orebPct - loserSide.orebPct) * 0.2,
+      summary: `${winnerSide.abbr} capturó el ${winnerSide.orebPct.toFixed(1)}% de sus rebotes en aro rival frente al ${loserSide.orebPct.toFixed(1)}% de ${loserSide.abbr}`,
+    },
+    {
+      label: "Presión al tiro libre (FTr)",
+      score: (winnerSide.ftRate - loserSide.ftRate) * 0.15,
+      summary: `${winnerSide.abbr} generó un ratio de tiro libre de ${winnerSide.ftRate.toFixed(1)}% frente al ${loserSide.ftRate.toFixed(1)}% de ${loserSide.abbr}`,
+    },
+  ].sort((a, b) => b.score - a.score);
+
+  const topFactor = factorImpacts[0];
+  const pbpClosingAway = Array.isArray(report.pbpHighlights?.closingLineupAway) ? report.pbpHighlights.closingLineupAway : [];
+  const pbpClosingHome = Array.isArray(report.pbpHighlights?.closingLineupHome) ? report.pbpHighlights.closingLineupHome : [];
+  const fallbackClosing = (side: any) =>
+    [...(side.starters || []), ...(side.bench || [])]
+      .sort((a, b) => Number(b.minutes || 0) - Number(a.minutes || 0))
+      .slice(0, 5)
+      .map((p) => `#${p.jersey} ${p.name}`);
+
+  return {
+    away: awayMetrics,
+    home: homeMetrics,
+    decisiveFactorLabel: topFactor.label,
+    decisiveFactorSummary: topFactor.summary,
+    closingLineupAway: pbpClosingAway.length >= 3 ? pbpClosingAway.slice(0, 5) : fallbackClosing(report.away),
+    closingLineupHome: pbpClosingHome.length >= 3 ? pbpClosingHome.slice(0, 5) : fallbackClosing(report.home),
+    defensiveDuels: Array.isArray(report.pbpHighlights?.defensiveDuels) ? report.pbpHighlights.defensiveDuels.slice(0, 6) : [],
+  };
+}
 function createScoutingEngine(deps) {
   async function fetchLivePressContext(dateIso, forceRefresh = false) {
     const yyyymmdd = dateIso.replace(/-/g, "");
@@ -1010,10 +1408,43 @@ function createScoutingEngine(deps) {
           sources.push(src);
           if (daySources.length < 6) daySources.push(src);
         }
-        byMatchup.set(key, { notes, sources });
+        byMatchup.set(key, { espnEventId: String(ev?.id || ""), notes, sources });
       }
     }
     return { byMatchup, dayNotes, daySources };
+  }
+  async function fetchEspnFullGameRecap(espnEventIdHint, gameDate, awayAbbr, homeAbbr, forceRefresh = false) {
+    try {
+      const espnEventId =
+        (espnEventIdHint && /^\d{6,14}$/.test(String(espnEventIdHint)) ? String(espnEventIdHint) : "") ||
+        (await resolveEspnEventIdForGame(gameDate, awayAbbr, homeAbbr, forceRefresh));
+      if (!espnEventId) return null;
+      const summary = await deps.cachedFetchJson(
+        `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${espnEventId}`,
+        20 * 60 * 1000,
+        {},
+        3500,
+        forceRefresh
+      );
+      const article = summary?.article;
+      if (!article || typeof article !== "object") return null;
+      const headline = String(article.headline || "").trim();
+      const storyText = stripHtmlToPlainText(String(article.story || ""), 3200);
+      if (!headline && storyText.length < 120) return null;
+      const rawUrl = String(article?.links?.web?.href || article?.links?.mobile?.href || "").trim();
+      const url = rawUrl
+        ? rawUrl.replace(/^http:\/\//i, "https://")
+        : `https://www.espn.com/nba/recap/_/gameId/${espnEventId}`;
+      return {
+        espnEventId,
+        headline,
+        storyText,
+        url,
+        title: `${awayAbbr} vs ${homeAbbr} — Crónica Oficial AP/ESPN`,
+      };
+    } catch {
+      return null;
+    }
   }
   function utcToEasternDateIso(utcStr) {
     if (!utcStr) return "";
@@ -1771,6 +2202,101 @@ function createScoutingEngine(deps) {
       lines.push(`- ACCIONES CLUTCH (ÚLTIMOS 5 MIN ≤5 PTS): ${clutchPlays.map((c) => `[${c.periodLabel} ${c.clock}] ${c.teamAbbr}: ${c.description} (margen ${c.scoreMargin} pts)`).join("; ")}`);
     }
 
+    // Mine closing-5 lineups (last 4 min of final period) and direct defensive duels (blocks & steals) from PBP
+    const maxPeriodNum = actions.reduce((acc, a) => Math.max(acc, Number(a?.period) || 1), 4);
+    const closingPlayersMap: Record<string, string[]> = { [awayAbbr]: [], [homeAbbr]: [] };
+    const pushClosingPlayer = (teamAbbr: string, rawName: string) => {
+      if (!teamAbbr || !closingPlayersMap[teamAbbr]) return;
+      const cleanName = String(rawName || "").trim();
+      if (!cleanName || cleanName.length < 3 || /^team\b/i.test(cleanName)) return;
+      const arr = closingPlayersMap[teamAbbr];
+      if (!arr.some((n) => n.toLowerCase() === cleanName.toLowerCase()) && arr.length < 5) {
+        arr.push(cleanName);
+      }
+    };
+    const duelCounts = new Map<string, { defender: string; defTeam: string; victim: string; vicTeam: string; type: "tapón" | "robo"; count: number; lastPeriod: string }>();
+    const addDuel = (defender: string, defTeam: string, victim: string, vicTeam: string, type: "tapón" | "robo", periodLabel: string) => {
+      const defClean = String(defender || "").trim();
+      const vicClean = String(victim || "").trim();
+      if (!defClean || !vicClean || defClean.length < 3 || vicClean.length < 3) return;
+      if (defClean.toLowerCase() === vicClean.toLowerCase()) return;
+      const key = `${type}|${defTeam}|${defClean.toLowerCase()}|${vicClean.toLowerCase()}`;
+      const existing = duelCounts.get(key);
+      if (existing) {
+        existing.count += 1;
+        existing.lastPeriod = periodLabel;
+      } else {
+        duelCounts.set(key, { defender: defClean, defTeam, victim: vicClean, vicTeam, type, count: 1, lastPeriod: periodLabel });
+      }
+    };
+
+    for (let i = 0; i < actions.length; i++) {
+      const a = actions[i];
+      const pNum = Number(a?.period) || 1;
+      const periodLabel = formatPbpPeriodLabel(pNum);
+      const clockStr = parsePbpClockRemaining(a?.clock, pNum) || "0:00";
+      const cSec = clockToSec(clockStr);
+      const tAbbr = String(a?.teamTricode || "").toUpperCase();
+      const actType = String(a?.actionType || "").toLowerCase();
+      const desc = String(a?.description || "").trim();
+      const pName = String(a?.playerNameI || a?.playerName || "").trim();
+
+      if (pNum === maxPeriodNum && cSec <= 240 && tAbbr && !actType.includes("timeout") && !actType.includes("substitution")) {
+        pushClosingPlayer(tAbbr, pName);
+      }
+
+      // 1) NBA CDN paired block (actionType === 'block' adjacent to a missed shot at same period+clock)
+      if (actType === "block" && pName && (tAbbr === awayAbbr || tAbbr === homeAbbr)) {
+        const oppAbbr = tAbbr === awayAbbr ? homeAbbr : awayAbbr;
+        const neighbor = [actions[i - 1], actions[i + 1]].find((n) => {
+          if (!n) return false;
+          const nTeam = String(n?.teamTricode || "").toUpperCase();
+          const nPeriod = Number(n?.period) || 0;
+          const nClock = parsePbpClockRemaining(n?.clock, nPeriod) || "";
+          return nTeam === oppAbbr && nPeriod === pNum && nClock === clockStr && (String(n?.shotResult || "").toLowerCase() === "missed" || /miss/i.test(String(n?.description || "")));
+        });
+        const victim = String(neighbor?.playerNameI || neighbor?.playerName || "").trim();
+        if (victim) addDuel(pName, tAbbr, victim, oppAbbr, "tapón", periodLabel);
+      } else if (/\bblocks\b/i.test(desc)) {
+        // ESPN PBP format: "Victor Wembanyama blocks LeBron James's 2-foot layup"
+        const m = /^([A-Z][A-Za-z.' -]{2,32})\s+blocks\s+([A-Z][A-Za-z.' -]{2,32}?)(?:'s|’s|\s+shot|\s+layup|\s+dunk|\s+jumper)/i.exec(desc);
+        if (m && (tAbbr === awayAbbr || tAbbr === homeAbbr)) {
+          const oppAbbr = tAbbr === awayAbbr ? homeAbbr : awayAbbr;
+          addDuel(m[1], tAbbr, m[2], oppAbbr, "tapón", periodLabel);
+        }
+      }
+
+      // 2) NBA CDN paired steal (actionType === 'steal' adjacent to opponent turnover at same period+clock)
+      if (actType === "steal" && pName && (tAbbr === awayAbbr || tAbbr === homeAbbr)) {
+        const oppAbbr = tAbbr === awayAbbr ? homeAbbr : awayAbbr;
+        const neighbor = [actions[i - 1], actions[i + 1]].find((n) => {
+          if (!n) return false;
+          const nTeam = String(n?.teamTricode || "").toUpperCase();
+          const nPeriod = Number(n?.period) || 0;
+          const nClock = parsePbpClockRemaining(n?.clock, nPeriod) || "";
+          return nTeam === oppAbbr && nPeriod === pNum && nClock === clockStr && String(n?.actionType || "").toLowerCase().includes("turnover");
+        });
+        const victim = String(neighbor?.playerNameI || neighbor?.playerName || "").trim();
+        if (victim) addDuel(pName, tAbbr, victim, oppAbbr, "robo", periodLabel);
+      } else if (/\bsteals\b/i.test(desc)) {
+        // ESPN PBP format: "Jamal Murray bad pass (Alex Caruso steals)"
+        const m = /^([A-Z][A-Za-z.' -]{2,32})\s+(?:bad pass|lost ball|turnover).*?\(([A-Z][A-Za-z.' -]{2,32})\s+steals\)/i.exec(desc);
+        if (m && (tAbbr === awayAbbr || tAbbr === homeAbbr)) {
+          const defTeam = tAbbr === awayAbbr ? homeAbbr : awayAbbr;
+          addDuel(m[2], defTeam, m[1], tAbbr, "robo", periodLabel);
+        }
+      }
+    }
+
+    const defensiveDuels = Array.from(duelCounts.values())
+      .sort((a, b) => b.count - a.count || (a.type === "tapón" ? -1 : 1))
+      .slice(0, 6)
+      .map((d) =>
+        d.count > 1
+          ? `${d.defender} (${d.defTeam}) — ${d.count} ${d.type === "tapón" ? "tapones" : "robos"} directos ante ${d.victim} (${d.vicTeam})`
+          : `${d.defender} (${d.defTeam}) — ${d.type} directo ante ${d.victim} (${d.vicTeam}) en ${d.lastPeriod}`
+      );
+
     return {
       keyRun,
       breakpoint: lastLeadChange,
@@ -1780,6 +2306,9 @@ function createScoutingEngine(deps) {
       earlyFoulTroubles,
       foulOuts,
       heroicClinchers: liveHeroicClinchers,
+      closingLineupAway: closingPlayersMap[awayAbbr],
+      closingLineupHome: closingPlayersMap[homeAbbr],
+      defensiveDuels,
       formattedDossierBlock: lines.join("\n"),
     };
   }
@@ -2635,7 +3164,7 @@ function createScoutingEngine(deps) {
       }
     }
   }
-  function buildDeterministicGameNarrative(report) {
+  function buildDeterministicGameNarrative(report, chronicleVersion: "v1_classic" | "v2_tactical" = "v1_classic") {
     const winner = report.away.isWinner ? report.away : report.home;
     const loser = report.away.isWinner ? report.home : report.away;
     const margin = Math.abs(winner.score - loser.score);
@@ -2725,11 +3254,16 @@ function createScoutingEngine(deps) {
 
 Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${wSecond.points} puntos, ${wSecond.rebounds} rebotes y ${wSecond.assists} asistencias, ${wSecond.plusMinus >= 0 ? `+${wSecond.plusMinus}` : wSecond.plusMinus} en pista)` : `el bloque exterior de **${winner.shortName}**`}, **dando continuidad ofensiva a cada tramo sin bal\xF3n**, mientras que en **${loser.name}** la producci\xF3n de **#${lStar.jersey} ${lStar.name}** (${lStar.points} puntos, ${lStar.rebounds} rebotes, ${lStar.assists} asistencias) sostuvo la pelea hasta el desenlace.` : `**El reparto coral en ataque est\xE1tico** de **${winner.name}** inclin\xF3 la balanza en las posesiones calientes del \xFAltimo cuarto ante **${loser.name}**.`;
     const ddProse = report.milestonesList.length > 0 ? `La hoja estad\xEDstica dej\xF3 actuaciones de dobles figuras m\xFAltiples con ${report.milestonesList.map((m) => m.type === "TD" ? `el triple-doble de **${m.detail.replace(/\s*\(.*$/, "")}** (${m.detail.match(/\((.*)\)/)?.[1] || m.detail})` : `el doble-doble de **${m.detail.replace(/\s*\(.*$/, "")}** (${m.detail.match(/\((.*)\)/)?.[1] || m.detail})`).join(", ")}. ` : "";
-    const verdictSection = `${ddProse}En la lectura global de scouting, **${winner.name}** (${winner.recordAfter}) **refuerza su solidez competitiva en media pista** firmando ${wt.offRtg.toFixed(1)} puntos por cada 100 posesiones, mientras que **${loser.name}** (${loser.recordAfter}) deber\xE1 corregir el cierre del rebote y el cuidado del bal\xF3n (${lt.tov} p\xE9rdidas) para su siguiente cita.`;
-    return {
+    const chList = Array.isArray(report._verifiedCareerHighs) ? report._verifiedCareerHighs : [];
+    const chProse = chList.length > 0 ? `Adem\xE1s, la noche dej\xF3 un r\xE9cord personal de carrera hist\xF3rico: ${chList.slice(0, 3).map((ch) => `**${ch.playerName}** (${ch.teamAbbr}) estableci\xF3 un nuevo Career High con ${ch.summary}`).join("; ")}. ` : "";
+    const verdictSection = `${ddProse}${chProse}En la lectura global de scouting, **${winner.name}** (${winner.recordAfter}) **refuerza su solidez competitiva en media pista** firmando ${wt.offRtg.toFixed(1)} puntos por cada 100 posesiones, mientras que **${loser.name}** (${loser.recordAfter}) deber\xE1 corregir el cierre del rebote y el cuidado del bal\xF3n (${lt.tov} p\xE9rdidas) para su siguiente cita.`;
+
+    const basePayload: any = {
       eventId: report.eventId,
       generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
       engineMode: "empirical_fallback",
+      chronicleVersion,
+      groundingUsed: false,
       pressHeadline: sanitizeEditorialSpanishGrammar(pressHeadline),
       pressLead: sanitizeEditorialSpanishGrammar(pressLead),
       gameFlowSection: sanitizeEditorialSpanishGrammar(`${quarterNarrative}\n\n${runAndClutchProse}`),
@@ -2740,9 +3274,49 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
       verdictSection: sanitizeEditorialSpanishGrammar(verdictSection),
       sources: [],
     };
+
+    if (chronicleVersion === "v2_tactical") {
+      const tacticalProfile = computeGameTacticalProfile(report);
+      const wMetrics = report.away.isWinner ? tacticalProfile.away : tacticalProfile.home;
+      const lMetrics = report.away.isWinner ? tacticalProfile.home : tacticalProfile.away;
+      const duelsText =
+        tacticalProfile.defensiveDuels.length > 0
+          ? ` El seguimiento jugada a jugada dejó cruces defensivos directos destacados: ${tacticalProfile.defensiveDuels.slice(0, 3).join("; ")}.`
+          : "";
+      basePayload.tacticalProfile = tacticalProfile;
+      basePayload.tacticalKeys = [
+        {
+          title: sanitizeEditorialSpanishGrammar(tacticalProfile.decisiveFactorLabel),
+          summary: sanitizeEditorialSpanishGrammar(
+            `${tacticalProfile.decisiveFactorSummary}, marcando la principal brecha de los Four Factors en el duelo.`
+          ),
+        },
+        {
+          title: sanitizeEditorialSpanishGrammar("Perfil de tiro y generación"),
+          summary: sanitizeEditorialSpanishGrammar(
+            `**${winner.shortName}** asistió el ${wMetrics.astPct.toFixed(1)}% de sus canastas con un ${wMetrics.threePointRatePct.toFixed(1)}% de volumen exterior${wMetrics.ptsPaint !== null && lMetrics.ptsPaint !== null ? ` y un pulso de ${wMetrics.ptsPaint}-${lMetrics.ptsPaint} en la pintura` : ""}.`
+          ),
+        },
+        {
+          title: sanitizeEditorialSpanishGrammar(`Control del tramo clave (${report.decisivePeriodLabel})`),
+          summary: sanitizeEditorialSpanishGrammar(
+            `**${winner.shortName}** protegió mejor el balón (${wMetrics.tovPct.toFixed(1)}% TOV% por ${lMetrics.tovPct.toFixed(1)}% rival) y convirtió las pérdidas rivales en ${wt.ptsOffTov ?? 0} puntos para cerrar el triunfo.`
+          ),
+        },
+      ];
+      basePayload.defensiveMatchupsSection = sanitizeEditorialSpanishGrammar(
+        `En la pizarra defensiva de los Four Factors, **${winner.name}** **marcó la diferencia desde ${tacticalProfile.decisiveFactorLabel.toLowerCase()}** (${tacticalProfile.decisiveFactorSummary}), obligando a **${loser.name}** a vivir en posesiones más forzadas (${lMetrics.astPct.toFixed(1)}% de tiros asistidos frente al ${wMetrics.astPct.toFixed(1)}% ganador) y concediendo ${wt.stl} robos y ${wt.blk} tapones.${duelsText}`
+      );
+      basePayload.postgameQuotes = [];
+    }
+
+    return basePayload;
   }
   async function buildGameNarrativePayload(eventId, forceRefresh = false) {
-    const cacheKey = `game_narrative_v16:${eventId}`;
+    const editorialCfg = await loadEditorialConfig(forceRefresh);
+    const gameVersion: "v1_classic" | "v2_tactical" =
+      editorialCfg.gameChronicleVersion === "v1_classic" ? "v1_classic" : "v2_tactical";
+    const cacheKey = `game_narrative_v18:${gameVersion}:e${editorialCfg.cacheEpoch}:${eventId}`;
     if (!forceRefresh) {
       const persisted = await readSharedPersistedNarrative(cacheKey);
       if (persisted) {
@@ -2762,8 +3336,46 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
         Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME) ||
         process.env.NBA_SNAPSHOT_ONLY === "1";
       const report = await buildGameOfficialReportData(eventId, forceRefresh);
+      if (report.seasonLabel === "2026-27") {
+        try {
+          const fullMem = await deps.getFullLeagueMemory();
+          const memPlayersById = new Map((fullMem?.allPlayers || []).map((pl) => [String(pl.id), pl]));
+          const verifiedCh = [];
+          const allBoxPlayers = [
+            ...(report.away.starters || []).map((p) => ({ ...p, teamAbbr: report.away.abbr })),
+            ...(report.away.bench || []).map((p) => ({ ...p, teamAbbr: report.away.abbr })),
+            ...(report.home.starters || []).map((p) => ({ ...p, teamAbbr: report.home.abbr })),
+            ...(report.home.bench || []).map((p) => ({ ...p, teamAbbr: report.home.abbr })),
+          ];
+          for (const bp of allBoxPlayers) {
+            const pid = String(bp.id || "");
+            const memPl = memPlayersById.get(pid);
+            if (!memPl || !Array.isArray(memPl.games)) continue;
+            const chrono = [...memPl.games]
+              .filter((x) => !x.seasonLabel || x.seasonLabel === "2026-27")
+              .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+            const idx = chrono.findIndex((x) => String(x.eventId) === String(report.eventId) || String(x.date || "").slice(0, 10) === String(report.date || "").slice(0, 10));
+            if (idx < 0) continue;
+            const base = getPlayerPriorCareerBaseline(pid, chrono, idx);
+            if (!base.hasHistoricalSnapshot || base.priorCareerGp < 15) continue;
+            const hits = [];
+            if ((bp.points || 0) >= 25 && bp.points > base.priorHighs.pts) hits.push(`${bp.points} puntos (anterior tope: ${base.priorHighs.pts})`);
+            if ((bp.rebounds || 0) >= 14 && bp.rebounds > base.priorHighs.reb) hits.push(`${bp.rebounds} rebotes (anterior tope: ${base.priorHighs.reb})`);
+            if ((bp.assists || 0) >= 10 && bp.assists > base.priorHighs.ast) hits.push(`${bp.assists} asistencias (anterior tope: ${base.priorHighs.ast})`);
+            if ((bp.fg3m || 0) >= 6 && bp.fg3m > base.priorHighs.fg3m) hits.push(`${bp.fg3m} triples (anterior tope: ${base.priorHighs.fg3m})`);
+            if ((bp.steals || 0) >= 5 && bp.steals > base.priorHighs.stl) hits.push(`${bp.steals} robos (anterior tope: ${base.priorHighs.stl})`);
+            if ((bp.blocks || 0) >= 5 && bp.blocks > base.priorHighs.blk) hits.push(`${bp.blocks} tapones (anterior tope: ${base.priorHighs.blk})`);
+            if (hits.length > 0) {
+              verifiedCh.push({ playerName: bp.name, teamAbbr: bp.teamAbbr, summary: hits.join(" y ") });
+            }
+          }
+          report._verifiedCareerHighs = verifiedCh;
+        } catch {
+          report._verifiedCareerHighs = [];
+        }
+      }
       if (!getGeminiClient()) {
-        const fallback = buildDeterministicGameNarrative(report);
+        const fallback = buildDeterministicGameNarrative(report, gameVersion);
         fallback.generationTimeMs = Date.now() - startTime;
         fallback.missingApiKey = true;
         return fallback;
@@ -2781,7 +3393,23 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
         pressCtx = { byMatchup: new Map(), globalNotes: [] };
       }
       const matchPress = pressCtx.byMatchup.get(`${report.away.abbr}@${report.home.abbr}`);
-      const seedSources = [{ uri: `https://www.nba.com/game/${report.away.abbr.toLowerCase()}-vs-${report.home.abbr.toLowerCase()}-${report.eventId}/box-score`, title: `NBA.com Acta Oficial \u2014 ${report.away.abbr} vs ${report.home.abbr}` }, { uri: `https://www.nba.com/game/${report.away.abbr.toLowerCase()}-vs-${report.home.abbr.toLowerCase()}-${report.eventId}/play-by-play`, title: `NBA.com Play-by-Play \u2014 ${report.away.abbr} vs ${report.home.abbr}` }, ...matchPress?.sources || []];
+      let espnRecap: any = null;
+      if (gameVersion === "v2_tactical") {
+        try {
+          espnRecap = await Promise.race([
+            fetchEspnFullGameRecap(matchPress?.espnEventId, report.date, report.away.abbr, report.home.abbr, forceRefresh),
+            new Promise((resolve) => setTimeout(() => resolve(null), 3600)),
+          ]);
+        } catch {
+          espnRecap = null;
+        }
+      }
+      const seedSources = [
+        { uri: `https://www.nba.com/game/${report.away.abbr.toLowerCase()}-vs-${report.home.abbr.toLowerCase()}-${report.eventId}/box-score`, title: `NBA.com Acta Oficial \u2014 ${report.away.abbr} vs ${report.home.abbr}` },
+        { uri: `https://www.nba.com/game/${report.away.abbr.toLowerCase()}-vs-${report.home.abbr.toLowerCase()}-${report.eventId}/play-by-play`, title: `NBA.com Play-by-Play \u2014 ${report.away.abbr} vs ${report.home.abbr}` },
+        ...(espnRecap?.url ? [{ uri: espnRecap.url, title: espnRecap.title }] : []),
+        ...matchPress?.sources || [],
+      ];
       const formatPlayerDossier = __name((p) => `#${p.jersey} ${p.name} (${p.position}, ${p.isStarter ? "Titular" : "Suplente"}): ${p.points} PTS, ${p.rebounds} REB (${p.oreb} OR), ${p.assists} AST, ${p.steals} ROB, ${p.blocks} TAP, ${p.turnovers} PER, ${p.fgm}/${p.fga} TC, ${p.fg3m}/${p.fg3a} T3, ${p.ftm}/${p.fta} TL, ${p.minutesFormatted} MIN, +/- ${p.plusMinus >= 0 ? `+${p.plusMinus}` : p.plusMinus}, GmSc ${p.gameScore.toFixed(1)}${p.tripleDouble ? " [TRIPLE-DOBLE]" : p.doubleDouble ? " [DOBLE-DOBLE]" : ""}`, "formatPlayerDossier");
       const verifiedGamePlayers = [...report.away.starters.map((p) => p.name), ...report.away.bench.map((p) => p.name), ...report.away.absencesAndDnp.map((p) => p.name), ...report.home.starters.map((p) => p.name), ...report.home.bench.map((p) => p.name), ...report.home.absencesAndDnp.map((p) => p.name)];
       const isRelevantTechnicalDnp = (a) => (a.statusType === "coach_decision" || a.statusType === "gleague") && ((a.minAvg ?? 0) >= 12 || (a.ptsAvg ?? 0) >= 5 || a.isSpanish);
@@ -2791,67 +3419,258 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
       const heroicDossierLine = Array.isArray(report.heroicClinchers) && report.heroicClinchers.length > 0
         ? `CANASTA DECISIVA VERIFICADA (BUZZER BEATER / GAME WINNER): ${report.heroicClinchers.map((hc) => `#${hc.jersey} ${hc.playerName} (${hc.teamAbbr}) anotó un ${hc.tagLabel} mediante ${hc.actionEs} ${hc.shotType === "buzzer_beater" ? `sobre la bocina del ${hc.periodLabel} (0.0s)` : `faltando ${hc.clock} del ${hc.periodLabel}`} para sellar la victoria (${report.away.score}-${report.home.score}).`).join(" | ")}`
         : "";
-      const dossier = [`AVISO CR\xCDTICO DE MUNDO CERRADO: Fecha real del encuentro ${report.date} (Temporada ${report.seasonLabel}). Tu memoria interna de entrenamiento est\xE1 desactualizada varios a\xF1os respecto a entrenadores actuales, traspasos, contratos y palmar\xE9s. NO des NING\xDAN dato por supuesto fuera de los hechos expl\xEDcitos de este dossier.`, `PARTIDO OFICIAL NBA (${report.date} \xB7 Temporada ${report.seasonLabel}):`, `T\xCDTULO: ${report.pasoBTitle}`, `PARCIALES POR CUARTOS: ${report.periods.length > 0 ? report.periods.map((p) => `${p.label} (${report.away.abbr} ${p.awayScore} - ${p.homeScore} ${report.home.abbr})`).join(" | ") : "Sin desglose parcial"} \xB7 Tramo decisivo: ${report.decisivePeriodLabel}`, `FLUJO DE MARCADOR: Cambios de l\xEDder=${report.leadChanges ?? "No consta"}, Empates=${report.timesTied ?? "No consta"}, M\xE1xima ventaja ${report.away.abbr}=+${report.away.totals.biggestLead ?? 0} (mejor parcial ${report.away.totals.biggestRun ?? 0}-0), M\xE1xima ventaja ${report.home.abbr}=+${report.home.totals.biggestLead ?? 0} (mejor parcial ${report.home.totals.biggestRun ?? 0}-0).`, `RITMO DEL ENCUENTRO (PACE VS MEDIA NBA): ${report.away.totals.pace.toFixed(1)} posesiones/48m (${report.paceDiffVsLeague >= 0 ? `+${report.paceDiffVsLeague.toFixed(1)}` : report.paceDiffVsLeague.toFixed(1)} frente al promedio oficial NBA ${report.seasonLabel} de ${report.leagueAvgPace.toFixed(1)} posesiones).`, heroicDossierLine, matchPress && matchPress.notes.length > 0 ? `TELETIPO DE PRENSA DE ESTE PARTIDO (${report.date}): ${matchPress.notes.join(" | ")}` : "", report.pbpHighlights?.formattedDossierBlock ? `HITOS PLAY-BY-PLAY (DATOS INDEXADOS EN VIVO EN PISTA):\n${report.pbpHighlights.formattedDossierBlock}` : "", ``, `ESTAD\xCDSTICAS COLECTIVAS:`, `- VISITANTE ${report.away.name} (${report.away.abbr}, r\xE9cord ${report.away.recordAfter}${report.away.isBackToBack ? ", en back-to-back" : ""}): ${report.away.score} PTS | ${report.away.totals.fgm}/${report.away.totals.fga} TC (${report.away.totals.fgPct}%) | ${report.away.totals.fg3m}/${report.away.totals.fg3a} T3 (${report.away.totals.fg3Pct}%) | ${report.away.totals.ftm}/${report.away.totals.fta} TL | ${report.away.totals.reb} REB (${report.away.totals.oreb} OR) | ${report.away.totals.ast} AST | ${report.away.totals.stl} ROB | ${report.away.totals.blk} TAP | ${report.away.totals.tov} PER | OffRtg ${report.away.totals.offRtg} | eFG% ${report.away.totals.efgPct}% | Pintura: ${report.away.totals.ptsPaint ?? "s/d"} | Contraataque: ${report.away.totals.ptsFastBreak ?? "s/d"} | Tras p\xE9rdida: ${report.away.totals.ptsOffTov ?? "s/d"} | 2\xAA jugada: ${report.away.totals.ptsSecondChance ?? "s/d"} | Banquillo: ${report.away.totals.benchPoints} PTS.`, `- LOCAL ${report.home.name} (${report.home.abbr}, r\xE9cord ${report.home.recordAfter}${report.home.isBackToBack ? ", en back-to-back" : ""}): ${report.home.score} PTS | ${report.home.totals.fgm}/${report.home.totals.fga} TC (${report.home.totals.fgPct}%) | ${report.home.totals.fg3m}/${report.home.totals.fg3a} T3 (${report.home.totals.fg3Pct}%) | ${report.home.totals.ftm}/${report.home.totals.fta} TL | ${report.home.totals.reb} REB (${report.home.totals.oreb} OR) | ${report.home.totals.ast} AST | ${report.home.totals.stl} ROB | ${report.home.totals.blk} TAP | ${report.home.totals.tov} PER | OffRtg ${report.home.totals.offRtg} | eFG% ${report.home.totals.efgPct}% | Pintura: ${report.home.totals.ptsPaint ?? "s/d"} | Contraataque: ${report.home.totals.ptsFastBreak ?? "s/d"} | Tras p\xE9rdida: ${report.home.totals.ptsOffTov ?? "s/d"} | 2\xAA jugada: ${report.home.totals.ptsSecondChance ?? "s/d"} | Banquillo: ${report.home.totals.benchPoints} PTS.`, ``, `PLANTILLA ${report.away.abbr} EN PISTA:`, ...[...report.away.starters, ...report.away.bench].map(formatPlayerDossier), `EXPULSADOS POR 6 FALTAS ${report.away.abbr}: ${report.away.absencesAndDnp.filter((a) => a.statusType === "foul_out").length > 0 ? report.away.absencesAndDnp.filter((a) => a.statusType === "foul_out").map((a) => `#${a.jersey} ${a.name} (${a.minutesPlayed ?? "?"}') — expulsado por seis faltas${a.foulOutPeriod && a.foulOutClock ? ` en el ${a.foulOutPeriod} faltando ${a.foulOutClock}` : ""}`).join("; ") : "Ninguno"}`, `BAJAS M\xC9DICAS / LESIONADOS E INCIDENCIAS EN PISTA ${report.away.abbr}: ${report.away.absencesAndDnp.filter((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague" && a.statusType !== "foul_out").length > 0 ? report.away.absencesAndDnp.filter((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague" && a.statusType !== "foul_out").map((a) => `#${a.jersey} ${a.name} [${a.statusLabel || "Lesionado"} \u2014 ${a.note}]`).join("; ") : "Ninguna baja m\xE9dica ni incidencia registrada"}`, awayRelevantTechDnp.length > 0 ? `ROTACI\xD3N HABITUAL SIN MINUTOS POR DECISI\xD3N T\xC9CNICA ${report.away.abbr}: ${awayRelevantTechDnp.map(formatRelevantDnp).join("; ")}` : "", ``, `PLANTILLA ${report.home.abbr} EN PISTA:`, ...[...report.home.starters, ...report.home.bench].map(formatPlayerDossier), `EXPULSADOS POR 6 FALTAS ${report.home.abbr}: ${report.home.absencesAndDnp.filter((a) => a.statusType === "foul_out").length > 0 ? report.home.absencesAndDnp.filter((a) => a.statusType === "foul_out").map((a) => `#${a.jersey} ${a.name} (${a.minutesPlayed ?? "?"}') — expulsado por seis faltas${a.foulOutPeriod && a.foulOutClock ? ` en el ${a.foulOutPeriod} faltando ${a.foulOutClock}` : ""}`).join("; ") : "Ninguno"}`, `BAJAS M\xC9DICAS / LESIONADOS E INCIDENCIAS EN PISTA ${report.home.abbr}: ${report.home.absencesAndDnp.filter((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague" && a.statusType !== "foul_out").length > 0 ? report.home.absencesAndDnp.filter((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague" && a.statusType !== "foul_out").map((a) => `#${a.jersey} ${a.name} [${a.statusLabel || "Lesionado"} \u2014 ${a.note}]`).join("; ") : "Ninguna baja m\xE9dica ni incidencia registrada"}`, homeRelevantTechDnp.length > 0 ? `ROTACI\xD3N HABITUAL SIN MINUTOS POR DECISI\xD3N T\xC9CNICA ${report.home.abbr}: ${homeRelevantTechDnp.map(formatRelevantDnp).join("; ")}` : "", ``, `DETECTOR OFICIAL DE JUGADORES ESPA\xD1OLES: ${report.spanishPlayersReport.summaryLine}`, `DOBLES-DOBLES Y TRIPLES-DOBLES VERIFICADOS: ${report.milestonesList.length > 0 ? report.milestonesList.map((m) => `${m.type}: ${m.detail}`).join(" | ") : "Ninguno en este encuentro"}`, `PODIO CALCULADO: ${report.away.abbr} (${report.away.podium.map((p) => `${"\u2B50".repeat(p.stars)} #${p.jersey} ${p.name}`).join(" | ")}) // ${report.home.abbr} (${report.home.podium.map((p) => `${"\u2B50".repeat(p.stars)} #${p.jersey} ${p.name}`).join(" | ")})`].filter(Boolean).join("\n");
-      const systemInstruction = [
-        "Eres un periodista sénior de prensa deportiva española y scout táctico profesional de la NBA (estilo The Athletic, Gigantes del Basket y NBAManiacs).",
-        "REGLAS INQUEBRANTABLES DE RIGOR Y MUNDO CERRADO (CERO DATOS POR SUPUESTOS):",
-        '1. RIGOR EMPÍRICO ABSOLUTO: Usa EXCLUSIVAMENTE las cifras estadísticas exactas, el pabellón oficial indicado en TÍTULO y la información explícita del dossier adjunto. Jamás inventes puntos, rebotes, parciales, jugadas concretas segundo a segundo (ej. "triple desde la esquina a falta de 2 segundos") ni dorsales que no figuren en el acta.',
-        '2. PROHIBICI\xD3N TOTAL DE DAR DATOS POR SUPUESTOS O USAR MEMORIA PREENTRENADA: Tu conocimiento interno previo está desactualizado respecto a la temporada actual. Tienes TERMINANTEMENTE PROHIBIDO dar por supuesto o mencionar: (a) nombres propios o apodos de entrenadores, asistentes o directivos (ej. Tom Thibodeau dejó los NY Knicks hace años; NUNCA cites nombres de entrenadores, usa SIEMPRE "el cuerpo técnico de [Equipo]", "la dirección técnica de [Equipo]" o "la pizarra de [Equipo]"); (b) antigüedad, edad, rondas de Draft, condición de rookie, contratos, exequipos o traspasos de jugadores; (c) premios pasados, anillos, "vigente campeón" o series de temporadas anteriores; (d) puestos exactos en la tabla clasificatoria (ej. "3º del Este") o próximos rivales del calendario; (e) diagnósticos médicos o plazos de recuperación más allá de la nota literal del dossier.',
-        '3. PULCRITUD EN BAJAS (LESIÓN VS DECISIÓN TÉCNICA VS EXPULSIÓN), MINUTOS Y RITMO: Al mencionar ausencias o jugadores sin minutos en PIZARRA_Y_ROTACION o ESPANOLES, sé escrupulosamente pulcro distinguiendo entre quienes causaron baja por lesión / parte médico (bloque BAJAS MÉDICAS / LESIONADOS), quienes fueron expulsados por 6 faltas (bloque EXPULSADOS POR 6 FALTAS) y quienes figuraran como rotación habitual sin minutos por decisión técnica (bloque ROTACIÓN HABITUAL SIN MINUTOS POR DECISIÓN TÉCNICA). Si ese bloque no aparece en el dossier porque los descartes fueron únicamente jugadores de G-League o fondo de banquillo sin peso en la rotación, NO los menciones en absoluto ni redactes listas de descartes irrelevantes. Jamás llames "lesionado" a un expulsado por faltas ni a un descarte por decisión técnica. Cuando menciones a un expulsado por 6 faltas: si el dossier especifica su cuarto y reloj exactos (ej. "en el 4Q faltando 0:52" o "en el OT2 faltando 0:16"), cópialos LITERALMENTE con ese formato ("**#24 Daniss Jenkins** (42\') fue expulsado por seis faltas en el OT2 faltando 0:16"); y si el dossier NO incluye cuarto/reloj, escribe solo los minutos jugados sin inventar ni restar 48 menos minutos jugados (PROHIBIDO deducir "faltando 18:00" o simular tiempos del reloj). Integra también el Pace frente a la media oficial NBA.',
-        '4. REDACCIÓN 100% NATURAL Y TERMINOLOGÍA NBA EN ESPAÑOL: Escribe en español de España fluido, con vocabulario táctico auténtico (espaciado, pintura, bloqueo directo, ajuste tras descanso, transición defensiva, segunda unidad, rebote ofensivo, clutch). NUNCA traduzcas literalmente anglicismos técnicos de la NBA: el término "back-to-back" (o B2B) NO se traduce jamás; PROHIBIDO escribir "espalda con espalda", "espalda contra espalda" o "en situación de espalda con espalda" — escribe siempre "en back-to-back" (o "en segunda noche consecutiva sin descanso"). Mantén igualmente términos asentados como clutch, pick and roll, box score o play-in sin calcos artificiales.',
-        '5. CERO CLICHÉS NI RELLENO: Prohibido usar "En conclusión", "Cabe destacar", "Sin lugar a dudas", "Sin duda" o metatexto. Redacta párrafos cohesivos, sin listas de viñetas ni tablas Markdown.',
-        '6. JERARQUÍA VISUAL Y ÉNFASIS EN NEGRITA (**...**): En todos los párrafos del cuerpo (ENTRADILLA, GUION_Y_QUIEBRE, PIZARRA_Y_ROTACION, cuerpo de FOCO_ESPECIAL, FACTOR_X_Y_LIDERES, ESPANOLES y VEREDICTO_E_HITOS), utiliza negrita Markdown (**texto**) EXCLUSIVAMENTE para estos tres elementos: (a) nombres de jugadores (incluyendo su dorsal cuando lo cites, ej. **#15 Nikola Jokić**), (b) nombres o apodos oficiales de equipos/franquicias (ej. **Boston Celtics**, **Knicks**), y (c) UNA sola idea táctica clave por párrafo (frase breve de 4 a 10 palabras que resuma la clave del juego, ej. **colapsando la pintura tras cada bloqueo directo**). PROHIBIDO poner en negrita cifras o estadísticas sueltas (como "49 puntos", "12 rebotes" o "58.4%"): intégralas en texto normal sin formato especial. PROHIBIDO usar ** en TITULAR_PRENSA ni en el título corto previo a || en FOCO_ESPECIAL.',
-        '7. ESTRUCTURA EXACTA DE SALIDA CON ESTAS 8 ETIQUETAS EN MAYÚSCULAS:',
-        "===TITULAR_PRENSA===",
-        "(Titular periodístico vibrante y directo de 1 línea sobre el partido, sin almohadillas # ni asteriscos **).",
-        "===ENTRADILLA===",
-        "(Entradilla destacada de 2 líneas sintetizando la tesis táctica y el protagonista del encuentro, aplicando la regla de negritas).",
-        "===GUION_Y_QUIEBRE===",
-        "(2 párrafos fluidos: evolución del partido por cuartos, ritmo comparado con la media NBA, alternancias, rachas anotadoras y el momento exacto donde se rompió o decidió el choque).",
-        "===PIZARRA_Y_ROTACION===",
-        "(2 párrafos de scouting profundo: ajustes tácticos colectivos, batallas en pintura/triple/rebote, impacto real diferenciando con pulcritud bajas por lesión frente a ausencias por decisión técnica o expulsiones por faltas con su cuarto/reloj, rendimiento de la segunda unidad y puntos tras pérdida/contraataque).",
-        "===FOCO_ESPECIAL===",
-        '(Si el partido tuvo un ángulo singular —prórroga, remontada grande, exhibición histórica, cortocircuito en el clutch, clínica defensiva—, escribe en una línea el título corto sin ** seguido de || y 1 párrafo analítico con la regla de negritas: ej. "Supervivencia en la prórroga || Texto...". Si fue un guion convencional sin ángulo extra, escribe únicamente: NINGUNO).',
-        "===FACTOR_X_Y_LIDERES===",
-        "(2 párrafos analizando el duelo de estrellas y quién emergió como Factor X inesperado para inclinar la balanza, citando siempre dorsales # y cifras reales).",
-        "===ESPANOLES===",
-        "(Si hay españoles en el detector oficial, analiza en 1 párrafo su impacto o situación en convocatoria; si NO los hay, escribe UNA SOLA FRASE breve, limpia y directa confirmándolo).",
-        "===VEREDICTO_E_HITOS===",
-        "(2 párrafos integrando con total naturalidad los dobles-dobles o triples-dobles verificados y cerrando con el veredicto strictly táctico del scout sobre qué deja este choque a ambos equipos).",
-        '8. INTEGRACIÓN FLUIDA DEL PLAY-BY-PLAY (SIN REPETICIONES NI LISTAS ARTIFICIALES): (a) TIEMPOS MUERTOS TRAS PARCIAL: Si el dossier detalla un parcial demoledor que forzó un tiempo muerto técnico (ej. "parcial de 11-0 que obligó a parar el partido con tiempo muerto"), intégralo con soltura en GUION_Y_QUIEBRE sin inventar nombres propios de entrenadores (usa siempre "el cuerpo técnico de [Equipo rival]" o "la dirección técnica de [Equipo rival]"). (b) REPARTO DE TIROS Y PÉRDIDAS EN CLUTCH: Si el dossier incluye el bloque de ejecución clutch (últimos 2 minutos con margen ≤5 pts), sintetiza con solvencia táctica cómo se repartieron los tiros decisivos, quién asumió la responsabilidad y qué pérdidas de balón castigaron al derrotado en GUION_Y_QUIEBRE o FOCO_ESPECIAL, sin enumerar viñetas mecánicas. (c) CANASTA GANADORA (BUZZER BEATER / GAME WINNER): Si y SOLO SI el dossier incluye `CANASTA DECISIVA VERIFICADA` o `CANASTA GANADORA DECISIVA`, destaca ese Buzzer Beater (BB) o Game Winner (GW) —jugador, dorsal #, acción de tiro y reloj exacto— en TITULAR_PRENSA, ENTRADILLA y GUION_Y_QUIEBRE/FOCO_ESPECIAL; si NO figura ese bloque en el dossier, NO hables de buzzer beaters ni de game winners. (d) CERO REPETICIÓN ENTRE SECCIONES: Distribuye la información armónicamente para no repetir el mismo hecho o cifra exacta en GUION_Y_QUIEBRE y de nuevo en PIZARRA_Y_ROTACION o FOCO_ESPECIAL.',
+      const careerHighDossierLine = Array.isArray(report._verifiedCareerHighs) && report._verifiedCareerHighs.length > 0
+        ? `RÉCORD PERSONAL DE CARRERA VERIFICADO (CAREER HIGH): ${report._verifiedCareerHighs.map((ch) => `${ch.playerName} (${ch.teamAbbr}) fijó nuevo Career High con ${ch.summary}`).join(" | ")}`
+        : "";
+      const dossierBody = [`AVISO CR\xCDTICO DE MUNDO CERRADO: Fecha real del encuentro ${report.date} (Temporada ${report.seasonLabel}). Tu memoria interna de entrenamiento est\xE1 desactualizada varios a\xF1os respecto a entrenadores actuales, traspasos, contratos y palmar\xE9s. NO des NING\xDAN dato por supuesto fuera de los hechos expl\xEDcitos de este dossier.`, `PARTIDO OFICIAL NBA (${report.date} \xB7 Temporada ${report.seasonLabel}):`, `T\xCDTULO: ${report.pasoBTitle}`, `PARCIALES POR CUARTOS: ${report.periods.length > 0 ? report.periods.map((p) => `${p.label} (${report.away.abbr} ${p.awayScore} - ${p.homeScore} ${report.home.abbr})`).join(" | ") : "Sin desglose parcial"} \xB7 Tramo decisivo: ${report.decisivePeriodLabel}`, `FLUJO DE MARCADOR: Cambios de l\xEDder=${report.leadChanges ?? "No consta"}, Empates=${report.timesTied ?? "No consta"}, M\xE1xima ventaja ${report.away.abbr}=+${report.away.totals.biggestLead ?? 0} (mejor parcial ${report.away.totals.biggestRun ?? 0}-0), M\xE1xima ventaja ${report.home.abbr}=+${report.home.totals.biggestLead ?? 0} (mejor parcial ${report.home.totals.biggestRun ?? 0}-0).`, `RITMO DEL ENCUENTRO (PACE VS MEDIA NBA): ${report.away.totals.pace.toFixed(1)} posesiones/48m (${report.paceDiffVsLeague >= 0 ? `+${report.paceDiffVsLeague.toFixed(1)}` : report.paceDiffVsLeague.toFixed(1)} frente al promedio oficial NBA ${report.seasonLabel} de ${report.leagueAvgPace.toFixed(1)} posesiones).`, heroicDossierLine, careerHighDossierLine, matchPress && matchPress.notes.length > 0 ? `TELETIPO DE PRENSA DE ESTE PARTIDO (${report.date}): ${matchPress.notes.join(" | ")}` : "", report.pbpHighlights?.formattedDossierBlock ? `HITOS PLAY-BY-PLAY (DATOS INDEXADOS EN VIVO EN PISTA):\n${report.pbpHighlights.formattedDossierBlock}` : "", ``, `ESTAD\xCDSTICAS COLECTIVAS:`, `- VISITANTE ${report.away.name} (${report.away.abbr}, r\xE9cord ${report.away.recordAfter}${report.away.isBackToBack ? ", en back-to-back" : ""}): ${report.away.score} PTS | ${report.away.totals.fgm}/${report.away.totals.fga} TC (${report.away.totals.fgPct}%) | ${report.away.totals.fg3m}/${report.away.totals.fg3a} T3 (${report.away.totals.fg3Pct}%) | ${report.away.totals.ftm}/${report.away.totals.fta} TL | ${report.away.totals.reb} REB (${report.away.totals.oreb} OR) | ${report.away.totals.ast} AST | ${report.away.totals.stl} ROB | ${report.away.totals.blk} TAP | ${report.away.totals.tov} PER | OffRtg ${report.away.totals.offRtg} | eFG% ${report.away.totals.efgPct}% | Pintura: ${report.away.totals.ptsPaint ?? "s/d"} | Contraataque: ${report.away.totals.ptsFastBreak ?? "s/d"} | Tras p\xE9rdida: ${report.away.totals.ptsOffTov ?? "s/d"} | 2\xAA jugada: ${report.away.totals.ptsSecondChance ?? "s/d"} | Banquillo: ${report.away.totals.benchPoints} PTS.`, `- LOCAL ${report.home.name} (${report.home.abbr}, r\xE9cord ${report.home.recordAfter}${report.home.isBackToBack ? ", en back-to-back" : ""}): ${report.home.score} PTS | ${report.home.totals.fgm}/${report.home.totals.fga} TC (${report.home.totals.fgPct}%) | ${report.home.totals.fg3m}/${report.home.totals.fg3a} T3 (${report.home.totals.fg3Pct}%) | ${report.home.totals.ftm}/${report.home.totals.fta} TL | ${report.home.totals.reb} REB (${report.home.totals.oreb} OR) | ${report.home.totals.ast} AST | ${report.home.totals.stl} ROB | ${report.home.totals.blk} TAP | ${report.home.totals.tov} PER | OffRtg ${report.home.totals.offRtg} | eFG% ${report.home.totals.efgPct}% | Pintura: ${report.home.totals.ptsPaint ?? "s/d"} | Contraataque: ${report.home.totals.ptsFastBreak ?? "s/d"} | Tras p\xE9rdida: ${report.home.totals.ptsOffTov ?? "s/d"} | 2\xAA jugada: ${report.home.totals.ptsSecondChance ?? "s/d"} | Banquillo: ${report.home.totals.benchPoints} PTS.`, ``, `PLANTILLA ${report.away.abbr} EN PISTA:`, ...[...report.away.starters, ...report.away.bench].map(formatPlayerDossier), `EXPULSADOS POR 6 FALTAS ${report.away.abbr}: ${report.away.absencesAndDnp.filter((a) => a.statusType === "foul_out").length > 0 ? report.away.absencesAndDnp.filter((a) => a.statusType === "foul_out").map((a) => `#${a.jersey} ${a.name} (${a.minutesPlayed ?? "?"}') — expulsado por seis faltas${a.foulOutPeriod && a.foulOutClock ? ` en el ${a.foulOutPeriod} faltando ${a.foulOutClock}` : ""}`).join("; ") : "Ninguno"}`, `BAJAS M\xC9DICAS / LESIONADOS E INCIDENCIAS EN PISTA ${report.away.abbr}: ${report.away.absencesAndDnp.filter((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague" && a.statusType !== "foul_out").length > 0 ? report.away.absencesAndDnp.filter((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague" && a.statusType !== "foul_out").map((a) => `#${a.jersey} ${a.name} [${a.statusLabel || "Lesionado"} \u2014 ${a.note}]`).join("; ") : "Ninguna baja m\xE9dica ni incidencia registrada"}`, awayRelevantTechDnp.length > 0 ? `ROTACI\xD3N HABITUAL SIN MINUTOS POR DECISI\xD3N T\xC9CNICA ${report.away.abbr}: ${awayRelevantTechDnp.map(formatRelevantDnp).join("; ")}` : "", ``, `PLANTILLA ${report.home.abbr} EN PISTA:`, ...[...report.home.starters, ...report.home.bench].map(formatPlayerDossier), `EXPULSADOS POR 6 FALTAS ${report.home.abbr}: ${report.home.absencesAndDnp.filter((a) => a.statusType === "foul_out").length > 0 ? report.home.absencesAndDnp.filter((a) => a.statusType === "foul_out").map((a) => `#${a.jersey} ${a.name} (${a.minutesPlayed ?? "?"}') — expulsado por seis faltas${a.foulOutPeriod && a.foulOutClock ? ` en el ${a.foulOutPeriod} faltando ${a.foulOutClock}` : ""}`).join("; ") : "Ninguno"}`, `BAJAS M\xC9DICAS / LESIONADOS E INCIDENCIAS EN PISTA ${report.home.abbr}: ${report.home.absencesAndDnp.filter((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague" && a.statusType !== "foul_out").length > 0 ? report.home.absencesAndDnp.filter((a) => a.statusType !== "coach_decision" && a.statusType !== "gleague" && a.statusType !== "foul_out").map((a) => `#${a.jersey} ${a.name} [${a.statusLabel || "Lesionado"} \u2014 ${a.note}]`).join("; ") : "Ninguna baja m\xE9dica ni incidencia registrada"}`, homeRelevantTechDnp.length > 0 ? `ROTACI\xD3N HABITUAL SIN MINUTOS POR DECISI\xD3N T\xC9CNICA ${report.home.abbr}: ${homeRelevantTechDnp.map(formatRelevantDnp).join("; ")}` : "", ``, `DETECTOR OFICIAL DE JUGADORES ESPA\xD1OLES: ${report.spanishPlayersReport.summaryLine}`, `DOBLES-DOBLES Y TRIPLES-DOBLES VERIFICADOS: ${report.milestonesList.length > 0 ? report.milestonesList.map((m) => `${m.type}: ${m.detail}`).join(" | ") : "Ninguno en este encuentro"}`, `PODIO CALCULADO: ${report.away.abbr} (${report.away.podium.map((p) => `${"\u2B50".repeat(p.stars)} #${p.jersey} ${p.name}`).join(" | ")}) // ${report.home.abbr} (${report.home.podium.map((p) => `${"\u2B50".repeat(p.stars)} #${p.jersey} ${p.name}`).join(" | ")})`].filter(Boolean).join("\n");
+      const dossier = `<dossier_partido_nba>\n${dossierBody}\n</dossier_partido_nba>`;
+      const gameEditorialBlock = buildEditorialDirectivesPromptBlock(editorialCfg, "game");
+
+      // =========================================================================
+      // BRANCH A: v1_classic — 100% INTACT ORIGINAL 8-SECTION CLOSED-WORLD ENGINE
+      // =========================================================================
+      if (gameVersion === "v1_classic") {
+        const systemInstruction = [
+          "Eres un periodista sénior de prensa deportiva española y scout táctico profesional de la NBA (estilo The Athletic, Gigantes del Basket y NBAManiacs) para RadarNBA.",
+          "Tu misión es redactar la crónica de scouting definitiva de este encuentro basándote EXCLUSIVAMENTE en los datos verificados dentro de <dossier_partido_nba> (estadísticas oficiales, pabellón, flujo de marcador, Play-by-Play de NBA.com, teletipo del choque, detector de españoles y podio calculado).",
+          "1. REGLAS INQUEBRANTABLES DE RIGOR Y MUNDO CERRADO",
+          '- Fidelidad empírica absoluta y jerarquía de fuentes: Usa EXCLUSIVAMENTE las cifras exactas, el pabellón oficial indicado en TÍTULO, los dorsales (#) y los hechos explícitos de <dossier_partido_nba>. Si cualquier dato de TELETIPO DE PRENSA discrepa con el acta numérica o con HITOS PLAY-BY-PLAY, manda SIEMPRE el acta oficial. Jamás inventes puntos, rebotes, parciales, jugadas concretas segundo a segundo (ej. "triple desde la esquina a falta de 2 segundos") ni dorsales que no figuren en PLANTILLA [ABBR] EN PISTA.',
+          '- Cortafuegos contra memoria preentrenada y datos externos: Tu memoria interna está desactualizada respecto a la temporada actual. Tienes TERMINANTEMENTE PROHIBIDO mencionar (incluso si aparecieran citados de pasada en TELETIPO DE PRENSA): (a) nombres propios o apodos de entrenadores, asistentes o directivos —usa SIEMPRE "el cuerpo técnico de [Equipo]", "la dirección técnica de [Equipo]" o "la pizarra de [Equipo]"—; (b) antigüedad, edad, rondas de Draft, condición de rookie, contratos, exequipos o traspasos de jugadores; (c) premios pasados, anillos, "vigente campeón" o series de temporadas anteriores; (d) puestos exactos en la tabla clasificatoria (ej. "3º del Este") o próximos rivales del calendario; (e) diagnósticos médicos o plazos de recuperación más allá de lo escrito literalmente en BAJAS MÉDICAS / LESIONADOS E INCIDENCIAS EN PISTA o en el teletipo sobre lo ocurrido hoy en cancha.',
+          '- Pulcritud estricta en bajas, expulsiones por faltas y rotación: Distingue escrupulosamente entre bajas médicas/incidencias (BAJAS MÉDICAS / LESIONADOS E INCIDENCIAS EN PISTA), expulsados por 6 faltas (EXPULSADOS POR 6 FALTAS) y rotación habitual sin minutos (ROTACIÓN HABITUAL SIN MINUTOS POR DECISIÓN TÉCNICA). Jamás llames "lesionado" a un expulsado por faltas ni a un descarte por decisión técnica. Si no existe bloque de rotación habitual sin minutos, ignora a los descartes de fondo de banquillo o G-League. En expulsiones por 6 faltas: si EXPULSADOS POR 6 FALTAS incluye cuarto y reloj exactos (ej. "en el OT2 faltando 0:16"), cópialos LITERALMENTE con formato "**#24 Nombre** (42\') fue expulsado por seis faltas en el OT2 faltando 0:16"; si NO incluye cuarto/reloj, cita solo los minutos jugados sin restar 48 menos minutos ni inventar relojes.',
+          "2. EXPLOTACIÓN PROFUNDA DEL PLAY-BY-PLAY (PBP), BUZZER BEATERS Y CAREER HIGHS",
+          "- Anatomía completa del partido (GUION_Y_QUIEBRE): No te limites al marcador por cuartos. Utiliza FLUJO DE MARCADOR y HITOS PLAY-BY-PLAY para reconstruir cómo mutó el choque: alternancias en el liderato, máximas ventajas, parciales demoledores que forzaron tiempos muertos técnicos, rachas anotadoras y problemas tempranos de faltas que alteraron las rotaciones.",
+          "- Gestión del clutch: Si HITOS PLAY-BY-PLAY incluye el bloque clutch (últimos 2 minutos con margen ≤5 pts), sintetiza con precisión táctica quién asumió los tiros decisivos, qué tipo de acciones ejecutó y qué pérdidas o rebotes condenaron al derrotado en GUION_Y_QUIEBRE o FOCO_ESPECIAL, sin enumerar listas mecánicas ni inventar emparejamientos defensivos no recogidos en el acta.",
+          "- Canasta ganadora (BB / GW): Menciona Buzzer Beaters o Game Winners (jugador, dorsal #, acción de tiro y reloj exacto) en TITULAR_PRENSA, ENTRADILLA y GUION_Y_QUIEBRE/FOCO_ESPECIAL ÚNICAMENTE si <dossier_partido_nba> incluye CANASTA DECISIVA VERIFICADA (BUZZER BEATER / GAME WINNER). Si no existe ese bloque, NO hables de buzzer beaters ni de game winners.",
+          "- Career Highs verificados: Menciona un récord personal de carrera (Career High) en ENTRADILLA y VEREDICTO_E_HITOS (o FOCO_ESPECIAL) ÚNICAMENTE si <dossier_partido_nba> incluye RÉCORD PERSONAL DE CARRERA VERIFICADO (CAREER HIGH). Si no figura ese bloque, PROHIBIDO afirmar que algún jugador batió su máximo de carrera.",
+          "3. ESTILO PERIODÍSTICO, PROSA SELECTIVA Y JERARQUÍA EN NEGRITA (**...**)",
+          '- Redacción natural sin volcado telegráfico ni relleno: Escribe en español de España ágil y analítico, con léxico táctico auténtico (espaciado, pintura, bloqueo directo, ajuste tras descanso, transición defensiva, segunda unidad, rebote ofensivo, clutch). El dato sirve al relato: evita atiborrar una misma frase con 6 o 7 métricas seguidas entre paréntesis; selecciona las 2 o 3 cifras más reveladoras por argumento e intégralas con fluidez. Prohibido usar "En conclusión", "Cabe destacar", "Sin lugar a dudas", "Sin duda", "dar un golpe sobre la mesa", "arma de destrucción masiva", listas con viñetas, tablas Markdown o metatexto. Distribuye los datos armónicamente para NO repetir la misma cifra o secuencia exacta en dos secciones distintas.',
+          '- Gramática y anglicismos técnicos NBA: Jamás dupliques el artículo delante de franquicias que empiezan por "Los" (escribe siempre **Los Angeles Lakers** o los **Lakers**, nunca "los Los Angeles Lakers"). Nunca traduzcas literalmente anglicismos técnicos: escribe siempre "back-to-back" (jamás "espalda con espalda" ni variantes), "clutch", "pick and roll", "box score" o "play-in".',
+          '- Jerarquía estricta de negritas (**...**): En todos los párrafos del cuerpo (ENTRADILLA, GUION_Y_QUIEBRE, PIZARRA_Y_ROTACION, cuerpo de FOCO_ESPECIAL, FACTOR_X_Y_LIDERES, ESPANOLES —excepto si es una sola frase confirmando ausencia de españoles— y VEREDICTO_E_HITOS), utiliza negrita Markdown (**texto**) EXCLUSIVAMENTE para: (a) nombres de jugadores con su dorsal cuando lo cites (ej. **#15 Nikola Jokić**), (b) nombres o apodos oficiales de equipos/franquicias (ej. **Boston Celtics**, **Knicks**), y (c) UNA sola idea táctica clave por párrafo (frase breve de 4 a 10 palabras que sintetice la clave causal, ej. **colapsando la pintura tras cada bloqueo directo**). PROHIBIDO poner negritas en cifras o estadísticas sueltas (como "49 puntos", "12 rebotes" o "58.4%"), marcadores, TITULAR_PRENSA ni antes de || en FOCO_ESPECIAL.',
+          "4. ESTRUCTURA EXACTA DE SALIDA (8 ETIQUETAS EN MAYÚSCULAS)",
+          "===TITULAR_PRENSA===",
+          "(Titular periodístico vibrante y directo de 1 línea sobre el ángulo táctico o protagonista del partido, sin # ni **).",
+          "===ENTRADILLA===",
+          "(2 líneas sintetizando la tesis táctica del encuentro y el protagonista principal, aplicando la regla de negritas).",
+          "===GUION_Y_QUIEBRE===",
+          "(2 párrafos fluidos: evolución por cuartos (PARCIALES POR CUARTOS), ritmo (RITMO DEL ENCUENTRO) comparado con la media NBA, cambios de líder, parciales de FLUJO DE MARCADOR y HITOS PLAY-BY-PLAY que forzaron tiempos muertos, problemas de faltas relevantes y el punto exacto donde se rompió o decidió el choque en el clutch).",
+          "===PIZARRA_Y_ROTACION===",
+          "(1 o 2 párrafos de scouting colectivo profundo según la riqueza del encuentro —sin paja si fue un choque unilateral—: cruza la eficiencia ofensiva (OffRtg y eFG%) con el origen de la anotación (puntos en la pintura frente al volumen y acierto en el triple), el castigo tras pérdida y en contraataque, las segundas oportunidades por rebote ofensivo, el desgaste por back-to-back si aplica, el diferencial de las segundas unidades y el impacto real de las bajas médicas, descartes técnicos o expulsiones con su cuarto/reloj, seleccionando siempre las cifras clave con prosa limpia).",
+          "===FOCO_ESPECIAL===",
+          '(Si el partido tuvo un ángulo singular —prórroga, remontada de gran calibre, exhibición histórica, Career High destacado, cortocircuito en el clutch, clínica defensiva o incidencia física en pista recogida en el teletipo—, escribe en una línea el título corto sin ** seguido de || y 1 párrafo analítico con la regla de negritas: ej. "Supervivencia en la prórroga || Texto...". Si fue un guion convencional sin ángulo extra, escribe únicamente: NINGUNO).',
+          "===FACTOR_X_Y_LIDERES===",
+          "(1 o 2 párrafos apoyados en PODIO CALCULADO (GmSc) y las estadísticas individuales: contrasta el duelo entre los referentes de ambos equipos y destaca quién emergió como Factor X inesperado desde el quinteto o el banquillo para inclinar la balanza, citando siempre dorsales # y 2-3 cifras clave por protagonista sin repetir lo ya contado en el guion).",
+          "===ESPANOLES===",
+          "(Si DETECTOR OFICIAL DE JUGADORES ESPAÑOLES confirma participación o presencia en convocatoria: 1 párrafo analizando sus minutos, serie de tiro, impacto en pista o situación exacta; si NO los hay: UNA SOLA FRASE breve, limpia y directa confirmándolo).",
+          "===VEREDICTO_E_HITOS===",
+          "(1 o 2 párrafos integrando con naturalidad los registros de DOBLES-DOBLES Y TRIPLES-DOBLES VERIFICADOS y Career Highs verificados —si constan— y cerrando con el veredicto estrictamente táctico del scout sobre qué certezas o señales de alarma deja este partido para ambos equipos).",
+          "CHECKLIST FINAL INTERNO (verificación mental antes de emitir; PROHIBIDO imprimir este checklist ni ningún texto adicional tras VEREDICTO_E_HITOS): ¿Cero nombres de entrenadores/directivos (ni siquiera del teletipo), cero datos biográficos/clasificación, cero Career Highs o Buzzer Beaters sin bloque verificado y cero \"Los Los Angeles\" o \"espalda con espalda\"? ¿Cero cifras sueltas en negrita y cero repetición de los mismos datos entre secciones? ¿Dorsales # incluidos junto a los nombres de jugadores en negrita?",
+          gameEditorialBlock,
+        ].filter(Boolean).join("\n");
+        try {
+          const cascadeBudgetMs = 48000;
+          const geminiCall = generateWithGeminiCascade({
+            systemInstruction,
+            contents: dossier,
+            seedSources,
+            isServerless,
+            budgetMs: cascadeBudgetMs,
+            enableGoogleSearch: false,
+          });
+          const cascadeTimer = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`Timeout ${cascadeBudgetMs}ms en cascada IA`)), cascadeBudgetMs + 500)
+          );
+          const { text: rawText, sources, model: modelUsed } = (await Promise.race([geminiCall, cascadeTimer])) as any;
+          const verifiedFoulOuts = [...report.away.absencesAndDnp, ...report.home.absencesAndDnp].filter((a) => a.statusType === "foul_out");
+          const safeRawText = reconcileVerifiedFoulOutTimings(sanitizeUnverifiedCoachClaims(rawText, verifiedGamePlayers), verifiedFoulOuts)
+            .replace(/\n+(?:CHECKLIST FINAL[^\n]*[\s\S]*)$/i, "")
+            .trim();
+          const parsed = parseDelimitedSections(safeRawText, ["TITULAR_PRENSA", "ENTRADILLA", "GUION_Y_QUIEBRE", "PIZARRA_Y_ROTACION", "FOCO_ESPECIAL", "FACTOR_X_Y_LIDERES", "ESPANOLES", "VEREDICTO_E_HITOS"]);
+          const fallback = buildDeterministicGameNarrative(report, "v1_classic");
+          const payload = {
+            eventId: report.eventId,
+            generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+            engineMode: "gemini_search",
+            chronicleVersion: "v1_classic" as const,
+            groundingUsed: false,
+            modelUsed,
+            generationTimeMs: Date.now() - startTime,
+            pressHeadline: parsed.TITULAR_PRENSA && parsed.TITULAR_PRENSA.length > 12 ? stripInlineWrapper(parsed.TITULAR_PRENSA) : fallback.pressHeadline,
+            pressLead: parsed.ENTRADILLA && parsed.ENTRADILLA.length > 25 ? parsed.ENTRADILLA : fallback.pressLead,
+            gameFlowSection: parsed.GUION_Y_QUIEBRE && parsed.GUION_Y_QUIEBRE.length > 60 ? parsed.GUION_Y_QUIEBRE : fallback.gameFlowSection,
+            chalkboardSection: parsed.PIZARRA_Y_ROTACION && parsed.PIZARRA_Y_ROTACION.length > 60 ? parsed.PIZARRA_Y_ROTACION : fallback.chalkboardSection,
+            dynamicSpotlight: parseSpotlight(parsed.FOCO_ESPECIAL, fallback.dynamicSpotlight),
+            xFactorSection: parsed.FACTOR_X_Y_LIDERES && parsed.FACTOR_X_Y_LIDERES.length > 50 ? parsed.FACTOR_X_Y_LIDERES : fallback.xFactorSection,
+            spanishSection: parsed.ESPANOLES && parsed.ESPANOLES.length > 12 ? parsed.ESPANOLES : fallback.spanishSection,
+            verdictSection: parsed.VEREDICTO_E_HITOS && parsed.VEREDICTO_E_HITOS.length > 45 ? parsed.VEREDICTO_E_HITOS : fallback.verdictSection,
+            sources,
+          };
+          const persistTtlMs = report.seasonLabel === "2026-27" ? 7 * 24 * 60 * 60 * 1e3 : 30 * 24 * 60 * 60 * 1e3;
+          await writeSharedPersistedNarrative(cacheKey, payload, persistTtlMs);
+          return payload;
+        } catch (err) {
+          const rawErrStr = String(err instanceof Error ? err.message : err || "timeout/offline");
+          const cleanReason = rawErrStr.replace(/[\{\}\"\:]/g, " ").replace(/\s+/g, " ").slice(0, 160);
+          console.info(`[RadarNBA] Motor determinista v1 activo para ${eventId} -> ${cleanReason}`);
+          const isQuota = isQuotaExhaustedError(err) || cleanReason.includes("cuota_agotada_429");
+          const isOverload = isTransientOverloadError(err) || cleanReason.includes("alta_demanda_503");
+          const fallback = buildDeterministicGameNarrative(report, "v1_classic");
+          fallback.generationTimeMs = Date.now() - startTime;
+          fallback.missingApiKey = false;
+          fallback.quotaExhausted = isQuota;
+          fallback.overload503 = isOverload;
+          fallback.fallbackReason = isQuota
+            ? `quota_exhausted_429 (${cleanReason})`
+            : isOverload
+            ? `overload_503 (${cleanReason})`
+            : cleanReason;
+          reportMemoryCache.set(cacheKey, {
+            expiresAt: Date.now() + (isQuota ? 5 * 60 * 1e3 : isOverload ? 30 * 1e3 : 2 * 60 * 1e3),
+            data: fallback,
+          });
+          return fallback;
+        }
+      }
+
+      // =========================================================================
+      // BRANCH B: v2_tactical — HYBRID TACTICAL ENGINE (ONLY FOR INDIVIDUAL GAMES)
+      // Four Factors + PBP Matchup Mining + Full AP/ESPN Recap + Google Search
+      // =========================================================================
+      const tacticalProfile = computeGameTacticalProfile(report);
+      const tacticalBlock = [
+        `<perfil_tactico_four_factors>`,
+        `FACTOR DECISIVO (FOUR FACTORS): ${tacticalProfile.decisiveFactorLabel} — ${tacticalProfile.decisiveFactorSummary}`,
+        `- ${tacticalProfile.away.abbr} (Visitante): eFG% ${tacticalProfile.away.efgPct}% | TOV% ${tacticalProfile.away.tovPct}% | OREB% ${tacticalProfile.away.orebPct}% | FTr ${tacticalProfile.away.ftRate}% | AST% ${tacticalProfile.away.astPct}% (canastas asistidas) | 3PAr ${tacticalProfile.away.threePointRatePct}% | Pintura ${tacticalProfile.away.ptsPaint ?? "s/d"} pts${tacticalProfile.away.paintSharePct !== null ? ` (${tacticalProfile.away.paintSharePct}% del total)` : ""}`,
+        `- ${tacticalProfile.home.abbr} (Local): eFG% ${tacticalProfile.home.efgPct}% | TOV% ${tacticalProfile.home.tovPct}% | OREB% ${tacticalProfile.home.orebPct}% | FTr ${tacticalProfile.home.ftRate}% | AST% ${tacticalProfile.home.astPct}% (canastas asistidas) | 3PAr ${tacticalProfile.home.threePointRatePct}% | Pintura ${tacticalProfile.home.ptsPaint ?? "s/d"} pts${tacticalProfile.home.paintSharePct !== null ? ` (${tacticalProfile.home.paintSharePct}% del total)` : ""}`,
+        `QUINTETOS DE CIERRE DETECTADOS (ÚLTIMOS MINUTOS PBP): ${tacticalProfile.away.abbr}: ${tacticalProfile.closingLineupAway.join(", ")} | ${tacticalProfile.home.abbr}: ${tacticalProfile.closingLineupHome.join(", ")}`,
+        tacticalProfile.defensiveDuels.length > 0
+          ? `DUELOS DEFENSIVOS DIRECTOS EN PLAY-BY-PLAY (TAPONES / ROBOS VERIFICADOS):\n${tacticalProfile.defensiveDuels.map((d) => `  * ${d}`).join("\n")}`
+          : `DUELOS DEFENSIVOS DIRECTOS EN PLAY-BY-PLAY: Sin pares explícitos indexados (apóyate en Four Factors, crónica AP/ESPN y búsqueda web si detalla emparejamientos).`,
+        `</perfil_tactico_four_factors>`,
       ].join("\n");
+
+      const apEspnBlock = espnRecap
+        ? [
+            `<cronica_oficial_ap_espn>`,
+            espnRecap.headline ? `TITULAR AP/ESPN: ${espnRecap.headline}` : "",
+            espnRecap.storyText,
+            `</cronica_oficial_ap_espn>`,
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : "";
+
+      const v2Dossier = [dossier, tacticalBlock, apEspnBlock].filter(Boolean).join("\n\n");
+
+      const v2SystemInstruction = [
+        "Eres un analista táctico sénior de la NBA y periodista deportivo español de referencia (estilo Zach Lowe, The Athletic y Gigantes del Basket) para RadarNBA.",
+        `Tu misión es redactar la crónica táctica definitiva (v2 Híbrida) del partido ${report.away.name} (${report.away.abbr}) vs ${report.home.name} (${report.home.abbr}) del ${report.date} (${report.away.score}-${report.home.score}), combinando: (1) <dossier_partido_nba> y <perfil_tactico_four_factors> (autoridad numérica absoluta), (2) <cronica_oficial_ap_espn> si está presente, y (3) búsqueda web en vivo sobre crónicas post-partido y beat writers de este encuentro concreto (${report.date}) para identificar emparejamientos defensivos reales, esquemas (zona, drop, switch, blitz/2x1, ayudas) y declaraciones verificadas post-partido.`,
+        "1. JERARQUÍA DE RIGOR Y CERO INVENCIÓN",
+        "- Autoridad absoluta del acta oficial: Todas las cifras, marcadores, dorsales (#), bajas médicas y expulsiones deben coincidir al 100% con <dossier_partido_nba> y <perfil_tactico_four_factors>. Si una crónica externa o búsqueda web discrepa en un dato numérico, MANDA SIEMPRE el acta oficial.",
+        "- Cero invención táctica ni de citas: Solo describe ajustes o esquemas específicos (ej. defensa en zona 2-3, blitz sobre el manejador, defender en drop o emparejamiento 1v1 concreto) si están respaldados por <perfil_tactico_four_factors>, <cronica_oficial_ap_espn> o la búsqueda web de este partido. Jamás inventes citas ni declaraciones post-partido: si no encuentras citas reales verificadas de jugadores/protagonistas en <cronica_oficial_ap_espn> o en la búsqueda web de este partido, escribe literalmente NINGUNA en ===VOCES_VESTUARIO===.",
+        '- Pulcritud en bajas, Career Highs y Buzzer Beaters: Distingue entre bajas médicas, expulsados por 6 faltas (copiando cuarto/reloj literales si constan) y decisión técnica. Menciona Buzzer Beaters/Game Winners SOLO si existe CANASTA DECISIVA VERIFICADA, y Career Highs SOLO si existe RÉCORD PERSONAL DE CARRERA VERIFICADO. No menciones puestos exactos de tabla clasificatoria ni próximos rivales.',
+        "2. PROFUNDIDAD TÁCTICA CAUSAL Y CONCISIÓN (CERO REPETICIÓN)",
+        "- Explica el PORQUÉ de la victoria y de la derrota con claridad para todo público: qué rompió el partido (Four Factors, ritmo, volumen exterior vs pintura, pérdidas castigadas, rebote ofensivo, quintetos de cierre) y cómo respondió o colapsó el rival.",
+        "- Prosa más incisiva y concisa: cada sección aporta un ángulo distinto SIN repetir cifras ni frases ya dichas en bloques anteriores. Evita volcar listas telegráficas de 6 números seguidos; integra 2 o 3 datos reveladores por argumento.",
+        '- Español natural y negritas limpias: Jamás escribas "los Los Angeles Lakers" ni "espalda con espalda" (usa "back-to-back", "clutch", "pick and roll", "drop", "switch"). Prohibido usar clichés ("En conclusión", "Cabe destacar", "Sin lugar a dudas", "dar un golpe sobre la mesa"). En párrafos de prosa, usa **negrita** únicamente para jugadores con dorsal (**#15 Nikola Jokić**), equipos (**Denver Nuggets**, **Nuggets**) y UNA sola idea táctica clave breve por párrafo. Cero cifras sueltas en negrita.',
+        "3. ESTRUCTURA EXACTA DE SALIDA (11 ETIQUETAS EN MAYÚSCULAS)",
+        "===TITULAR_PRENSA===",
+        "(Titular periodístico conciso y potente de 1 línea con el ángulo táctico decisivo, sin # ni **).",
+        "===ENTRADILLA===",
+        "(2 líneas concisas resumiendo por qué ganó el vencedor y cuál fue la clave táctica principal, aplicando negritas).",
+        "===CLAVES_TACTICAS===",
+        "(Exactamente 3 líneas, una por clave causal de por qué ganó/perdió cada equipo, formato exacto: Título corto sin ** (3-7 palabras) || Explicación concisa de 1 a 2 frases con dato exacto que demuestre causa y efecto. Sin numeración ni viñetas).",
+        "===GUION_Y_QUIEBRE===",
+        "(1 o 2 párrafos ágiles y concisos: evolución por cuartos, ritmo, cambios de líder, parcial decisivo que forzó tiempos muertos y ejecución del clutch/tramo final).",
+        "===PIZARRA_Y_ROTACION===",
+        "(1 o 2 párrafos concisos: perfil ofensivo —pintura vs triple, tiros asistidos AST%, transición, rebote ofensivo—, impacto del banquillo, desgaste back-to-back si aplica y bajas/expulsiones relevantes).",
+        "===EMPAREJAMIENTOS_Y_DEFENSA===",
+        "(1 o 2 párrafos de lectura táctica específica: cómo defendió cada equipo las fortalezas rivales —protección de aro, persecución del triple, ayudas/traps, presión al balón—, emparejamientos defensivos destacados apoyados en DUELOS DEFENSIVOS DIRECTOS PBP, crónica AP/ESPN y búsqueda web, y lectura de los quintetos de cierre).",
+        "===FOCO_ESPECIAL===",
+        '(Si el choque tuvo un ángulo singular —prórroga, remontada, Buzzer Beater/Game Winner verificado, Career High verificado, clínica defensiva o incidencia física—, escribe: Título corto sin ** || 1 párrafo conciso. Si no aplica, escribe únicamente: NINGUNO).',
+        "===FACTOR_X_Y_LIDERES===",
+        "(1 o 2 párrafos concisos comparando a los líderes del PODIO CALCULADO y destacando el Factor X que desequilibró el guion, con dorsales # y sin repetir datos ya citados).",
+        "===ESPANOLES===",
+        "(Si DETECTOR OFICIAL DE JUGADORES ESPAÑOLES confirma presencia: 1 párrafo conciso con su impacto; si no los hay: UNA sola frase sobria confirmándolo).",
+        "===VOCES_VESTUARIO===",
+        "(Si <cronica_oficial_ap_espn> o la búsqueda web contienen declaraciones reales post-partido de jugadores o protagonistas de este partido, incluye 1 o 2 líneas con formato exacto: Nombre completo | ABBR | Cita traducida con fidelidad al español natural sin comillas externas | Nombre del medio/fuente ej. AP/ESPN. Prioriza citas que expliquen el plan táctico, la defensa o el momento decisivo. Si NO hay declaraciones reales verificadas en las fuentes, escribe ÚNICAMENTE: NINGUNA).",
+        "===VEREDICTO_E_HITOS===",
+        "(1 párrafo final conciso integrando dobles-dobles/triples-dobles o Career Highs verificados y cerrando con la conclusión táctica que deja el partido para ambos equipos).",
+        gameEditorialBlock,
+      ].filter(Boolean).join("\n");
+
       try {
-        const cascadeBudgetMs = 40000;
+        const cascadeBudgetMs = 52000;
         const geminiCall = generateWithGeminiCascade({
-          systemInstruction,
-          contents: dossier,
+          systemInstruction: v2SystemInstruction,
+          contents: v2Dossier,
           seedSources,
           isServerless,
           budgetMs: cascadeBudgetMs,
+          enableGoogleSearch: true,
         });
         const cascadeTimer = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`Timeout ${cascadeBudgetMs}ms en cascada IA`)), cascadeBudgetMs + 500)
+          setTimeout(() => reject(new Error(`Timeout ${cascadeBudgetMs}ms en cascada IA v2`)), cascadeBudgetMs + 500)
         );
-        const { text: rawText, sources, model: modelUsed } = (await Promise.race([geminiCall, cascadeTimer])) as any;
+        const { text: rawText, sources, model: modelUsed, groundingUsed } = (await Promise.race([geminiCall, cascadeTimer])) as any;
         const verifiedFoulOuts = [...report.away.absencesAndDnp, ...report.home.absencesAndDnp].filter((a) => a.statusType === "foul_out");
-        const safeRawText = reconcileVerifiedFoulOutTimings(sanitizeUnverifiedCoachClaims(rawText, verifiedGamePlayers), verifiedFoulOuts);
-        const parsed = parseDelimitedSections(safeRawText, ["TITULAR_PRENSA", "ENTRADILLA", "GUION_Y_QUIEBRE", "PIZARRA_Y_ROTACION", "FOCO_ESPECIAL", "FACTOR_X_Y_LIDERES", "ESPANOLES", "VEREDICTO_E_HITOS"]);
-        const fallback = buildDeterministicGameNarrative(report);
-        const payload = { eventId: report.eventId, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), engineMode: "gemini_search", modelUsed, generationTimeMs: Date.now() - startTime, pressHeadline: parsed.TITULAR_PRENSA && parsed.TITULAR_PRENSA.length > 12 ? stripInlineWrapper(parsed.TITULAR_PRENSA) : fallback.pressHeadline, pressLead: parsed.ENTRADILLA && parsed.ENTRADILLA.length > 25 ? parsed.ENTRADILLA : fallback.pressLead, gameFlowSection: parsed.GUION_Y_QUIEBRE && parsed.GUION_Y_QUIEBRE.length > 60 ? parsed.GUION_Y_QUIEBRE : fallback.gameFlowSection, chalkboardSection: parsed.PIZARRA_Y_ROTACION && parsed.PIZARRA_Y_ROTACION.length > 60 ? parsed.PIZARRA_Y_ROTACION : fallback.chalkboardSection, dynamicSpotlight: parseSpotlight(parsed.FOCO_ESPECIAL, fallback.dynamicSpotlight), xFactorSection: parsed.FACTOR_X_Y_LIDERES && parsed.FACTOR_X_Y_LIDERES.length > 50 ? parsed.FACTOR_X_Y_LIDERES : fallback.xFactorSection, spanishSection: parsed.ESPANOLES && parsed.ESPANOLES.length > 12 ? parsed.ESPANOLES : fallback.spanishSection, verdictSection: parsed.VEREDICTO_E_HITOS && parsed.VEREDICTO_E_HITOS.length > 45 ? parsed.VEREDICTO_E_HITOS : fallback.verdictSection, sources };
+        const safeRawText = reconcileVerifiedFoulOutTimings(rawText, verifiedFoulOuts)
+          .replace(/\n+(?:CHECKLIST FINAL[^\n]*[\s\S]*)$/i, "")
+          .trim();
+        const parsed = parseDelimitedSections(safeRawText, [
+          "TITULAR_PRENSA",
+          "ENTRADILLA",
+          "CLAVES_TACTICAS",
+          "GUION_Y_QUIEBRE",
+          "PIZARRA_Y_ROTACION",
+          "EMPAREJAMIENTOS_Y_DEFENSA",
+          "FOCO_ESPECIAL",
+          "FACTOR_X_Y_LIDERES",
+          "ESPANOLES",
+          "VOCES_VESTUARIO",
+          "VEREDICTO_E_HITOS",
+        ]);
+        const fallback = buildDeterministicGameNarrative(report, "v2_tactical");
+        const parsedQuotes = parsePostgameQuotes(parsed.VOCES_VESTUARIO || "");
+        const payload = {
+          eventId: report.eventId,
+          generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          engineMode: "gemini_search",
+          chronicleVersion: "v2_tactical" as const,
+          groundingUsed: Boolean(groundingUsed || espnRecap),
+          modelUsed,
+          generationTimeMs: Date.now() - startTime,
+          pressHeadline: parsed.TITULAR_PRENSA && parsed.TITULAR_PRENSA.length > 12 ? stripInlineWrapper(parsed.TITULAR_PRENSA) : fallback.pressHeadline,
+          pressLead: parsed.ENTRADILLA && parsed.ENTRADILLA.length > 25 ? parsed.ENTRADILLA : fallback.pressLead,
+          tacticalKeys: parseTacticalKeys(parsed.CLAVES_TACTICAS || "", fallback.tacticalKeys || []),
+          gameFlowSection: parsed.GUION_Y_QUIEBRE && parsed.GUION_Y_QUIEBRE.length > 60 ? parsed.GUION_Y_QUIEBRE : fallback.gameFlowSection,
+          chalkboardSection: parsed.PIZARRA_Y_ROTACION && parsed.PIZARRA_Y_ROTACION.length > 60 ? parsed.PIZARRA_Y_ROTACION : fallback.chalkboardSection,
+          defensiveMatchupsSection:
+            parsed.EMPAREJAMIENTOS_Y_DEFENSA && parsed.EMPAREJAMIENTOS_Y_DEFENSA.length > 50
+              ? parsed.EMPAREJAMIENTOS_Y_DEFENSA
+              : fallback.defensiveMatchupsSection,
+          tacticalProfile,
+          postgameQuotes: parsedQuotes,
+          dynamicSpotlight: parseSpotlight(parsed.FOCO_ESPECIAL, fallback.dynamicSpotlight),
+          xFactorSection: parsed.FACTOR_X_Y_LIDERES && parsed.FACTOR_X_Y_LIDERES.length > 50 ? parsed.FACTOR_X_Y_LIDERES : fallback.xFactorSection,
+          spanishSection: parsed.ESPANOLES && parsed.ESPANOLES.length > 12 ? parsed.ESPANOLES : fallback.spanishSection,
+          verdictSection: parsed.VEREDICTO_E_HITOS && parsed.VEREDICTO_E_HITOS.length > 45 ? parsed.VEREDICTO_E_HITOS : fallback.verdictSection,
+          sources,
+        };
         const persistTtlMs = report.seasonLabel === "2026-27" ? 7 * 24 * 60 * 60 * 1e3 : 30 * 24 * 60 * 60 * 1e3;
         await writeSharedPersistedNarrative(cacheKey, payload, persistTtlMs);
         return payload;
       } catch (err) {
         const rawErrStr = String(err instanceof Error ? err.message : err || "timeout/offline");
         const cleanReason = rawErrStr.replace(/[\{\}\"\:]/g, " ").replace(/\s+/g, " ").slice(0, 160);
-        console.info(`[RadarNBA] Motor determinista activo para ${eventId} -> ${cleanReason}`);
+        console.info(`[RadarNBA] Motor determinista v2 activo para ${eventId} -> ${cleanReason}`);
         const isQuota = isQuotaExhaustedError(err) || cleanReason.includes("cuota_agotada_429");
         const isOverload = isTransientOverloadError(err) || cleanReason.includes("alta_demanda_503");
-        const fallback = buildDeterministicGameNarrative(report);
+        const fallback = buildDeterministicGameNarrative(report, "v2_tactical");
         fallback.generationTimeMs = Date.now() - startTime;
         fallback.missingApiKey = false;
         fallback.quotaExhausted = isQuota;
         fallback.overload503 = isOverload;
+        fallback.sources = seedSources;
         fallback.fallbackReason = isQuota
           ? `quota_exhausted_429 (${cleanReason})`
           : isOverload
@@ -2871,7 +3690,7 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
       reportInflight.delete(cacheKey);
     }
   }
-  function buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments = new Map(), tripleDoublesNight = [], dailyHeroicClinchers = []) {
+  function buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments = new Map(), tripleDoublesNight = [], dailyHeroicClinchers = [], careerHighsNight = []) {
     const mvp = gd.mvpOfTheNight;
     const stmt = gd.statementTeamWin;
     const topExp = gd.topExplosion;
@@ -2982,6 +3801,37 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
       });
     }
 
+    // Capítulo 3: Reseña obligatoria del resto de la cartelera para garantizar cobertura del 100% de los partidos
+    const coveredEventIds = new Set([focusMatch?.eventId, stmtMatch?.eventId].filter(Boolean));
+    const remainingMatchups = (gd.matchups || []).filter((m) => !coveredEventIds.has(m.eventId));
+    if (remainingMatchups.length > 0) {
+      const remSentences = remainingMatchups.map((m) => {
+        const winner = m.away.isWinner ? m.away : m.home;
+        const loser = m.away.isWinner ? m.home : m.away;
+        const enr = matchEnrichments.get(m.eventId);
+        const wLog = enr?.winnerLog;
+        const lLog = enr?.loserLog;
+        const topP = winner.topPlayer || loser.topPlayer;
+        const topPLine = topP
+          ? `, con **${topP.playerName}** como referente (${topP.points} puntos, ${topP.rebounds} rebotes y ${topP.assists} asistencias)`
+          : "";
+        const driverLine = wLog && lLog
+          ? `apoyado en **${wLog.efgPct >= lLog.efgPct + 4 ? "su superioridad en eficacia de tiro" : wLog.tov < lLog.tov ? "un control mucho más limpio del balón" : "su solidez en los momentos clave"}** (${wLog.efgPct.toFixed(1)}% eFG frente al ${lLog.efgPct.toFixed(1)}% rival)`
+          : `marcando diferencias por un margen de ${m.margin} puntos a un ritmo de ${m.pace.toFixed(1)} posesiones`;
+        return `En ${m.away.abbr} @ ${m.home.abbr}, **${winner.name}** se impuso ${winner.score}-${loser.score} a **${loser.name}** ${driverLine}${topPLine}.`;
+      });
+      const chunkSize = Math.max(2, Math.ceil(remSentences.length / 2));
+      const remParagraphs = [];
+      for (let i = 0; i < remSentences.length; i += chunkSize) {
+        remParagraphs.push(remSentences.slice(i, i + chunkSize).join(" "));
+      }
+      dynamicSections.push({
+        kicker: "Panorama de la Cartelera",
+        title: `Repaso completo al resto de la jornada (${remainingMatchups.length} ${remainingMatchups.length === 1 ? "duelo adicional" : "duelos restantes"})`,
+        body: remParagraphs.join("\n\n"),
+      });
+    }
+
     const pizarrasSortedByEff = [...(gd.matchups || [])]
       .map((m) => {
         const winner = m.away.isWinner ? m.away : m.home;
@@ -3076,6 +3926,11 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
     if (dailyHeroicClinchers.length > 0) {
       hitosParagraphs.push(
         `En el capítulo de desenlaces límite, ${dailyHeroicClinchers.map((hc) => `**${hc.playerName}** (${hc.teamAbbr}) decidió el choque frente a **${hc.opponentAbbr}** (${hc.scoreDisplay}) con un ${hc.shotType === "buzzer_beater" ? "Buzzer Beater sobre la bocina (BB · 0.0s)" : `Game Winner (GW) a falta de ${hc.clock} del ${hc.periodLabel}`} mediante ${hc.actionEs}`).join("; ")}.`
+      );
+    }
+    if (careerHighsNight.length > 0) {
+      hitosParagraphs.push(
+        `La jornada también inscribió nuevos máximos personales de carrera (Career Highs verificados): ${careerHighsNight.slice(0, 4).join("; ")}.`
       );
     }
 
@@ -3174,7 +4029,8 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
       };
     }
 
-    const cacheKey = `gameday_chronicle_v16:${gd.selectedDate}`;
+    const editorialCfg = await loadEditorialConfig(forceRefresh);
+    const cacheKey = `gameday_chronicle_v18:e${editorialCfg.cacheEpoch}:${gd.selectedDate}`;
     if (!forceRefresh) {
       const persisted = await readSharedPersistedNarrative(cacheKey);
       if (persisted) {
@@ -3204,6 +4060,7 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
       const spanishNightNotes = [];
       const tripleDoublesNight = [];
       const doubleDoublesNight = [];
+      const careerHighsNight = [];
       const verifiedNightPlayerNames = [];
       const eventIdsToday = new Set(gd.matchups.map((m) => m.eventId));
       let totalDoubleDoubles = 0;
@@ -3232,6 +4089,28 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
           totalDoubleDoubles++;
           if (doubleDoublesNight.length < 8) {
             doubleDoublesNight.push(`${p.name} (${p.teamAbbr} vs ${g.opponentAbbr}): ${g.points} PTS, ${g.rebounds} REB, ${g.assists} AST (${g.fgm}/${g.fga} TC)`);
+          }
+        }
+        // Verified Career High detection for the selected 2026-27 date
+        if (gd.seasonLabel === "2026-27") {
+          const chrono27 = [...(p.games || [])]
+            .filter((x) => !x.seasonLabel || x.seasonLabel === "2026-27")
+            .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+          const gIdx = chrono27.findIndex((x) => x.eventId === g.eventId || String(x.date || "").slice(0, 10) === gd.selectedDate);
+          if (gIdx >= 0) {
+            const base = getPlayerPriorCareerBaseline(p.id, chrono27, gIdx);
+            if (base.hasHistoricalSnapshot && base.priorCareerGp >= 15) {
+              const chHits = [];
+              if ((g.points || 0) >= 25 && g.points > base.priorHighs.pts) chHits.push(`${g.points} PTS (antes: ${base.priorHighs.pts})`);
+              if ((g.rebounds || 0) >= 14 && g.rebounds > base.priorHighs.reb) chHits.push(`${g.rebounds} REB (antes: ${base.priorHighs.reb})`);
+              if ((g.assists || 0) >= 10 && g.assists > base.priorHighs.ast) chHits.push(`${g.assists} AST (antes: ${base.priorHighs.ast})`);
+              if ((g.fg3m || 0) >= 6 && g.fg3m > base.priorHighs.fg3m) chHits.push(`${g.fg3m} T3 (antes: ${base.priorHighs.fg3m})`);
+              if ((g.steals || 0) >= 5 && g.steals > base.priorHighs.stl) chHits.push(`${g.steals} ROB (antes: ${base.priorHighs.stl})`);
+              if ((g.blocks || 0) >= 5 && g.blocks > base.priorHighs.blk) chHits.push(`${g.blocks} TAP (antes: ${base.priorHighs.blk})`);
+              if (chHits.length > 0) {
+                careerHighsNight.push(`**${p.name}** (${p.teamAbbr} ${g.isHome ? "vs" : "@"} ${g.opponentAbbr}): ${chHits.join(" y ")}`);
+              }
+            }
           }
         }
       }
@@ -3335,7 +4214,7 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
       const dailyHeroicClinchers = Array.from(heroicMapToday.values());
 
       if (!getGeminiClient() || gd.matchups.length === 0) {
-        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments, tripleDoublesNight, dailyHeroicClinchers);
+        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments, tripleDoublesNight, dailyHeroicClinchers, careerHighsNight);
         fallback.generationTimeMs = Date.now() - startTime;
         fallback.missingApiKey = !getGeminiClient();
         fallback.fallbackReason = !getGeminiClient() ? "missing_api_key" : "no_matchups";
@@ -3390,10 +4269,14 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
         ? `CANASTAS DECISIVAS DE LA JORNADA (BUZZER BEATERS / GAME WINNERS VERIFICADOS): ${dailyHeroicClinchers.map((hc) => `#${hc.jersey} ${hc.playerName} (${hc.teamAbbr}, ${hc.scoreDisplay}) firmó un ${hc.shotType === "buzzer_beater" ? "Buzzer Beater sobre la bocina (BB · 0.0s)" : `Game Winner decisivo (GW · faltando ${hc.clock})`} en el ${hc.periodLabel} con ${hc.actionEs}`).join(" | ")}`
         : "";
       const daySeedSources = [{ uri: `https://www.nba.com/games?date=${gd.selectedDate}`, title: `NBA.com — Resultados y Actas Oficiales (${gd.selectedDate})` }, ...pressCtx.daySources].slice(0, 6);
+      const mandatoryMatchupsIndex = gd.matchups
+        .map((m, idx) => `${idx + 1}. ${m.away.abbr} ${m.away.score}-${m.home.score} ${m.home.abbr}`)
+        .join(" | ");
       const dayDossier = [
         `AVISO CRÍTICO DE MUNDO CERRADO: Jornada oficial NBA del ${gd.selectedDate} (Temporada ${gd.seasonLabel}). Tu memoria interna de entrenamiento está desactualizada varios años respecto a entrenadores actuales, traspasos, contratos y palmarés. NO des NINGÚN dato por supuesto fuera de los hechos explícitos de este dossier.`,
         `FECHA DE LA JORNADA NBA: ${gd.selectedDate} (Temporada ${gd.seasonLabel})`,
         `PULSO GLOBAL: ${gd.pulse.gamesCount} partidos disputados | Media puntos combinados: ${gd.pulse.avgTotalPoints.toFixed(1)} PTS (media liga: ${gd.pulse.leagueAvgTotalPoints.toFixed(1)}) | Finales apretados (<=5 pts): ${gd.pulse.closeGamesCount} | Palizas (>=15 pts): ${gd.pulse.blowoutsCount} | Victorias visitantes: ${gd.pulse.roadWinsCount}/${gd.pulse.gamesCount} | Ritmo medio (Pace): ${gd.pulse.avgPace.toFixed(1)}.`,
+        `CHECKLIST DE PARTIDOS OBLIGATORIOS A RESEÑAR (TOTAL: ${gd.matchups.length}, PROHIBIDO OMITIR NINGUNO): ${mandatoryMatchupsIndex}`,
         dayHeroicBlock,
         gd.statementTeamWin ? `GOLPE EN LA MESA COLECTIVO: ${gd.statementTeamWin.teamName} (${gd.statementTeamWin.summaryAdvanced}).` : "",
         pressCtx.dayNotes.length > 0 ? `TELETIPOS DE PRENSA DE LOS PARTIDOS DE ESTA FECHA (${gd.selectedDate}):\n${pressCtx.dayNotes.slice(0, 12).map((n) => `  • ${n}`).join("\n")}` : "",
@@ -3409,36 +4292,44 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
         `CAMBIOS DE ROL / PICOS DE MINUTOS: ${gd.roleShifts.length > 0 ? gd.roleShifts.slice(0, 4).map((r) => `${r.playerName} (${r.teamAbbr} vs ${r.opponentAbbr}): ${r.minutes.toFixed(0)} MIN (+${r.minutesDelta.toFixed(1)} vs media ${r.minutesAvg.toFixed(0)}), ${r.usgEst.toFixed(1)}% USG, ${r.points}P/${r.rebounds}R/${r.assists}A con ${r.fga} TCI`).join(" | ") : "Rotaciones estables"}`,
         `RACHAS DESTACADAS: ${gd.streakShifts.length > 0 ? gd.streakShifts.slice(0, 6).map((st) => `${st.playerName} (${st.teamAbbr} vs ${st.opponentAbbr}): ${st.status === "broken" ? `RACHA ROTA tras ${st.streakCount} PJ` : `PROLONGA a ${st.streakCount} PJ`} en ${st.thresholdLabel} (${st.nightValueDisplay} hoy, media racha ${st.avgDuringStreak})`).join(" | ") : "Sin rachas largas alteradas"}`,
         `TRIPLES-DOBLES DE LA NOCHE: ${tripleDoublesNight.length > 0 ? tripleDoublesNight.join(" | ") : "Ninguno"} (Total dobles-dobles en la jornada: ${totalDoubleDoubles}${doubleDoublesNight.length > 0 ? `; destacados: ${doubleDoublesNight.slice(0, 4).join(" | ")}` : ""}).`,
+        careerHighsNight.length > 0 ? `RÉCORDS PERSONALES DE CARRERA VERIFICADOS (CAREER HIGHS): ${careerHighsNight.map((s) => s.replace(/\*\*/g, "")).join(" | ")}` : "",
         `JUGADORES ESPAÑOLES EN LA JORNADA: ${spanishNightNotes.length > 0 ? spanishNightNotes.join(" | ") : "Ningún jugador español sumó minutos en pista esta fecha."}`,
       ].filter(Boolean).join("\n");
 
+      const dailyEditorialBlock = buildEditorialDirectivesPromptBlock(editorialCfg, "daily");
+      const totalGamesCount = gd.matchups.length;
+      const capitulosInstruction = totalGamesCount >= 3
+        ? `(Exactamente 3 capítulos separados por una línea con --- para cubrir el 100% de los ${totalGamesCount} partidos de la cartelera. Formato obligatorio en cada capítulo: "Título concreto del capítulo :: Párrafo 1\\n\\nPárrafo 2...".\n- CAPÍTULO 1 (Foco Principal — el gran pulso o exhibición eje de la noche, 2 o 3 párrafos): Párrafo 1 narra el guion del partido, choque de estilos y quiebre (con hitos PBP si figuran); Párrafo 2 desgrana las claves tácticas colectivas con 2-3 cifras limpias; Párrafo 3 profundiza en los duelos individuales decisivos.\n- CAPÍTULO 2 (Segundo Foco — gran contraste táctico, sorpresa o segundo choque destacado, 2 párrafos): desarrolla otra gran narrativa de la jornada explicando qué ajustes defensivos u ofensivos decidieron el resultado.\n- CAPÍTULO 3 (Panorama Completo del Resto de la Cartelera — OBLIGATORIO reseñar TODOS Y CADA UNO de los ${totalGamesCount - 2} partidos no cubiertos en los capítulos 1 y 2, sin omitir ni un solo encuentro del CHECKLIST, en 2 o 3 párrafos cohesivos sin viñetas agrupados por dinámica —finales ajustados, triunfos visitantes, victorias contundentes—): dedica 2 frases claras y fluidas a cada partido restante incluyendo ambos equipos, marcador exacto, clave táctica del triunfo y protagonista principal con 2-3 cifras reales).`
+        : `(Exactamente ${totalGamesCount === 1 ? "2 capítulos sobre el único duelo disputado" : "2 capítulos de fondo"} separados por una línea con --- cubriendo el 100% de los ${totalGamesCount} partidos de la jornada. Formato obligatorio: "Título concreto del capítulo :: Párrafo 1\\n\\nPárrafo 2\\n\\nPárrafo 3".\n- CAPÍTULO 1 (Foco Principal): narra el guion del choque principal, quiebre del marcador (con hitos PBP si constan), claves colectivas y duelo de estrellas.\n- CAPÍTULO 2 (${totalGamesCount === 1 ? "Lectura Táctica Complementaria y Banquillos" : "Segundo Foco — análisis completo del otro encuentro de la fecha"}): desarrolla con profundidad táctica, cifras selectivas y protagonistas reales sin repetir lo ya dicho en el Capítulo 1).`;
+
       const systemInstruction = [
-        "Eres el analista jefe y cronista de scouting NBA de referencia en España. Cada mañana escribes la gran revista editorial de la jornada para que un lector exigente entienda con profundidad, buen ritmo periodístico y precisión táctica qué ocurrió exactamente en la pista y por qué se ganaron o perdieron los partidos.",
-        "REGLAS INQUEBRANTABLES DE RIGOR, PROSA SELECTIVA Y LECTURA TÁCTICA:",
-        "1. RIGOR EMPÍRICO TOTAL: Todos los marcadores, puntos, series de tiro, porcentajes, pérdidas, rebotes, récords y rachas que cites deben coincidir al 100% con el dossier adjunto. Jamás inventes resultados, cifras ni jugadas concretas no descritas. Si mencionas a un expulsado por 6 faltas, copia literalmente su cuarto y reloj si aparecen en `Expulsados 6 faltas PBP`; si no figuran, NO deduzcas ni restes `48 - minutos` (prohibido inventar relojes como `18:00`). SI Y SOLO SI el dossier incluye `CANASTAS DECISIVAS DE LA JORNADA` o `CANASTA GANADORA DECISIVA`, menciona de forma natural ese Buzzer Beater (BB) o Game Winner (GW) (protagonista, equipo y reloj exacto) en ENTRADILLA, CAPITULOS_DINAMICOS/HITOS o CLAVES; si NO existe ese bloque en el dossier, NO menciones buzzer beaters ni game winners en absoluto.",
-        '2. PROHIBICIÓN DE DAR DATOS POR SUPUESTOS: Tienes TERMINANTEMENTE PROHIBIDO mencionar: (a) nombres propios o apodos de entrenadores, asistentes o directivos (usa SIEMPRE "el cuerpo técnico de [Equipo]", "la dirección técnica de [Equipo]" o "la pizarra de [Equipo]"); (b) antigüedad, edad, rondas de Draft, condición de rookie, contratos, exequipos o traspasos de jugadores; (c) premios pasados, anillos o series de temporadas anteriores; (d) puestos exactos en la clasificación o próximos rivales; (e) causas médicas no escritas literalmente en el dossier.',
-        '3. DATO PRECISO AL SERVICIO DEL RELATO (CERO VOLCADOS TELEGRÁFICOS DE BOXSCORE): Respalda siempre tus tesis con cifras reales del dossier y cita el marcador exacto (ej. 116-94) la primera vez que analices un encuentro. PERO evita atiborrar una misma frase con 6 o 7 métricas seguidas entre paréntesis: selecciona únicamente los 2 o 3 datos más reveladores para explicar cada idea táctica e intégralos con fluidez dentro de la oración (ej. "alcanzó los 33 puntos con un 11/15 en tiros de campo" o "dejó a su rival en 94 puntos, casi trece por debajo de su media"). El lector ya dispone de las fichas numéricas completas en las tarjetas laterales; tu trabajo es contar el baloncesto con precisión, no copiar actas.',
-        '4. PROFUNDIDAD NARRATIVA, CAUSA-EFECTO Y CERO CLICHÉS: No hagas un repaso telegráfico partido a partido ni encadenes frases sueltas. Tómate la extensión necesaria (2 a 3 párrafos bien construidos por sección) para desarrollar el arco real de cada historia: cómo se planteó el duelo, qué ajuste táctico lo quebró (ayudas defensivas, protección de pintura, castigo tras pérdida, ritmo en transición, rebote ofensivo, parciales o ejecución clutch del PBP cuando consten) y cómo respondieron las estrellas. EVITA tópicos gastados o frases hechas como "arma de destrucción masiva", "el reverso de la moneda", "la tiranía del...", "colapso de la jerarquía" o "dar un golpe sobre la mesa".',
-        '5. GRAMÁTICA Y TERMINOLOGÍA NBA EN ESPAÑOL + JERARQUÍA EN NEGRITA (**...**): JAMÁS dupliques el artículo delante de franquicias que ya empiezan por "Los" (PROHIBIDO escribir "Los Los Angeles Lakers" o "los Los Angeles Clippers"; escribe siempre "**Los Angeles Lakers**" o "los **Lakers**"). NUNCA traduzcas literalmente anglicismos técnicos de la NBA: el término "back-to-back" (o B2B) NO se traduce jamás; PROHIBIDO escribir "espalda con espalda", "espalda contra espalda" o "en situación de espalda con espalda" — escribe siempre "en back-to-back" (o "en segunda noche consecutiva sin descanso"). Mantén también términos como clutch, pick and roll o play-in sin calcos artificiales. En todos los párrafos del cuerpo (ENTRADILLA, CAPITULOS_DINAMICOS, PIZARRAS, HITOS, ESPANOLES y la explicación tras :: en CLAVES), utiliza negrita Markdown (**texto**) EXCLUSIVAMENTE para: (a) nombres de jugadores (ej. **Nikola Jokić**), (b) nombres o apodos oficiales de equipos (ej. **Boston Celtics**, **Lakers**), y (c) UNA sola idea táctica clave por párrafo (frase breve de 4 a 10 palabras que sintetice la clave causal, ej. **castigando las pérdidas rivales tras cada atrapada**). PROHIBIDO poner en negrita cifras aisladas y PROHIBIDO poner ** en TITULAR o antes de ::.',
+        "Eres el analista jefe y cronista de scouting NBA de referencia en España. Cada mañana escribes la gran revista editorial de la jornada para que un lector exigente entienda con profundidad, buen ritmo periodístico y precisión táctica qué ocurrió exactamente en la pista y por qué se ganaron o perdieron TODOS los partidos de la fecha.",
+        "REGLAS INQUEBRANTABLES DE RIGOR, COBERTURA COMPLETA Y LECTURA TÁCTICA:",
+        "1. RIGOR EMPÍRICO TOTAL Y JERARQUÍA DE FUENTES: Todos los marcadores, puntos, series de tiro, porcentajes, pérdidas, rebotes, récords y rachas que cites deben coincidir al 100% con el dossier adjunto (ante cualquier matiz discrepante en TELETIPOS DE PRENSA, manda siempre el acta oficial). Jamás inventes resultados, cifras ni jugadas concretas no descritas. En expulsiones por 6 faltas, copia literalmente cuarto y reloj si aparecen en `Expulsados 6 faltas PBP`; si no figuran, NO deduzcas ni restes `48 - minutos`. SI Y SOLO SI el dossier incluye `CANASTAS DECISIVAS DE LA JORNADA` o `CANASTA GANADORA DECISIVA`, destaca ese Buzzer Beater (BB) o Game Winner (GW) (protagonista, equipo y reloj exacto) en ENTRADILLA, CAPITULOS_DINAMICOS/HITOS o CLAVES; si NO existe ese bloque, prohibido mencionar buzzer beaters o game winners. SI Y SOLO SI el dossier incluye `RÉCORDS PERSONALES DE CARRERA VERIFICADOS (CAREER HIGHS)`, destácalo en ENTRADILLA, HITOS o CLAVES; si NO figura ese bloque, PROHIBIDO afirmar que algún jugador batió su Career High.",
+        '2. PROHIBICIÓN DE DAR DATOS POR SUPUESTOS: PROHIBIDO mencionar: (a) nombres propios o apodos de entrenadores, asistentes o directivos (usa SIEMPRE "el cuerpo técnico de [Equipo]", "la dirección técnica de [Equipo]" o "la pizarra de [Equipo]"); (b) antigüedad, edad, rondas de Draft, condición de rookie, contratos, exequipos o traspasos de jugadores; (c) premios pasados, anillos o series de temporadas anteriores; (d) puestos exactos en la clasificación o próximos rivales; (e) causas médicas no escritas literalmente en el dossier.',
+        '3. DATO PRECISO AL SERVICIO DEL RELATO (CERO VOLCADOS TELEGRÁFICOS DE BOXSCORE): Respalda siempre tus tesis con cifras reales del dossier y cita el marcador exacto (ej. 116-94) la primera vez que analices cada encuentro. Evita atiborrar una misma frase con 6 o 7 métricas seguidas entre paréntesis: selecciona únicamente los 2 o 3 datos más reveladores para explicar cada idea táctica e intégralos con fluidez dentro de la oración. El lector ya dispone de las fichas numéricas completas en las tarjetas laterales; tu trabajo es contar el baloncesto con precisión, no copiar actas.',
+        `4. COBERTURA INTEGRAL DE LA CARTELERA, CAUSA-EFECTO Y CERO CLICHÉS: Aunque los primeros focos profundicen en los duelos principales, es OBLIGATORIO reseñar TODOS Y CADA UNO de los ${totalGamesCount} partidos listados en el CHECKLIST DEL DOSSIER (cero partidos omitidos), redactando en párrafos periodísticos fluidos sin listas de viñetas y sin repetir los mismos hechos en dos secciones distintas. Desarrolla causa y efecto real (ayudas defensivas, protección de pintura, castigo tras pérdida, transición, rebote ofensivo, parciales o ejecución clutch del PBP cuando consten). EVITA tópicos gastados como "En conclusión", "Cabe destacar", "Sin lugar a dudas", "arma de destrucción masiva", "el reverso de la moneda", "la tiranía del...", "colapso de la jerarquía" o "dar un golpe sobre la mesa".`,
+        '5. GRAMÁTICA Y TERMINOLOGÍA NBA EN ESPAÑOL + JERARQUÍA EN NEGRITA (**...**): JAMÁS dupliques el artículo delante de franquicias que empiezan por "Los" (escribe "**Los Angeles Lakers**" o "los **Lakers**", nunca "los Los Angeles Lakers"). NUNCA traduzcas literalmente "back-to-back" (PROHIBIDO "espalda con espalda"; escribe "en back-to-back" o "en segunda noche consecutiva sin descanso"); mantén clutch, pick and roll y play-in. En todos los párrafos del cuerpo (ENTRADILLA, CAPITULOS_DINAMICOS, PIZARRAS, HITOS, ESPANOLES —salvo frase única de ausencia— y explicación tras :: en CLAVES), usa **texto** EXCLUSIVAMENTE para: (a) jugadores (ej. **Nikola Jokić**), (b) equipos/franquicias (ej. **Boston Celtics**, **Lakers**), y (c) UNA sola idea táctica clave por párrafo (frase breve de 4 a 10 palabras, ej. **castigando las pérdidas rivales tras cada atrapada**). PROHIBIDO poner en negrita cifras aisladas y PROHIBIDO poner ** en TITULAR o antes de ::.',
         "6. FORMATO EXACTO CON ESTAS 7 ETIQUETAS EN MAYÚSCULAS:",
         "===TITULAR===",
         "(Titular periodístico potente de portada en 1 sola línea con foco concreto de la noche, sin # ni **).",
         "===ENTRADILLA===",
         "(Entradilla editorial de 2 a 3 líneas resumiendo los grandes focos con datos clave reales —marcadores o cifras destacadas— aplicando la regla de negritas).",
         "===CAPITULOS_DINAMICOS===",
-        '(Exactamente 2 capítulos de fondo separados por una línea con ---. Formato obligatorio: "Título concreto del capítulo :: Párrafo 1\\n\\nPárrafo 2\\n\\nPárrafo 3" —2 o 3 párrafos bien desarrollados por capítulo, sin prisa por resumir en exceso—.\n- CAPÍTULO 1 (Foco Principal — el gran pulso o exhibición eje de la noche): Párrafo 1 narra el guion del partido, el choque de estilos y dónde se rompió el marcador (incorporando hitos PBP de parciales, tiempos muertos o últimos 2 minutos si figuran); Párrafo 2 desgrana las claves tácticas colectivas (selección de tiro, defensa, rebote o cuidado del balón con 2-3 cifras limpias por equipo); Párrafo 3 profundiza en los duelos individuales que decidieron el encuentro explicando cómo generaron ventaja en pista.\n- CAPÍTULO 2 (Segundo Foco — el gran contraste táctico o sorpresa colectiva de la cartelera): Párrafo 1 desarrolla otra gran narrativa real de la fecha (cerrojo defensivo que frenó a un ataque potente, remontada o choque de propuestas opuestas) comparando 2 o 3 equipos concretos; Párrafo 2 y/o 3 explican por qué funcionaron esas defensas o ataques en los tramos decisivos, integrando los datos con naturalidad en la prosa).',
+        capitulosInstruction,
         "===PIZARRAS===",
-        "(Epígrafe fijo Pizarras: 2 o 3 párrafos fluidos de lectura táctica comparada —más analíticos que enumerativos— contrastando cómo los distintos planes de partido de la noche (peso del triple frente a la pintura, presión al manejador y robos+tapones, carga del rebote ofensivo, ritmo frente al Pace medio de la jornada) explicaron los resultados. Cita cifras reales selectivas que ilustren cada argumento sin saturar cada oración con paréntesis encadenados).",
+        "(Epígrafe fijo Pizarras: 2 o 3 párrafos fluidos de lectura táctica comparada contrastando cómo los planes de partido de la noche —peso del triple frente a la pintura, presión al manejador y robos+tapones, carga del rebote ofensivo, ritmo frente al Pace medio— explicaron los resultados, citando cifras reales selectivas).",
         "===HITOS===",
-        '(Epígrafe fijo Hitos: 2 o 3 párrafos de auténtica crónica narrativa sobre los protagonistas individuales de la fecha —actuaciones estelares, triples-dobles, explosiones por encima de su media, noches frías de referentes, irrupciones desde el banquillo y rachas prolongadas o cortadas—. PROHIBICIÓN ABSOLUTA: NO escribas fichas telegráficas ni enumeraciones de boxscore tipo "Nombre (Equipo): 33 PTS, 5 REB, 9 AST, 4 ROB+TAP, 11/15 TC, 3/5 T3, 8/8 TL, 89.1% TS, 34 MIN, marcador 116-94". En su lugar, redacta párrafos periodísticos ricos y legibles donde expliques QUÉ hizo cada protagonista sobre la pista, cómo influyó en el resultado de su partido y qué significado tiene su registro, integrando únicamente 2 o 3 números decisivos dentro de cada frase).',
+        '(Epígrafe fijo Hitos: 2 o 3 párrafos de auténtica crónica narrativa sobre los protagonistas individuales de la fecha —actuaciones estelares, Career Highs verificados, triples-dobles, explosiones, noches frías de referentes, irrupciones desde el banquillo y rachas—. PROHIBICIÓN ABSOLUTA de fichas telegráficas tipo "Nombre (Equipo): 33 PTS, 5 REB, 9 AST...". Explica QUÉ hizo cada protagonista en pista y su impacto integrando solo 2 o 3 números decisivos por frase).',
         "===ESPANOLES===",
-        "(Epígrafe fijo Españoles: si jugaron españoles, 1 párrafo analizando sus minutos, serie de tiro, producción exacta y contexto del partido; si ninguno sumó minutos en esta fecha, 1 frase sobria, directa y natural confirmándolo).",
+        "(Epígrafe fijo Españoles: si jugaron españoles, 1 párrafo analizando sus minutos, serie de tiro, producción exacta y contexto; si ninguno sumó minutos, 1 frase sobria, directa y natural confirmándolo).",
         "===CLAVES===",
-        '(Epígrafe fijo Claves: exactamente 4 claves analíticas incisivas, una por línea con formato exacto "Título analítico corto sin ** :: Explicación táctica en 2 frases respaldada por marcador exacto y 2-3 cifras concretas aplicando negritas", sin numeración inicial. Criterio obligatorio: [1] la gran exhibición individual de la noche y cómo generó ventaja para su equipo; [2] la pizarra colectiva o cerrojo táctico más determinante de la jornada; [3] el cierre apretado, manejo de pérdidas o factor X más decisivo; [4] lectura táctica transversal de la cartelera con promedios reales de la fecha. PROHIBIDO usar ratios opacos como "tasa de tiros libres" / FTR% o afirmaciones sin cifras).',
-      ].join("\n");
+        '(Epígrafe fijo Claves: exactamente 4 claves analíticas incisivas, una por línea con formato exacto "Título analítico corto sin ** :: Explicación táctica en 2 frases respaldada por marcador exacto y 2-3 cifras concretas aplicando negritas", sin numeración inicial. Criterio obligatorio: [1] gran exhibición individual o Career High de la noche; [2] pizarra colectiva o cerrojo táctico más determinante; [3] cierre apretado, manejo de pérdidas o factor X decisivo; [4] lectura táctica transversal de la cartelera con promedios reales de la fecha. PROHIBIDO usar ratios opacos como "tasa de tiros libres" / FTR% o afirmaciones sin cifras).',
+        dailyEditorialBlock,
+      ].filter(Boolean).join("\n");
 
       try {
-        const cascadeBudgetMs = 40000;
+        const cascadeBudgetMs = 48000;
         const geminiCall = generateWithGeminiCascade({
           systemInstruction,
           contents: dayDossier,
@@ -3459,7 +4350,7 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
         }
         const safeRawText = reconcileVerifiedFoulOutTimings(sanitizeUnverifiedCoachClaims(rawText, verifiedNightPlayerNames), nightVerifiedFoulOuts);
         const parsed = parseDelimitedSections(safeRawText, ["TITULAR", "ENTRADILLA", "CAPITULOS_DINAMICOS", "PIZARRAS", "HITOS", "ESPANOLES", "CLAVES"]);
-        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments, tripleDoublesNight, dailyHeroicClinchers);
+        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments, tripleDoublesNight, dailyHeroicClinchers, careerHighsNight);
         const payload = { date: gd.selectedDate, seasonLabel: gd.seasonLabel, gamesCount: gd.pulse.gamesCount, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), generationTimeMs: Date.now() - startTime, engineMode: "gemini_search", modelUsed, headline: parsed.TITULAR && parsed.TITULAR.length > 12 ? stripInlineWrapper(parsed.TITULAR) : fallback.headline, lead: parsed.ENTRADILLA && parsed.ENTRADILLA.length > 25 ? parsed.ENTRADILLA : fallback.lead, dynamicSections: parseDynamicChapters(parsed.CAPITULOS_DINAMICOS, fallback.dynamicSections), pizarrasSection: parsed.PIZARRAS && parsed.PIZARRAS.length > 60 ? parsed.PIZARRAS : fallback.pizarrasSection, hitosSection: parsed.HITOS && parsed.HITOS.length > 60 ? parsed.HITOS : fallback.hitosSection, espanolesSection: parsed.ESPANOLES && parsed.ESPANOLES.length > 12 ? parsed.ESPANOLES : fallback.espanolesSection, clavesList: parseClavesList(parsed.CLAVES, fallback.clavesList), spanishPlayersSummary: spanishNightNotes.length > 0 ? spanishNightNotes.join(" · ") : "Sin minutos en pista de jugadores españoles en los encuentros disputados esta fecha.", sources };
         const persistTtlMs = 7 * 24 * 60 * 60 * 1e3;
         await writeSharedPersistedNarrative(cacheKey, payload, persistTtlMs);
@@ -3474,7 +4365,7 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
             isQuota ? "cuota_diaria_429_agotada" : isOverload ? "alta_demanda_503" : cleanReason
           })`
         );
-        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments, tripleDoublesNight, dailyHeroicClinchers);
+        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments, tripleDoublesNight, dailyHeroicClinchers, careerHighsNight);
         fallback.generationTimeMs = Date.now() - startTime;
         fallback.missingApiKey = !getGeminiClient();
         fallback.quotaExhausted = isQuota;
@@ -3498,9 +4389,10 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
       reportInflight.delete(cacheKey);
     }
   }
-  return { buildGameOfficialReportData, buildGameNarrativePayload, buildDeterministicGameNarrative, buildGameDayChroniclePayload, fetchLeagueScheduleGames, fetchEspnInjuriesByName };
+  return { buildGameOfficialReportData, buildGameNarrativePayload, buildDeterministicGameNarrative, buildGameDayChroniclePayload, fetchLeagueScheduleGames, fetchEspnInjuriesByName, purgeNarrativeCache: purgeSharedPersistedNarrativeCache };
 }
 export {
   createScoutingEngine,
+  purgeSharedPersistedNarrativeCache,
   translateMedicalDetailEs
 };

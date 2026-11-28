@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Compass,
   Flame,
+  HeartPulse,
   Shield,
   Star,
   TrendingDown,
@@ -14,6 +15,7 @@ import type {
   ActiveSection,
   AnomalySignal,
   ExperienceMode,
+  InjuriesRotationPayload,
   PlayerSummary,
   StreakEntry,
   TeamSummary,
@@ -56,6 +58,7 @@ import {
   matchesTeamUnifiedFilters,
   type UnifiedTableFiltersState,
 } from '../utils/entityFilters';
+import { useExperienceMetrics } from '../context/ExperienceMetricsContext';
 
 interface GuidedHomeViewProps {
   players: PlayerSummary[];
@@ -73,6 +76,7 @@ interface GuidedHomeViewProps {
   onToggleWatchlist: (entityKey: string) => void;
   onInspectEntity: (entityType: 'player' | 'team', entityId: string) => void;
   onNavigateSection: (section: ActiveSection) => void;
+  injuriesData?: InjuriesRotationPayload | null;
 }
 
 function getSignalSparklineValues(
@@ -188,6 +192,7 @@ export function GuidedHomeView({
   onToggleWatchlist,
   onInspectEntity,
   onNavigateSection,
+  injuriesData = null,
 }: GuidedHomeViewProps) {
   const [protagonistDirection, setProtagonistDirection] = useState<
     'all' | 'positive' | 'negative'
@@ -239,27 +244,36 @@ export function GuidedHomeView({
     toggleSort: toggleStrSort,
   } = useTableSort<'name' | 'count' | 'vsNba'>('count', false, ['name']);
 
-  // Watchlist-filtered base pools
+  const { isMetricAllowed } = useExperienceMetrics();
+
+  // Watchlist + Experience-mode filtered base pools
   const scopedAnomalies = useMemo(() => {
-    if (!onlyWatchlist) return anomalies;
-    return anomalies.filter((s) =>
+    const modeFiltered = anomalies.filter((s) => isMetricAllowed(s.metricKey));
+    if (!onlyWatchlist) return modeFiltered;
+    return modeFiltered.filter((s) =>
       watchlistIds.has(`${s.entityType}:${s.entityId}`)
     );
-  }, [anomalies, onlyWatchlist, watchlistIds]);
+  }, [anomalies, isMetricAllowed, onlyWatchlist, watchlistIds]);
 
   const scopedStreaks = useMemo(() => {
-    if (!onlyWatchlist) return streaks;
-    return streaks.filter((s) =>
+    const modeFiltered = streaks.filter((s) =>
+      isMetricAllowed(s.ruleMetricId ?? s.id)
+    );
+    if (!onlyWatchlist) return modeFiltered;
+    return modeFiltered.filter((s) =>
       watchlistIds.has(`${s.entityType}:${s.entityId}`)
     );
-  }, [streaks, onlyWatchlist, watchlistIds]);
+  }, [streaks, isMetricAllowed, onlyWatchlist, watchlistIds]);
 
   const scopedBreakouts = useMemo(() => {
-    if (!onlyWatchlist) return trendBreakouts;
-    return trendBreakouts.filter((b) =>
+    const modeFiltered = trendBreakouts.filter((b) =>
+      isMetricAllowed(b.metricKey)
+    );
+    if (!onlyWatchlist) return modeFiltered;
+    return modeFiltered.filter((b) =>
       watchlistIds.has(`player:${b.playerId}`)
     );
-  }, [trendBreakouts, onlyWatchlist, watchlistIds]);
+  }, [trendBreakouts, isMetricAllowed, onlyWatchlist, watchlistIds]);
 
   const breakoutAxesSummary = useMemo(() => {
     const axesMeta: Array<{
@@ -267,40 +281,56 @@ export function GuidedHomeView({
       label: string;
       subtitle: string;
       helpKey: string;
+      visible: boolean;
     }> = [
       {
         id: 'exterior',
         label: 'Tiro Exterior',
         subtitle: 'Puntería de tres (3P%), triples anotados y volumen exterior',
         helpKey: 'breakoutExterior',
+        visible: isMetricAllowed('fg3m') || isMetricAllowed('fg3Pct'),
       },
       {
         id: 'minutes_usage',
-        label: 'Minutos y Uso',
-        subtitle: 'Expansión o recorte de rol en pista (MIN, USG% y tiros)',
+        label: experienceMode === 'simple' ? 'Minutos y Rol' : 'Minutos y Uso',
+        subtitle:
+          experienceMode === 'simple'
+            ? 'Expansión o recorte de minutos y volumen de tiros en pista'
+            : 'Expansión o recorte de rol en pista (MIN, USG% y tiros)',
         helpKey: 'breakoutMinutesUsage',
+        visible:
+          isMetricAllowed('minutes') ||
+          isMetricAllowed('usgEst') ||
+          isMetricAllowed('fga'),
       },
       {
         id: 'efficiency',
         label: 'Eficiencia Real',
         subtitle: 'Conversión ponderada de tiro (TS%, eFG% y Game Score)',
         helpKey: 'breakoutEfficiency',
+        visible:
+          experienceMode === 'advanced' ||
+          isMetricAllowed('tsPct') ||
+          isMetricAllowed('efgPct') ||
+          isMetricAllowed('gameScore'),
       },
     ];
 
-    return axesMeta.map((meta) => {
-      const items = scopedBreakouts.filter((b) => b.axis === meta.id);
-      const posCount = items.filter((b) => b.direction === 'positive').length;
-      const negCount = items.filter((b) => b.direction === 'negative').length;
-      return {
-        ...meta,
-        totalCount: items.length,
-        posCount,
-        negCount,
-        topAlert: items[0] || null,
-      };
-    });
-  }, [scopedBreakouts]);
+    return axesMeta
+      .filter((meta) => meta.visible)
+      .map((meta) => {
+        const items = scopedBreakouts.filter((b) => b.axis === meta.id);
+        const posCount = items.filter((b) => b.direction === 'positive').length;
+        const negCount = items.filter((b) => b.direction === 'negative').length;
+        return {
+          ...meta,
+          totalCount: items.length,
+          posCount,
+          negCount,
+          topAlert: items[0] || null,
+        };
+      });
+  }, [scopedBreakouts, experienceMode, isMetricAllowed]);
 
   // Global pulse counts & hero items for Row 1 KPI strip
   const radarPulse = useMemo(() => {
@@ -789,6 +819,125 @@ export function GuidedHomeView({
           </p>
         </div>
       </div>
+
+      {/* PHASE 12: Compact Daily Injuries & Rotation Absorption Strip */}
+      {injuriesData && injuriesData.summary.totalReported > 0 && (
+        <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
+          <div className="px-4 py-3 border-b border-[#1E293B] flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <HeartPulse className="w-4 h-4 text-rose-400 shrink-0" />
+              <h2 className="text-sm font-semibold text-slate-100 truncate">
+                Parte de Lesiones e Impacto en Rotaciones
+              </h2>
+              <span className="hidden sm:inline text-xs text-slate-400 font-mono tabular-nums">
+                · {injuriesData.summary.outOrIrCount} Out/IR ·{' '}
+                {injuriesData.summary.doubtfulCount + injuriesData.summary.questionableOrDtdCount} dudas ·{' '}
+                {injuriesData.summary.totalVacatedMinutes.toFixed(0)} MIN vacantes
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => onNavigateSection('injuries')}
+              className="inline-flex items-center gap-1 text-xs font-medium text-orange-400 hover:text-orange-300 transition-colors whitespace-nowrap shrink-0"
+            >
+              <span>Ver parte completo</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-[#1E293B]">
+            {/* Left: Most impacted teams */}
+            <div className="p-3.5 space-y-2">
+              <div className="text-[11px] font-medium text-slate-400">
+                Equipos más condicionados hoy (minutos vacantes)
+              </div>
+              <div className="space-y-1.5">
+                {injuriesData.teams.slice(0, 3).map((t) => (
+                  <button
+                    key={t.teamAbbr}
+                    type="button"
+                    onClick={() => onInspectEntity('team', t.teamId)}
+                    className="w-full flex items-center justify-between gap-2 py-1.5 px-2 -mx-2 rounded-md hover:bg-[#182338] transition-colors text-left"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <TeamLogo abbr={t.teamAbbr} teamId={t.teamId} logoUrl={t.logoUrl} size="xs" />
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-slate-100 truncate">
+                          {t.teamName}
+                        </div>
+                        <div className="text-[11px] text-slate-400 truncate">
+                          {t.injuries
+                            .slice(0, 2)
+                            .map((i) => `${i.name} (${i.shortTag})`)
+                            .join(' · ')}
+                          {t.injuries.length > 2 ? ` +${t.injuries.length - 2}` : ''}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right font-mono tabular-nums text-xs shrink-0 whitespace-nowrap">
+                      <span className="text-rose-300 font-semibold">
+                        -{t.vacatedMinutes.toFixed(0)} MIN
+                      </span>
+                      <span className="text-slate-500 mx-1">·</span>
+                      <span className="text-slate-300">
+                        -{t.vacatedPoints.toFixed(0)} PTS
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Right: Top rotation beneficiaries */}
+            <div className="p-3.5 space-y-2">
+              <div className="text-[11px] font-medium text-slate-400">
+                Compañeros con mayor subida proyectada (+MIN / +USG% / +PTS)
+              </div>
+              <div className="space-y-1.5">
+                {injuriesData.topBeneficiaries.slice(0, 3).map((b) => (
+                  <button
+                    key={`${b.teamAbbr}:${b.playerId}`}
+                    type="button"
+                    onClick={() => onInspectEntity('player', b.playerId)}
+                    className="w-full flex items-center justify-between gap-2 py-1.5 px-2 -mx-2 rounded-md hover:bg-[#182338] transition-colors text-left"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <PlayerAvatar
+                        playerId={b.playerId}
+                        name={b.name}
+                        headshotUrl={b.headshotUrl}
+                        teamAbbr={b.teamAbbr}
+                        size="xs"
+                      />
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-slate-100 truncate">
+                          {b.name}{' '}
+                          <span className="font-normal text-slate-400">
+                            · {b.teamAbbr}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 truncate">
+                          {b.roleShiftLabel}
+                          {b.triggeredBy[0] ? ` · por ${b.triggeredBy[0].name}` : ''}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right font-mono tabular-nums text-xs shrink-0 whitespace-nowrap">
+                      <span className="text-emerald-400 font-semibold">
+                        +{b.projectedMinDelta.toFixed(1)}m
+                      </span>
+                      <span className="text-slate-500 mx-1">·</span>
+                      <span className="text-sky-300 font-semibold">
+                        +{b.projectedPtsDelta.toFixed(1)} PTS
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* BLOCK 01: Alertas de Rupturas de Tendencia (Tiro Exterior, Minutos/Uso y Eficiencia) */}
       <section className="space-y-3">

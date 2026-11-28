@@ -93,16 +93,237 @@ function normalizeScheduleDateToEasternIso(estRaw, gdDateRaw, utcRaw) {
   }
   return utcTrim.slice(0, 10);
 }
-function getSnapshotCandidatePaths() {
-  const candidates = [path.resolve(process.cwd(), "data", "nba-snapshot.json.gz"), path.resolve(__dirname, "data", "nba-snapshot.json.gz"), path.resolve(__dirname, "..", "data", "nba-snapshot.json.gz"), path.resolve(__dirname, "..", "..", "data", "nba-snapshot.json.gz"), path.resolve(__dirname, "..", "..", "..", "data", "nba-snapshot.json.gz")];
+function getDataFileCandidatePaths(fileName: string): string[] {
+  const candidates = [
+    path.resolve(process.cwd(), "data", fileName),
+    path.resolve(__dirname, "data", fileName),
+    path.resolve(__dirname, "..", "data", fileName),
+    path.resolve(__dirname, "..", "..", "data", fileName),
+    path.resolve(__dirname, "..", "..", "..", "data", fileName),
+  ];
   return Array.from(new Set(candidates));
 }
-function getPrimarySnapshotWritePath() {
+
+function getPrimaryDataFileWritePath(fileName: string): string {
   const cwdData = path.resolve(process.cwd(), "data");
   if (fs.existsSync(cwdData)) {
-    return path.join(cwdData, "nba-snapshot.json.gz");
+    return path.join(cwdData, fileName);
   }
-  return path.resolve(__dirname, "../../data/nba-snapshot.json.gz");
+  return path.resolve(__dirname, "../../data", fileName);
+}
+
+function findExistingDataFilePath(fileName: string): string | null {
+  for (const filePath of getDataFileCandidatePaths(fileName)) {
+    if (fs.existsSync(filePath)) return filePath;
+  }
+  return null;
+}
+
+function writeGzipJsonAtomic(targetPath: string, payload: unknown, level = 9) {
+  const dir = path.dirname(targetPath);
+  fs.mkdirSync(dir, { recursive: true });
+  const jsonBuffer = Buffer.from(JSON.stringify(payload), "utf8");
+  const gzBuffer = zlib.gzipSync(jsonBuffer, { level });
+  const tmpPath = `${targetPath}.tmp`;
+  fs.writeFileSync(tmpPath, gzBuffer);
+  fs.renameSync(tmpPath, targetPath);
+  const stat = fs.statSync(targetPath);
+  return {
+    filePath: targetPath,
+    mtimeMs: stat.mtimeMs,
+    bytesCompressed: gzBuffer.byteLength,
+    bytesUncompressed: jsonBuffer.byteLength,
+  };
+}
+
+interface SeasonSnapshotDescriptor {
+  yearToken: "2027" | "2026" | "2025" | "2024";
+  propKey: "s2027" | "s2026" | "s2025" | "s2024";
+  seasonCode: "2026-27" | "2025-26" | "2024-25" | "2023-24";
+  fileName: string;
+  minPlayers: number;
+}
+
+const SEASON_SNAPSHOT_DESCRIPTORS: Record<string, SeasonSnapshotDescriptor> = {
+  "2026-27": { yearToken: "2027", propKey: "s2027", seasonCode: "2026-27", fileName: "nba-snapshot-2027.json.gz", minPlayers: 100 },
+  "2027": { yearToken: "2027", propKey: "s2027", seasonCode: "2026-27", fileName: "nba-snapshot-2027.json.gz", minPlayers: 100 },
+  s2027: { yearToken: "2027", propKey: "s2027", seasonCode: "2026-27", fileName: "nba-snapshot-2027.json.gz", minPlayers: 100 },
+  "2025-26": { yearToken: "2026", propKey: "s2026", seasonCode: "2025-26", fileName: "nba-snapshot-2026.json.gz", minPlayers: 300 },
+  "2026": { yearToken: "2026", propKey: "s2026", seasonCode: "2025-26", fileName: "nba-snapshot-2026.json.gz", minPlayers: 300 },
+  s2026: { yearToken: "2026", propKey: "s2026", seasonCode: "2025-26", fileName: "nba-snapshot-2026.json.gz", minPlayers: 300 },
+  "2024-25": { yearToken: "2025", propKey: "s2025", seasonCode: "2024-25", fileName: "nba-snapshot-2025.json.gz", minPlayers: 300 },
+  "2025": { yearToken: "2025", propKey: "s2025", seasonCode: "2024-25", fileName: "nba-snapshot-2025.json.gz", minPlayers: 300 },
+  s2025: { yearToken: "2025", propKey: "s2025", seasonCode: "2024-25", fileName: "nba-snapshot-2025.json.gz", minPlayers: 300 },
+  "2023-24": { yearToken: "2024", propKey: "s2024", seasonCode: "2023-24", fileName: "nba-snapshot-2024.json.gz", minPlayers: 300 },
+  "2024": { yearToken: "2024", propKey: "s2024", seasonCode: "2023-24", fileName: "nba-snapshot-2024.json.gz", minPlayers: 300 },
+  s2024: { yearToken: "2024", propKey: "s2024", seasonCode: "2023-24", fileName: "nba-snapshot-2024.json.gz", minPlayers: 300 },
+};
+
+function resolveSeasonSnapshotDescriptor(seasonOrKey: string): SeasonSnapshotDescriptor | null {
+  return SEASON_SNAPSHOT_DESCRIPTORS[String(seasonOrKey || "").trim()] || null;
+}
+
+function isValidSeasonDatasetPayload(ds: any, minPlayers = 0): boolean {
+  if (!ds || typeof ds !== "object") return false;
+  if (!Array.isArray(ds.teams) || ds.teams.length < 30) return false;
+  if (!Array.isArray(ds.players) || ds.players.length < minPlayers) return false;
+  return true;
+}
+
+let memoryBiosSnapshotCache: { filePath: string; mtimeMs: number; bios: any[]; generatedAt?: string } | null = null;
+const memorySeasonSnapshotCache = new Map<
+  string,
+  { filePath: string; mtimeMs: number; dataset: any; generatedAt?: string; lastSyncedSource?: string }
+>();
+
+function readNbaBiosSnapshotFromDisk(): any[] | null {
+  for (const filePath of getDataFileCandidatePaths("nba-bios.json.gz")) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const stat = fs.statSync(filePath);
+      if (
+        memoryBiosSnapshotCache &&
+        memoryBiosSnapshotCache.filePath === filePath &&
+        memoryBiosSnapshotCache.mtimeMs === stat.mtimeMs
+      ) {
+        return memoryBiosSnapshotCache.bios;
+      }
+      const compressed = fs.readFileSync(filePath);
+      const parsed = JSON.parse(zlib.gunzipSync(compressed).toString("utf8"));
+      const biosArr = Array.isArray(parsed?.bios) ? parsed.bios : Array.isArray(parsed) ? parsed : null;
+      if (!biosArr || biosArr.length < 250) {
+        console.warn(`[RadarNBA Bios Snapshot] Archivo ignorado por validación incompleta: ${filePath}`);
+        continue;
+      }
+      memoryBiosSnapshotCache = {
+        filePath,
+        mtimeMs: stat.mtimeMs,
+        bios: biosArr,
+        generatedAt: parsed?.generatedAt,
+      };
+      return biosArr;
+    } catch (err) {
+      console.warn(`[RadarNBA Bios Snapshot] No se pudo leer ${filePath}:`, err);
+    }
+  }
+  const legacySnap = readNbaSnapshotFromDisk();
+  return Array.isArray(legacySnap?.bios) ? legacySnap.bios : null;
+}
+
+function writeNbaBiosSnapshotToDisk(bios: any[], meta?: { generatedAt?: string; lastSyncedSource?: string }) {
+  if (!Array.isArray(bios) || bios.length < 250) {
+    throw new Error("Validación abortada: el listado de fichas biográficas NBA está incompleto.");
+  }
+  const generatedAt = meta?.generatedAt || new Date().toISOString();
+  const payload = {
+    version: 1,
+    generatedAt,
+    lastSyncedSource: meta?.lastSyncedSource || "nba_official_hybrid",
+    bios,
+  };
+  const targetPath = getPrimaryDataFileWritePath("nba-bios.json.gz");
+  const written = writeGzipJsonAtomic(targetPath, payload, 9);
+  memoryBiosSnapshotCache = {
+    filePath: written.filePath,
+    mtimeMs: written.mtimeMs,
+    bios,
+    generatedAt,
+  };
+  return written;
+}
+
+function hasNbaSeasonSnapshotOnDisk(seasonOrKey: string): boolean {
+  const desc = resolveSeasonSnapshotDescriptor(seasonOrKey);
+  if (!desc) return false;
+  return Boolean(findExistingDataFilePath(desc.fileName));
+}
+
+function readNbaSeasonSnapshotFromDisk(seasonOrKey: string): any | null {
+  const desc = resolveSeasonSnapshotDescriptor(seasonOrKey);
+  if (!desc) return null;
+
+  for (const filePath of getDataFileCandidatePaths(desc.fileName)) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const stat = fs.statSync(filePath);
+      const cached = memorySeasonSnapshotCache.get(desc.propKey);
+      if (cached && cached.filePath === filePath && cached.mtimeMs === stat.mtimeMs) {
+        return cached.dataset;
+      }
+      const compressed = fs.readFileSync(filePath);
+      const parsed = JSON.parse(zlib.gunzipSync(compressed).toString("utf8"));
+      const dataset = parsed?.data && typeof parsed.data === "object" ? parsed.data : parsed;
+      if (!isValidSeasonDatasetPayload(dataset, desc.minPlayers)) {
+        console.warn(`[RadarNBA Season Snapshot] Archivo ignorado por validación incompleta: ${filePath}`);
+        continue;
+      }
+      memorySeasonSnapshotCache.set(desc.propKey, {
+        filePath,
+        mtimeMs: stat.mtimeMs,
+        dataset,
+        generatedAt: parsed?.generatedAt,
+        lastSyncedSource: parsed?.lastSyncedSource || dataset?.dataSource,
+      });
+      return dataset;
+    } catch (err) {
+      console.warn(`[RadarNBA Season Snapshot] No se pudo leer ${filePath}:`, err);
+    }
+  }
+
+  // Retrocompatible fallback to legacy monolithic snapshot if modular file is not yet on disk
+  const legacySnap = readNbaSnapshotFromDisk();
+  const legacySeason = legacySnap?.[desc.propKey];
+  if (isValidSeasonDatasetPayload(legacySeason, desc.minPlayers)) {
+    return legacySeason;
+  }
+  return null;
+}
+
+function writeNbaSeasonSnapshotToDisk(
+  seasonOrKey: string,
+  datasetPayload: any,
+  meta?: { generatedAt?: string; lastSyncedSource?: string }
+) {
+  const desc = resolveSeasonSnapshotDescriptor(seasonOrKey);
+  if (!desc) {
+    throw new Error(`Temporada desconocida para snapshot modular: ${seasonOrKey}`);
+  }
+  if (!isValidSeasonDatasetPayload(datasetPayload, desc.minPlayers)) {
+    throw new Error(
+      `Validación de seguridad abortada: el snapshot de temporada ${desc.seasonCode} está incompleto y NO sobrescribirá los datos existentes.`
+    );
+  }
+  const generatedAt = meta?.generatedAt || new Date().toISOString();
+  const lastSyncedSource = meta?.lastSyncedSource || datasetPayload.dataSource || "nba_official_hybrid";
+  const envelope = {
+    version: 1,
+    seasonKey: desc.propKey,
+    seasonCode: desc.seasonCode,
+    generatedAt,
+    lastSyncedSource,
+    data: datasetPayload,
+  };
+  const targetPath = getPrimaryDataFileWritePath(desc.fileName);
+  const written = writeGzipJsonAtomic(targetPath, envelope, 9);
+  memorySeasonSnapshotCache.set(desc.propKey, {
+    filePath: written.filePath,
+    mtimeMs: written.mtimeMs,
+    dataset: datasetPayload,
+    generatedAt,
+    lastSyncedSource,
+  });
+  return {
+    ...written,
+    seasonCode: desc.seasonCode,
+    generatedAt,
+  };
+}
+
+function getSnapshotCandidatePaths() {
+  return getDataFileCandidatePaths("nba-snapshot.json.gz");
+}
+function getPrimarySnapshotWritePath() {
+  return getPrimaryDataFileWritePath("nba-snapshot.json.gz");
 }
 let memorySnapshotCache = null;
 function isValidSnapshotPayload(candidate) {
@@ -152,16 +373,19 @@ function writeNbaSnapshotToDisk(snapshot) {
     throw new Error("Validación de seguridad abortada: el snapshot generado está incompleto y NO sobrescribirá los datos existentes.");
   }
   const targetPath = getPrimarySnapshotWritePath();
-  const dir = path.dirname(targetPath);
-  fs.mkdirSync(dir, { recursive: true });
-  const jsonBuffer = Buffer.from(JSON.stringify(snapshot), "utf8");
-  const gzBuffer = zlib.gzipSync(jsonBuffer, { level: 9 });
-  const tmpPath = `${targetPath}.tmp`;
-  fs.writeFileSync(tmpPath, gzBuffer);
-  fs.renameSync(tmpPath, targetPath);
-  const stat = fs.statSync(targetPath);
-  memorySnapshotCache = { filePath: targetPath, mtimeMs: stat.mtimeMs, snapshot };
-  return { filePath: targetPath, bytesCompressed: gzBuffer.byteLength, bytesUncompressed: jsonBuffer.byteLength };
+  const written = writeGzipJsonAtomic(targetPath, snapshot, 9);
+  memorySnapshotCache = { filePath: targetPath, mtimeMs: written.mtimeMs, snapshot };
+  return { filePath: targetPath, bytesCompressed: written.bytesCompressed, bytesUncompressed: written.bytesUncompressed };
+}
+
+export interface NbaHeroicShotsSnapshotPayload {
+  version?: 1;
+  season: string;
+  generatedAt: string;
+  scannedGameIds?: string[];
+  items: any[];
+  playerCounts: Record<string, { buzzerBeaters: number; gameWinners: number; otTyingBuzzers: number }>;
+  teamCounts: Record<string, { buzzerBeaters: number; gameWinners: number; otTyingBuzzers: number }>;
 }
 
 export interface NbaAdvancedSnapshotPayload {
@@ -179,42 +403,96 @@ export interface NbaAdvancedSnapshotPayload {
   violations: { player: any; team: any };
   lineups: { lineups5: any; lineups3?: any; lineups2: any };
   onOffByTeam: Record<string, any[]>;
-  heroicShots?: {
-    season: string;
-    generatedAt: string;
-    scannedGameIds?: string[];
-    items: any[];
-    playerCounts: Record<string, { buzzerBeaters: number; gameWinners: number; otTyingBuzzers: number }>;
-    teamCounts: Record<string, { buzzerBeaters: number; gameWinners: number; otTyingBuzzers: number }>;
-  };
+  heroicShots?: NbaHeroicShotsSnapshotPayload;
   benchmarks: {
     player: Record<string, { mean: number; sd: number }>;
     team: Record<string, { mean: number; sd: number }>;
   };
 }
 
+let memoryHeroicShotsCache: { filePath: string; mtimeMs: number; payload: NbaHeroicShotsSnapshotPayload } | null = null;
+
+function isValidHeroicShotsPayload(candidate: any): candidate is NbaHeroicShotsSnapshotPayload {
+  if (!candidate || typeof candidate !== "object") return false;
+  if (!Array.isArray(candidate.items)) return false;
+  return true;
+}
+
+function readNbaHeroicShotsFromDisk(): NbaHeroicShotsSnapshotPayload | null {
+  for (const filePath of getDataFileCandidatePaths("nba-heroic-shots.json.gz")) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const stat = fs.statSync(filePath);
+      if (
+        memoryHeroicShotsCache &&
+        memoryHeroicShotsCache.filePath === filePath &&
+        memoryHeroicShotsCache.mtimeMs === stat.mtimeMs
+      ) {
+        return memoryHeroicShotsCache.payload;
+      }
+      const compressed = fs.readFileSync(filePath);
+      const parsed = JSON.parse(zlib.gunzipSync(compressed).toString("utf8"));
+      if (!isValidHeroicShotsPayload(parsed)) {
+        console.warn(`[RadarNBA Heroic Shots Snapshot] Archivo ignorado por validación incompleta: ${filePath}`);
+        continue;
+      }
+      memoryHeroicShotsCache = { filePath, mtimeMs: stat.mtimeMs, payload: parsed };
+      return parsed;
+    } catch (err) {
+      console.warn(`[RadarNBA Heroic Shots Snapshot] No se pudo leer ${filePath}:`, err);
+    }
+  }
+  // Retrocompatible fallback if micro-snapshot file does not exist yet
+  const coreSnap = readNbaAdvancedCoreSnapshotFromDisk();
+  if (coreSnap?.heroicShots && isValidHeroicShotsPayload(coreSnap.heroicShots)) {
+    return coreSnap.heroicShots;
+  }
+  const advSnap = readNbaAdvancedSnapshotFromDisk();
+  if (advSnap?.heroicShots && isValidHeroicShotsPayload(advSnap.heroicShots)) {
+    return advSnap.heroicShots;
+  }
+  return null;
+}
+
+function writeNbaHeroicShotsToDisk(payload: NbaHeroicShotsSnapshotPayload) {
+  if (!isValidHeroicShotsPayload(payload)) {
+    throw new Error("Validación abortada: el micro-snapshot de Buzzer Beaters & Game Winners es inválido.");
+  }
+  const normalized: NbaHeroicShotsSnapshotPayload = {
+    version: 1,
+    season: payload.season || "2026-27",
+    generatedAt: payload.generatedAt || new Date().toISOString(),
+    scannedGameIds: Array.isArray(payload.scannedGameIds) ? payload.scannedGameIds : [],
+    items: payload.items,
+    playerCounts: payload.playerCounts || {},
+    teamCounts: payload.teamCounts || {},
+  };
+  const targetPath = getPrimaryDataFileWritePath("nba-heroic-shots.json.gz");
+  const written = writeGzipJsonAtomic(targetPath, normalized, 9);
+  memoryHeroicShotsCache = {
+    filePath: written.filePath,
+    mtimeMs: written.mtimeMs,
+    payload: normalized,
+  };
+  return {
+    ...written,
+    itemsCount: normalized.items.length,
+    generatedAt: normalized.generatedAt,
+  };
+}
+
 function getAdvancedSnapshotCandidatePaths(): string[] {
-  const candidates = [
-    path.resolve(process.cwd(), "data", "nba-advanced-snapshot.json.gz"),
-    path.resolve(__dirname, "data", "nba-advanced-snapshot.json.gz"),
-    path.resolve(__dirname, "..", "data", "nba-advanced-snapshot.json.gz"),
-    path.resolve(__dirname, "..", "..", "data", "nba-advanced-snapshot.json.gz"),
-    path.resolve(__dirname, "..", "..", "..", "data", "nba-advanced-snapshot.json.gz"),
-  ];
-  return Array.from(new Set(candidates));
+  return getDataFileCandidatePaths("nba-advanced-snapshot.json.gz");
 }
 
 function getPrimaryAdvancedSnapshotWritePath(): string {
-  const cwdData = path.resolve(process.cwd(), "data");
-  if (fs.existsSync(cwdData)) {
-    return path.join(cwdData, "nba-advanced-snapshot.json.gz");
-  }
-  return path.resolve(__dirname, "../../data/nba-advanced-snapshot.json.gz");
+  return getPrimaryDataFileWritePath("nba-advanced-snapshot.json.gz");
 }
 
 let memoryAdvancedSnapshotCache: { filePath: string; mtimeMs: number; snapshot: NbaAdvancedSnapshotPayload } | null = null;
+let memoryAdvancedCoreSnapshotCache: { filePath: string; mtimeMs: number; snapshot: NbaAdvancedSnapshotPayload } | null = null;
 
-function isValidAdvancedSnapshotPayload(candidate: any): candidate is NbaAdvancedSnapshotPayload {
+function isValidAdvancedCoreSnapshotPayload(candidate: any): candidate is NbaAdvancedSnapshotPayload {
   if (!candidate || typeof candidate !== "object") return false;
   if (candidate.version !== 1) return false;
   if (!candidate.shotZones?.player || !candidate.shotZones?.team) return false;
@@ -225,10 +503,64 @@ function isValidAdvancedSnapshotPayload(candidate: any): candidate is NbaAdvance
   if (!candidate.scoring?.player || !candidate.scoring?.team) return false;
   if (!candidate.fourFactors?.player || !candidate.fourFactors?.team) return false;
   if (!candidate.violations?.player || !candidate.violations?.team) return false;
-  if (!candidate.lineups?.lineups5 || !candidate.lineups?.lineups2) return false;
   if (!candidate.onOffByTeam || typeof candidate.onOffByTeam !== "object") return false;
   if (!candidate.benchmarks?.player || !candidate.benchmarks?.team) return false;
   return true;
+}
+
+function isValidAdvancedSnapshotPayload(candidate: any): candidate is NbaAdvancedSnapshotPayload {
+  if (!isValidAdvancedCoreSnapshotPayload(candidate)) return false;
+  if (!candidate.lineups?.lineups5 || !candidate.lineups?.lineups2) return false;
+  return true;
+}
+
+function readNbaAdvancedCoreSnapshotFromDisk(): NbaAdvancedSnapshotPayload | null {
+  for (const filePath of getDataFileCandidatePaths("nba-advanced-core.json.gz")) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const stat = fs.statSync(filePath);
+      if (
+        memoryAdvancedCoreSnapshotCache &&
+        memoryAdvancedCoreSnapshotCache.filePath === filePath &&
+        memoryAdvancedCoreSnapshotCache.mtimeMs === stat.mtimeMs
+      ) {
+        return memoryAdvancedCoreSnapshotCache.snapshot;
+      }
+      const compressed = fs.readFileSync(filePath);
+      const parsed = JSON.parse(zlib.gunzipSync(compressed).toString("utf8"));
+      if (!isValidAdvancedCoreSnapshotPayload(parsed)) {
+        console.warn(`[RadarNBA Advanced Core Snapshot] Archivo ignorado por validación incompleta: ${filePath}`);
+        continue;
+      }
+      memoryAdvancedCoreSnapshotCache = { filePath, mtimeMs: stat.mtimeMs, snapshot: parsed };
+      return parsed;
+    } catch (err) {
+      console.warn(`[RadarNBA Advanced Core Snapshot] No se pudo leer ${filePath}:`, err);
+    }
+  }
+  return readNbaAdvancedSnapshotFromDisk();
+}
+
+function writeNbaAdvancedCoreSnapshotToDisk(snapshot: NbaAdvancedSnapshotPayload) {
+  if (!isValidAdvancedCoreSnapshotPayload(snapshot)) {
+    throw new Error("Validación abortada: el snapshot avanzado core está incompleto.");
+  }
+  const corePayload: NbaAdvancedSnapshotPayload = {
+    ...snapshot,
+    lineups: {
+      lineups5: { items: [] },
+      lineups3: { items: [] },
+      lineups2: { items: [] },
+    },
+  };
+  const targetPath = getPrimaryDataFileWritePath("nba-advanced-core.json.gz");
+  const written = writeGzipJsonAtomic(targetPath, corePayload, 9);
+  memoryAdvancedCoreSnapshotCache = {
+    filePath: written.filePath,
+    mtimeMs: written.mtimeMs,
+    snapshot: corePayload,
+  };
+  return written;
 }
 
 function readNbaAdvancedSnapshotFromDisk(): NbaAdvancedSnapshotPayload | null {
@@ -266,21 +598,69 @@ function writeNbaAdvancedSnapshotToDisk(snapshot: NbaAdvancedSnapshotPayload) {
     );
   }
   const targetPath = getPrimaryAdvancedSnapshotWritePath();
-  const dir = path.dirname(targetPath);
-  fs.mkdirSync(dir, { recursive: true });
-  const jsonBuffer = Buffer.from(JSON.stringify(snapshot), "utf8");
-  const gzBuffer = zlib.gzipSync(jsonBuffer, { level: 9 });
-  const tmpPath = `${targetPath}.tmp`;
-  fs.writeFileSync(tmpPath, gzBuffer);
-  fs.renameSync(tmpPath, targetPath);
-  const stat = fs.statSync(targetPath);
-  memoryAdvancedSnapshotCache = { filePath: targetPath, mtimeMs: stat.mtimeMs, snapshot };
+  const written = writeGzipJsonAtomic(targetPath, snapshot, 9);
+  memoryAdvancedSnapshotCache = { filePath: targetPath, mtimeMs: written.mtimeMs, snapshot };
+
+  let coreMeta = null;
+  let heroicMeta = null;
+  try {
+    coreMeta = writeNbaAdvancedCoreSnapshotToDisk(snapshot);
+  } catch (err) {
+    console.warn("[RadarNBA] No se pudo escribir nba-advanced-core.json.gz:", err);
+  }
+  if (snapshot.heroicShots && isValidHeroicShotsPayload(snapshot.heroicShots)) {
+    try {
+      heroicMeta = writeNbaHeroicShotsToDisk(snapshot.heroicShots);
+    } catch (err) {
+      console.warn("[RadarNBA] No se pudo escribir nba-heroic-shots.json.gz:", err);
+    }
+  }
+
   return {
     filePath: targetPath,
-    bytesCompressed: gzBuffer.byteLength,
-    bytesUncompressed: jsonBuffer.byteLength,
+    bytesCompressed: written.bytesCompressed,
+    bytesUncompressed: written.bytesUncompressed,
     season: snapshot.season,
     generatedAt: snapshot.generatedAt,
+    coreSnapshot: coreMeta,
+    heroicSnapshot: heroicMeta,
+  };
+}
+
+function readNbaSnapshotMetadataFromDisk() {
+  const s2027Path = findExistingDataFilePath("nba-snapshot-2027.json.gz");
+  const biosPath = findExistingDataFilePath("nba-bios.json.gz");
+  const heroicPath = findExistingDataFilePath("nba-heroic-shots.json.gz");
+  const legacyPath = findExistingDataFilePath("nba-snapshot.json.gz");
+  const activePath = s2027Path || legacyPath;
+  if (!activePath) {
+    return {
+      snapshotLoaded: false,
+      modularSnapshots: false,
+      heroicMicroSnapshot: false,
+      snapshotGeneratedAt: null,
+    };
+  }
+  const cached2027 = memorySeasonSnapshotCache.get("s2027");
+  const cachedBios = memoryBiosSnapshotCache;
+  const cachedLegacy = memorySnapshotCache;
+  let generatedAt =
+    cached2027?.generatedAt ||
+    cachedBios?.generatedAt ||
+    cachedLegacy?.snapshot?.generatedAt ||
+    null;
+  if (!generatedAt) {
+    try {
+      generatedAt = new Date(fs.statSync(activePath).mtimeMs).toISOString();
+    } catch {
+      generatedAt = null;
+    }
+  }
+  return {
+    snapshotLoaded: true,
+    modularSnapshots: Boolean(s2027Path && biosPath),
+    heroicMicroSnapshot: Boolean(heroicPath),
+    snapshotGeneratedAt: generatedAt,
   };
 }
 function serializeSeasonDatasetForSnapshot(ds) {
@@ -785,12 +1165,25 @@ export {
   getPrimaryAdvancedSnapshotWritePath,
   getPrimarySnapshotWritePath,
   getSnapshotCandidatePaths,
+  hasNbaSeasonSnapshotOnDisk,
   hydrateSeasonDatasetFromSnapshot,
+  isValidAdvancedCoreSnapshotPayload,
   isValidAdvancedSnapshotPayload,
+  isValidHeroicShotsPayload,
+  isValidSeasonDatasetPayload,
   isValidSnapshotPayload,
+  readNbaAdvancedCoreSnapshotFromDisk,
   readNbaAdvancedSnapshotFromDisk,
+  readNbaBiosSnapshotFromDisk,
+  readNbaHeroicShotsFromDisk,
+  readNbaSeasonSnapshotFromDisk,
   readNbaSnapshotFromDisk,
+  readNbaSnapshotMetadataFromDisk,
   serializeSeasonDatasetForSnapshot,
+  writeNbaAdvancedCoreSnapshotToDisk,
   writeNbaAdvancedSnapshotToDisk,
+  writeNbaBiosSnapshotToDisk,
+  writeNbaHeroicShotsToDisk,
+  writeNbaSeasonSnapshotToDisk,
   writeNbaSnapshotToDisk
 };

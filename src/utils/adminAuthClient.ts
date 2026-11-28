@@ -1,6 +1,10 @@
 import type {
   AdminSecurityConfig,
   AdminSecurityConfigValues,
+  AutoStreaksConfig,
+  AutoStreaksConfigValues,
+  ExperienceMetricsConfig,
+  ExperienceMetricsConfigValues,
   GamedayThresholdsConfig,
   GamedayThresholdsConfigValues,
   InspectorDefaultKpisConfig,
@@ -11,9 +15,28 @@ import type {
   WebFeatureFlags,
 } from '../types/nba';
 import {
+  DEFAULT_AUTO_STREAKS_CONFIG,
+  DEFAULT_AUTO_STREAKS_CONFIG_VALUES,
+  normalizeAutoStreaksConfig,
+} from './autoStreaksConfig';
+import {
+  DEFAULT_EXPERIENCE_METRICS_CONFIG,
+  DEFAULT_SIMPLE_METRIC_IDS,
+  normalizeExperienceMetricsConfig,
+} from './experienceMetricsCatalog';
+import {
   DEFAULT_PLAYER_NBA_KPI_KEYS,
   DEFAULT_TEAM_NBA_KPI_KEYS,
 } from './nbaInspectorAllKpis';
+import {
+  DEFAULT_SIDEBAR_MENU_CONFIG,
+  DEFAULT_SIDEBAR_MENU_CONFIG_VALUES,
+  normalizeSidebarMenuConfig,
+  readLocalSidebarMenuConfig,
+  writeLocalSidebarMenuConfig,
+  type SidebarMenuConfig,
+  type SidebarMenuConfigValues,
+} from './sidebarMenuConfig';
 
 const LEGACY_TOKEN_V2_STORAGE_KEY = 'radarnba_admin_token_v2';
 const LEGACY_TOKEN_V1_STORAGE_KEY = 'radarnba_admin_token_v1';
@@ -1011,25 +1034,93 @@ export async function resetAdminGamedayThresholdsDefaults(): Promise<AdminGameda
   };
 }
 
-const WEB_FEATURE_FLAGS_BACKUP_KEY = 'radarnba_web_feature_flags_v1';
+const WEB_FEATURE_FLAGS_BACKUP_KEY = 'radarnba_web_feature_flags_v2';
 
 export const DEFAULT_WEB_FEATURE_FLAGS: WebFeatureFlags = {
   showHeroicBadges: false,
+  themeStyle: 'v3_broadcast',
+  defaultSeasonMode: '2027',
+  defaultPlayerMatchWindow: 18,
+  minZScore: 1.5,
+  minPctDelta: 15,
+  minMinutes: 18,
   updatedAt: 0,
 };
+
+function normalizeWebFeatureFlags(raw: unknown): WebFeatureFlags | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  if (
+    typeof obj.showHeroicBadges !== 'boolean' &&
+    obj.themeStyle !== 'v2_editorial' &&
+    obj.themeStyle !== 'classic' &&
+    obj.themeStyle !== 'v3_broadcast' &&
+    obj.defaultSeasonMode === undefined
+  ) {
+    return null;
+  }
+  const numOr = (v: unknown, min: number, max: number, fb: number, dec = 0) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return fb;
+    const c = Math.max(min, Math.min(max, n));
+    return dec > 0 ? Math.round(c * 10 ** dec) / 10 ** dec : Math.round(c);
+  };
+  return {
+    showHeroicBadges:
+      typeof obj.showHeroicBadges === 'boolean'
+        ? obj.showHeroicBadges
+        : DEFAULT_WEB_FEATURE_FLAGS.showHeroicBadges,
+    themeStyle:
+      obj.themeStyle === 'classic' ||
+      obj.themeStyle === 'v2_editorial' ||
+      obj.themeStyle === 'v3_broadcast'
+        ? obj.themeStyle
+        : DEFAULT_WEB_FEATURE_FLAGS.themeStyle,
+    defaultSeasonMode:
+      obj.defaultSeasonMode === '2027' ||
+      obj.defaultSeasonMode === '2026' ||
+      obj.defaultSeasonMode === '2025' ||
+      obj.defaultSeasonMode === '2024'
+        ? obj.defaultSeasonMode
+        : DEFAULT_WEB_FEATURE_FLAGS.defaultSeasonMode,
+    defaultPlayerMatchWindow: numOr(
+      obj.defaultPlayerMatchWindow,
+      3,
+      82,
+      DEFAULT_WEB_FEATURE_FLAGS.defaultPlayerMatchWindow ?? 18,
+      0
+    ),
+    minZScore: numOr(
+      obj.minZScore,
+      0.5,
+      3.0,
+      DEFAULT_WEB_FEATURE_FLAGS.minZScore ?? 1.5,
+      1
+    ),
+    minPctDelta: numOr(
+      obj.minPctDelta,
+      5,
+      50,
+      DEFAULT_WEB_FEATURE_FLAGS.minPctDelta ?? 15,
+      0
+    ),
+    minMinutes: numOr(
+      obj.minMinutes,
+      5,
+      35,
+      DEFAULT_WEB_FEATURE_FLAGS.minMinutes ?? 18,
+      0
+    ),
+    updatedAt: typeof obj.updatedAt === 'number' ? obj.updatedAt : 0,
+  };
+}
 
 function readLocalWebFeatureFlags(): WebFeatureFlags | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = localStorage.getItem(WEB_FEATURE_FLAGS_BACKUP_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed.showHeroicBadges === 'boolean') {
-      return {
-        showHeroicBadges: parsed.showHeroicBadges,
-        updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
-      };
-    }
+    return normalizeWebFeatureFlags(JSON.parse(raw));
   } catch {
     // Ignore parse error
   }
@@ -1052,9 +1143,10 @@ export async function fetchPublicWebFeatureFlags(): Promise<WebFeatureFlags> {
       cache: 'no-store',
     });
     const data = await res.json().catch(() => ({}));
-    if (res.ok && data?.flags && typeof data.flags.showHeroicBadges === 'boolean') {
-      writeLocalWebFeatureFlags(data.flags);
-      return data.flags as WebFeatureFlags;
+    const normalized = res.ok ? normalizeWebFeatureFlags(data?.flags) : null;
+    if (normalized) {
+      writeLocalWebFeatureFlags(normalized);
+      return normalized;
     }
   } catch {
     // Network fallback
@@ -1081,9 +1173,10 @@ export async function fetchAdminWebFeatureFlags(): Promise<AdminWebFeatureFlagsR
       return { ok: false, unauthorized: true };
     }
     const data = await res.json().catch(() => ({}));
-    if (res.ok && data?.flags && typeof data.flags.showHeroicBadges === 'boolean') {
-      writeLocalWebFeatureFlags(data.flags);
-      return { ok: true, flags: data.flags as WebFeatureFlags };
+    const normalized = res.ok ? normalizeWebFeatureFlags(data?.flags) : null;
+    if (normalized) {
+      writeLocalWebFeatureFlags(normalized);
+      return { ok: true, flags: normalized };
     }
   } catch {
     // Network fallback
@@ -1095,7 +1188,13 @@ export async function fetchAdminWebFeatureFlags(): Promise<AdminWebFeatureFlagsR
 }
 
 export async function updateAdminWebFeatureFlags(values: {
-  showHeroicBadges: boolean;
+  showHeroicBadges?: boolean;
+  themeStyle?: 'v3_broadcast' | 'v2_editorial' | 'classic';
+  defaultSeasonMode?: '2027' | '2026' | '2025' | '2024';
+  defaultPlayerMatchWindow?: number;
+  minZScore?: number;
+  minPctDelta?: number;
+  minMinutes?: number;
 }): Promise<AdminWebFeatureFlagsResponse> {
   try {
     const res = await fetch('/api/admin/web-feature-flags', {
@@ -1108,19 +1207,22 @@ export async function updateAdminWebFeatureFlags(values: {
       return { ok: false, unauthorized: true };
     }
     const data = await res.json().catch(() => ({}));
-    if (res.ok && data?.flags && typeof data.flags.showHeroicBadges === 'boolean') {
-      writeLocalWebFeatureFlags(data.flags);
-      return { ok: true, flags: data.flags as WebFeatureFlags };
+    const normalized = res.ok ? normalizeWebFeatureFlags(data?.flags) : null;
+    if (normalized) {
+      writeLocalWebFeatureFlags(normalized);
+      return { ok: true, flags: normalized };
     }
     return {
       ok: false,
-      error: data?.error || 'No se pudo actualizar la configuración de insignias.',
+      error: data?.error || 'No se pudo actualizar la configuración web.',
     };
   } catch {
-    const fallbackFlags: WebFeatureFlags = {
-      showHeroicBadges: Boolean(values.showHeroicBadges),
+    const prev = readLocalWebFeatureFlags() ?? { ...DEFAULT_WEB_FEATURE_FLAGS };
+    const fallbackFlags = normalizeWebFeatureFlags({
+      ...prev,
+      ...values,
       updatedAt: Date.now(),
-    };
+    }) ?? { ...DEFAULT_WEB_FEATURE_FLAGS, updatedAt: Date.now() };
     writeLocalWebFeatureFlags(fallbackFlags);
     return { ok: true, flags: fallbackFlags };
   }
@@ -1327,14 +1429,27 @@ const MILESTONE_NOTIFICATIONS_BACKUP_KEY = 'radarnba_milestone_notifications_cfg
 
 export const DEFAULT_MILESTONE_NOTIFICATIONS_VALUES: MilestoneNotificationsConfigValues = {
   enabled: true,
-  lookbackDays: 3,
+  lookbackDays: 2,
   maxNotifications: 40,
+  minSeverity: 'all',
+  dedupePlayerGame: true,
 
   scoringMilestoneEnabled: true,
   scoringThreshold: 40,
   seasonHighPtsEnabled: true,
-  seasonHighMinPts: 26,
-  seasonHighMinGames: 4,
+  seasonHighMinPts: 35,
+  seasonHighMinGames: 8,
+  seasonHighMinReb: 16,
+  seasonHighMinAst: 13,
+  seasonHighMin3pm: 7,
+  seasonHighMinStlBlk: 5,
+  careerHighEnabled: true,
+  careerHighMinGames: 30,
+  careerHighMinPts: 32,
+  careerHighMinReb: 15,
+  careerHighMinAst: 12,
+  careerHighMin3pm: 7,
+  careerHighMinStlBlk: 5,
   threePointExplosionEnabled: true,
   threePointThreshold: 8,
   assistExplosionEnabled: true,
@@ -1394,8 +1509,8 @@ export const DEFAULT_MILESTONE_NOTIFICATIONS_VALUES: MilestoneNotificationsConfi
   teamSeasonWinsStep: 10,
 
   imminentMilestonesEnabled: true,
-  imminentPtsWithin: 25,
-  imminentOtherWithin: 5,
+  imminentPtsWithin: 15,
+  imminentOtherWithin: 3,
   streakMilestoneEnabled: true,
   streakMinGames: 7,
   streakPtsThreshold: 20,
@@ -1408,8 +1523,18 @@ export const MILESTONE_NOTIFICATIONS_BOUNDS = {
   maxNotifications: { min: 5, max: 100, step: 5, unit: 'alertas' },
 
   scoringThreshold: { min: 20, max: 80, step: 5, unit: 'PTS' },
-  seasonHighMinPts: { min: 15, max: 60, step: 1, unit: 'PTS' },
-  seasonHighMinGames: { min: 2, max: 20, step: 1, unit: 'PJ' },
+  seasonHighMinPts: { min: 15, max: 65, step: 1, unit: 'PTS' },
+  seasonHighMinGames: { min: 2, max: 30, step: 1, unit: 'PJ' },
+  seasonHighMinReb: { min: 8, max: 30, step: 1, unit: 'REB' },
+  seasonHighMinAst: { min: 6, max: 25, step: 1, unit: 'AST' },
+  seasonHighMin3pm: { min: 4, max: 16, step: 1, unit: '3PM' },
+  seasonHighMinStlBlk: { min: 3, max: 10, step: 1, unit: 'R/T' },
+  careerHighMinGames: { min: 5, max: 150, step: 5, unit: 'PJ' },
+  careerHighMinPts: { min: 15, max: 65, step: 1, unit: 'PTS' },
+  careerHighMinReb: { min: 8, max: 30, step: 1, unit: 'REB' },
+  careerHighMinAst: { min: 6, max: 25, step: 1, unit: 'AST' },
+  careerHighMin3pm: { min: 4, max: 16, step: 1, unit: '3PM' },
+  careerHighMinStlBlk: { min: 3, max: 10, step: 1, unit: 'R/T' },
   threePointThreshold: { min: 4, max: 16, step: 1, unit: '3PM' },
   assistExplosionThreshold: { min: 8, max: 25, step: 1, unit: 'AST' },
   reboundExplosionThreshold: { min: 10, max: 30, step: 1, unit: 'REB' },
@@ -1460,17 +1585,35 @@ function sanitizeClientMilestoneNotificationsConfig(
     return Math.min(max, Math.max(min, Math.round(n)));
   };
   const b = (v: unknown, def: boolean) => (typeof v === 'boolean' ? v : def);
+  const sev = (
+    v: unknown,
+    def: MilestoneNotificationsConfigValues['minSeverity']
+  ): MilestoneNotificationsConfigValues['minSeverity'] =>
+    v === 'all' || v === 'high' || v === 'epic' ? v : def;
   const d = DEFAULT_MILESTONE_NOTIFICATIONS_VALUES;
   return {
     enabled: b(obj.enabled, d.enabled),
     lookbackDays: clampInt(obj.lookbackDays, d.lookbackDays, 1, 14),
     maxNotifications: clampInt(obj.maxNotifications, d.maxNotifications, 5, 100),
+    minSeverity: sev(obj.minSeverity, d.minSeverity),
+    dedupePlayerGame: b(obj.dedupePlayerGame, d.dedupePlayerGame),
 
     scoringMilestoneEnabled: b(obj.scoringMilestoneEnabled, d.scoringMilestoneEnabled),
     scoringThreshold: clampInt(obj.scoringThreshold, d.scoringThreshold, 20, 80),
     seasonHighPtsEnabled: b(obj.seasonHighPtsEnabled, d.seasonHighPtsEnabled),
-    seasonHighMinPts: clampInt(obj.seasonHighMinPts, d.seasonHighMinPts, 15, 60),
-    seasonHighMinGames: clampInt(obj.seasonHighMinGames, d.seasonHighMinGames, 2, 20),
+    seasonHighMinPts: clampInt(obj.seasonHighMinPts, d.seasonHighMinPts, 15, 65),
+    seasonHighMinGames: clampInt(obj.seasonHighMinGames, d.seasonHighMinGames, 2, 30),
+    seasonHighMinReb: clampInt(obj.seasonHighMinReb, d.seasonHighMinReb, 8, 30),
+    seasonHighMinAst: clampInt(obj.seasonHighMinAst, d.seasonHighMinAst, 6, 25),
+    seasonHighMin3pm: clampInt(obj.seasonHighMin3pm, d.seasonHighMin3pm, 4, 16),
+    seasonHighMinStlBlk: clampInt(obj.seasonHighMinStlBlk, d.seasonHighMinStlBlk, 3, 10),
+    careerHighEnabled: b(obj.careerHighEnabled, d.careerHighEnabled),
+    careerHighMinGames: clampInt(obj.careerHighMinGames, d.careerHighMinGames, 5, 150),
+    careerHighMinPts: clampInt(obj.careerHighMinPts, d.careerHighMinPts, 15, 65),
+    careerHighMinReb: clampInt(obj.careerHighMinReb, d.careerHighMinReb, 8, 30),
+    careerHighMinAst: clampInt(obj.careerHighMinAst, d.careerHighMinAst, 6, 25),
+    careerHighMin3pm: clampInt(obj.careerHighMin3pm, d.careerHighMin3pm, 4, 16),
+    careerHighMinStlBlk: clampInt(obj.careerHighMinStlBlk, d.careerHighMinStlBlk, 3, 10),
     threePointExplosionEnabled: b(obj.threePointExplosionEnabled, d.threePointExplosionEnabled),
     threePointThreshold: clampInt(obj.threePointThreshold, d.threePointThreshold, 4, 16),
     assistExplosionEnabled: b(obj.assistExplosionEnabled, d.assistExplosionEnabled),
@@ -1737,6 +1880,10 @@ export async function previewAdminMilestoneNotificationsCounts(
           recentCounts: data.recentCounts,
           totalDates: Number(data.totalDates || 0),
           totalEnabledRecentAlerts: Number(data.totalEnabledRecentAlerts || 0),
+          estimatedFinalAlerts:
+            typeof data.estimatedFinalAlerts === 'number'
+              ? data.estimatedFinalAlerts
+              : undefined,
         },
       };
     }
@@ -1751,6 +1898,676 @@ export async function previewAdminMilestoneNotificationsCounts(
     return { ok: false, error: 'Error al consultar la simulación.' };
   }
 }
+
+export type GameChronicleVersion = 'v1_classic' | 'v2_tactical';
+export type DailyChronicleVersion = 'v1_classic';
+export type EditorialLengthProfile = 'concise' | 'standard' | 'deep';
+export type EditorialTacticalFocus =
+  | 'balanced'
+  | 'tactical_chalkboard'
+  | 'narrative_storytelling'
+  | 'advanced_metrics';
+
+export interface EditorialConfigValues {
+  gameChronicleVersion: GameChronicleVersion;
+  dailyChronicleVersion: DailyChronicleVersion;
+  lengthProfile: EditorialLengthProfile;
+  tacticalFocus: EditorialTacticalFocus;
+  customStyleDirectives: string;
+  extraForbiddenCliches: string[];
+  applyToGameChronicles: boolean;
+  applyToDailyChronicles: boolean;
+}
+
+export interface EditorialConfigStored extends EditorialConfigValues {
+  cacheEpoch: number;
+  updatedAt: number;
+}
+
+export interface EditorialStorageInfo {
+  storageMode: 'upstash-redis' | 'local-disk';
+  cloudConfigured: boolean;
+}
+
+export interface AdminEditorialConfigResponse {
+  ok: boolean;
+  unauthorized?: boolean;
+  config?: EditorialConfigStored;
+  defaults?: EditorialConfigValues;
+  storage?: EditorialStorageInfo;
+  previewBlock?: {
+    game: string;
+    daily: string;
+  };
+  cachePurgeResult?: {
+    clearedScope: 'all' | 'date' | 'game';
+    cacheEpoch: number;
+    clearedLocalKeys: number;
+    clearedAt: number;
+  } | null;
+  error?: string;
+}
+
+export interface AdminPurgeChronicleCacheResponse {
+  ok: boolean;
+  unauthorized?: boolean;
+  clearedScope?: 'all' | 'date' | 'game';
+  target?: string | null;
+  cacheEpoch?: number;
+  clearedLocalKeys?: number;
+  clearedAt?: number;
+  error?: string;
+}
+
+export const DEFAULT_EDITORIAL_CONFIG_VALUES: EditorialConfigValues = {
+  gameChronicleVersion: 'v2_tactical',
+  dailyChronicleVersion: 'v1_classic',
+  lengthProfile: 'standard',
+  tacticalFocus: 'balanced',
+  customStyleDirectives: '',
+  extraForbiddenCliches: [],
+  applyToGameChronicles: true,
+  applyToDailyChronicles: true,
+};
+
+export async function fetchAdminEditorialConfig(): Promise<AdminEditorialConfigResponse> {
+  try {
+    const res = await fetch('/api/admin/editorial-config', {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: buildAdminAuthHeaders(),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      return {
+        ok: true,
+        config: data.config as EditorialConfigStored,
+        defaults: (data.defaults as EditorialConfigValues) || DEFAULT_EDITORIAL_CONFIG_VALUES,
+        storage: data.storage as EditorialStorageInfo | undefined,
+        previewBlock: data.previewBlock as { game: string; daily: string } | undefined,
+      };
+    }
+    return {
+      ok: false,
+      error: data?.error || 'No se pudo cargar la configuración editorial.',
+    };
+  } catch {
+    return {
+      ok: false,
+      error: 'Error de red al cargar la configuración editorial.',
+    };
+  }
+}
+
+export async function updateAdminEditorialConfig(
+  values: EditorialConfigValues & { invalidateCacheOnSave?: boolean }
+): Promise<AdminEditorialConfigResponse> {
+  try {
+    const res = await fetch('/api/admin/editorial-config', {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(values),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      return {
+        ok: true,
+        config: data.config as EditorialConfigStored,
+        defaults: (data.defaults as EditorialConfigValues) || DEFAULT_EDITORIAL_CONFIG_VALUES,
+        storage: data.storage as EditorialStorageInfo | undefined,
+        cachePurgeResult: data.cachePurgeResult ?? null,
+        previewBlock: data.previewBlock as { game: string; daily: string } | undefined,
+      };
+    }
+    return {
+      ok: false,
+      error: data?.error || 'No se pudo guardar la configuración editorial.',
+    };
+  } catch {
+    return {
+      ok: false,
+      error: 'Error de red al guardar la configuración editorial.',
+    };
+  }
+}
+
+export async function resetAdminEditorialConfigDefaults(): Promise<AdminEditorialConfigResponse> {
+  try {
+    const res = await fetch('/api/admin/editorial-config/reset-defaults', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      return {
+        ok: true,
+        config: data.config as EditorialConfigStored,
+        defaults: (data.defaults as EditorialConfigValues) || DEFAULT_EDITORIAL_CONFIG_VALUES,
+        storage: data.storage as EditorialStorageInfo | undefined,
+        previewBlock: data.previewBlock as { game: string; daily: string } | undefined,
+      };
+    }
+    return {
+      ok: false,
+      error: data?.error || 'No se pudo restablecer la configuración editorial.',
+    };
+  } catch {
+    return {
+      ok: false,
+      error: 'Error de red al restablecer la configuración editorial.',
+    };
+  }
+}
+
+export async function purgeAdminChronicleCache(payload: {
+  scope: 'all' | 'date' | 'game';
+  date?: string;
+  eventId?: string;
+}): Promise<AdminPurgeChronicleCacheResponse> {
+  try {
+    const res = await fetch('/api/admin/chronicles/purge-cache', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      return {
+        ok: true,
+        clearedScope: data.clearedScope,
+        target: data.target ?? null,
+        cacheEpoch: typeof data.cacheEpoch === 'number' ? data.cacheEpoch : undefined,
+        clearedLocalKeys: typeof data.clearedLocalKeys === 'number' ? data.clearedLocalKeys : 0,
+        clearedAt: typeof data.clearedAt === 'number' ? data.clearedAt : Date.now(),
+      };
+    }
+    return {
+      ok: false,
+      error: data?.error || 'No se pudo purgar la caché de crónicas.',
+    };
+  } catch {
+    return {
+      ok: false,
+      error: 'Error de red al purgar la caché de crónicas.',
+    };
+  }
+}
+
+const AUTO_STREAKS_CONFIG_BACKUP_KEY = 'radarnba_auto_streaks_config_v2';
+
+function readLocalAutoStreaksConfig(): AutoStreaksConfig | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(AUTO_STREAKS_CONFIG_BACKUP_KEY);
+    if (!raw) return null;
+    return normalizeAutoStreaksConfig(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalAutoStreaksConfig(cfg: AutoStreaksConfig): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(AUTO_STREAKS_CONFIG_BACKUP_KEY, JSON.stringify(cfg));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+export interface AdminAutoStreaksConfigResponse {
+  ok: boolean;
+  unauthorized?: boolean;
+  config?: AutoStreaksConfig;
+  defaults?: AutoStreaksConfigValues;
+  error?: string;
+}
+
+export async function fetchPublicAutoStreaksConfig(): Promise<AutoStreaksConfig> {
+  try {
+    const res = await fetch('/api/nba/streaks-config', {
+      method: 'GET',
+      cache: 'no-store',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = normalizeAutoStreaksConfig(data.config);
+      writeLocalAutoStreaksConfig(normalized);
+      return normalized;
+    }
+  } catch {
+    // Network fallback
+  }
+  return readLocalAutoStreaksConfig() ?? normalizeAutoStreaksConfig(DEFAULT_AUTO_STREAKS_CONFIG);
+}
+
+export async function fetchAdminAutoStreaksConfig(): Promise<AdminAutoStreaksConfigResponse> {
+  try {
+    const res = await fetch('/api/admin/streaks-config', {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: buildAdminAuthHeaders(),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = normalizeAutoStreaksConfig(data.config);
+      writeLocalAutoStreaksConfig(normalized);
+      return {
+        ok: true,
+        config: normalized,
+        defaults: data.defaults || DEFAULT_AUTO_STREAKS_CONFIG_VALUES,
+      };
+    }
+  } catch {
+    // Network fallback
+  }
+  return {
+    ok: true,
+    config: readLocalAutoStreaksConfig() ?? normalizeAutoStreaksConfig(DEFAULT_AUTO_STREAKS_CONFIG),
+    defaults: DEFAULT_AUTO_STREAKS_CONFIG_VALUES,
+  };
+}
+
+export async function updateAdminAutoStreaksConfig(
+  values: AutoStreaksConfigValues
+): Promise<AdminAutoStreaksConfigResponse> {
+  try {
+    const res = await fetch('/api/admin/streaks-config', {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(values),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = normalizeAutoStreaksConfig(data.config);
+      writeLocalAutoStreaksConfig(normalized);
+      return {
+        ok: true,
+        config: normalized,
+        defaults: data.defaults || DEFAULT_AUTO_STREAKS_CONFIG_VALUES,
+      };
+    }
+    return {
+      ok: false,
+      error: data?.error || 'No se pudo guardar la configuración de rachas automáticas.',
+    };
+  } catch {
+    const fallback = normalizeAutoStreaksConfig({
+      ...values,
+      updatedAt: Date.now(),
+    });
+    writeLocalAutoStreaksConfig(fallback);
+    return {
+      ok: true,
+      config: fallback,
+      defaults: DEFAULT_AUTO_STREAKS_CONFIG_VALUES,
+    };
+  }
+}
+
+export async function resetAdminAutoStreaksConfigDefaults(): Promise<AdminAutoStreaksConfigResponse> {
+  try {
+    const res = await fetch('/api/admin/streaks-config/reset-defaults', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders(),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = normalizeAutoStreaksConfig(data.config);
+      writeLocalAutoStreaksConfig(normalized);
+      return {
+        ok: true,
+        config: normalized,
+        defaults: data.defaults || DEFAULT_AUTO_STREAKS_CONFIG_VALUES,
+      };
+    }
+  } catch {
+    // Network fallback
+  }
+  const reset = normalizeAutoStreaksConfig({
+    ...DEFAULT_AUTO_STREAKS_CONFIG_VALUES,
+    updatedAt: Date.now(),
+  });
+  writeLocalAutoStreaksConfig(reset);
+  return {
+    ok: true,
+    config: reset,
+    defaults: DEFAULT_AUTO_STREAKS_CONFIG_VALUES,
+  };
+}
+
+// ── Experience Metrics Config (Modo Sencillo vs Modo Avanzado) ──
+
+const EXPERIENCE_METRICS_BACKUP_KEY = 'radarnba_experience_metrics_config_v1';
+
+function readLocalExperienceMetricsConfig(): ExperienceMetricsConfig | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(EXPERIENCE_METRICS_BACKUP_KEY);
+    if (!raw) return null;
+    return normalizeExperienceMetricsConfig(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalExperienceMetricsConfig(cfg: ExperienceMetricsConfig): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(EXPERIENCE_METRICS_BACKUP_KEY, JSON.stringify(cfg));
+  } catch {
+    // Ignore storage error
+  }
+}
+
+export interface AdminExperienceMetricsConfigResponse {
+  ok: boolean;
+  unauthorized?: boolean;
+  config?: ExperienceMetricsConfig;
+  defaults?: ExperienceMetricsConfigValues;
+  error?: string;
+}
+
+export async function fetchPublicExperienceMetricsConfig(): Promise<ExperienceMetricsConfig> {
+  try {
+    const res = await fetch('/api/nba/experience-metrics-config', {
+      method: 'GET',
+      cache: 'no-store',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = normalizeExperienceMetricsConfig(data.config);
+      writeLocalExperienceMetricsConfig(normalized);
+      return normalized;
+    }
+  } catch {
+    // Network fallback
+  }
+  return (
+    readLocalExperienceMetricsConfig() ??
+    normalizeExperienceMetricsConfig(DEFAULT_EXPERIENCE_METRICS_CONFIG)
+  );
+}
+
+export async function fetchAdminExperienceMetricsConfig(): Promise<AdminExperienceMetricsConfigResponse> {
+  try {
+    const res = await fetch('/api/admin/experience-metrics-config', {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: buildAdminAuthHeaders(),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = normalizeExperienceMetricsConfig(data.config);
+      writeLocalExperienceMetricsConfig(normalized);
+      return {
+        ok: true,
+        config: normalized,
+        defaults: data.defaults || { simpleMetricIds: [...DEFAULT_SIMPLE_METRIC_IDS] },
+      };
+    }
+  } catch {
+    // Network fallback
+  }
+  return {
+    ok: true,
+    config:
+      readLocalExperienceMetricsConfig() ??
+      normalizeExperienceMetricsConfig(DEFAULT_EXPERIENCE_METRICS_CONFIG),
+    defaults: { simpleMetricIds: [...DEFAULT_SIMPLE_METRIC_IDS] },
+  };
+}
+
+export async function updateAdminExperienceMetricsConfig(
+  values: ExperienceMetricsConfigValues
+): Promise<AdminExperienceMetricsConfigResponse> {
+  try {
+    const res = await fetch('/api/admin/experience-metrics-config', {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(values),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = normalizeExperienceMetricsConfig(data.config);
+      writeLocalExperienceMetricsConfig(normalized);
+      return {
+        ok: true,
+        config: normalized,
+        defaults: data.defaults || { simpleMetricIds: [...DEFAULT_SIMPLE_METRIC_IDS] },
+      };
+    }
+    return {
+      ok: false,
+      error:
+        data?.error ||
+        'No se pudo guardar la configuración de estadísticas Sencillo/Avanzado.',
+    };
+  } catch {
+    const fallback = normalizeExperienceMetricsConfig({
+      ...values,
+      updatedAt: Date.now(),
+    });
+    writeLocalExperienceMetricsConfig(fallback);
+    return {
+      ok: true,
+      config: fallback,
+      defaults: { simpleMetricIds: [...DEFAULT_SIMPLE_METRIC_IDS] },
+    };
+  }
+}
+
+export async function resetAdminExperienceMetricsConfigDefaults(): Promise<AdminExperienceMetricsConfigResponse> {
+  try {
+    const res = await fetch('/api/admin/experience-metrics-config/reset-defaults', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders(),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = normalizeExperienceMetricsConfig(data.config);
+      writeLocalExperienceMetricsConfig(normalized);
+      return {
+        ok: true,
+        config: normalized,
+        defaults: data.defaults || { simpleMetricIds: [...DEFAULT_SIMPLE_METRIC_IDS] },
+      };
+    }
+  } catch {
+    // Network fallback
+  }
+  const reset = normalizeExperienceMetricsConfig({
+    simpleMetricIds: [...DEFAULT_SIMPLE_METRIC_IDS],
+    updatedAt: Date.now(),
+  });
+  writeLocalExperienceMetricsConfig(reset);
+  return {
+    ok: true,
+    config: reset,
+    defaults: { simpleMetricIds: [...DEFAULT_SIMPLE_METRIC_IDS] },
+  };
+}
+
+export interface AdminSidebarMenuConfigResponse {
+  ok: boolean;
+  unauthorized?: boolean;
+  config?: SidebarMenuConfig;
+  defaults?: SidebarMenuConfigValues;
+  error?: string;
+}
+
+export async function fetchPublicSidebarMenuConfig(): Promise<SidebarMenuConfig> {
+  try {
+    const res = await fetch('/api/nba/sidebar-menu-config', {
+      method: 'GET',
+      cache: 'no-store',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = normalizeSidebarMenuConfig(data.config);
+      writeLocalSidebarMenuConfig(normalized);
+      return normalized;
+    }
+  } catch {
+    // Network fallback
+  }
+  return (
+    readLocalSidebarMenuConfig() ??
+    normalizeSidebarMenuConfig(DEFAULT_SIDEBAR_MENU_CONFIG)
+  );
+}
+
+export async function fetchAdminSidebarMenuConfig(): Promise<AdminSidebarMenuConfigResponse> {
+  try {
+    const res = await fetch('/api/admin/sidebar-menu-config', {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: buildAdminAuthHeaders(),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = normalizeSidebarMenuConfig(data.config);
+      writeLocalSidebarMenuConfig(normalized);
+      return {
+        ok: true,
+        config: normalized,
+        defaults: data.defaults || DEFAULT_SIDEBAR_MENU_CONFIG_VALUES,
+      };
+    }
+  } catch {
+    // Network fallback
+  }
+  return {
+    ok: true,
+    config:
+      readLocalSidebarMenuConfig() ??
+      normalizeSidebarMenuConfig(DEFAULT_SIDEBAR_MENU_CONFIG),
+    defaults: DEFAULT_SIDEBAR_MENU_CONFIG_VALUES,
+  };
+}
+
+export async function updateAdminSidebarMenuConfig(
+  values: SidebarMenuConfigValues
+): Promise<AdminSidebarMenuConfigResponse> {
+  try {
+    const res = await fetch('/api/admin/sidebar-menu-config', {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(values),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = normalizeSidebarMenuConfig(data.config);
+      writeLocalSidebarMenuConfig(normalized);
+      return {
+        ok: true,
+        config: normalized,
+        defaults: data.defaults || DEFAULT_SIDEBAR_MENU_CONFIG_VALUES,
+      };
+    }
+    return {
+      ok: false,
+      error: data?.error || 'No se pudo guardar la organización del menú lateral.',
+    };
+  } catch {
+    const fallback = normalizeSidebarMenuConfig({
+      ...values,
+      updatedAt: Date.now(),
+    });
+    writeLocalSidebarMenuConfig(fallback);
+    return {
+      ok: true,
+      config: fallback,
+      defaults: DEFAULT_SIDEBAR_MENU_CONFIG_VALUES,
+    };
+  }
+}
+
+export async function resetAdminSidebarMenuConfigDefaults(): Promise<AdminSidebarMenuConfigResponse> {
+  try {
+    const res = await fetch('/api/admin/sidebar-menu-config/reset-defaults', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: buildAdminAuthHeaders(),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 503) {
+      return { ok: false, unauthorized: true };
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.config) {
+      const normalized = normalizeSidebarMenuConfig(data.config);
+      writeLocalSidebarMenuConfig(normalized);
+      return {
+        ok: true,
+        config: normalized,
+        defaults: data.defaults || DEFAULT_SIDEBAR_MENU_CONFIG_VALUES,
+      };
+    }
+  } catch {
+    // Network fallback
+  }
+  const reset = normalizeSidebarMenuConfig({
+    ...DEFAULT_SIDEBAR_MENU_CONFIG_VALUES,
+    updatedAt: Date.now(),
+  });
+  writeLocalSidebarMenuConfig(reset);
+  return {
+    ok: true,
+    config: reset,
+    defaults: DEFAULT_SIDEBAR_MENU_CONFIG_VALUES,
+  };
+}
+
+
+
 
 
 

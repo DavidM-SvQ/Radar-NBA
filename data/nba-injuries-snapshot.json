@@ -1,0 +1,935 @@
+{
+  "savedAt": "2026-11-26T10:40:44.992Z",
+  "records": [
+    {
+      "name": "Jock Landale",
+      "teamAbbr": "ATL",
+      "teamName": "Atlanta Hawks",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/3146557.png",
+      "status": "Out",
+      "detail": "Right Hip Inflammation (Landale (hip) won't play Sunday against the Pistons.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Asa Newell",
+      "teamAbbr": "ATL",
+      "teamName": "Atlanta Hawks",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4873201.png",
+      "status": "Out",
+      "detail": "Left Toe (Newell underwent surgery Tuesday for a plantar plate tear in his left great toe, and he will be re-evaluated in approximately four months, Brad Rowland of the Locked On Podcast Network reports.)",
+      "returnDate": "2027-03-17"
+    },
+    {
+      "name": "CJ McCollum",
+      "teamAbbr": "ATL",
+      "teamName": "Atlanta Hawks",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/2490149.png",
+      "status": "Out",
+      "detail": "Left Calf Strain (McCollum (calf) will miss at least four weeks, per Brad Rowland of the Locked On Podcast Network.)",
+      "returnDate": "2026-12-19"
+    },
+    {
+      "name": "Mouhamed Gueye",
+      "teamAbbr": "ATL",
+      "teamName": "Atlanta Hawks",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4712863.png",
+      "status": "Out",
+      "detail": "Left Foot Fracture (Gueye (foot) is ready to begin on-court activities and will be re-evaluated in four weeks, Brad Rowland of the Locked On Podcast Network reports.)",
+      "returnDate": "2026-12-12"
+    },
+    {
+      "name": "Henri Veesaar",
+      "teamAbbr": "ATL",
+      "teamName": "Atlanta Hawks",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5105571.png",
+      "status": "Out",
+      "detail": "Right Knee (Veesaar was diagnosed with a torn right ACL and is expected to miss the 2026-27 season, the Hawks announced Monday.)",
+      "returnDate": "2027-07-01"
+    },
+    {
+      "name": "Mitchell Robinson",
+      "teamAbbr": "BOS",
+      "teamName": "Boston Celtics",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4351852.png",
+      "status": "Out",
+      "detail": "Illness (Robinson (illness) is out for Tuesday's game against Washington, Taylor Snow of the Celtics' official site reports.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Moritz Wagner",
+      "teamAbbr": "BKN",
+      "teamName": "Brooklyn Nets",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/3150844.png",
+      "status": "Out",
+      "detail": "Left Knee Soreness (Wagner (knee) will not return to Wednesday's game against the Bucks, C.J. Holmes of the New York Daily News reports.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Nolan Traore",
+      "teamAbbr": "BKN",
+      "teamName": "Brooklyn Nets",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5279130.png",
+      "status": "Out",
+      "detail": "Right Hamstring Strain (Traore will be re-evaluated in approximately 8-10 weeks due to a right hamstring strain, Michael Scotto of HoopsHype.com reports.)",
+      "returnDate": "2027-01-27"
+    },
+    {
+      "name": "Ryan Kalkbrenner",
+      "teamAbbr": "CHA",
+      "teamName": "Charlotte Hornets",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4576060.png",
+      "status": "Day-To-Day",
+      "detail": "Left Hip Soreness (Kalkbrenner (hip) has been ruled out for Wednesday's matchup with Chicago.)",
+      "returnDate": "2026-11-28"
+    },
+    {
+      "name": "Grayson Allen",
+      "teamAbbr": "CHA",
+      "teamName": "Charlotte Hornets",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/3135045.png",
+      "status": "Out",
+      "detail": "Concussion (Allen (concussion) has been ruled out for Wednesday's game against Chicago.)",
+      "returnDate": "2026-11-28"
+    },
+    {
+      "name": "Dennis Schroder",
+      "teamAbbr": "CHA",
+      "teamName": "Charlotte Hornets",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/3032979.png",
+      "status": "Out",
+      "detail": "Left Hamstring Strain (Schroder (hamstring) is out for Wednesday's game the Bulls.)",
+      "returnDate": "2026-12-12"
+    },
+    {
+      "name": "Kon Knueppel",
+      "teamAbbr": "CHA",
+      "teamName": "Charlotte Hornets",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5061575.png",
+      "status": "Out",
+      "detail": "Left Hamstring Strain (Knueppel (hamstring) was diagnosed with a left hamstring strain Sunday and will be re-evaluated in four weeks.)",
+      "returnDate": "2026-12-12"
+    },
+    {
+      "name": "Jalen Smith",
+      "teamAbbr": "CHI",
+      "teamName": "Chicago Bulls",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4397189.png",
+      "status": "Day-To-Day",
+      "detail": "Illness (Smith (illness) is listed as out for Wednesday's game against Charlotte.)",
+      "returnDate": "2026-11-28"
+    },
+    {
+      "name": "Norman Powell",
+      "teamAbbr": "CHI",
+      "teamName": "Chicago Bulls",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/2595516.png",
+      "status": "Out",
+      "detail": "Right Hamstring Strain (Powell has been diagnosed with a mild right hamstring strain and will be re-evaluated later this week.)",
+      "returnDate": "2026-11-28"
+    },
+    {
+      "name": "Caleb Wilson",
+      "teamAbbr": "CHI",
+      "teamName": "Chicago Bulls",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5095151.png",
+      "status": "Out",
+      "detail": "Right Hand (Wilson (hand) is expected to miss four to six weeks, Shams Charania of ESPN reports.)",
+      "returnDate": "2026-12-13"
+    },
+    {
+      "name": "Nae'Qwan Tomlin",
+      "teamAbbr": "CLE",
+      "teamName": "Cleveland Cavaliers",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5106268.png",
+      "status": "Out",
+      "detail": "Back (Tomlin (back) will remain on the inactive list for Wednesday's game against the Grizzlies.)",
+      "returnDate": "2026-11-29"
+    },
+    {
+      "name": "Evan Mobley",
+      "teamAbbr": "CLE",
+      "teamName": "Cleveland Cavaliers",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4432158.png",
+      "status": "Out",
+      "detail": "Left Toe Sprain (Mobley will receive treatment and participate in rehab after the team confirmed a diagnosis of a right great toe sprain, and he'll be re-evaluated in the next 7-to-10 days.)",
+      "returnDate": "2026-11-29"
+    },
+    {
+      "name": "Tobi Lawal",
+      "teamAbbr": "DAL",
+      "teamName": "Dallas Mavericks",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5106040.png",
+      "status": "Out",
+      "detail": "Right Groin (Lawal (groin) is out for Tuesday's game against Denver.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Dereck Lively II",
+      "teamAbbr": "DAL",
+      "teamName": "Dallas Mavericks",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4683688.png",
+      "status": "Out",
+      "detail": "Right Foot Surgery (Head coach Dusty May said Friday that Lively (foot) is moving well and progressing in his recovery, and the big man told May he's \"close\" to returning, Mike Curtis of The Dallas Morning News reports.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Sergio de Larrea",
+      "teamAbbr": "DAL",
+      "teamName": "Dallas Mavericks",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5279129.png",
+      "status": "Out",
+      "detail": "Right Knee Strain (De Larrea (knee) is listed as out for Wednesday's game against the Warriors.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Tarik Biberovic",
+      "teamAbbr": "DAL",
+      "teamName": "Dallas Mavericks",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5148538.png",
+      "status": "Out",
+      "detail": "Right Heel Inflammation (Biberovic (heel) is out for Wednesday's game against the Warriors.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Cade Cunningham",
+      "teamAbbr": "DET",
+      "teamName": "Detroit Pistons",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4432166.png",
+      "status": "Day-To-Day",
+      "detail": "Knee (Cunningham (knee) is listed as out for Tuesday's game against Orlando.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Ebuka Okorie",
+      "teamAbbr": "DET",
+      "teamName": "Detroit Pistons",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5258459.png",
+      "status": "Out",
+      "detail": "Left Oblique Strain (The Pistons announced Tuesday that Okorie (oblique) will miss at least two weeks, per Eric Vincent of ClutchPoints.com.)",
+      "returnDate": "2026-12-13"
+    },
+    {
+      "name": "Taurean Prince",
+      "teamAbbr": "DET",
+      "teamName": "Detroit Pistons",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/2990962.png",
+      "status": "Out",
+      "detail": "Right Knee Surgery (Prince underwent arthroscopic right knee surgery Nov. 18 and will be re-evaluated in four weeks, Eric Vincent of ClutchPoints.com reports.)",
+      "returnDate": "2026-12-26"
+    },
+    {
+      "name": "Duncan Robinson",
+      "teamAbbr": "DET",
+      "teamName": "Detroit Pistons",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/3157465.png",
+      "status": "Out",
+      "detail": "Left Quadriceps Strain (Robinson (quadriceps) is considered day-to-day as he progresses in his rehab, Eric Vincent of ClutchPoints.com reports.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Jalen Duren",
+      "teamAbbr": "DET",
+      "teamName": "Detroit Pistons",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4433621.png",
+      "status": "Out",
+      "detail": "Right Hamstring Strain (Duren (hamstring) is being assigned to the Motor City Cruise on Wednesday for practice as he ramps up for a return, Eric Vincent of ClutchPoints.com reports.)",
+      "returnDate": "2026-11-30"
+    },
+    {
+      "name": "Stephen Curry",
+      "teamAbbr": "GSW",
+      "teamName": "Golden State Warriors",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/3975.png",
+      "status": "Out",
+      "detail": "Right Abdomen (Curry (abdomen) will be re-evaluated Friday after Thanksgiving, Anthony Slater of ESPN.com reports.)",
+      "returnDate": "2026-12-12"
+    },
+    {
+      "name": "Kristaps Porzingis",
+      "teamAbbr": "GSW",
+      "teamName": "Golden State Warriors",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/3102531.png",
+      "status": "Out",
+      "detail": "Illness (Porzingis announced on his social media that he's stepping away from basketball.)",
+      "returnDate": "2027-01-02"
+    },
+    {
+      "name": "Moses Moody",
+      "teamAbbr": "GSW",
+      "teamName": "Golden State Warriors",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4432171.png",
+      "status": "Out",
+      "detail": "Left Knee Surgery (Moody (knee) is progressing toward a potential return between December and January after rupturing his left patellar tendon in March, Anthony Slater of ESPN reports.)",
+      "returnDate": "2026-12-01"
+    },
+    {
+      "name": "Jimmy Butler III",
+      "teamAbbr": "GSW",
+      "teamName": "Golden State Warriors",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/6430.png",
+      "status": "Out",
+      "detail": "Right Knee Surgery (Butler (knee) could return sometime between January and February as he continues recovering from a torn right ACL, Anthony Slater of ESPN reports.)",
+      "returnDate": "2027-01-02"
+    },
+    {
+      "name": "T.J. McConnell",
+      "teamAbbr": "IND",
+      "teamName": "Indiana Pacers",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/2530530.png",
+      "status": "Day-To-Day",
+      "detail": "Left Hamstring (McConnell (hamstring) was recalled from the G League's Noblesville Boom on Tuesday, Shams Charania of ESPN reports.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Tyrese Haliburton",
+      "teamAbbr": "IND",
+      "teamName": "Indiana Pacers",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4396993.png",
+      "status": "Out",
+      "detail": "Left Hamstring Strain (Haliburton (hamstring) was recalled from the G League's Noblesville Boom on Tuesday, Tony East of Forbes.com reports.)",
+      "returnDate": "2026-12-13"
+    },
+    {
+      "name": "Aaron Nesmith",
+      "teamAbbr": "IND",
+      "teamName": "Indiana Pacers",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4396909.png",
+      "status": "Day-To-Day",
+      "detail": "Foot (Nesmith is out for Monday's game against the Thunder due to right foot soreness.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Larry Nance Jr.",
+      "teamAbbr": "IND",
+      "teamName": "Indiana Pacers",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/2580365.png",
+      "status": "Day-To-Day",
+      "detail": "Right Ankle Soreness (Nance exited Monday's game against the Thunder due to a sore right ankle and he will not return, Tony East of Forbes.com reports.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Ben Sheppard",
+      "teamAbbr": "IND",
+      "teamName": "Indiana Pacers",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4433076.png",
+      "status": "Out",
+      "detail": "Left Knee (Head coach Rick Carlise confirmed Sheppard will miss \"months\" after undergoing surgery to repair a torn meniscus in his left knee, Tony East of Forbes.com reports.)",
+      "returnDate": "2027-01-02"
+    },
+    {
+      "name": "Bradley Beal",
+      "teamAbbr": "LAC",
+      "teamName": "LA Clippers",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/6580.png",
+      "status": "Out",
+      "detail": "Right Knee Inflammation (Beal (knee) will not be ready for the start of the regular season, NBA writer Justin Russo reports.)",
+      "returnDate": "2026-11-29"
+    },
+    {
+      "name": "Jordan Miller",
+      "teamAbbr": "LAC",
+      "teamName": "LA Clippers",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4396818.png",
+      "status": "Out",
+      "detail": "Left Shoulder Surgery (Miller underwent surgery Wednesday to repair a torn left rotator cuff and will be re-evaluated in six months, per Law Murray of The Athletic.)",
+      "returnDate": "2027-03-02"
+    },
+    {
+      "name": "Austin Reaves",
+      "teamAbbr": "LAL",
+      "teamName": "Los Angeles Lakers",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4066457.png",
+      "status": "Out",
+      "detail": "Left Heel Bruise (Reaves (heel) was a full participant in Wednesday's practice, Daniel Starkand of LakersNation.com reports.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Zach Edey",
+      "teamAbbr": "MEM",
+      "teamName": "Memphis Grizzlies",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4600663.png",
+      "status": "Day-To-Day",
+      "detail": "Left Ankle Soreness (Edey (ankle) did not return to Wednesday's 115-97 win over the Clippers. He finished with seven points (3-4 FG, 1-1 FT), four rebounds, two assists and two blocks across nine minutes.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Scotty Pippen Jr.",
+      "teamAbbr": "MEM",
+      "teamName": "Memphis Grizzlies",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4431785.png",
+      "status": "Out",
+      "detail": "Back Soreness (Pippen (back) is out for Wednesday's game against the Clippers.)",
+      "returnDate": "2026-12-12"
+    },
+    {
+      "name": "Cameron Boozer",
+      "teamAbbr": "MEM",
+      "teamName": "Memphis Grizzlies",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5041935.png",
+      "status": "Out",
+      "detail": "Right Ankle Sprain (Boozer (ankle) will be re-evaluated in four weeks, Brett Siegel of ClutchPoints.com reports.)",
+      "returnDate": "2026-12-21"
+    },
+    {
+      "name": "Jerami Grant",
+      "teamAbbr": "MEM",
+      "teamName": "Memphis Grizzlies",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/2991070.png",
+      "status": "Out",
+      "detail": "Left Calf (Grant was diagnosed with a grade 1 left calf strain and will be re-evaluated in two weeks.)",
+      "returnDate": "2026-12-12"
+    },
+    {
+      "name": "GG Jackson",
+      "teamAbbr": "MEM",
+      "teamName": "Memphis Grizzlies",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5105550.png",
+      "status": "Out",
+      "detail": "Left Foot Surgery (Jackson underwent a procedure Wednesday to repair a broken fifth metatarsal in his left foot. He is expected to recover fully and will be re-evaluated in approximately three months.)",
+      "returnDate": "2027-01-18"
+    },
+    {
+      "name": "Richie Saunders",
+      "teamAbbr": "MEM",
+      "teamName": "Memphis Grizzlies",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5105462.png",
+      "status": "Out",
+      "detail": "Right Knee Surgery (Saunders signed a two-way contract with the Grizzlies on Saturday, Shams Charania of ESPN reports.)",
+      "returnDate": "2026-12-01"
+    },
+    {
+      "name": "LaMelo Ball",
+      "teamAbbr": "MIN",
+      "teamName": "Minnesota Timberwolves",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4432816.png",
+      "status": "Day-To-Day",
+      "detail": "Left Ankle (Ball (ankle) did not return to Wednesday's 113-106 win over the Thunder.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Donte DiVincenzo",
+      "teamAbbr": "MIN",
+      "teamName": "Minnesota Timberwolves",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/3934673.png",
+      "status": "Out",
+      "detail": "Right Achilles Surgery (DiVincenzo (Achilles) has been cleared for team basketball activities and is targeting a return to game action in January, Jon Krawczynski of The Athletic reports.)",
+      "returnDate": "2027-01-03"
+    },
+    {
+      "name": "Jaylen Clark",
+      "teamAbbr": "MIN",
+      "teamName": "Minnesota Timberwolves",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4432247.png",
+      "status": "Out",
+      "detail": "Right Hamstring (Clark (hamstring) has been ruled out for the next two weeks.)",
+      "returnDate": "2026-11-29"
+    },
+    {
+      "name": "Anthony Edwards",
+      "teamAbbr": "MIN",
+      "teamName": "Minnesota Timberwolves",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4594268.png",
+      "status": "Out",
+      "detail": "Right Knee Surgery (Edwards underwent a successful arthroscopic procedure on his right knee Thursday, the Timberwolves announced.)",
+      "returnDate": "2026-12-21"
+    },
+    {
+      "name": "Julian Reese",
+      "teamAbbr": "NOP",
+      "teamName": "New Orleans Pelicans",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4683742.png",
+      "status": "Day-To-Day",
+      "detail": "Right Knee (The Pelicans transferred Reese from the G League's Laketown Squadron, and he will be available for New Orleans' game against the Warriors on Monday.)",
+      "returnDate": "2026-12-01"
+    },
+    {
+      "name": "Trendon Watford",
+      "teamAbbr": "NOP",
+      "teamName": "New Orleans Pelicans",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4431675.png",
+      "status": "Out",
+      "detail": "Right Ankle Sprain (Watford (ankle) is out for Saturday's game against the Spurs.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Bennedict Mathurin",
+      "teamAbbr": "NOP",
+      "teamName": "New Orleans Pelicans",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4683634.png",
+      "status": "Out",
+      "detail": "Left Foot Plantar Fasciitis (Mathurin (foot) has been ruled out for Friday's game against the Thunder.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Dejounte Murray",
+      "teamAbbr": "NOP",
+      "teamName": "New Orleans Pelicans",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/3907497.png",
+      "status": "Out",
+      "detail": "Ankle (Murray (ankle) is out for Friday's game against Memphis.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Miles McBride",
+      "teamAbbr": "NYK",
+      "teamName": "New York Knicks",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4431823.png",
+      "status": "Day-To-Day",
+      "detail": "Left Groin Soreness (McBride (adductor) has been ruled out for Wednesday's game against the Cavaliers.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Andre Drummond",
+      "teamAbbr": "NYK",
+      "teamName": "New York Knicks",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/6585.png",
+      "status": "Day-To-Day",
+      "detail": "Head (Drummond (head) did not return to Wednesday's 121-102 win over the Cavaliers.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "OG Anunoby",
+      "teamAbbr": "NYK",
+      "teamName": "New York Knicks",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/3934719.png",
+      "status": "Out",
+      "detail": "Left Calf Soreness (Anunoby (calf) participated in on-court work for the first time since sustaining the injury, Ian Begley of SportsNet New York reports.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Jordan Clarkson",
+      "teamAbbr": "NYK",
+      "teamName": "New York Knicks",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/2528426.png",
+      "status": "Out",
+      "detail": "Right Foot Plantar Fasciitis (Clarkson (foot) is out for Wednesday's game against Cleveland.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Nikola Topic",
+      "teamAbbr": "OKC",
+      "teamName": "Oklahoma City Thunder",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5159925.png",
+      "status": "Out",
+      "detail": "Left Hip Strain (Topic (hip) is listed as out for Wednesday's game versus Minnesota.)",
+      "returnDate": "2026-11-28"
+    },
+    {
+      "name": "Jaylin Williams",
+      "teamAbbr": "OKC",
+      "teamName": "Oklahoma City Thunder",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4432823.png",
+      "status": "Out",
+      "detail": "Back Spasms (Williams (back) is listed as out for Wednesday's game against Minnesota.)",
+      "returnDate": "2026-11-28"
+    },
+    {
+      "name": "Aday Mara",
+      "teamAbbr": "OKC",
+      "teamName": "Oklahoma City Thunder",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5174983.png",
+      "status": "Out",
+      "detail": "Right Lower Leg Bruise (Mara (leg) is out for Wednesday's game versus the Timberwolves.)",
+      "returnDate": "2026-11-28"
+    },
+    {
+      "name": "Jalen Williams",
+      "teamAbbr": "OKC",
+      "teamName": "Oklahoma City Thunder",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4593803.png",
+      "status": "Out",
+      "detail": "Left Leg Fracture (Williams (ankle) has been ruled out for Monday's game against the Pacers, according to the NBA's official injury report.)",
+      "returnDate": "2027-03-02"
+    },
+    {
+      "name": "Thomas Sorber",
+      "teamAbbr": "OKC",
+      "teamName": "Oklahoma City Thunder",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5061603.png",
+      "status": "Out",
+      "detail": "Knee (Sorber underwent an arthroscopic knee procedure Tuesday to address inflammation at the patellofemoral joint in his right knee, and he's expected to return to on-court activities in 6-8 weeks, Steve McGehee of News 9 Oklahoma City reports.)",
+      "returnDate": "2027-01-31"
+    },
+    {
+      "name": "Cason Wallace",
+      "teamAbbr": "OKC",
+      "teamName": "Oklahoma City Thunder",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4683692.png",
+      "status": "Out",
+      "detail": "Left Shoulder Surgery (Wallace underwent surgery Friday to repair a torn labrum in his left shoulder and will be re-evaluated before the end of the regular season, Clemente Almanza of USA Today reports.)",
+      "returnDate": "2027-03-02"
+    },
+    {
+      "name": "Chet Holmgren",
+      "teamAbbr": "OKC",
+      "teamName": "Oklahoma City Thunder",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4433255.png",
+      "status": "Out",
+      "detail": "Right Knee (Holmgren underwent a biological treatment Friday to address a small patellar tendon tear and will miss at least 8-10 weeks, Nick Crain of Slam reports.)",
+      "returnDate": "2027-01-02"
+    },
+    {
+      "name": "Jonathan Isaac",
+      "teamAbbr": "ORL",
+      "teamName": "Orlando Magic",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4065654.png",
+      "status": "Out",
+      "detail": "Left Knee (Isaac (knee) is out for Sunday's game against the Wizards.)",
+      "returnDate": "2026-11-29"
+    },
+    {
+      "name": "Izaiyah Nelson",
+      "teamAbbr": "ORL",
+      "teamName": "Orlando Magic",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5107251.png",
+      "status": "Out",
+      "detail": "Left Ankle Surgery (Head coach Sean Sweeney said Wednesday that Nelson (ankle) has been doing \"some on-court stuff,\" though Sweeney added that the work has been \"minimal,\" Jason Beede of the Orlando Sentinel reports.)",
+      "returnDate": "2026-11-29"
+    },
+    {
+      "name": "Noah Penda",
+      "teamAbbr": "ORL",
+      "teamName": "Orlando Magic",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5214637.png",
+      "status": "Out",
+      "detail": "Right Hamstring Strain (Penda (hamstring) is making progress but remains without a timetable to return to game action, Jason Beede of the Orlando Sentinel reports.)",
+      "returnDate": "2026-11-29"
+    },
+    {
+      "name": "Paolo Banchero",
+      "teamAbbr": "ORL",
+      "teamName": "Orlando Magic",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4432573.png",
+      "status": "Out",
+      "detail": "Right Ankle Sprain (Banchero is expected to be sidelined for the next four-to-six weeks due to a right high-ankle sprain, Shams Charania of ESPN reports.)",
+      "returnDate": "2026-11-29"
+    },
+    {
+      "name": "Joel Embiid",
+      "teamAbbr": "PHI",
+      "teamName": "Philadelphia 76ers",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/3059318.png",
+      "status": "Day-To-Day",
+      "detail": "Illness (Embiid (illness) is out for Wednesday's game against Miami, Ira Winderman of the South Florida Sun Sentinel reports.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Jaylen Brown",
+      "teamAbbr": "PHI",
+      "teamName": "Philadelphia 76ers",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/3917376.png",
+      "status": "Day-To-Day",
+      "detail": "Left Hamstring (Brown (hamstring) will receive imaging, and the Sixers will provide an update Thursday, Ky Carlin of USA Today reports.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Ariel Hukporti",
+      "teamAbbr": "PHI",
+      "teamName": "Philadelphia 76ers",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4871141.png",
+      "status": "Out",
+      "detail": "Right Achilles Surgery (Hukporti has sustained a season-ending ruptured right Achilles tendon, per Shams Charania of ESPN.)",
+      "returnDate": "2027-10-01"
+    },
+    {
+      "name": "Mark Williams",
+      "teamAbbr": "PHX",
+      "teamName": "Phoenix Suns",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4701232.png",
+      "status": "Out",
+      "detail": "Left Shoulder Surgery (Williams underwent surgery Thursday to repair a torn labrum in his left shoulder and will miss an extended period of time, Shams Charania of ESPN reports.)",
+      "returnDate": "2027-02-03"
+    },
+    {
+      "name": "Chris Youngblood",
+      "teamAbbr": "POR",
+      "teamName": "Portland Trail Blazers",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4706557.png",
+      "status": "Out",
+      "detail": "Right Heel Bruise (Youngblood (heel) has been ruled out for Saturday's game against the Knicks.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Vit Krejci",
+      "teamAbbr": "POR",
+      "teamName": "Portland Trail Blazers",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4578893.png",
+      "status": "Out",
+      "detail": "Left Ankle (Krejci underwent surgery on his fractured left ankle Wednesday and will be re-evaluated in eight weeks, Brett Siegel of ClutchPoints.com reports.)",
+      "returnDate": "2027-01-12"
+    },
+    {
+      "name": "Ja Morant",
+      "teamAbbr": "POR",
+      "teamName": "Portland Trail Blazers",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4279888.png",
+      "status": "Out",
+      "detail": "Left Hamstring (Head coach Micah Nori said Morant met with a doctor in Los Angeles, who gave him a positive outlook on his recovery from the hamstring injury. While Nori declined to update Morant's timetable, he added Morant \"may not be out for as long as we thought,\" Trail Blazers Insider Sean Highkin reports.)",
+      "returnDate": "2026-12-01"
+    },
+    {
+      "name": "Shaedon Sharpe",
+      "teamAbbr": "POR",
+      "teamName": "Portland Trail Blazers",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4914336.png",
+      "status": "Out",
+      "detail": "Right Knee Surgery (Sharpe suffered a torn meniscus in his knee and is expected to miss six months, per Shams Charania of ESPN.)",
+      "returnDate": "2027-03-02"
+    },
+    {
+      "name": "Zach LaVine",
+      "teamAbbr": "SAC",
+      "teamName": "Sacramento Kings",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/3064440.png",
+      "status": "Day-To-Day",
+      "detail": "Right Knee Soreness (LaVine (knee) is listed as out for Wednesday's game versus the Warriors.)",
+      "returnDate": "2026-11-29"
+    },
+    {
+      "name": "Maxime Raynaud",
+      "teamAbbr": "SAC",
+      "teamName": "Sacramento Kings",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4898371.png",
+      "status": "Out",
+      "detail": "Right Knee Dislocated (Raynaud (knee) was recalled from the G League's Stockton Kings on Wednesday, Marc J. Spears of ESPN.com reports.)",
+      "returnDate": "2026-12-02"
+    },
+    {
+      "name": "Ben Simmons",
+      "teamAbbr": "SAC",
+      "teamName": "Sacramento Kings",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/3907387.png",
+      "status": "Out",
+      "detail": "Right Achilles Surgery (Simmons underwent successful surgery Tuesday to repair a torn right Achilles tendon, James Ham of ESPN 1320 Sacramento reports.)",
+      "returnDate": "2027-10-01"
+    },
+    {
+      "name": "De'Aaron Fox",
+      "teamAbbr": "SAS",
+      "teamName": "San Antonio Spurs",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4066259.png",
+      "status": "Day-To-Day",
+      "detail": "Right Lower Leg Bruise (Fox (shin) has been ruled out for Wednesday's game against Portland, Jeff McDonald of the San Antonio Express-News reports.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Dylan Harper",
+      "teamAbbr": "SAS",
+      "teamName": "San Antonio Spurs",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5037871.png",
+      "status": "Out",
+      "detail": "Hip Soreness (Harper (hip) is expected to miss two to three weeks, Brett Siegel of ClutchPoints.com reports.)",
+      "returnDate": "2026-12-13"
+    },
+    {
+      "name": "Tobias Harris",
+      "teamAbbr": "SAS",
+      "teamName": "San Antonio Spurs",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/6440.png",
+      "status": "Out",
+      "detail": "Left Calf Strain (Harris (calf) is likely to be sidelined until early December, per Jeff Garcia of KENS 5 San Antonio.)",
+      "returnDate": "2026-12-03"
+    },
+    {
+      "name": "Jayden Quaintance",
+      "teamAbbr": "SAS",
+      "teamName": "San Antonio Spurs",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/5101845.png",
+      "status": "Out",
+      "detail": "Right Knee Surgery (Quaintance has been around the team but has not yet been cleared for basketball activities, Matt Guzman of SI.com reports.)",
+      "returnDate": "2026-12-03"
+    },
+    {
+      "name": "Kawhi Leonard",
+      "teamAbbr": "TOR",
+      "teamName": "Toronto Raptors",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/6450.png",
+      "status": "Out",
+      "detail": "Left Knee Inflammation (Leonard has begun individual on-court workouts following treatment to address swelling in his left knee, and he will be re-evaluated in one week, Marc J. Spears of ESPN.com reports.)",
+      "returnDate": "2026-12-03"
+    },
+    {
+      "name": "Nate Bittle",
+      "teamAbbr": "TOR",
+      "teamName": "Toronto Raptors",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4432586.png",
+      "status": "Out",
+      "detail": "Right Foot Fracture (Bittle (foot) has been ruled out for Monday's game against the Bucks, Blake Murphy of Sportsnet.ca reports.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "RJ Barrett",
+      "teamAbbr": "TOR",
+      "teamName": "Toronto Raptors",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4395625.png",
+      "status": "Out",
+      "detail": "Right Hamstring Strain (Barrett has been diagnosed with a right hamstring strain and will be re-evaluated in two weeks, Brett Siegel of ClutchPoints.com reports.)",
+      "returnDate": "2026-12-13"
+    },
+    {
+      "name": "Jaxson Hayes",
+      "teamAbbr": "UTA",
+      "teamName": "Utah Jazz",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4397077.png",
+      "status": "Day-To-Day",
+      "detail": "Left Knee (Hayes (knee) has been ruled out for Monday's game against the Lakers.)",
+      "returnDate": "2026-11-27"
+    },
+    {
+      "name": "Jusuf Nurkic",
+      "teamAbbr": "UTA",
+      "teamName": "Utah Jazz",
+      "position": "C",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/3102530.png",
+      "status": "Out",
+      "detail": "Right Foot Strain (Nurkic (foot) has been cleared for on-court work and will be re-evaluated in one week.)",
+      "returnDate": "2026-11-29"
+    },
+    {
+      "name": "Lauri Markkanen",
+      "teamAbbr": "UTA",
+      "teamName": "Utah Jazz",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4066336.png",
+      "status": "Out",
+      "detail": "Right Hand Fracture (Markkanen has been diagnosed with a non-displaced fracture in his right hand and will be sidelined for at least one month, Shams Charania of ESPN reports.)",
+      "returnDate": "2027-01-04"
+    },
+    {
+      "name": "Jaren Jackson Jr.",
+      "teamAbbr": "UTA",
+      "teamName": "Utah Jazz",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4277961.png",
+      "status": "Out",
+      "detail": "Right Knee (Jackson has been diagnosed with a torn MCL in his right knee and will be sidelined for 6-to-8 weeks, per Shams Charania of ESPN.)",
+      "returnDate": "2026-12-14"
+    },
+    {
+      "name": "Tristan Vukcevic",
+      "teamAbbr": "WAS",
+      "teamName": "Washington Wizards",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4997537.png",
+      "status": "Out",
+      "detail": "Left Hip Pinched Nerve (Vukcevic (hip) has been ruled out for Tuesday's game against Boston.)",
+      "returnDate": "2026-11-30"
+    },
+    {
+      "name": "Reece Beekman",
+      "teamAbbr": "WAS",
+      "teamName": "Washington Wizards",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4432187.png",
+      "status": "Out",
+      "detail": "Shoulder (The Wizards announced Monday that Beekman sustained a right acromioclavicular joint injury and will be re-evaluated in approximately three weeks.)",
+      "returnDate": "2026-12-03"
+    },
+    {
+      "name": "Justin Champagnie",
+      "teamAbbr": "WAS",
+      "teamName": "Washington Wizards",
+      "position": "F",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4432907.png",
+      "status": "Out",
+      "detail": "Right Foot (Champagnie (foot) is expected to miss several months, per Josh Robbins of The Athletic.)",
+      "returnDate": "2027-02-25"
+    },
+    {
+      "name": "Jamir Watkins",
+      "teamAbbr": "WAS",
+      "teamName": "Washington Wizards",
+      "position": "G",
+      "headshotUrl": "https://a.espncdn.com/i/headshots/nba/players/full/4606840.png",
+      "status": "Out",
+      "detail": "Left Knee Surgery (The Wizards announced Thursday that Watkins has undergone surgery for a torn ACL.)",
+      "returnDate": "2027-04-02"
+    }
+  ]
+}

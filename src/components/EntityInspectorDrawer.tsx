@@ -7,6 +7,7 @@ import {
   Check,
   ChevronDown,
   Columns3,
+  Crown,
   Expand,
   Maximize2,
   Minus,
@@ -17,19 +18,23 @@ import {
   Star,
   Target,
   TrendingUp,
+  Trophy,
   Users,
   X,
 } from 'lucide-react';
 import type {
   ExperienceMode,
+  InjuriesRotationPayload,
   NbaPlayerDossierAdvancedResponse,
   NbaTeamDossierAdvancedResponse,
+  PlayerCareerProfile,
   PlayerGameLog,
   PlayerInspectorBenchmarkItem,
   PlayerInspectorDossier,
   PlayerSummary,
   RosterPlayerItem,
   SearchPlayerResult,
+  TeamCareerHistory,
   TeamSummary,
   WindowSize,
 } from '../types/nba';
@@ -46,6 +51,12 @@ import {
   computePlainTeamTakeaways,
   type LeagueBenchmarks,
 } from '../utils/humanize';
+import {
+  buildInjuriesLookupIndex,
+  findPlayerInjury,
+  getImpactTierMeta,
+} from '../utils/injuriesClient';
+import { InjuryStatusBadge } from './InjuryStatusBadge';
 import {
   buildExtendedPlayerBenchmarks,
   DEFAULT_PLAYER_LOG_COLUMNS,
@@ -75,7 +86,9 @@ import {
   MetricInfoTooltip,
   SortableTh,
 } from './MetricUiHelpers';
-import { PlayerAvatar, TeamLogo } from './NbaVisuals';
+import { PlayerAvatar, TeamLogo, getTeamBrandColors } from './NbaVisuals';
+import { useThemeStyle } from '../context/ThemeStyleContext';
+import { useExperienceMetrics } from '../context/ExperienceMetricsContext';
 import {
   ClutchAndDefensePanel,
   FourFactorsFullPanel,
@@ -88,6 +101,13 @@ import {
   ViolationsPanel,
 } from './NbaAdvancedModules';
 import { InspectorAllNbaKpisPanel } from './InspectorAllNbaKpisPanel';
+import {
+  CareerHistoryPanel,
+  computeActivePlayerCareerHighKpis,
+  computeActiveTeamCareerHighKpis,
+  fetchPlayerCareerProfileCached,
+  fetchTeamCareerHistoryCached,
+} from './CareerHistoryPanel';
 import { NbaAggregateDistributionChart } from './InspectorAllLayerChartHelpers';
 import {
   computeClientLeagueBenchmarks,
@@ -261,6 +281,7 @@ interface EntityInspectorDrawerProps {
   showHeroicBadges?: boolean;
   defaultPlayerKpiKeys?: string[];
   defaultTeamKpiKeys?: string[];
+  injuriesData?: InjuriesRotationPayload | null;
 }
 
 interface ReferenceSelectorBarProps {
@@ -594,19 +615,28 @@ export function EntityInspectorDrawer({
   showHeroicBadges = false,
   defaultPlayerKpiKeys = DEFAULT_PLAYER_NBA_KPI_KEYS,
   defaultTeamKpiKeys = DEFAULT_TEAM_NBA_KPI_KEYS,
+  injuriesData = null,
 }: EntityInspectorDrawerProps) {
+  const { isV2, isV3 } = useThemeStyle();
+  const { isMetricAllowed } = useExperienceMetrics();
   // Modal layout mode: wide popup (default), fullscreen, or side panel
   const [displayMode, setDisplayMode] =
     useState<'wide' | 'fullscreen' | 'sidebar'>('wide');
 
   // Top Tab Navigation state
   const [activeInspectorTab, setActiveInspectorTab] = useState<
-    'overview' | 'charts' | 'gamelog' | 'roster' | 'nba_lab'
+    'overview' | 'charts' | 'gamelog' | 'career' | 'roster' | 'nba_lab'
   >('overview');
 
   useEffect(() => {
     setActiveInspectorTab('overview');
   }, [entityType, entityId]);
+
+  useEffect(() => {
+    if (experienceMode === 'simple' && activeInspectorTab === 'nba_lab') {
+      setActiveInspectorTab('overview');
+    }
+  }, [experienceMode, activeInspectorTab]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -855,6 +885,54 @@ export function EntityInspectorDrawer({
     };
   }, [entityType, entityId]);
 
+  // Cached career history for active 2026-27 Career High / Franchise Record badges in Header & Resumen & KPIs
+  const [playerCareerProfile, setPlayerCareerProfile] = useState<PlayerCareerProfile | null>(null);
+  const [teamCareerHistory, setTeamCareerHistory] = useState<TeamCareerHistory | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    if (entityType === 'player' && entityId) {
+      setTeamCareerHistory(null);
+      fetchPlayerCareerProfileCached(entityId).then((prof) => {
+        if (active) setPlayerCareerProfile(prof);
+      });
+    } else if (entityType === 'team') {
+      const lookupTeamKey = team?.abbreviation || entityId;
+      setPlayerCareerProfile(null);
+      if (lookupTeamKey) {
+        fetchTeamCareerHistoryCached(lookupTeamKey).then((hist) => {
+          if (active) setTeamCareerHistory(hist);
+        });
+      } else {
+        setTeamCareerHistory(null);
+      }
+    } else {
+      setPlayerCareerProfile(null);
+      setTeamCareerHistory(null);
+    }
+    return () => {
+      active = false;
+    };
+  }, [entityType, entityId, team?.abbreviation]);
+
+  const playerCareerHighKpis = useMemo(
+    () => computeActivePlayerCareerHighKpis(playerCareerProfile),
+    [playerCareerProfile]
+  );
+
+  const teamCareerHighKpis = useMemo(
+    () => computeActiveTeamCareerHighKpis(teamCareerHistory),
+    [teamCareerHistory]
+  );
+
+  const activeCareerHighSummary = useMemo(
+    () =>
+      Object.values(
+        entityType === 'player' ? playerCareerHighKpis : teamCareerHighKpis
+      ),
+    [entityType, playerCareerHighKpis, teamCareerHighKpis]
+  );
+
   useEffect(() => {
     if (entityType !== 'team' || !team || activeInspectorTab !== 'roster') return;
     let active = true;
@@ -882,6 +960,35 @@ export function EntityInspectorDrawer({
     }
     return basePlayer;
   }, [entityType, entityId, dossier, basePlayer]);
+
+  const injuriesIndex = useMemo(
+    () => buildInjuriesLookupIndex(injuriesData),
+    [injuriesData]
+  );
+
+  const playerInjury = useMemo(() => {
+    if (!player) return null;
+    return findPlayerInjury(injuriesIndex, player.id, player.name);
+  }, [injuriesIndex, player]);
+
+  const playerTeamInjuryImpact = useMemo(() => {
+    if (!player) return null;
+    return injuriesIndex.byTeamAbbr.get(player.teamAbbr.toUpperCase()) || null;
+  }, [injuriesIndex, player]);
+
+  const playerBeneficiaryOpportunity = useMemo(() => {
+    if (!player || playerInjury || !playerTeamInjuryImpact) return null;
+    return (
+      playerTeamInjuryImpact.beneficiaries.find(
+        (b) => b.playerId === player.id
+      ) || null
+    );
+  }, [player, playerInjury, playerTeamInjuryImpact]);
+
+  const teamInjuryImpact = useMemo(() => {
+    if (!team) return null;
+    return injuriesIndex.byTeamAbbr.get(team.abbreviation.toUpperCase()) || null;
+  }, [injuriesIndex, team]);
 
   // Advanced NBA.com Dossier state (shot zones, tracking, clutch, defense/hustle, playtypes, on/off, scoring, violations)
   const [teamAdvancedDossier, setTeamAdvancedDossier] =
@@ -1139,9 +1246,11 @@ export function EntityInspectorDrawer({
   const scopedChartCatalog = useMemo<InspectorNbaKpiDef[]>(
     () =>
       NBA_ALL_KPIS_CATALOG.filter(
-        (k) => k.scope === 'both' || k.scope === (player ? 'player' : 'team')
+        (k) =>
+          (k.scope === 'both' || k.scope === (player ? 'player' : 'team')) &&
+          isMetricAllowed(k.key)
       ),
-    [player]
+    [player, isMetricAllowed]
   );
 
   const chartLayerKpis = useMemo(
@@ -1157,11 +1266,24 @@ export function EntityInspectorDrawer({
 
   const activeChartKpiDef = useMemo<InspectorNbaKpiDef>(() => {
     const found = NBA_ALL_KPIS_MAP[activeChartKpiKey];
-    if (found && (found.scope === 'both' || found.scope === (player ? 'player' : 'team'))) {
+    if (
+      found &&
+      (found.scope === 'both' || found.scope === (player ? 'player' : 'team')) &&
+      isMetricAllowed(found.key)
+    ) {
       return found;
     }
-    return scopedChartCatalog[0];
-  }, [activeChartKpiKey, player, scopedChartCatalog]);
+    return scopedChartCatalog[0] || NBA_ALL_KPIS_CATALOG[0];
+  }, [activeChartKpiKey, player, scopedChartCatalog, isMetricAllowed]);
+
+  useEffect(() => {
+    if (
+      scopedChartCatalog.length > 0 &&
+      !scopedChartCatalog.some((k) => k.layer === chartLayerId)
+    ) {
+      setChartLayerId(activeChartKpiDef.layer);
+    }
+  }, [scopedChartCatalog, chartLayerId, activeChartKpiDef.layer]);
 
   const activeChartKpiMeta = useMemo(
     () => getKpiMeta(activeChartKpiDef, 'per_game'),
@@ -1912,7 +2034,34 @@ export function EntityInspectorDrawer({
           <X className="w-5 h-5 sm:w-5 sm:h-5" />
         </button>
         {/* Sticky Header */}
-        <div className="sticky top-0 z-20 bg-[#0F172A]/95 backdrop-blur-md border-b border-[#1E293B] px-4 sm:px-6 pt-2.5 sm:pt-4 pb-3.5 sm:pb-4 space-y-2.5 sm:space-y-0">
+        <div
+          style={
+            isV3
+              ? (() => {
+                  const brand = getTeamBrandColors(
+                    player ? player.teamAbbr : team?.abbreviation,
+                    player ? null : team?.id
+                  );
+                  return {
+                    borderTop: `3px solid ${brand.primary}`,
+                    backgroundImage: `radial-gradient(ellipse 68% 125% at 8% 0%, ${brand.primary}2B, transparent 68%), radial-gradient(ellipse 46% 95% at 92% 0%, ${brand.secondary}18, transparent 65%)`,
+                  };
+                })()
+              : isV2
+              ? (() => {
+                  const brand = getTeamBrandColors(
+                    player ? player.teamAbbr : team?.abbreviation,
+                    player ? null : team?.id
+                  );
+                  return {
+                    borderTop: `3px solid ${brand.primary}`,
+                    backgroundImage: `radial-gradient(ellipse 65% 120% at 10% 0%, ${brand.primary}1F, transparent 70%)`,
+                  };
+                })()
+              : undefined
+          }
+          className="sticky top-0 z-20 bg-[#0F172A]/95 backdrop-blur-md border-b border-[#1E293B] px-4 sm:px-6 pt-2.5 sm:pt-4 pb-3.5 sm:pb-4 space-y-2.5 sm:space-y-0"
+        >
           <div className="w-10 h-1 bg-slate-700 rounded-full mx-auto mb-2 sm:hidden" />
 
           <div className="flex items-center justify-between gap-3">
@@ -1964,6 +2113,33 @@ export function EntityInspectorDrawer({
                         >
                           🎯 {hdrGw} GW
                         </span>
+                      )}
+                      {activeCareerHighSummary.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setActiveInspectorTab('career')}
+                          title={`Promediando ${
+                            entityType === 'player' ? 'Career High' : 'Récord Histórico'
+                          } en 2026-27: ${activeCareerHighSummary
+                            .map(
+                              (b) =>
+                                `${b.shortLabel} (${b.currentFormatted} vs ant. ${b.prevBestFormatted})`
+                            )
+                            .join(' · ')}. Pulsa para ver Trayectoria & Highs.`}
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/15 text-amber-300 border border-amber-500/35 hover:bg-amber-500/25 transition-colors shrink-0"
+                        >
+                          <Crown className="w-3 h-3 text-amber-400 shrink-0" />
+                          <span>
+                            {entityType === 'player' ? 'CH' : 'RH'} 26-27:{' '}
+                            {activeCareerHighSummary
+                              .slice(0, 3)
+                              .map((b) => b.shortLabel)
+                              .join('·')}
+                            {activeCareerHighSummary.length > 3
+                              ? ` +${activeCareerHighSummary.length - 3}`
+                              : ''}
+                          </span>
+                        </button>
                       )}
                     </h2>
                   );
@@ -2136,6 +2312,19 @@ export function EntityInspectorDrawer({
 
             <button
               type="button"
+              onClick={() => setActiveInspectorTab('career')}
+              className={`px-3.5 py-2 text-xs font-medium border-b-2 transition-all flex items-center gap-2 whitespace-nowrap shrink-0 ${
+                activeInspectorTab === 'career'
+                  ? 'border-orange-500 text-orange-400 font-bold'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Trophy className="w-3.5 h-3.5" />
+              <span>{player ? 'Trayectoria & Highs' : 'Historia Franquicia'}</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setActiveInspectorTab('roster')}
               className={`px-3.5 py-2 text-xs font-medium border-b-2 transition-all flex items-center gap-2 whitespace-nowrap shrink-0 ${
                 activeInspectorTab === 'roster'
@@ -2144,21 +2333,23 @@ export function EntityInspectorDrawer({
               }`}
             >
               <Users className="w-3.5 h-3.5" />
-              <span>{player ? 'Perfil & Trayectoria' : 'Plantilla / Roster'}</span>
+              <span>{player ? 'Perfil & Bio' : 'Plantilla / Roster'}</span>
             </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveInspectorTab('nba_lab')}
-              className={`px-3.5 py-2 text-xs font-medium border-b-2 transition-all flex items-center gap-2 whitespace-nowrap shrink-0 ${
-                activeInspectorTab === 'nba_lab'
-                  ? 'border-orange-500 text-orange-400 font-bold'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Target className="w-3.5 h-3.5" />
-              <span>NBA.com Pro & Zonas</span>
-            </button>
+            {experienceMode === 'advanced' && (
+              <button
+                type="button"
+                onClick={() => setActiveInspectorTab('nba_lab')}
+                className={`px-3.5 py-2 text-xs font-medium border-b-2 transition-all flex items-center gap-2 whitespace-nowrap shrink-0 ${
+                  activeInspectorTab === 'nba_lab'
+                    ? 'border-orange-500 text-orange-400 font-bold'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Target className="w-3.5 h-3.5" />
+                <span>NBA.com Pro & Zonas</span>
+              </button>
+            )}
           </div>
 
         </div>
@@ -3085,6 +3276,116 @@ export function EntityInspectorDrawer({
               {/* TAB 1: RESUMEN & KPIS (Jugador) */}
               {activeInspectorTab === 'overview' && (
                 <>
+                  {/* PARTE MÉDICO / OPORTUNIDAD DE ROTACIÓN (Fase 12) */}
+                  {player && playerInjury && (
+                    <section className="bg-[#131C2E] border border-rose-500/30 rounded-lg p-4 space-y-3">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-[11px] font-semibold uppercase tracking-wider text-rose-300">
+                              Parte Médico Oficial
+                            </span>
+                            <InjuryStatusBadge injury={playerInjury} />
+                          </div>
+                          <p className="text-xs text-slate-200 leading-relaxed">
+                            {playerInjury.detailEs}
+                          </p>
+                          <p className="text-[11px] text-slate-400 font-mono">
+                            {playerInjury.returnDate
+                              ? `Retorno est.: ${playerInjury.returnDate}`
+                              : 'Retorno pendiente de reevaluación médica'}
+                            {' · '}Impacto vacante est.: {playerInjury.minutesPg.toFixed(1)} MIN ·{' '}
+                            {playerInjury.pointsPg.toFixed(1)} PTS · {playerInjury.usgPct.toFixed(1)}% USG
+                          </p>
+                        </div>
+                      </div>
+
+                      {playerTeamInjuryImpact &&
+                        playerTeamInjuryImpact.beneficiaries.length > 0 && (
+                          <div className="pt-2.5 border-t border-[#1E293B] space-y-2">
+                            <div className="text-[11px] font-medium text-slate-400">
+                              Quién absorbe sus minutos y Usage % en {player.teamAbbr}:
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                              {playerTeamInjuryImpact.beneficiaries
+                                .slice(0, 3)
+                                .map((ben) => (
+                                  <button
+                                    key={ben.playerId}
+                                    type="button"
+                                    onClick={() =>
+                                      void onSelectRosterPlayer({
+                                        id: ben.playerId,
+                                        name: ben.name,
+                                        teamAbbr: ben.teamAbbr,
+                                        teamName: player.teamName,
+                                        position: ben.position,
+                                        headshotUrl: ben.headshotUrl,
+                                      })
+                                    }
+                                    className="text-left bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] hover:border-emerald-500/40 rounded-md px-3 py-2 transition-colors"
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="text-xs font-semibold text-slate-100 truncate">
+                                        {ben.name}
+                                      </span>
+                                      <span className="text-[11px] font-mono font-semibold text-emerald-400 shrink-0">
+                                        +{ben.projectedMinDelta.toFixed(1)}m
+                                      </span>
+                                    </div>
+                                    <div className="text-[11px] font-mono text-slate-400 mt-0.5">
+                                      +{ben.projectedUsgDelta.toFixed(1)}% USG · +
+                                      {ben.projectedPtsDelta.toFixed(1)} PTS
+                                    </div>
+                                  </button>
+                                ))}
+                            </div>
+                          </div>
+                        )}
+                    </section>
+                  )}
+
+                  {player && !playerInjury && playerBeneficiaryOpportunity && (
+                    <section className="bg-[#131C2E] border border-emerald-500/30 rounded-lg p-4 space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold uppercase tracking-wider text-emerald-400">
+                          Oportunidad en Rotación por Bajas de {player.teamAbbr}
+                        </span>
+                        <span className="text-xs font-mono font-semibold text-emerald-300">
+                          +{playerBeneficiaryOpportunity.projectedMinDelta.toFixed(1)} MIN · +
+                          {playerBeneficiaryOpportunity.projectedUsgDelta.toFixed(1)}% USG · +
+                          {playerBeneficiaryOpportunity.projectedPtsDelta.toFixed(1)} PTS
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-300 leading-relaxed">
+                        {playerBeneficiaryOpportunity.roleShiftLabel}
+                        {playerBeneficiaryOpportunity.triggeredBy.length > 0
+                          ? ` (${playerBeneficiaryOpportunity.triggeredBy.map((t) => t.name).join(', ')})`
+                          : ''}
+                        . Proyección estimada:{' '}
+                        <span className="font-mono text-slate-100">
+                          {(
+                            playerBeneficiaryOpportunity.baseMinutesPg +
+                            playerBeneficiaryOpportunity.projectedMinDelta
+                          ).toFixed(1)}{' '}
+                          MIN
+                        </span>{' '}
+                        y{' '}
+                        <span className="font-mono text-slate-100">
+                          {(
+                            playerBeneficiaryOpportunity.basePointsPg +
+                            playerBeneficiaryOpportunity.projectedPtsDelta
+                          ).toFixed(1)}{' '}
+                          PTS
+                        </span>
+                        {playerBeneficiaryOpportunity.empiricalGamesWithout > 0
+                          ? ` (muestra real sin lesionado: ${playerBeneficiaryOpportunity.empiricalGamesWithout} PJ)`
+                          : ''}
+                        .
+                      </p>
+                    </section>
+                  )}
+
                   {/* MASTER FILTER BAR: Configurable Sample Slider + Predefined Ranges */}
               <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3.5 sm:p-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3229,6 +3530,10 @@ export function EntityInspectorDrawer({
                 referenceMode={kpiRefMode}
                 ownBaselineGames={ownBaselineSelection.games}
                 ownBaselineShortLabel={ownBaselineSelection.shortLabel}
+                careerHighKpis={
+                  samplePreset === 'season_2027' ? playerCareerHighKpis : undefined
+                }
+                onOpenCareerTab={() => setActiveInspectorTab('career')}
                 title={
                   kpiRefMode === 'nba'
                     ? 'Nivel comparado frente a la Media de la NBA & KPIs Oficiales'
@@ -3311,6 +3616,16 @@ export function EntityInspectorDrawer({
                 </section>
               )}
                 </>
+              )}
+
+              {/* TAB 3B: TRAYECTORIA HISTÓRICA & CAREER HIGHS (Jugador) */}
+              {activeInspectorTab === 'career' && player && (
+                <CareerHistoryPanel
+                  entityType="player"
+                  entityId={player.id}
+                  entityName={player.name}
+                  teamAbbr={player.teamAbbr}
+                />
               )}
 
               {/* TAB 3: HISTORIAL DE PARTIDOS (Jugador) */}
@@ -3889,6 +4204,150 @@ export function EntityInspectorDrawer({
               {/* TAB 1: RESUMEN & KPIS (Equipo) */}
               {activeInspectorTab === 'overview' && (
                 <>
+                  {/* ENFERMERÍA Y REAJUSTE DE ROTACIÓN (Fase 12) */}
+                  {teamInjuryImpact && teamInjuryImpact.totalInjured > 0 && (
+                    <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-3.5 shadow-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1E293B] pb-3">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-sm font-bold text-slate-100">
+                              Enfermería y Reajuste de Rotación
+                            </h3>
+                            <span
+                              className={`text-[11px] font-semibold ${
+                                getImpactTierMeta(teamInjuryImpact.impactTier).textClass
+                              }`}
+                            >
+                              · {getImpactTierMeta(teamInjuryImpact.impactTier).label}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-400">
+                            {teamInjuryImpact.outOrIrCount} bajas confirmadas (Out/IR) y{' '}
+                            {teamInjuryImpact.questionableOrDtdCount} en duda · Carga vacante estimada:{' '}
+                            <span className="font-mono text-slate-200">
+                              -{teamInjuryImpact.vacatedMinutes.toFixed(0)} MIN
+                            </span>
+                            ,{' '}
+                            <span className="font-mono text-slate-200">
+                              -{teamInjuryImpact.vacatedPoints.toFixed(1)} PTS
+                            </span>
+                            ,{' '}
+                            <span className="font-mono text-slate-200">
+                              -{teamInjuryImpact.vacatedUsage.toFixed(1)}% USG
+                            </span>
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
+                        <div className="space-y-1.5">
+                          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                            Jugadores en parte médico ({teamInjuryImpact.injuries.length})
+                          </div>
+                          <div className="divide-y divide-[#1E293B] bg-[#0B1120] border border-[#1E293B] rounded-md">
+                            {teamInjuryImpact.injuries.slice(0, 6).map((inj) => (
+                              <div
+                                key={`${inj.id}-${inj.name}`}
+                                className="px-3 py-2 flex items-start justify-between gap-2 text-xs"
+                              >
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    {inj.playerId ? (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          void onSelectRosterPlayer({
+                                            id: inj.playerId!,
+                                            name: inj.name,
+                                            teamAbbr: inj.teamAbbr,
+                                            teamName: team.name,
+                                            position: inj.position,
+                                            headshotUrl: inj.headshotUrl,
+                                          })
+                                        }
+                                        className="font-semibold text-slate-100 hover:text-orange-400 transition-colors text-left"
+                                      >
+                                        {inj.name}
+                                      </button>
+                                    ) : (
+                                      <span className="font-semibold text-slate-100">
+                                        {inj.name}
+                                      </span>
+                                    )}
+                                    <InjuryStatusBadge injury={inj} compact />
+                                  </div>
+                                  <div className="text-[11px] text-slate-400 truncate mt-0.5">
+                                    {inj.detailEs}
+                                    {inj.returnDate ? ` · Retorno: ${inj.returnDate}` : ''}
+                                  </div>
+                                </div>
+                                <div className="text-right font-mono text-[11px] text-slate-300 shrink-0">
+                                  {inj.minutesPg > 0 ? `${inj.minutesPg.toFixed(1)}m` : '—'}
+                                  {inj.pointsPg > 0 ? ` · ${inj.pointsPg.toFixed(1)}p` : ''}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <div className="text-[11px] font-semibold uppercase tracking-wider text-emerald-400">
+                            Beneficiarios directos en la rotación
+                          </div>
+                          {teamInjuryImpact.beneficiaries.length === 0 ? (
+                            <div className="bg-[#0B1120] border border-[#1E293B] rounded-md p-3 text-xs text-slate-400">
+                              Sin reajuste significativo de minutos con el parte actual.
+                            </div>
+                          ) : (
+                            <div className="divide-y divide-[#1E293B] bg-[#0B1120] border border-[#1E293B] rounded-md">
+                              {teamInjuryImpact.beneficiaries.slice(0, 4).map((ben) => (
+                                <button
+                                  key={ben.playerId}
+                                  type="button"
+                                  onClick={() =>
+                                    void onSelectRosterPlayer({
+                                      id: ben.playerId,
+                                      name: ben.name,
+                                      teamAbbr: ben.teamAbbr,
+                                      teamName: team.name,
+                                      position: ben.position,
+                                      headshotUrl: ben.headshotUrl,
+                                    })
+                                  }
+                                  className="w-full text-left px-3 py-2 hover:bg-[#182338] transition-colors flex items-center justify-between gap-2 text-xs"
+                                >
+                                  <div className="min-w-0">
+                                    <div className="font-semibold text-slate-100 truncate">
+                                      {ben.name}{' '}
+                                      <span className="text-[11px] font-normal text-slate-400">
+                                        ({ben.position})
+                                      </span>
+                                    </div>
+                                    <div className="text-[11px] text-slate-400 truncate">
+                                      {ben.roleShiftLabel}
+                                      {ben.triggeredBy.length > 0
+                                        ? ` · por ${ben.triggeredBy.map((t) => t.name).join(', ')}`
+                                        : ''}
+                                    </div>
+                                  </div>
+                                  <div className="text-right font-mono text-[11px] shrink-0">
+                                    <div className="text-emerald-400 font-semibold">
+                                      +{ben.projectedMinDelta.toFixed(1)}m · +
+                                      {ben.projectedUsgDelta.toFixed(1)}% USG
+                                    </div>
+                                    <div className="text-orange-300">
+                                      +{ben.projectedPtsDelta.toFixed(1)} PTS
+                                    </div>
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </section>
+                  )}
+
                   {/* 1. DEAN OLIVER 4 FACTORS BLOCK (FIRST) */}
                   <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 sm:p-5 space-y-4 shadow-sm">
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1E293B] pb-3">
@@ -3985,6 +4444,8 @@ export function EntityInspectorDrawer({
                     defaultKeys={effectiveTeamDefaults}
                     externalOpen={teamAllKpisOpen}
                     onExternalOpenChange={setTeamAllKpisOpen}
+                    careerHighKpis={teamCareerHighKpis}
+                    onOpenCareerTab={() => setActiveInspectorTab('career')}
                     title="KPIs Colectivos, Percentiles NBA & Oficiales NBA.com (10 Capas · Personalizable)"
                     subtitle="Estadísticas colectivas con percentil frente a las 30 franquicias y media NBA. Personaliza qué KPIs mostrar o explora las 10 capas."
                     headerExtra={
@@ -4369,6 +4830,16 @@ export function EntityInspectorDrawer({
                     </div>
                   </section>
                 </>
+              )}
+
+              {/* TAB 3B: HISTORIA HISTÓRICA DE LA FRANQUICIA (Equipo) */}
+              {activeInspectorTab === 'career' && team && (
+                <CareerHistoryPanel
+                  entityType="team"
+                  entityId={team.id}
+                  entityName={team.name}
+                  teamAbbr={team.abbreviation}
+                />
               )}
 
               {/* TAB 3: HISTORIAL DE PARTIDOS (Equipo - Columnas Personalizables Max 10) */}

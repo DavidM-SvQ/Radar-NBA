@@ -34,7 +34,8 @@ import { UnifiedEntityFilterBar } from './UnifiedEntityFilterBar';
 import { formatSigned, normalizeSearchText } from '../utils/analytics';
 import { STICKY_THEAD_CLASS, sortRows, useTableSort } from '../utils/tableSort';
 import { SortableTh } from './MetricUiHelpers';
-import { PlayerAvatar, TeamLogo } from './NbaVisuals';
+import { PlayerAvatar, TeamLogo, getTeamBrandColors } from './NbaVisuals';
+import { useThemeStyle } from '../context/ThemeStyleContext';
 import { ExportImageButton } from './ExportImageButton';
 import { buildTableSnapshotBlob } from '../utils/exportImageCard';
 
@@ -186,6 +187,7 @@ export function SeasonAwardsView({
   onInspectEntity,
   onRetry,
 }: SeasonAwardsViewProps) {
+  const { isV2, isV3 } = useThemeStyle();
   const [minProjectedGames, setMinProjectedGames] = useState<number>(() => {
     try {
       const saved = Number(localStorage.getItem(STORAGE_MIN_GAMES_KEY));
@@ -885,6 +887,7 @@ export function SeasonAwardsView({
                       ? cand.metricsSimple
                       : cand.metricsAdvanced;
                   const isStarred = watchlistIds.has(`player:${cand.playerId}`);
+                  const brand = getTeamBrandColors(cand.teamAbbr);
 
                   return (
                     <div
@@ -898,6 +901,29 @@ export function SeasonAwardsView({
                           onInspectEntity('player', cand.playerId);
                         }
                       }}
+                      style={
+                        isV3
+                          ? {
+                              borderTop: `3px solid ${
+                                idx === 0 ? '#F59E0B' : brand.primary
+                              }`,
+                              background:
+                                idx === 0
+                                  ? `radial-gradient(circle at 82% 8%, rgba(245, 158, 11, 0.2) 0%, transparent 56%), radial-gradient(circle at 12% 12%, ${brand.primary}26 0%, transparent 62%)`
+                                  : `radial-gradient(circle at 15% 12%, ${brand.primary}22 0%, transparent 62%)`,
+                            }
+                          : isV2
+                          ? {
+                              borderTop: `3px solid ${
+                                idx === 0 ? '#F59E0B' : brand.primary
+                              }`,
+                              background:
+                                idx === 0
+                                  ? `radial-gradient(circle at 82% 8%, rgba(245, 158, 11, 0.14) 0%, transparent 56%), radial-gradient(circle at 12% 12%, ${brand.primary}1a 0%, transparent 62%)`
+                                  : `radial-gradient(circle at 15% 12%, ${brand.primary}16 0%, transparent 62%)`,
+                            }
+                          : undefined
+                      }
                       className={`bg-[#131C2E] border rounded-lg p-4 flex flex-col justify-between gap-3.5 cursor-pointer transition-colors hover:bg-[#182338] ${
                         idx === 0
                           ? 'border-orange-500/45'

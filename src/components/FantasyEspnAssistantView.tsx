@@ -9,6 +9,7 @@ import {
   Download,
   Edit3,
   Eye,
+  HeartPulse,
   Info,
   Layers,
   Plus,
@@ -39,6 +40,7 @@ import type {
   FantasyStorageMode,
   FantasyTeamGameSlot,
   FantasyWeekWindow,
+  InjuriesRotationPayload,
   PlayerSummary,
   TeamSummary,
   TrendBreakoutAlert,
@@ -219,6 +221,7 @@ interface FantasyEspnAssistantViewProps {
   onInspectEntity: (entityType: 'player' | 'team', entityId: string) => void;
   initialTab?: FantasyTab;
   onTabChange?: (tab: FantasyTab) => void;
+  injuriesData?: InjuriesRotationPayload | null;
 }
 
 type ManagerModalTab = 'my_team' | 'rivals_manager' | 'bulk_moves' | 'backup';
@@ -703,6 +706,7 @@ export function FantasyEspnAssistantView({
   onInspectEntity,
   initialTab = 'lineup',
   onTabChange,
+  injuriesData = null,
 }: FantasyEspnAssistantViewProps) {
   const [activeTab, setActiveTab] = useState<FantasyTab>(() => initialTab);
   const [nbaContext, setNbaContext] = useState<FantasyEspnSyncPayload | null>(null);
@@ -1898,6 +1902,14 @@ export function FantasyEspnAssistantView({
     weeklyLineupCoverage.gapDateSet,
     effectiveDropMember,
   ]);
+
+  // Cross Phase 12 Rotation Injury Beneficiaries × Free Agents in the Fantasy League
+  const injuryWaiverOpportunities = useMemo(() => {
+    if (!injuriesData || injuriesData.topBeneficiaries.length === 0) return [];
+    return injuriesData.topBeneficiaries
+      .filter((ben) => !unavailableIds.has(ben.playerId))
+      .slice(0, 6);
+  }, [injuriesData, unavailableIds]);
 
   // Target week window for Waiver Wire / Free Agents:
   // `effectiveWeeks` ('current') already applies the Monday Lock Horizon pivot:
@@ -4226,6 +4238,74 @@ export function FantasyEspnAssistantView({
               </div>
             )}
           </section>
+
+          {/* Phase 12: Injury-Driven Rotation Beneficiaries Free in League */}
+          {injuryWaiverOpportunities.length > 0 && (
+            <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden divide-y divide-[#1E293B] min-w-0 max-w-full">
+              <div className="px-4 py-3 bg-[#0F172A]/70 flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-rose-300">
+                    <HeartPulse className="w-3.5 h-3.5" />
+                    <span>Beneficiarios de Lesiones Libres en tu Liga</span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Agentes libres que absorben minutos, Usage % y FPTS directos por bajas confirmadas o dudas clave en su franquicia.
+                  </p>
+                </div>
+                <span className="text-[11px] font-mono text-slate-400">
+                  {injuryWaiverOpportunities.length} libres detectados
+                </span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 divide-y md:divide-y-0 md:gap-px bg-[#1E293B]">
+                {injuryWaiverOpportunities.map((ben) => (
+                  <button
+                    key={ben.playerId}
+                    type="button"
+                    onClick={() => onInspectEntity('player', ben.playerId)}
+                    className="bg-[#131C2E] hover:bg-[#182338] px-4 py-3 text-left transition-colors flex flex-col justify-between gap-2"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <PlayerAvatar
+                          playerId={ben.playerId}
+                          name={ben.name}
+                          headshotUrl={ben.headshotUrl}
+                          teamAbbr={ben.teamAbbr}
+                          showTeamBadge
+                          size="sm"
+                        />
+                        <div className="min-w-0">
+                          <div className="text-xs font-semibold text-slate-100 truncate">
+                            {ben.name}
+                          </div>
+                          <div className="text-[11px] text-slate-400 truncate">
+                            {ben.teamAbbr} · {ben.position} · Libre
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-right font-mono shrink-0">
+                        <div className="text-xs font-bold text-orange-400">
+                          +{ben.projectedFptsDelta.toFixed(1)} FPTS
+                        </div>
+                        <div className="text-[10px] text-emerald-400">
+                          +{ben.projectedMinDelta.toFixed(1)}m · +{ben.projectedUsgDelta.toFixed(1)}% USG
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-[11px] text-slate-400 truncate">
+                      {ben.roleShiftLabel}
+                      {ben.triggeredBy.length > 0
+                        ? ` · por ${ben.triggeredBy.map((t) => t.name).join(', ')}`
+                        : ''}
+                      {ben.empiricalGamesWithout > 0
+                        ? ` · ${ben.empiricalGamesWithout} PJ reales sin baja`
+                        : ''}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
 
           {/* Radar Minutes/Usage × League Free Agents × Lineup Gaps Streaming Panel */}
           <section className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden divide-y divide-[#1E293B] min-w-0 max-w-full">

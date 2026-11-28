@@ -2,13 +2,19 @@
 import { executeWithCircuitBreaker, identifyProviderFromUrl, isCircuitOpen } from "./circuitBreaker.ts";
 import {
   readNbaSnapshotFromDisk,
+  readNbaSeasonSnapshotFromDisk,
   readNbaAdvancedSnapshotFromDisk,
+  readNbaAdvancedCoreSnapshotFromDisk,
+  readNbaHeroicShotsFromDisk,
+  writeNbaHeroicShotsToDisk,
   writeNbaAdvancedSnapshotToDisk,
   type NbaAdvancedSnapshotPayload,
+  type NbaAdvancedCoreSnapshotPayload,
 } from "./nbaSnapshotStore.ts";
 import { NBA_TEAMS_MAP } from "../utils/teamLogos.ts";
 
 let memoryAdvancedSnapshot: NbaAdvancedSnapshotPayload | null = null;
+let memoryAdvancedCoreSnapshot: NbaAdvancedCoreSnapshotPayload | null = null;
 
 export function getActiveAdvancedSnapshot(): NbaAdvancedSnapshotPayload | null {
   if (memoryAdvancedSnapshot) return memoryAdvancedSnapshot;
@@ -20,6 +26,21 @@ export function getActiveAdvancedSnapshot(): NbaAdvancedSnapshotPayload | null {
     }
   } catch (err) {
     console.warn("[RadarNBA] Error leyendo snapshot avanzado:", err);
+  }
+  return null;
+}
+
+export function getActiveAdvancedCoreSnapshot(): NbaAdvancedCoreSnapshotPayload | null {
+  if (memoryAdvancedCoreSnapshot) return memoryAdvancedCoreSnapshot;
+  if (memoryAdvancedSnapshot) return memoryAdvancedSnapshot;
+  try {
+    const snap = readNbaAdvancedCoreSnapshotFromDisk();
+    if (snap) {
+      memoryAdvancedCoreSnapshot = snap;
+      return snap;
+    }
+  } catch (err) {
+    console.warn("[RadarNBA] Error leyendo snapshot avanzado core:", err);
   }
   return null;
 }
@@ -536,7 +557,7 @@ function buildDefaultSynergyPlaytypes(typeGrouping: "offensive" | "defensive" = 
 // =========================================================================
 export async function getLeagueShotZonesAdvanced(seasonToken?: string, scope: "team" | "player" = "team", forceRefresh = false): Promise<any> {
   if (!forceRefresh) {
-    const advSnap = getActiveAdvancedSnapshot();
+    const advSnap = getActiveAdvancedCoreSnapshot();
     if (advSnap?.shotZones?.[scope]?.items?.length) {
       return advSnap.shotZones[scope];
     }
@@ -672,7 +693,7 @@ export async function getLeagueShotZonesAdvanced(seasonToken?: string, scope: "t
 // =========================================================================
 export async function getLeagueClutchAdvanced(seasonToken?: string, scope: "team" | "player" = "team", forceRefresh = false): Promise<any> {
   if (!forceRefresh) {
-    const advSnap = getActiveAdvancedSnapshot();
+    const advSnap = getActiveAdvancedCoreSnapshot();
     if (advSnap?.clutch?.[scope]?.items?.length) {
       return advSnap.clutch[scope];
     }
@@ -756,7 +777,7 @@ export async function getLeagueClutchAdvanced(seasonToken?: string, scope: "team
 // =========================================================================
 export async function getLeagueDefenseHustleAdvanced(seasonToken?: string, scope: "team" | "player" = "team", forceRefresh = false): Promise<any> {
   if (!forceRefresh) {
-    const advSnap = getActiveAdvancedSnapshot();
+    const advSnap = getActiveAdvancedCoreSnapshot();
     if (advSnap?.defenseHustle?.[scope]?.items?.length) {
       return advSnap.defenseHustle[scope];
     }
@@ -1049,7 +1070,7 @@ export async function getLeagueDefenseHustleAdvanced(seasonToken?: string, scope
 // =========================================================================
 export async function getLeagueTrackingAdvanced(seasonToken?: string, scope: "team" | "player" = "team", forceRefresh = false): Promise<any> {
   if (!forceRefresh) {
-    const advSnap = getActiveAdvancedSnapshot();
+    const advSnap = getActiveAdvancedCoreSnapshot();
     if (advSnap?.tracking?.[scope]?.items?.length) {
       return advSnap.tracking[scope];
     }
@@ -1232,7 +1253,7 @@ export async function getLeagueTrackingAdvanced(seasonToken?: string, scope: "te
 // =========================================================================
 export async function getLeaguePlaytypesAdvanced(seasonToken?: string, scope: "team" | "player" = "team", forceRefresh = false): Promise<any> {
   if (!forceRefresh) {
-    const advSnap = getActiveAdvancedSnapshot();
+    const advSnap = getActiveAdvancedCoreSnapshot();
     if (advSnap?.playtypes?.[scope]?.items?.length) {
       return advSnap.playtypes[scope];
     }
@@ -1354,7 +1375,7 @@ export async function getLeaguePlaytypesAdvanced(seasonToken?: string, scope: "t
 // =========================================================================
 export async function getLeagueScoringSplitsAdvanced(seasonToken?: string, scope: "team" | "player" = "team", forceRefresh = false): Promise<any> {
   if (!forceRefresh) {
-    const advSnap = getActiveAdvancedSnapshot();
+    const advSnap = getActiveAdvancedCoreSnapshot();
     if (advSnap?.scoring?.[scope]?.items?.length) {
       return advSnap.scoring[scope];
     }
@@ -1406,7 +1427,7 @@ export async function getLeagueScoringSplitsAdvanced(seasonToken?: string, scope
 // =========================================================================
 export async function getLeagueFourFactorsAdvanced(seasonToken?: string, scope: "team" | "player" = "team", forceRefresh = false): Promise<any> {
   if (!forceRefresh) {
-    const advSnap = getActiveAdvancedSnapshot();
+    const advSnap = getActiveAdvancedCoreSnapshot();
     if (advSnap?.fourFactors?.[scope]?.items?.length) {
       return advSnap.fourFactors[scope];
     }
@@ -1491,7 +1512,7 @@ export async function getLeagueFourFactorsAdvanced(seasonToken?: string, scope: 
 // =========================================================================
 export async function getLeagueViolationsAdvanced(seasonToken?: string, scope: "team" | "player" = "team", forceRefresh = false): Promise<any> {
   if (!forceRefresh) {
-    const advSnap = getActiveAdvancedSnapshot();
+    const advSnap = getActiveAdvancedCoreSnapshot();
     if (advSnap?.violations?.[scope]?.items?.length) {
       return advSnap.violations[scope];
     }
@@ -2708,15 +2729,14 @@ async function scanHeroicClutchShotsFromSnapshotAndCdn(
 ) {
   const forceLive = typeof options === "boolean" ? options : Boolean(options.forceLive);
   const fullRescan = typeof options === "object" && Boolean(options.fullRescan);
-  const advSnap = getActiveAdvancedSnapshot();
-  const prevHeroic = advSnap?.heroicShots;
+  const prevHeroic = readNbaHeroicShotsFromDisk();
 
   if (!forceLive && prevHeroic?.items) {
     return prevHeroic;
   }
 
-  const baseSnap = readNbaSnapshotFromDisk();
-  if (!baseSnap) {
+  const s2027Snap = readNbaSeasonSnapshotFromDisk("2026-27");
+  if (!s2027Snap) {
     return (
       prevHeroic || {
         season: "2026-27",
@@ -2769,13 +2789,16 @@ async function scanHeroicClutchShotsFromSnapshotAndCdn(
     return Array.from(byEvent.values());
   };
 
-  // Scan close games (|diff| <= 4) from both 2026-27 and 2025-26
-  const close2027 = collectCloseGames(baseSnap.s2027?.teams || [], "2026-27", 4);
-  const close2026 = collectCloseGames(baseSnap.s2026?.teams || [], "2025-26", 4);
-  const allCloseGames = [...close2027, ...close2026];
-
   const existingItems: any[] = !fullRescan && Array.isArray(prevHeroic?.items) ? prevHeroic.items : [];
   const scannedSet = new Set<string>(!fullRescan && Array.isArray(prevHeroic?.scannedGameIds) ? prevHeroic.scannedGameIds : []);
+
+  // Only load 2025-26 snapshot if performing a full rescan or if scannedGameIds was never initialized
+  const need2026Archive = fullRescan || scannedSet.size === 0;
+  const s2026Snap = need2026Archive ? readNbaSeasonSnapshotFromDisk("2025-26") : null;
+
+  const close2027 = collectCloseGames(s2027Snap?.teams || [], "2026-27", 4);
+  const close2026 = s2026Snap ? collectCloseGames(s2026Snap.teams || [], "2025-26", 4) : [];
+  const allCloseGames = [...close2027, ...close2026];
 
   // Legacy migration: if previous snapshot already holds heroic shots without scannedGameIds,
   // treat finished 2025-26 archive + already-detected gameIds as archived so daily sync only checks new games.
@@ -2853,28 +2876,33 @@ async function scanHeroicClutchShotsFromSnapshotAndCdn(
 }
 
 export async function getLeagueHeroicShots(seasonToken?: string, forceRefresh = false): Promise<any> {
-  const advSnap = getActiveAdvancedSnapshot();
-  const prevHeroic = advSnap?.heroicShots;
+  const prevHeroic = readNbaHeroicShotsFromDisk();
   const basePayload =
     !forceRefresh && prevHeroic?.items
       ? prevHeroic
       : await scanHeroicClutchShotsFromSnapshotAndCdn({ forceLive: forceRefresh });
 
   if (
-    advSnap &&
     basePayload &&
     basePayload !== prevHeroic &&
     Array.isArray(basePayload.items) &&
     ((prevHeroic?.items?.length ?? -1) !== basePayload.items.length ||
       (prevHeroic?.scannedGameIds?.length ?? -1) !== (basePayload.scannedGameIds?.length ?? -1))
   ) {
-    const updatedSnap: NbaAdvancedSnapshotPayload = {
-      ...advSnap,
-      heroicShots: basePayload,
-    };
-    memoryAdvancedSnapshot = updatedSnap;
+    if (memoryAdvancedSnapshot) {
+      memoryAdvancedSnapshot = {
+        ...memoryAdvancedSnapshot,
+        heroicShots: basePayload,
+      };
+    }
+    if (memoryAdvancedCoreSnapshot) {
+      memoryAdvancedCoreSnapshot = {
+        ...memoryAdvancedCoreSnapshot,
+        heroicShots: basePayload,
+      };
+    }
     try {
-      writeNbaAdvancedSnapshotToDisk(updatedSnap);
+      writeNbaHeroicShotsToDisk(basePayload);
     } catch (err) {
       console.warn("[RadarNBA] No se pudo persistir heroicShots incremental en disco:", err);
     }
@@ -2904,7 +2932,7 @@ export async function getLeagueHeroicShots(seasonToken?: string, forceRefresh = 
 async function getTeamOnOffSplits(teamId: string, season: string, forceRefresh = false): Promise<any[]> {
   if (!teamId || teamId === "0") return [];
   if (!forceRefresh) {
-    const advSnap = getActiveAdvancedSnapshot();
+    const advSnap = getActiveAdvancedCoreSnapshot();
     if (advSnap?.onOffByTeam?.[teamId]?.length) {
       return advSnap.onOffByTeam[teamId];
     }
@@ -2988,7 +3016,7 @@ function buildAdvancedLeagueBenchmarks(
   },
   forceRefresh = false
 ): Record<string, { mean: number; sd: number }> {
-  const advSnapForOnOff = getActiveAdvancedSnapshot();
+  const advSnapForOnOff = getActiveAdvancedCoreSnapshot();
   const computeOnOffLeagueStats = (): Record<string, { mean: number; sd: number }> => {
     const outOnOff: Record<string, { mean: number; sd: number }> = {};
     const byTeam = advSnapForOnOff?.onOffByTeam;
@@ -3012,7 +3040,7 @@ function buildAdvancedLeagueBenchmarks(
   };
 
   if (!forceRefresh) {
-    const advSnap = getActiveAdvancedSnapshot();
+    const advSnap = getActiveAdvancedCoreSnapshot();
     if (advSnap?.benchmarks?.[scope] && Object.keys(advSnap.benchmarks[scope]).length >= 100) {
       return {
         ...advSnap.benchmarks[scope],
@@ -3586,8 +3614,8 @@ export async function buildAdvancedSnapshotFromCurrentState(
 
   // 3. Fetch or synthesize on/off splits for each team
   const onOffByTeam: Record<string, any[]> = {};
-  const baseSnap = readNbaSnapshotFromDisk();
-  const s2027Players = baseSnap?.s2027?.players || [];
+  const s2027Snap = readNbaSeasonSnapshotFromDisk("2026-27");
+  const s2027Players = s2027Snap?.players || [];
 
   const teamEntries = Object.entries(NBA_TEAMS_MAP);
   await mapWithConcurrency(teamEntries, 4, async ([abbr, meta]) => {
@@ -3724,6 +3752,7 @@ export async function syncNbaAdvancedSnapshotToDisk(options?: { forceLive?: bool
   const payload = await buildAdvancedSnapshotFromCurrentState("2026-27", options?.forceLive ?? false);
   const writeRes = writeNbaAdvancedSnapshotToDisk(payload);
   memoryAdvancedSnapshot = payload;
+  memoryAdvancedCoreSnapshot = payload;
 
   const itemsCount = {
     playerShotZones: payload.shotZones.player?.items?.length || 0,

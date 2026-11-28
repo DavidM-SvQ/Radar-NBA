@@ -25,6 +25,8 @@ import {
   matchesEntityUnifiedFilters,
   type UnifiedTableFiltersState,
 } from '../utils/entityFilters';
+import { CareerLeadersSubView } from './CareerLeadersSubView';
+import { useExperienceMetrics } from '../context/ExperienceMetricsContext';
 
 interface SeasonMilestonesViewProps {
   data: MilestonesPayload | null;
@@ -49,6 +51,8 @@ export function SeasonMilestonesView({
   onRetry,
   onInspectEntity,
 }: SeasonMilestonesViewProps) {
+  const { isMetricAllowed } = useExperienceMetrics();
+  const [sectionMode, setSectionMode] = useState<'season_2027' | 'career_history'>('season_2027');
   const [compMode, setCompMode] = useState<MilestoneComparisonMode>('full_season');
   const [showCurSeasonCol, setShowCurSeasonCol] = useState(true);
   const [showPrevSeasonCol, setShowPrevSeasonCol] = useState(true);
@@ -132,7 +136,9 @@ export function SeasonMilestonesView({
   const unifiedActive = hasActiveUnifiedFilters(unifiedFilters, 'mixed');
 
   const filteredSingleGame = useMemo(() => {
-    const records = data?.singleGameRecords ?? [];
+    const records = (data?.singleGameRecords ?? []).filter((item) =>
+      isMetricAllowed(item.metricId)
+    );
     return records.filter((item) => {
       if (sgCategory !== 'all' && item.category !== sgCategory) return false;
       if (sgSubGroup !== 'all' && item.subGroup && item.subGroup !== sgSubGroup)
@@ -176,6 +182,7 @@ export function SeasonMilestonesView({
     });
   }, [
     data?.singleGameRecords,
+    isMetricAllowed,
     sgCategory,
     sgSubGroup,
     qNorm,
@@ -186,7 +193,9 @@ export function SeasonMilestonesView({
   ]);
 
   const baseSeasonLeaders = useMemo(() => {
-    const leaders = data?.seasonLeaders ?? [];
+    const leaders = (data?.seasonLeaders ?? []).filter((item) =>
+      isMetricAllowed(item.metricId)
+    );
     if (compMode === 'head_to_head') {
       return leaders.filter((x) => !x.isCumulativeTotal);
     }
@@ -197,7 +206,16 @@ export function SeasonMilestonesView({
       return leaders.filter((x) => Boolean(x.isCumulativeTotal));
     }
     return leaders;
-  }, [data?.seasonLeaders, compMode, leaderStatMode]);
+  }, [data?.seasonLeaders, isMetricAllowed, compMode, leaderStatMode]);
+
+  useEffect(() => {
+    if (
+      leaderGroup !== 'all' &&
+      !baseSeasonLeaders.some((x) => x.group === leaderGroup)
+    ) {
+      setLeaderGroup('all');
+    }
+  }, [leaderGroup, baseSeasonLeaders]);
 
   const filteredSeasonLeaders = useMemo(() => {
     return baseSeasonLeaders.filter((item) => {
@@ -249,9 +267,55 @@ export function SeasonMilestonesView({
     entityLookup,
   ]);
 
+  const topSectionSwitcher = (
+    <div className="flex flex-wrap items-center justify-between gap-3 bg-[#131C2E] border border-[#1E293B] rounded-xl px-4 py-3">
+      <div className="inline-flex rounded-lg bg-[#0B1120] border border-[#1E293B] p-0.5">
+        <button
+          type="button"
+          onClick={() => setSectionMode('season_2027')}
+          className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-colors flex items-center gap-1.5 ${
+            sectionMode === 'season_2027'
+              ? 'bg-orange-500 text-white'
+              : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Flame className="w-3.5 h-3.5" />
+          <span>Temporada 2026-27 vs 2025-26</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setSectionMode('career_history')}
+          className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-colors flex items-center gap-1.5 ${
+            sectionMode === 'career_history'
+              ? 'bg-orange-500 text-white'
+              : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Trophy className="w-3.5 h-3.5" />
+          <span>Histórico & Récords de Carrera</span>
+        </button>
+      </div>
+      <span className="text-xs text-slate-400">
+        {sectionMode === 'career_history'
+          ? 'Buscador global de acumulados, promedios y Career Highs (2003-04 a 2026-27)'
+          : 'Comparativa interanual oficial y topes del curso actual'}
+      </span>
+    </div>
+  );
+
+  if (sectionMode === 'career_history') {
+    return (
+      <div className="space-y-4 sm:space-y-5 min-w-0">
+        {topSectionSwitcher}
+        <CareerLeadersSubView onInspectEntity={onInspectEntity} />
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="space-y-4">
+        {topSectionSwitcher}
         <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden [&>*:nth-child(odd)]:border-r [&>*:nth-child(odd)]:border-[#1E293B] [&>*:nth-child(-n+2)]:border-b [&>*:nth-child(-n+2)]:border-[#1E293B] lg:[&>*]:border-b-0 lg:[&>*]:border-r lg:[&>*:last-child]:border-r-0">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="p-3 space-y-1.5 animate-pulse">
@@ -279,22 +343,25 @@ export function SeasonMilestonesView({
 
   if (errorMsg || !data) {
     return (
-      <div className="bg-[#131C2E] border border-rose-500/40 rounded-lg p-5 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <p className="text-sm font-semibold text-rose-300">
-            No se pudieron cargar los hitos comparativos de ambas temporadas
-          </p>
-          <p className="text-xs text-slate-400 mt-1">
-            {errorMsg || 'Intenta actualizar de nuevo en unos segundos.'}
-          </p>
+      <div className="space-y-4">
+        {topSectionSwitcher}
+        <div className="bg-[#131C2E] border border-rose-500/40 rounded-lg p-5 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold text-rose-300">
+              No se pudieron cargar los hitos comparativos de ambas temporadas
+            </p>
+            <p className="text-xs text-slate-400 mt-1">
+              {errorMsg || 'Intenta actualizar de nuevo en unos segundos.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onRetry}
+            className="px-4 py-2 text-xs font-semibold bg-orange-500 text-slate-950 rounded-lg hover:bg-orange-400 transition-colors whitespace-nowrap shrink-0"
+          >
+            Reintentar carga
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={onRetry}
-          className="px-4 py-2 text-xs font-semibold bg-orange-500 text-slate-950 rounded-lg hover:bg-orange-400 transition-colors whitespace-nowrap shrink-0"
-        >
-          Reintentar carga
-        </button>
       </div>
     );
   }
@@ -480,9 +547,39 @@ export function SeasonMilestonesView({
     },
   ];
 
-  const visibleGlobalRows = globalRows.filter(
-    (r) => globalLayer === 'all' || r.layer === globalLayer
+  const GLOBAL_ROW_METRIC_MAP: Record<string, string> = {
+    ppg: 'points',
+    tot: 'points',
+    margin: 'team_diff',
+    pace: 'pace',
+    offrtg: 'offRtg',
+    efg: 'efgPct',
+    ts: 'tsPct',
+    '3pm': 'fg3m',
+    '3pct': 'fg3Pct',
+    orb: 'oreb',
+    orebpct: 'orebPct',
+    tovpct: 'tovPct',
+    paint: 'ptsPaint',
+    second: 'pts2ndChance',
+    fb: 'ptsFastBreak',
+    reb: 'rebounds',
+    ast: 'assists',
+    homew: 'team_win',
+    close: 'team_diff',
+    blowout: 'team_diff',
+  };
+
+  const allowedGlobalRows = globalRows.filter((r) =>
+    isMetricAllowed(GLOBAL_ROW_METRIC_MAP[r.id] ?? r.id)
   );
+
+  const visibleGlobalRows =
+    experienceMode === 'simple'
+      ? allowedGlobalRows
+      : allowedGlobalRows.filter(
+          (r) => globalLayer === 'all' || r.layer === globalLayer
+        );
 
   const maxPtsPlayer = data.singleGameRecords.find(
     (r) => r.metricId === 'sg-player-pts'
@@ -582,6 +679,7 @@ export function SeasonMilestonesView({
 
   return (
     <div className="space-y-4 sm:space-y-5 min-w-0">
+      {topSectionSwitcher}
       {/* Row 1: Compact 4-Column Summary Strip */}
       <div className="grid grid-cols-2 lg:grid-cols-4 bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden [&>*:nth-child(odd)]:border-r [&>*:nth-child(odd)]:border-[#1E293B] [&>*:nth-child(-n+2)]:border-b [&>*:nth-child(-n+2)]:border-[#1E293B] lg:[&>*]:border-b-0 lg:[&>*]:border-r lg:[&>*:last-child]:border-r-0">
         <div className="p-2.5 sm:p-3 min-w-0">
@@ -849,37 +947,37 @@ export function SeasonMilestonesView({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex flex-wrap items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg">
-              {(
-                [
-                  { id: 'basic', label: 'Esenciales' },
-                  { id: 'advanced', label: 'Ritmo, Puntería y Pintura' },
-                  { id: 'all', label: `Todos (${globalRows.length})` },
-                ] as const
-              ).map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => setGlobalLayer(opt.id)}
-                  className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                    globalLayer === opt.id
-                      ? 'bg-orange-500 text-slate-950 font-semibold'
-                      : 'text-slate-300 hover:text-white'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-
-            {experienceMode === 'simple' && (
+            {experienceMode === 'advanced' ? (
+              <div className="flex flex-wrap items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg">
+                {(
+                  [
+                    { id: 'basic', label: 'Esenciales' },
+                    { id: 'advanced', label: 'Ritmo, Puntería y Pintura' },
+                    { id: 'all', label: `Todos (${allowedGlobalRows.length})` },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setGlobalLayer(opt.id)}
+                    className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                      globalLayer === opt.id
+                        ? 'bg-orange-500 text-slate-950 font-semibold'
+                        : 'text-slate-300 hover:text-white'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            ) : (
               <button
                 type="button"
                 onClick={onSwitchToAdvanced}
                 className="min-h-[36px] inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-[#131C2E] hover:bg-[#182338] border border-[#1E293B] rounded-lg text-orange-400 transition-colors whitespace-nowrap shrink-0"
               >
                 <Sliders className="w-3.5 h-3.5" />
-                <span>Modo Avanzado</span>
+                <span>Ver métricas avanzadas</span>
               </button>
             )}
           </div>
@@ -1619,23 +1717,35 @@ export function SeasonMilestonesView({
           <div className="flex flex-wrap items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg self-start">
             {(
               [
-                { id: 'all', label: `Todos (${baseSeasonLeaders.length})` },
                 {
-                  id: 'shooting_scoring',
+                  id: 'all' as const,
+                  count: baseSeasonLeaders.length,
+                  label: `Todos (${baseSeasonLeaders.length})`,
+                },
+                {
+                  id: 'shooting_scoring' as const,
+                  count: baseSeasonLeaders.filter(
+                    (x) => x.group === 'shooting_scoring'
+                  ).length,
                   label: `Anotación y Tiro (${
                     baseSeasonLeaders.filter((x) => x.group === 'shooting_scoring')
                       .length
                   })`,
                 },
                 {
-                  id: 'rebounding',
+                  id: 'rebounding' as const,
+                  count: baseSeasonLeaders.filter((x) => x.group === 'rebounding')
+                    .length,
                   label: `Rebotes (${
                     baseSeasonLeaders.filter((x) => x.group === 'rebounding')
                       .length
                   })`,
                 },
                 {
-                  id: 'playmaking_allaround',
+                  id: 'playmaking_allaround' as const,
+                  count: baseSeasonLeaders.filter(
+                    (x) => x.group === 'playmaking_allaround'
+                  ).length,
                   label: `Creación y Todo-Terreno (${
                     baseSeasonLeaders.filter(
                       (x) => x.group === 'playmaking_allaround'
@@ -1643,37 +1753,40 @@ export function SeasonMilestonesView({
                   })`,
                 },
                 {
-                  id: 'defense_discipline',
-                  label: `Defensa y Hustle (${
+                  id: 'defense_discipline' as const,
+                  count: baseSeasonLeaders.filter(
+                    (x) => x.group === 'defense_discipline'
+                  ).length,
+                  label: `Defensa y Disciplina (${
                     baseSeasonLeaders.filter(
                       (x) => x.group === 'defense_discipline'
                     ).length
                   })`,
                 },
                 {
-                  id: 'advanced_hustle',
-                  label:
-                    experienceMode === 'simple'
-                      ? `Pintura e Impacto (${
-                          baseSeasonLeaders.filter(
-                            (x) => x.group === 'advanced_hustle'
-                          ).length
-                        })`
-                      : `Avanzadas y Zonas (${
-                          baseSeasonLeaders.filter(
-                            (x) => x.group === 'advanced_hustle'
-                          ).length
-                        })`,
+                  id: 'advanced_hustle' as const,
+                  count: baseSeasonLeaders.filter(
+                    (x) => x.group === 'advanced_hustle'
+                  ).length,
+                  label: `Avanzadas y Zonas (${
+                    baseSeasonLeaders.filter(
+                      (x) => x.group === 'advanced_hustle'
+                    ).length
+                  })`,
                 },
                 {
-                  id: 'team_leaders',
+                  id: 'team_leaders' as const,
+                  count: baseSeasonLeaders.filter((x) => x.group === 'team_leaders')
+                    .length,
                   label: `Equipos NBA (${
                     baseSeasonLeaders.filter((x) => x.group === 'team_leaders')
                       .length
                   })`,
                 },
-              ] as const
-            ).map((g) => (
+              ]
+            )
+              .filter((g) => g.id === 'all' || g.count > 0)
+              .map((g) => (
               <button
                 key={g.id}
                 type="button"

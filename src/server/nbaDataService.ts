@@ -9,15 +9,115 @@ import { createScoutingEngine } from "./scoutingEngine.ts";
 import { buildFantasyEspnSyncPayload } from "./fantasyEspnService.ts";
 import zlib from "zlib";
 import { packBootstrapWirePayload, populateTeamComputedFields } from "../utils/bootstrapWireCodec.ts";
-import { applyCdnDeltaGamesTo2027, hydrateSeasonDatasetFromSnapshot, readNbaSnapshotFromDisk, serializeSeasonDatasetForSnapshot, writeNbaSnapshotToDisk } from "./nbaSnapshotStore.ts";
+import {
+  applyCdnDeltaGamesTo2027,
+  hasNbaSeasonSnapshotOnDisk,
+  hydrateSeasonDatasetFromSnapshot,
+  readNbaBiosSnapshotFromDisk,
+  readNbaSeasonSnapshotFromDisk,
+  readNbaSnapshotFromDisk,
+  serializeSeasonDatasetForSnapshot,
+  writeNbaBiosSnapshotToDisk,
+  writeNbaSeasonSnapshotToDisk,
+  writeNbaSnapshotToDisk,
+} from "./nbaSnapshotStore.ts";
 import { buildSeasonAwardsPayload, enrichBiosWithEspnRosters } from "./seasonAwardsService.ts";
 import { executeWithCircuitBreaker, identifyProviderFromUrl, isCircuitOpen } from "./circuitBreaker.ts";
 import { STATIC_SCHEDULE_2027 } from "../utils/staticSchedule.ts";
 import { getLeagueHeroicShots, syncNbaAdvancedSnapshotToDisk } from "./nbaAdvancedStatsService.ts";
 import { translateHeroicShotActionCompactEs } from "../utils/heroicPlayEs.ts";
 import { DEFAULT_PLAYER_NBA_KPI_KEYS, DEFAULT_TEAM_NBA_KPI_KEYS } from "../utils/nbaInspectorAllKpis.ts";
+import { DEFAULT_EXPERIENCE_METRICS_CONFIG, DEFAULT_SIMPLE_METRIC_IDS, normalizeExperienceMetricsConfig } from "../utils/experienceMetricsCatalog.ts";
+import {
+  getCareerLeadersResponse,
+  getPlayerCareerProfile,
+  getPlayerPriorCareerBaseline,
+  getTeamCareerHistory,
+} from "./nbaCareerHistoryService.ts";
+import { buildInjuriesRotationPayload } from "./injuriesRotationService.ts";
+import { buildLeagueContractsPayload } from "./contractsService.ts";
+import { buildDraftHistoryPayload } from "./draftHistoryService.ts";
+import { buildFutureDraftPicksPayload } from "./futureDraftPicksService.ts";
+import {
+  DEFAULT_AUTO_STREAKS_CONFIG,
+  DEFAULT_AUTO_STREAKS_CONFIG_VALUES,
+  normalizeAutoStreaksConfig,
+} from "../utils/autoStreaksConfig.ts";
+import {
+  DEFAULT_SIDEBAR_MENU_CONFIG,
+  DEFAULT_SIDEBAR_MENU_CONFIG_VALUES,
+  normalizeSidebarMenuConfig,
+} from "../utils/sidebarMenuConfig.ts";
 
 const GAMEDAY_THRESHOLDS_FILE = path.resolve(process.cwd(), "data", "gameday-thresholds-config.json");
+const AUTO_STREAKS_CONFIG_FILE = path.resolve(process.cwd(), "data", "auto-streaks-config.json");
+const AUTO_STREAKS_CONFIG_TMP_FILE = path.resolve("/tmp", "radarnba-auto-streaks-config.json");
+
+let activeAutoStreaksConfig = normalizeAutoStreaksConfig(DEFAULT_AUTO_STREAKS_CONFIG);
+
+function initAutoStreaksConfigFromDisk() {
+  const candidates = [AUTO_STREAKS_CONFIG_FILE, AUTO_STREAKS_CONFIG_TMP_FILE];
+  for (const filePath of candidates) {
+    try {
+      if (fs.existsSync(filePath)) {
+        const raw = fs.readFileSync(filePath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object" && Array.isArray(parsed.rules)) {
+          activeAutoStreaksConfig = normalizeAutoStreaksConfig(parsed);
+          return;
+        }
+      }
+    } catch {
+      // Ignore disk read errors
+    }
+  }
+}
+initAutoStreaksConfigFromDisk();
+
+function getAutoStreaksConfig() {
+  return normalizeAutoStreaksConfig(activeAutoStreaksConfig);
+}
+
+function updateAutoStreaksConfig(values) {
+  const normalized = normalizeAutoStreaksConfig({
+    ...values,
+    updatedAt: Date.now(),
+  });
+  activeAutoStreaksConfig = normalized;
+  let persisted = false;
+  try {
+    const dir = path.dirname(AUTO_STREAKS_CONFIG_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(AUTO_STREAKS_CONFIG_FILE, JSON.stringify(normalized, null, 2), "utf-8");
+    persisted = true;
+  } catch {
+    // Fallback to /tmp on read-only serverless runtimes (Vercel)
+  }
+  if (!persisted) {
+    try {
+      fs.writeFileSync(AUTO_STREAKS_CONFIG_TMP_FILE, JSON.stringify(normalized, null, 2), "utf-8");
+    } catch {
+      // Ignore /tmp write error
+    }
+  }
+  return getAutoStreaksConfig();
+}
+
+function resetAutoStreaksConfigDefaults() {
+  const reset = normalizeAutoStreaksConfig({
+    ...DEFAULT_AUTO_STREAKS_CONFIG_VALUES,
+    updatedAt: Date.now(),
+  });
+  activeAutoStreaksConfig = reset;
+  for (const filePath of [AUTO_STREAKS_CONFIG_FILE, AUTO_STREAKS_CONFIG_TMP_FILE]) {
+    try {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch {
+      // Ignore unlink errors
+    }
+  }
+  return getAutoStreaksConfig();
+}
 
 export const DEFAULT_GAMEDAY_THRESHOLDS = {
   // 03A. Noches de Explosión
@@ -108,27 +208,71 @@ function resetGamedayThresholdsConfigDefaults() {
 }
 
 const WEB_FEATURE_FLAGS_FILE = path.resolve(process.cwd(), "data", "web-feature-flags.json");
+const WEB_FEATURE_FLAGS_TMP_FILE = path.resolve("/tmp", "radarnba-web-feature-flags.json");
 
 export const DEFAULT_WEB_FEATURE_FLAGS = {
   showHeroicBadges: false,
+  themeStyle: "v3_broadcast",
+  defaultSeasonMode: "2027",
+  defaultPlayerMatchWindow: 18,
+  minZScore: 1.5,
+  minPctDelta: 15,
+  minMinutes: 18,
 };
 
 let activeWebFeatureFlags = { ...DEFAULT_WEB_FEATURE_FLAGS, updatedAt: 0 };
 
+function sanitizeWebFeatureFlagsPayload(parsed, base) {
+  const validSeason =
+    parsed?.defaultSeasonMode === "2027" ||
+    parsed?.defaultSeasonMode === "2026" ||
+    parsed?.defaultSeasonMode === "2025" ||
+    parsed?.defaultSeasonMode === "2024"
+      ? parsed.defaultSeasonMode
+      : base.defaultSeasonMode;
+  const clampNum = (val, min, max, fallback, decimals = 0) => {
+    const n = Number(val);
+    if (!Number.isFinite(n)) return fallback;
+    const clamped = Math.max(min, Math.min(max, n));
+    return decimals > 0 ? Math.round(clamped * 10 ** decimals) / 10 ** decimals : Math.round(clamped);
+  };
+  return {
+    showHeroicBadges:
+      typeof parsed?.showHeroicBadges === "boolean"
+        ? parsed.showHeroicBadges
+        : base.showHeroicBadges,
+    themeStyle:
+      parsed?.themeStyle === "classic" ||
+      parsed?.themeStyle === "v2_editorial" ||
+      parsed?.themeStyle === "v3_broadcast"
+        ? parsed.themeStyle
+        : base.themeStyle,
+    defaultSeasonMode: validSeason,
+    defaultPlayerMatchWindow: clampNum(parsed?.defaultPlayerMatchWindow, 3, 82, base.defaultPlayerMatchWindow, 0),
+    minZScore: clampNum(parsed?.minZScore, 0.5, 3.0, base.minZScore, 1),
+    minPctDelta: clampNum(parsed?.minPctDelta, 5, 50, base.minPctDelta, 0),
+    minMinutes: clampNum(parsed?.minMinutes, 5, 35, base.minMinutes, 0),
+    updatedAt: typeof parsed?.updatedAt === "number" ? parsed.updatedAt : base.updatedAt ?? 0,
+  };
+}
+
 function initWebFeatureFlagsFromDisk() {
-  try {
-    if (fs.existsSync(WEB_FEATURE_FLAGS_FILE)) {
-      const raw = fs.readFileSync(WEB_FEATURE_FLAGS_FILE, "utf-8");
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed.showHeroicBadges === "boolean") {
-        activeWebFeatureFlags = {
-          showHeroicBadges: parsed.showHeroicBadges,
-          updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : 0,
-        };
+  for (const candidatePath of [WEB_FEATURE_FLAGS_FILE, WEB_FEATURE_FLAGS_TMP_FILE]) {
+    try {
+      if (fs.existsSync(candidatePath)) {
+        const raw = fs.readFileSync(candidatePath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") {
+          activeWebFeatureFlags = sanitizeWebFeatureFlagsPayload(parsed, {
+            ...DEFAULT_WEB_FEATURE_FLAGS,
+            updatedAt: 0,
+          });
+          return;
+        }
       }
+    } catch {
+      // Try fallback path
     }
-  } catch {
-    // Ignore disk read errors
   }
 }
 initWebFeatureFlagsFromDisk();
@@ -138,19 +282,161 @@ function getWebFeatureFlags() {
 }
 
 function updateWebFeatureFlags(values) {
-  const updated = {
-    showHeroicBadges: Boolean(values?.showHeroicBadges),
-    updatedAt: Date.now(),
-  };
+  const updated = sanitizeWebFeatureFlagsPayload(
+    { ...values, updatedAt: Date.now() },
+    activeWebFeatureFlags
+  );
   activeWebFeatureFlags = updated;
-  try {
-    const dir = path.dirname(WEB_FEATURE_FLAGS_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(WEB_FEATURE_FLAGS_FILE, JSON.stringify(updated, null, 2), "utf-8");
-  } catch {
-    // Ignore disk write errors in read-only runtimes
+  for (const targetPath of [WEB_FEATURE_FLAGS_FILE, WEB_FEATURE_FLAGS_TMP_FILE]) {
+    try {
+      const dir = path.dirname(targetPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(targetPath, JSON.stringify(updated, null, 2), "utf-8");
+      break;
+    } catch {
+      // Fallback to /tmp in read-only runtimes
+    }
   }
   return { ...activeWebFeatureFlags };
+}
+
+const EXPERIENCE_METRICS_CONFIG_FILE = path.resolve(process.cwd(), "data", "experience-metrics-config.json");
+const EXPERIENCE_METRICS_CONFIG_TMP_FILE = path.resolve("/tmp", "radarnba-experience-metrics-config.json");
+
+export const DEFAULT_EXPERIENCE_METRICS_CONFIG_VALUES = {
+  simpleMetricIds: [...DEFAULT_SIMPLE_METRIC_IDS],
+};
+
+let activeExperienceMetricsConfig = normalizeExperienceMetricsConfig(DEFAULT_EXPERIENCE_METRICS_CONFIG);
+
+function initExperienceMetricsConfigFromDisk() {
+  for (const candidatePath of [EXPERIENCE_METRICS_CONFIG_FILE, EXPERIENCE_METRICS_CONFIG_TMP_FILE]) {
+    try {
+      if (fs.existsSync(candidatePath)) {
+        const raw = fs.readFileSync(candidatePath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") {
+          activeExperienceMetricsConfig = normalizeExperienceMetricsConfig(parsed);
+          return;
+        }
+      }
+    } catch {
+      // Try next path
+    }
+  }
+}
+initExperienceMetricsConfigFromDisk();
+
+function getExperienceMetricsConfig() {
+  return {
+    simpleMetricIds: [...activeExperienceMetricsConfig.simpleMetricIds],
+    updatedAt: activeExperienceMetricsConfig.updatedAt,
+  };
+}
+
+function updateExperienceMetricsConfig(values) {
+  const normalized = normalizeExperienceMetricsConfig({
+    ...values,
+    updatedAt: Date.now(),
+  });
+  activeExperienceMetricsConfig = normalized;
+  for (const targetPath of [EXPERIENCE_METRICS_CONFIG_FILE, EXPERIENCE_METRICS_CONFIG_TMP_FILE]) {
+    try {
+      const dir = path.dirname(targetPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(targetPath, JSON.stringify(normalized, null, 2), "utf-8");
+      break;
+    } catch {
+      // Fallback to /tmp in read-only runtimes
+    }
+  }
+  return getExperienceMetricsConfig();
+}
+
+function resetExperienceMetricsConfigDefaults() {
+  const reset = normalizeExperienceMetricsConfig({
+    simpleMetricIds: [...DEFAULT_SIMPLE_METRIC_IDS],
+    updatedAt: Date.now(),
+  });
+  activeExperienceMetricsConfig = reset;
+  for (const targetPath of [EXPERIENCE_METRICS_CONFIG_FILE, EXPERIENCE_METRICS_CONFIG_TMP_FILE]) {
+    try {
+      if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
+    } catch {
+      // Ignore unlink errors
+    }
+  }
+  return getExperienceMetricsConfig();
+}
+
+const SIDEBAR_MENU_CONFIG_FILE = path.resolve(process.cwd(), "data", "sidebar-menu-config.json");
+const SIDEBAR_MENU_CONFIG_TMP_FILE = path.resolve("/tmp", "radarnba-sidebar-menu-config.json");
+
+let activeSidebarMenuConfig = normalizeSidebarMenuConfig(DEFAULT_SIDEBAR_MENU_CONFIG);
+
+function initSidebarMenuConfigFromDisk() {
+  for (const candidatePath of [SIDEBAR_MENU_CONFIG_FILE, SIDEBAR_MENU_CONFIG_TMP_FILE]) {
+    try {
+      if (fs.existsSync(candidatePath)) {
+        const raw = fs.readFileSync(candidatePath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") {
+          activeSidebarMenuConfig = normalizeSidebarMenuConfig(parsed);
+          return;
+        }
+      }
+    } catch {
+      // Try next path
+    }
+  }
+}
+initSidebarMenuConfigFromDisk();
+
+function getSidebarMenuConfig() {
+  return {
+    groups: activeSidebarMenuConfig.groups.map((g) => ({
+      id: g.id,
+      label: g.label,
+      itemIds: [...g.itemIds],
+    })),
+    hiddenIds: [...activeSidebarMenuConfig.hiddenIds],
+    updatedAt: activeSidebarMenuConfig.updatedAt,
+  };
+}
+
+function updateSidebarMenuConfig(values) {
+  const normalized = normalizeSidebarMenuConfig({
+    ...values,
+    updatedAt: Date.now(),
+  });
+  activeSidebarMenuConfig = normalized;
+  for (const targetPath of [SIDEBAR_MENU_CONFIG_FILE, SIDEBAR_MENU_CONFIG_TMP_FILE]) {
+    try {
+      const dir = path.dirname(targetPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(targetPath, JSON.stringify(normalized, null, 2), "utf-8");
+      break;
+    } catch {
+      // Fallback to /tmp in read-only runtimes
+    }
+  }
+  return getSidebarMenuConfig();
+}
+
+function resetSidebarMenuConfigDefaults() {
+  const reset = normalizeSidebarMenuConfig({
+    ...DEFAULT_SIDEBAR_MENU_CONFIG_VALUES,
+    updatedAt: Date.now(),
+  });
+  activeSidebarMenuConfig = reset;
+  for (const targetPath of [SIDEBAR_MENU_CONFIG_FILE, SIDEBAR_MENU_CONFIG_TMP_FILE]) {
+    try {
+      if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
+    } catch {
+      // Ignore unlink errors
+    }
+  }
+  return getSidebarMenuConfig();
 }
 
 const INSPECTOR_KPI_DEFAULTS_FILE = path.resolve(process.cwd(), "data", "inspector-kpi-defaults.json");
@@ -245,14 +531,27 @@ const MILESTONE_NOTIFICATIONS_FILE = path.resolve(process.cwd(), "data", "milest
 
 export const DEFAULT_MILESTONE_NOTIFICATIONS_CONFIG = {
   enabled: true,
-  lookbackDays: 3,
+  lookbackDays: 2,
   maxNotifications: 40,
+  minSeverity: "all",
+  dedupePlayerGame: true,
 
   scoringMilestoneEnabled: true,
   scoringThreshold: 40,
   seasonHighPtsEnabled: true,
-  seasonHighMinPts: 26,
-  seasonHighMinGames: 4,
+  seasonHighMinPts: 35,
+  seasonHighMinGames: 8,
+  seasonHighMinReb: 16,
+  seasonHighMinAst: 13,
+  seasonHighMin3pm: 7,
+  seasonHighMinStlBlk: 5,
+  careerHighEnabled: true,
+  careerHighMinGames: 30,
+  careerHighMinPts: 32,
+  careerHighMinReb: 15,
+  careerHighMinAst: 12,
+  careerHighMin3pm: 7,
+  careerHighMinStlBlk: 5,
   threePointExplosionEnabled: true,
   threePointThreshold: 8,
   assistExplosionEnabled: true,
@@ -312,8 +611,8 @@ export const DEFAULT_MILESTONE_NOTIFICATIONS_CONFIG = {
   teamSeasonWinsStep: 10,
 
   imminentMilestonesEnabled: true,
-  imminentPtsWithin: 25,
-  imminentOtherWithin: 5,
+  imminentPtsWithin: 15,
+  imminentOtherWithin: 3,
   streakMilestoneEnabled: true,
   streakMinGames: 7,
   streakPtsThreshold: 20,
@@ -335,17 +634,31 @@ function sanitizeMilestoneNotificationsConfig(values) {
     return Math.min(max, Math.max(min, Math.round(n)));
   };
   const boolVal = (v, def) => (typeof v === "boolean" ? v : def);
+  const sevVal = (v, def) => (v === "all" || v === "high" || v === "epic" ? v : def);
   const d = DEFAULT_MILESTONE_NOTIFICATIONS_CONFIG;
   return {
     enabled: boolVal(values?.enabled, d.enabled),
     lookbackDays: numClamp(values?.lookbackDays, d.lookbackDays, 1, 14),
     maxNotifications: numClamp(values?.maxNotifications, d.maxNotifications, 5, 100),
+    minSeverity: sevVal(values?.minSeverity, d.minSeverity),
+    dedupePlayerGame: boolVal(values?.dedupePlayerGame, d.dedupePlayerGame),
 
     scoringMilestoneEnabled: boolVal(values?.scoringMilestoneEnabled, d.scoringMilestoneEnabled),
     scoringThreshold: numClamp(values?.scoringThreshold, d.scoringThreshold, 20, 80),
     seasonHighPtsEnabled: boolVal(values?.seasonHighPtsEnabled, d.seasonHighPtsEnabled),
-    seasonHighMinPts: numClamp(values?.seasonHighMinPts, d.seasonHighMinPts, 15, 60),
-    seasonHighMinGames: numClamp(values?.seasonHighMinGames, d.seasonHighMinGames, 2, 20),
+    seasonHighMinPts: numClamp(values?.seasonHighMinPts, d.seasonHighMinPts, 15, 65),
+    seasonHighMinGames: numClamp(values?.seasonHighMinGames, d.seasonHighMinGames, 2, 30),
+    seasonHighMinReb: numClamp(values?.seasonHighMinReb, d.seasonHighMinReb, 8, 30),
+    seasonHighMinAst: numClamp(values?.seasonHighMinAst, d.seasonHighMinAst, 6, 25),
+    seasonHighMin3pm: numClamp(values?.seasonHighMin3pm, d.seasonHighMin3pm, 4, 16),
+    seasonHighMinStlBlk: numClamp(values?.seasonHighMinStlBlk, d.seasonHighMinStlBlk, 3, 10),
+    careerHighEnabled: boolVal(values?.careerHighEnabled, d.careerHighEnabled),
+    careerHighMinGames: numClamp(values?.careerHighMinGames, d.careerHighMinGames, 5, 150),
+    careerHighMinPts: numClamp(values?.careerHighMinPts, d.careerHighMinPts, 15, 65),
+    careerHighMinReb: numClamp(values?.careerHighMinReb, d.careerHighMinReb, 8, 30),
+    careerHighMinAst: numClamp(values?.careerHighMinAst, d.careerHighMinAst, 6, 25),
+    careerHighMin3pm: numClamp(values?.careerHighMin3pm, d.careerHighMin3pm, 4, 16),
+    careerHighMinStlBlk: numClamp(values?.careerHighMinStlBlk, d.careerHighMinStlBlk, 3, 10),
     threePointExplosionEnabled: boolVal(values?.threePointExplosionEnabled, d.threePointExplosionEnabled),
     threePointThreshold: numClamp(values?.threePointThreshold, d.threePointThreshold, 4, 16),
     assistExplosionEnabled: boolVal(values?.assistExplosionEnabled, d.assistExplosionEnabled),
@@ -618,9 +931,9 @@ async function getPlayerBiosMap(forceRefresh = false, options) {
     return cachedBios.map;
   }
   const map = /* @__PURE__ */ new Map();
-  const snap = readNbaSnapshotFromDisk();
-  if (snap?.bios?.length) {
-    for (const b of snap.bios) {
+  const biosList = readNbaBiosSnapshotFromDisk();
+  if (biosList?.length) {
+    for (const b of biosList) {
       if (b?.id) {
         map.set(b.id, { ...b });
       }
@@ -679,36 +992,25 @@ async function buildSingleSeasonDataset(seasonCode, forceRefresh = false, option
     return existing;
   }
   const promise = (async () => {
-    const snap = readNbaSnapshotFromDisk();
-    if (seasonCode === "2025-26" && !forceLive && snap?.s2026) {
-      const hydrated26 = hydrateSeasonDatasetFromSnapshot(snap.s2026);
-      seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: hydrated26 });
-      return hydrated26;
-    }
-    if (seasonCode === "2023-24" && !forceLive && snap?.s2024) {
-      const hydrated24 = hydrateSeasonDatasetFromSnapshot(snap.s2024);
-      seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: hydrated24 });
-      return hydrated24;
+    const seasonSnap = readNbaSeasonSnapshotFromDisk(seasonCode);
+    if (
+      (seasonCode === "2025-26" || seasonCode === "2024-25" || seasonCode === "2023-24") &&
+      !forceLive &&
+      seasonSnap
+    ) {
+      const hydratedClosed = hydrateSeasonDatasetFromSnapshot(seasonSnap);
+      seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: hydratedClosed });
+      return hydratedClosed;
     }
     const biosMap = await getPlayerBiosMap(forceRefresh, { forceLiveStats: forceLive });
     if (isSnapshotOnlyRuntime() && !forceLive) {
       const createEmptyTeamsMap = __name(() => new Map(Object.values(NBA_TEAMS_MAP).map((tm) => [tm.abbr, { id: tm.id, name: tm.name, shortName: tm.abbr === "POR" ? "Trail Blazers" : tm.name.split(" ").slice(-1)[0] || tm.name, abbreviation: tm.abbr, conference: EAST_TEAM_ABBRS.has(tm.abbr) ? "Este" : "Oeste", wins: 0, losses: 0, winPct: 0, playoffSeed: 0, gamesBehind: "-", streakCode: "-", homeRecord: "0-0", roadRecord: "0-0", lastTenRecord: "0-0", avgPointsFor: 0, avgPointsAgainst: 0, differential: 0, games: [] }])), "createEmptyTeamsMap");
-      if (seasonCode === "2025-26") {
-        const fallback26 = snap?.s2026 ? hydrateSeasonDatasetFromSnapshot(snap.s2026) : { seasonCode: "2025-26", dataSource: "espn_fallback", teamsByAbbr: createEmptyTeamsMap(), playersById: /* @__PURE__ */ new Map() };
-        seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: fallback26 });
-        return fallback26;
+      if (seasonCode === "2025-26" || seasonCode === "2024-25" || seasonCode === "2023-24") {
+        const fallbackClosed = seasonSnap ? hydrateSeasonDatasetFromSnapshot(seasonSnap) : { seasonCode, dataSource: "espn_fallback", teamsByAbbr: createEmptyTeamsMap(), playersById: /* @__PURE__ */ new Map() };
+        seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: fallbackClosed });
+        return fallbackClosed;
       }
-      if (seasonCode === "2024-25") {
-        const fallback25 = snap?.s2025 ? hydrateSeasonDatasetFromSnapshot(snap.s2025) : { seasonCode: "2024-25", dataSource: "espn_fallback", teamsByAbbr: createEmptyTeamsMap(), playersById: /* @__PURE__ */ new Map() };
-        seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: fallback25 });
-        return fallback25;
-      }
-      if (seasonCode === "2023-24") {
-        const fallback24 = snap?.s2024 ? hydrateSeasonDatasetFromSnapshot(snap.s2024) : { seasonCode: "2023-24", dataSource: "espn_fallback", teamsByAbbr: createEmptyTeamsMap(), playersById: /* @__PURE__ */ new Map() };
-        seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: fallback24 });
-        return fallback24;
-      }
-      const hydrated27 = snap?.s2027 ? hydrateSeasonDatasetFromSnapshot(snap.s2027) : { seasonCode: "2026-27", dataSource: "nba_official_hybrid", teamsByAbbr: createEmptyTeamsMap(), playersById: /* @__PURE__ */ new Map() };
+      const hydrated27 = seasonSnap ? hydrateSeasonDatasetFromSnapshot(seasonSnap) : { seasonCode: "2026-27", dataSource: "nba_official_hybrid", teamsByAbbr: createEmptyTeamsMap(), playersById: /* @__PURE__ */ new Map() };
       await applyCdnDeltaGamesTo2027(hydrated27, biosMap, { maxGamesToFetch: options?.cdnMaxGames ?? 32, timeoutBudgetMs: options?.cdnTimeoutMs ?? 3800, forceRefresh });
       seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: hydrated27 });
       return hydrated27;
@@ -716,9 +1018,9 @@ async function buildSingleSeasonDataset(seasonCode, forceRefresh = false, option
     const encSeason = encodeURIComponent(seasonCode);
     const standingsUrl = `https://stats.nba.com/stats/leaguestandingsv3?GroupBy=conf&LeagueID=00&Season=${encSeason}&SeasonType=Regular%20Season&Section=overall`;
     let standingsRes: PromiseSettledResult<any>;
-    if (!forceLive && snap?.s2027 && seasonCode === "2026-27") {
+    if (!forceLive && seasonSnap && seasonCode === "2026-27") {
       if (isCircuitOpen("nba_stats")) {
-        const base27 = hydrateSeasonDatasetFromSnapshot(snap.s2027);
+        const base27 = hydrateSeasonDatasetFromSnapshot(seasonSnap);
         await applyCdnDeltaGamesTo2027(base27, biosMap, { maxGamesToFetch: options?.cdnMaxGames ?? 32, timeoutBudgetMs: options?.cdnTimeoutMs ?? 3800, forceRefresh });
         seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: base27 });
         return base27;
@@ -728,7 +1030,7 @@ async function buildSingleSeasonDataset(seasonCode, forceRefresh = false, option
       ]);
       const probeRows = probeRes.status === "fulfilled" ? parseNbaResultSet(probeRes.value) : [];
       if (probeRows.length === 0) {
-        const base27 = hydrateSeasonDatasetFromSnapshot(snap.s2027);
+        const base27 = hydrateSeasonDatasetFromSnapshot(seasonSnap);
         await applyCdnDeltaGamesTo2027(base27, biosMap, { maxGamesToFetch: options?.cdnMaxGames ?? 32, timeoutBudgetMs: options?.cdnTimeoutMs ?? 3800, forceRefresh });
         seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: base27 });
         return base27;
@@ -990,23 +1292,13 @@ async function buildSingleSeasonDataset(seasonCode, forceRefresh = false, option
       }
     }
     if (rawTeamLogs.length === 0 || rawPlayerLogs.length === 0) {
-      if (seasonCode === "2024-25" && snap?.s2025) {
-        const fallback25 = hydrateSeasonDatasetFromSnapshot(snap.s2025);
-        seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: fallback25 });
-        return fallback25;
-      }
-      if (seasonCode === "2023-24" && snap?.s2024) {
-        const fallback24 = hydrateSeasonDatasetFromSnapshot(snap.s2024);
-        seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: fallback24 });
-        return fallback24;
-      }
-      if (seasonCode === "2025-26" && snap?.s2026) {
-        const fallback26 = hydrateSeasonDatasetFromSnapshot(snap.s2026);
-        seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: fallback26 });
-        return fallback26;
+      if ((seasonCode === "2024-25" || seasonCode === "2023-24" || seasonCode === "2025-26") && seasonSnap) {
+        const fallbackClosed = hydrateSeasonDatasetFromSnapshot(seasonSnap);
+        seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: fallbackClosed });
+        return fallbackClosed;
       }
       if (seasonCode === "2026-27") {
-        const base27 = snap?.s2027 ? hydrateSeasonDatasetFromSnapshot(snap.s2027) : { seasonCode: "2026-27", dataSource: "nba_official_hybrid", teamsByAbbr, playersById };
+        const base27 = seasonSnap ? hydrateSeasonDatasetFromSnapshot(seasonSnap) : { seasonCode: "2026-27", dataSource: "nba_official_hybrid", teamsByAbbr, playersById };
         await applyCdnDeltaGamesTo2027(base27, biosMap, { maxGamesToFetch: options?.cdnMaxGames ?? 60, timeoutBudgetMs: options?.cdnTimeoutMs ?? 8e3, forceRefresh: true });
         seasonDatasetCache.set(seasonCode, { expiresAt: Date.now() + ttlMs, data: base27 });
         return base27;
@@ -1222,25 +1514,45 @@ async function searchLeaguePlayers(query) {
   return out;
 }
 async function getSinglePlayerSummary(playerId, seasonMode = "continuous") {
-  const [full, biosMap] = await Promise.all([getFullLeagueMemory(false), getPlayerBiosMap(false)]);
   if (seasonMode === "2027") {
-    const p = full.s2027.playersById.get(playerId);
+    const [s2027, biosMap] = await Promise.all([buildSingleSeasonDataset("2026-27", false), getPlayerBiosMap(false)]);
+    const p = s2027.playersById.get(playerId);
     if (p) return p;
-  } else if (seasonMode === "2026") {
-    const p = full.s2026.playersById.get(playerId);
+    const bio = biosMap.get(playerId);
+    if (!bio) return null;
+    const tMeta = NBA_TEAMS_MAP[bio.teamAbbr];
+    return { id: bio.id, name: bio.name, teamId: bio.teamId || tMeta?.id || "", teamAbbr: bio.teamAbbr || "NBA", teamName: tMeta?.name || bio.teamAbbr || "NBA", position: bio.position || "G-F", jersey: bio.jersey || void 0, height: bio.height || void 0, country: bio.country || void 0, ...(bio.birthYear ? { birthYear: bio.birthYear } : {}), ...(bio.fromYear ? { fromYear: bio.fromYear } : {}), ...(bio.draftYear ? { draftYear: bio.draftYear } : {}), ...(typeof bio.experienceYears === "number" ? { experienceYears: bio.experienceYears } : {}), games: [] };
+  }
+  if (seasonMode === "2026") {
+    const [s2026, biosMap] = await Promise.all([buildSingleSeasonDataset("2025-26", false), getPlayerBiosMap(false)]);
+    const p = s2026.playersById.get(playerId);
     if (p) return p;
-  } else if (seasonMode === "2025") {
-    const s2025 = await buildSingleSeasonDataset("2024-25", false);
+    const bio = biosMap.get(playerId);
+    if (!bio) return null;
+    const tMeta = NBA_TEAMS_MAP[bio.teamAbbr];
+    return { id: bio.id, name: bio.name, teamId: bio.teamId || tMeta?.id || "", teamAbbr: bio.teamAbbr || "NBA", teamName: tMeta?.name || bio.teamAbbr || "NBA", position: bio.position || "G-F", jersey: bio.jersey || void 0, height: bio.height || void 0, country: bio.country || void 0, ...(bio.birthYear ? { birthYear: bio.birthYear } : {}), ...(bio.fromYear ? { fromYear: bio.fromYear } : {}), ...(bio.draftYear ? { draftYear: bio.draftYear } : {}), ...(typeof bio.experienceYears === "number" ? { experienceYears: bio.experienceYears } : {}), games: [] };
+  }
+  if (seasonMode === "2025") {
+    const [s2025, biosMap] = await Promise.all([buildSingleSeasonDataset("2024-25", false), getPlayerBiosMap(false)]);
     const p = s2025.playersById.get(playerId);
     if (p) return p;
-  } else if (seasonMode === "2024") {
-    const s2024 = await buildSingleSeasonDataset("2023-24", false);
+    const bio = biosMap.get(playerId);
+    if (!bio) return null;
+    const tMeta = NBA_TEAMS_MAP[bio.teamAbbr];
+    return { id: bio.id, name: bio.name, teamId: bio.teamId || tMeta?.id || "", teamAbbr: bio.teamAbbr || "NBA", teamName: tMeta?.name || bio.teamAbbr || "NBA", position: bio.position || "G-F", jersey: bio.jersey || void 0, height: bio.height || void 0, country: bio.country || void 0, ...(bio.birthYear ? { birthYear: bio.birthYear } : {}), ...(bio.fromYear ? { fromYear: bio.fromYear } : {}), ...(bio.draftYear ? { draftYear: bio.draftYear } : {}), ...(typeof bio.experienceYears === "number" ? { experienceYears: bio.experienceYears } : {}), games: [] };
+  }
+  if (seasonMode === "2024") {
+    const [s2024, biosMap] = await Promise.all([buildSingleSeasonDataset("2023-24", false), getPlayerBiosMap(false)]);
     const p = s2024.playersById.get(playerId);
     if (p) return p;
-  } else {
-    const p = full.allPlayers.find((x) => x.id === playerId);
-    if (p) return p;
+    const bio = biosMap.get(playerId);
+    if (!bio) return null;
+    const tMeta = NBA_TEAMS_MAP[bio.teamAbbr];
+    return { id: bio.id, name: bio.name, teamId: bio.teamId || tMeta?.id || "", teamAbbr: bio.teamAbbr || "NBA", teamName: tMeta?.name || bio.teamAbbr || "NBA", position: bio.position || "G-F", jersey: bio.jersey || void 0, height: bio.height || void 0, country: bio.country || void 0, ...(bio.birthYear ? { birthYear: bio.birthYear } : {}), ...(bio.fromYear ? { fromYear: bio.fromYear } : {}), ...(bio.draftYear ? { draftYear: bio.draftYear } : {}), ...(typeof bio.experienceYears === "number" ? { experienceYears: bio.experienceYears } : {}), games: [] };
   }
+  const [full, biosMap] = await Promise.all([getFullLeagueMemory(false), getPlayerBiosMap(false)]);
+  const p = full.allPlayers.find((x) => x.id === playerId);
+  if (p) return p;
   const bio = biosMap.get(playerId);
   if (!bio) return null;
   const tMeta = NBA_TEAMS_MAP[bio.teamAbbr];
@@ -1278,19 +1590,24 @@ async function getPlayerInspectorDossier(playerId) {
   return { player, advanced2027: p2027?.advanced, advanced2026: p2026?.advanced, latestLeagueDate2027: cachedInspectorBenchmarks.latestLeagueDate2027, benchmarksByScope: cachedInspectorBenchmarks.benchmarksByScope };
 }
 async function getTeamRoster(teamId) {
-  const [biosMap, full] = await Promise.all([getPlayerBiosMap(false), getFullLeagueMemory(false)]);
-  const targetTeam = full.teams.find((t) => t.id === teamId || t.abbreviation.toUpperCase() === teamId.toUpperCase());
-  const targetAbbr = targetTeam?.abbreviation || "";
+  const biosMap = await getPlayerBiosMap(false);
+  const rawUpper = String(teamId || "").toUpperCase().trim();
+  const matchedMeta =
+    NBA_TEAMS_MAP[rawUpper] ||
+    Object.values(NBA_TEAMS_MAP).find((tm) => String(tm.id) === String(teamId));
+  const targetAbbr = matchedMeta?.abbr || "";
+  const targetId = matchedMeta?.id || String(teamId || "");
   const roster = [];
   const seen = /* @__PURE__ */ new Set();
   for (const b of biosMap.values()) {
-    if (b.teamId === teamId || targetAbbr && b.teamAbbr === targetAbbr) {
+    if (b.teamId === targetId || (targetAbbr && b.teamAbbr === targetAbbr)) {
       seen.add(b.id);
       roster.push({ id: b.id, name: b.name, position: b.position || "JUG", jersey: b.jersey || "0", height: b.height || void 0, country: b.country || void 0, ...(b.birthYear ? { birthYear: b.birthYear } : {}) });
     }
   }
   if (roster.length === 0 && targetAbbr) {
-    for (const p of full.allPlayers) {
+    const s2027 = await buildSingleSeasonDataset("2026-27", false);
+    for (const p of s2027.playersById.values()) {
       if (p.teamAbbr === targetAbbr && !seen.has(p.id)) {
         seen.add(p.id);
         roster.push({ id: p.id, name: p.name, position: p.position || "JUG", jersey: p.jersey || "0", height: p.height, country: p.country, ...(p.birthYear ? { birthYear: p.birthYear } : {}) });
@@ -2335,11 +2652,11 @@ async function getSeasonAwardsPayload(seasonScope = "2027", forceRefresh = false
   return buildSeasonAwardsPayload({ full, biosMap, seasonScope, forceRefresh });
 }
 async function syncNbaSnapshotToDisk(options) {
-  const existingSnap = readNbaSnapshotFromDisk();
-  const prevGames2027 = existingSnap?.s2027 ? Math.round(existingSnap.s2027.teams.reduce((acc, t) => acc + t.games.length, 0) / 2) : 0;
-  const forceFull2026 = Boolean(options?.forceFull2026) || !existingSnap?.s2026;
+  const prev2027 = readNbaSeasonSnapshotFromDisk("2026-27");
+  const prevGames2027 = prev2027 ? Math.round(prev2027.teams.reduce((acc, t) => acc + t.games.length, 0) / 2) : 0;
+  const forceFull2026 = Boolean(options?.forceFull2026) || !hasNbaSeasonSnapshotOnDisk("2025-26");
   const biosMap = await getPlayerBiosMap(true, { forceLiveStats: true });
-  const s2026 = forceFull2026 ? await buildSingleSeasonDataset("2025-26", true, { forceLiveStats: true }) : hydrateSeasonDatasetFromSnapshot(existingSnap.s2026);
+
   let statsLiveSucceeded = false;
   try {
     const probe = await cachedFetchJson("https://stats.nba.com/stats/leaguestandingsv3?GroupBy=conf&LeagueID=00&Season=2026-27&SeasonType=Regular%20Season&Section=overall", 60 * 1e3, NBA_STATS_HEADERS, 8e3, true);
@@ -2347,16 +2664,17 @@ async function syncNbaSnapshotToDisk(options) {
   } catch {
     statsLiveSucceeded = false;
   }
+
   const s2027 = await buildSingleSeasonDataset("2026-27", true, { forceLiveStats: true, cdnMaxGames: 180, cdnTimeoutMs: 4e4 });
-  if (existingSnap?.s2027) {
-    const prevPlayersById = new Map(existingSnap.s2027.players.map((p) => [p.id, p]));
+  if (prev2027) {
+    const prevPlayersById = new Map(prev2027.players.map((p) => [p.id, p]));
     for (const [pid, curP] of s2027.playersById.entries()) {
       if (!curP.advanced) {
         const prevP = prevPlayersById.get(pid);
         if (prevP?.advanced) curP.advanced = { ...prevP.advanced };
       }
     }
-    const prevTeamsByAbbr = new Map(existingSnap.s2027.teams.map((t) => [t.abbreviation, t]));
+    const prevTeamsByAbbr = new Map(prev2027.teams.map((t) => [t.abbreviation, t]));
     for (const [abbr, curT] of s2027.teamsByAbbr.entries()) {
       if (!curT.advanced) {
         const prevT = prevTeamsByAbbr.get(abbr);
@@ -2364,14 +2682,44 @@ async function syncNbaSnapshotToDisk(options) {
       }
     }
   }
+
+  const generatedAt = (/* @__PURE__ */ new Date()).toISOString();
   const lastSyncedSource = statsLiveSucceeded ? "nba_stats_live" : "cdn_delta_only";
-  const snapshot = { version: 1, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), lastSyncedSource, bios: [...biosMap.values()], s2025: existingSnap?.s2025, s2024: existingSnap?.s2024, s2026: serializeSeasonDatasetForSnapshot(s2026), s2027: serializeSeasonDatasetForSnapshot(s2027) };
-  const teamGames2026 = Math.round(snapshot.s2026.teams.reduce((acc, t) => acc + t.games.length, 0) / 2);
-  const teamGames2027 = Math.round(snapshot.s2027.teams.reduce((acc, t) => acc + t.games.length, 0) / 2);
+  const serialized2027 = serializeSeasonDatasetForSnapshot(s2027);
+  const teamGames2027 = Math.round(serialized2027.teams.reduce((acc, t) => acc + t.games.length, 0) / 2);
+
   if (teamGames2027 < prevGames2027) {
     throw new Error(`Guardia de no-regresi\xF3n activada: el nuevo snapshot ten\xEDa ${teamGames2027} partidos 2026-27 frente a ${prevGames2027} previos.`);
   }
-  const written = writeNbaSnapshotToDisk(snapshot);
+
+  // 1.Sincronización Diaria Ligera: reescribir solo bios + temporada activa 2026-27
+  const biosList = [...biosMap.values()];
+  const biosWritten = writeNbaBiosSnapshotToDisk(biosList, { generatedAt, lastSyncedSource });
+  const s2027Written = writeNbaSeasonSnapshotToDisk("2026-27", serialized2027, { generatedAt, lastSyncedSource });
+
+  // 2. Solo reescribir 2025-26 si se solicitó --full o si no existía el archivo modular en disco
+  let serialized2026 = null;
+  if (forceFull2026) {
+    const s2026 = await buildSingleSeasonDataset("2025-26", true, { forceLiveStats: true });
+    serialized2026 = serializeSeasonDatasetForSnapshot(s2026);
+    writeNbaSeasonSnapshotToDisk("2025-26", serialized2026, { generatedAt, lastSyncedSource });
+  } else {
+    serialized2026 = readNbaSeasonSnapshotFromDisk("2025-26");
+  }
+
+  // 3. Garantizar que archivos modulares cerrados 2024-25 y 2023-24 existan sin reescribirlos en sync diario
+  if (!hasNbaSeasonSnapshotOnDisk("2024-25")) {
+    const s2025Snap = readNbaSeasonSnapshotFromDisk("2024-25");
+    if (s2025Snap) writeNbaSeasonSnapshotToDisk("2024-25", s2025Snap, { generatedAt, lastSyncedSource });
+  }
+  if (!hasNbaSeasonSnapshotOnDisk("2023-24")) {
+    const s2024Snap = readNbaSeasonSnapshotFromDisk("2023-24");
+    if (s2024Snap) writeNbaSeasonSnapshotToDisk("2023-24", s2024Snap, { generatedAt, lastSyncedSource });
+  }
+
+  const teamGames2026 = serialized2026 ? Math.round(serialized2026.teams.reduce((acc, t) => acc + t.games.length, 0) / 2) : 0;
+  const players2026 = serialized2026?.players?.length || 0;
+
   let advancedSnapshotMeta = null;
   try {
     advancedSnapshotMeta = await syncNbaAdvancedSnapshotToDisk({ forceLive: statsLiveSucceeded });
@@ -2380,28 +2728,35 @@ async function syncNbaSnapshotToDisk(options) {
   }
 
   return {
-    ...written,
+    filePath: s2027Written.filePath,
+    biosFilePath: biosWritten.filePath,
+    bytesCompressed: s2027Written.bytesCompressed + biosWritten.bytesCompressed,
+    bytesUncompressed: s2027Written.bytesUncompressed + biosWritten.bytesUncompressed,
     lastSyncedSource,
-    biosCount: snapshot.bios.length,
-    players2026: snapshot.s2026.players.length,
-    players2027: snapshot.s2027.players.length,
+    biosCount: biosList.length,
+    players2026,
+    players2027: serialized2027.players.length,
     teamGames2026,
     teamGames2027,
     advancedSnapshot: advancedSnapshotMeta,
   };
 }
-async function getMilestoneNotificationsPayload(forceRefresh = false) {
-  const cfg = getMilestoneNotificationsConfig();
+async function getMilestoneNotificationsPayload(forceRefresh = false, overrideConfig = null) {
+  const isOverride = Boolean(overrideConfig);
+  const cfg = isOverride
+    ? sanitizeMilestoneNotificationsConfig(overrideConfig)
+    : getMilestoneNotificationsConfig();
   if (!cfg.enabled) {
     return {
       enabled: false,
       generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
       latestDate: "",
       notifications: [],
-      summary: { total: 0, epicCount: 0, imminentCount: 0 },
+      summary: { total: 0, epicCount: 0, imminentCount: 0, totalBeforeCap: 0, consolidatedCount: 0 },
     };
   }
   if (
+    !isOverride &&
     !forceRefresh &&
     cachedMilestoneNotifications &&
     cachedMilestoneNotifications.expiresAt > Date.now() &&
@@ -2410,8 +2765,7 @@ async function getMilestoneNotificationsPayload(forceRefresh = false) {
     return cachedMilestoneNotifications.payload;
   }
 
-  const full = await getFullLeagueMemory(forceRefresh);
-  const s27 = full.s2027;
+  const s27 = await buildSingleSeasonDataset("2026-27", forceRefresh);
   const players = [...(s27?.playersById?.values() || [])];
   const teams = [...(s27?.teamsByAbbr?.values() || [])];
 
@@ -2457,6 +2811,11 @@ async function getMilestoneNotificationsPayload(forceRefresh = false) {
     let cumStl = 0;
     let cumBlk = 0;
     let priorMaxPts = 0;
+    let priorMaxReb = 0;
+    let priorMaxAst = 0;
+    let priorMax3pm = 0;
+    let priorMaxStl = 0;
+    let priorMaxBlk = 0;
 
     for (let idx = 0; idx < chrono.length; idx++) {
       const g = chrono[idx];
@@ -2584,28 +2943,102 @@ async function getMilestoneNotificationsPayload(forceRefresh = false) {
           }, 84 + Math.min(15, pts - cfg.scoringThreshold));
         }
 
-        // 2. Récord Personal de Temporada en Puntos
-        if (
-          cfg.seasonHighPtsEnabled &&
-          idx + 1 >= cfg.seasonHighMinGames &&
-          pts >= cfg.seasonHighMinPts &&
-          pts > priorMaxPts
-        ) {
-          pushNotif({
-            id: `shpts:${p.id}:${g.eventId}`,
-            category: "scoring",
-            severity: pts >= 40 ? "epic" : "high",
-            title: `Tope de temporada para ${p.name}`,
-            detail: `Alcanza ${pts} PTS (anterior marca: ${priorMaxPts} PTS en 2026-27) · ${teamAbbr} ${gameCtx}`,
-            badgeText: `Récord ${pts} PTS`,
-            date: dateIso,
-            entityType: "player",
-            entityId: p.id,
-            entityName: p.name,
-            teamAbbr,
-            eventId: g.eventId,
-            opponentAbbr: g.opponentAbbr,
-          }, 68);
+        // 2B. Nuevo Récord Personal de Carrera (Career High histórico verificado)
+        const brokenChCats = new Set();
+        if (cfg.careerHighEnabled) {
+          const chBase = getPlayerPriorCareerBaseline(p.id, chrono, idx);
+          if (chBase.hasHistoricalSnapshot && chBase.priorCareerGp >= cfg.careerHighMinGames) {
+            const brokenCh = [];
+            if (pts >= cfg.careerHighMinPts && pts > chBase.priorHighs.pts) {
+              brokenCh.push({ label: "PTS", val: pts, prev: chBase.priorHighs.pts, name: "puntos" });
+              brokenChCats.add("PTS");
+            }
+            if (reb >= cfg.careerHighMinReb && reb > chBase.priorHighs.reb) {
+              brokenCh.push({ label: "REB", val: reb, prev: chBase.priorHighs.reb, name: "rebotes" });
+              brokenChCats.add("REB");
+            }
+            if (ast >= cfg.careerHighMinAst && ast > chBase.priorHighs.ast) {
+              brokenCh.push({ label: "AST", val: ast, prev: chBase.priorHighs.ast, name: "asistencias" });
+              brokenChCats.add("AST");
+            }
+            if (fg3m >= cfg.careerHighMin3pm && fg3m > chBase.priorHighs.fg3m) {
+              brokenCh.push({ label: "3PM", val: fg3m, prev: chBase.priorHighs.fg3m, name: "triples" });
+              brokenChCats.add("3PM");
+            }
+            if (stl >= cfg.careerHighMinStlBlk && stl > chBase.priorHighs.stl) {
+              brokenCh.push({ label: "ROB", val: stl, prev: chBase.priorHighs.stl, name: "robos" });
+              brokenChCats.add("ROB");
+            }
+            if (blk >= cfg.careerHighMinStlBlk && blk > chBase.priorHighs.blk) {
+              brokenCh.push({ label: "TAP", val: blk, prev: chBase.priorHighs.blk, name: "tapones" });
+              brokenChCats.add("TAP");
+            }
+            if (brokenCh.length > 0) {
+              const primary = brokenCh[0];
+              const summaryText = brokenCh
+                .map((b) => `${b.val} ${b.label} (antes: ${b.prev})`)
+                .join(" · ");
+              pushNotif({
+                id: `ch:${p.id}:${g.eventId}`,
+                category: "record",
+                severity: "epic",
+                title: `Nuevo Career High de ${p.name}`,
+                detail: `${summaryText} · ${pts}P/${reb}R/${ast}A · ${teamAbbr} ${gameCtx}`,
+                badgeText: `Career High ${primary.val} ${primary.label}`,
+                date: dateIso,
+                entityType: "player",
+                entityId: p.id,
+                entityName: p.name,
+                teamAbbr,
+                eventId: g.eventId,
+                opponentAbbr: g.opponentAbbr,
+              }, 96);
+            }
+          }
+        }
+
+        // 2. Máximo de Temporada Multi-Estadística (excluyendo categorías ya cubiertas por Career High)
+        if (cfg.seasonHighPtsEnabled && idx + 1 >= cfg.seasonHighMinGames) {
+          const brokenSh = [];
+          if (!brokenChCats.has("PTS") && pts >= cfg.seasonHighMinPts && pts > priorMaxPts) {
+            brokenSh.push({ label: "PTS", val: pts, prev: priorMaxPts });
+          }
+          if (!brokenChCats.has("REB") && reb >= cfg.seasonHighMinReb && reb > priorMaxReb) {
+            brokenSh.push({ label: "REB", val: reb, prev: priorMaxReb });
+          }
+          if (!brokenChCats.has("AST") && ast >= cfg.seasonHighMinAst && ast > priorMaxAst) {
+            brokenSh.push({ label: "AST", val: ast, prev: priorMaxAst });
+          }
+          if (!brokenChCats.has("3PM") && fg3m >= cfg.seasonHighMin3pm && fg3m > priorMax3pm) {
+            brokenSh.push({ label: "3PM", val: fg3m, prev: priorMax3pm });
+          }
+          if (!brokenChCats.has("ROB") && stl >= cfg.seasonHighMinStlBlk && stl > priorMaxStl) {
+            brokenSh.push({ label: "ROB", val: stl, prev: priorMaxStl });
+          }
+          if (!brokenChCats.has("TAP") && blk >= cfg.seasonHighMinStlBlk && blk > priorMaxBlk) {
+            brokenSh.push({ label: "TAP", val: blk, prev: priorMaxBlk });
+          }
+          if (brokenSh.length > 0) {
+            const primary = brokenSh[0];
+            const summaryText = brokenSh
+              .map((b) => `${b.val} ${b.label} (antes: ${b.prev})`)
+              .join(" · ");
+            pushNotif({
+              id: `shpts:${p.id}:${g.eventId}`,
+              category: "record",
+              severity: (primary.label === "PTS" && pts >= 45) || brokenSh.length >= 2 ? "epic" : "high",
+              title: `Máximo de temporada de ${p.name}`,
+              detail: `${summaryText} en 2026-27 · ${pts}P/${reb}R/${ast}A · ${teamAbbr} ${gameCtx}`,
+              badgeText: `Máx. Temp. ${primary.val} ${primary.label}`,
+              date: dateIso,
+              entityType: "player",
+              entityId: p.id,
+              entityName: p.name,
+              teamAbbr,
+              eventId: g.eventId,
+              opponentAbbr: g.opponentAbbr,
+            }, 76);
+          }
         }
 
         // 3. Lluvia de Triples
@@ -2899,9 +3332,12 @@ async function getMilestoneNotificationsPayload(forceRefresh = false) {
         }
       }
 
-      if (pts > priorMaxPts) {
-        priorMaxPts = pts;
-      }
+      if (pts > priorMaxPts) priorMaxPts = pts;
+      if (reb > priorMaxReb) priorMaxReb = reb;
+      if (ast > priorMaxAst) priorMaxAst = ast;
+      if (fg3m > priorMax3pm) priorMax3pm = fg3m;
+      if (stl > priorMaxStl) priorMaxStl = stl;
+      if (blk > priorMaxBlk) priorMaxBlk = blk;
     }
 
     // 28. Hitos Inminentes ("A las puertas" en todas las estadísticas habilitadas)
@@ -3257,7 +3693,78 @@ async function getMilestoneNotificationsPayload(forceRefresh = false) {
     return a.title.localeCompare(b.title);
   });
 
-  const capped = notifications.slice(0, cfg.maxNotifications).map(({ _priority, ...rest }) => rest);
+  // Filtro de relevancia mínima configurado en Admin
+  const severityFiltered = notifications.filter((n) => {
+    if (cfg.minSeverity === "epic") return n.severity === "epic";
+    if (cfg.minSeverity === "high") return n.severity === "epic" || n.severity === "high";
+    return true;
+  });
+
+  // Consolidación anti-ruido: 1 alerta principal por jugador y partido (conserva la más épica/prioritaria)
+  let consolidatedCount = 0;
+  let postDedupe = severityFiltered;
+  if (cfg.dedupePlayerGame) {
+    const byPlayerGame = new Map();
+    const mergedList = [];
+    for (const item of severityFiltered) {
+      const canConsolidate =
+        item.entityType === "player" &&
+        Boolean(item.eventId) &&
+        item.category !== "cumulative" &&
+        item.category !== "imminent" &&
+        item.category !== "streak";
+      if (!canConsolidate) {
+        mergedList.push(item);
+        continue;
+      }
+      const key = `${item.entityId}:${item.eventId}`;
+      const existing = byPlayerGame.get(key);
+      if (!existing) {
+        const clone = { ...item, _extraBadges: [], _mergedItems: [], _mergedCount: 1 };
+        byPlayerGame.set(key, clone);
+        mergedList.push(clone);
+      } else {
+        existing._mergedCount += 1;
+        consolidatedCount += 1;
+        existing._mergedItems.push({
+          id: item.id,
+          category: item.category,
+          severity: item.severity,
+          title: item.title,
+          detail: item.detail,
+          badgeText: item.badgeText,
+        });
+        if (
+          item.badgeText &&
+          item.badgeText !== existing.badgeText &&
+          !existing._extraBadges.includes(item.badgeText) &&
+          existing._extraBadges.length < 3
+        ) {
+          existing._extraBadges.push(item.badgeText);
+        }
+      }
+    }
+    postDedupe = mergedList.map((item) => {
+      if (item._mergedCount && item._mergedCount > 1) {
+        const extraStr =
+          item._extraBadges && item._extraBadges.length > 0
+            ? ` · También: ${item._extraBadges.join(" · ")}`
+            : "";
+        return {
+          ...item,
+          detail: `${item.detail}${extraStr}`,
+          mergedCount: item._mergedCount,
+          mergedItems: Array.isArray(item._mergedItems) ? item._mergedItems : [],
+        };
+      }
+      return item;
+    });
+  }
+
+  const capped = postDedupe.slice(0, cfg.maxNotifications).map((item) => {
+    const { _priority, _extraBadges, _mergedItems, _mergedCount, ...rest } = item;
+    return rest;
+  });
   const payload = {
     enabled: true,
     generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -3267,20 +3774,23 @@ async function getMilestoneNotificationsPayload(forceRefresh = false) {
       total: capped.length,
       epicCount: capped.filter((n) => n.severity === "epic").length,
       imminentCount: capped.filter((n) => Boolean(n.isImminent)).length,
+      totalBeforeCap: postDedupe.length,
+      consolidatedCount,
     },
   };
-  cachedMilestoneNotifications = {
-    expiresAt: Date.now() + 3 * 60 * 1e3,
-    configUpdatedAt: cfg.updatedAt,
-    payload,
-  };
+  if (!isOverride) {
+    cachedMilestoneNotifications = {
+      expiresAt: Date.now() + 3 * 60 * 1e3,
+      configUpdatedAt: cfg.updatedAt,
+      payload,
+    };
+  }
   return payload;
 }
 
 async function getMilestoneNotificationsSeasonCounts(rawConfig) {
   const cfg = sanitizeMilestoneNotificationsConfig(rawConfig || activeMilestoneNotificationsConfig);
-  const full = await getFullLeagueMemory(false);
-  const s27 = full.s2027;
+  const s27 = await buildSingleSeasonDataset("2026-27", false);
   const players = [...(s27?.playersById?.values() || [])];
   const teams = [...(s27?.teamsByAbbr?.values() || [])];
 
@@ -3297,6 +3807,7 @@ async function getMilestoneNotificationsSeasonCounts(rawConfig) {
   const seasonCounts = {
     scoringMilestoneEnabled: 0,
     seasonHighPtsEnabled: 0,
+    careerHighEnabled: 0,
     threePointExplosionEnabled: 0,
     assistExplosionEnabled: 0,
     reboundExplosionEnabled: 0,
@@ -3355,6 +3866,11 @@ async function getMilestoneNotificationsSeasonCounts(rawConfig) {
     let cumStl = 0;
     let cumBlk = 0;
     let priorMaxPts = 0;
+    let priorMaxReb = 0;
+    let priorMaxAst = 0;
+    let priorMax3pm = 0;
+    let priorMaxStl = 0;
+    let priorMaxBlk = 0;
 
     // Track distinct streak episodes across the season per rule
     const streakRuns = { ptsHigh: 0, ptsBase: 0, reb10: 0, ast10: 0, three3: 0 };
@@ -3394,8 +3910,29 @@ async function getMilestoneNotificationsSeasonCounts(rawConfig) {
       cumBlk += blk;
 
       if (pts >= cfg.scoringThreshold) bump("scoringMilestoneEnabled", inWin);
-      if (idx + 1 >= cfg.seasonHighMinGames && pts >= cfg.seasonHighMinPts && pts > priorMaxPts) {
-        bump("seasonHighPtsEnabled", inWin);
+      const brokenChCats = new Set();
+      {
+        const chBase = getPlayerPriorCareerBaseline(p.id, chrono, idx);
+        if (chBase.hasHistoricalSnapshot && chBase.priorCareerGp >= cfg.careerHighMinGames) {
+          if (pts >= cfg.careerHighMinPts && pts > chBase.priorHighs.pts) brokenChCats.add("PTS");
+          if (reb >= cfg.careerHighMinReb && reb > chBase.priorHighs.reb) brokenChCats.add("REB");
+          if (ast >= cfg.careerHighMinAst && ast > chBase.priorHighs.ast) brokenChCats.add("AST");
+          if (fg3m >= cfg.careerHighMin3pm && fg3m > chBase.priorHighs.fg3m) brokenChCats.add("3PM");
+          if (stl >= cfg.careerHighMinStlBlk && stl > chBase.priorHighs.stl) brokenChCats.add("ROB");
+          if (blk >= cfg.careerHighMinStlBlk && blk > chBase.priorHighs.blk) brokenChCats.add("TAP");
+          if (brokenChCats.size > 0) bump("careerHighEnabled", inWin);
+        }
+      }
+      if (idx + 1 >= cfg.seasonHighMinGames) {
+        const chSkip = (cat) => cfg.careerHighEnabled && brokenChCats.has(cat);
+        const hitSh =
+          (!chSkip("PTS") && pts >= cfg.seasonHighMinPts && pts > priorMaxPts) ||
+          (!chSkip("REB") && reb >= cfg.seasonHighMinReb && reb > priorMaxReb) ||
+          (!chSkip("AST") && ast >= cfg.seasonHighMinAst && ast > priorMaxAst) ||
+          (!chSkip("3PM") && fg3m >= cfg.seasonHighMin3pm && fg3m > priorMax3pm) ||
+          (!chSkip("ROB") && stl >= cfg.seasonHighMinStlBlk && stl > priorMaxStl) ||
+          (!chSkip("TAP") && blk >= cfg.seasonHighMinStlBlk && blk > priorMaxBlk);
+        if (hitSh) bump("seasonHighPtsEnabled", inWin);
       }
       if (fg3m >= cfg.threePointThreshold) bump("threePointExplosionEnabled", inWin);
       if (ast >= cfg.assistExplosionThreshold) bump("assistExplosionEnabled", inWin);
@@ -3474,6 +4011,11 @@ async function getMilestoneNotificationsSeasonCounts(rawConfig) {
       }
 
       if (pts > priorMaxPts) priorMaxPts = pts;
+      if (reb > priorMaxReb) priorMaxReb = reb;
+      if (ast > priorMaxAst) priorMaxAst = ast;
+      if (fg3m > priorMax3pm) priorMax3pm = fg3m;
+      if (stl > priorMaxStl) priorMaxStl = stl;
+      if (blk > priorMaxBlk) priorMaxBlk = blk;
     }
 
     // Recent active/broken streaks count (matches payload logic)
@@ -3621,12 +4163,88 @@ async function getMilestoneNotificationsSeasonCounts(rawConfig) {
     }
   }
 
+  let estimatedFinalAlerts = totalEnabledRecentAlerts;
+  try {
+    const simPayload = await getMilestoneNotificationsPayload(false, { ...cfg, enabled: true });
+    if (simPayload?.summary && typeof simPayload.summary.totalBeforeCap === "number") {
+      estimatedFinalAlerts = simPayload.summary.totalBeforeCap;
+    }
+  } catch {
+    // Fallback to raw count if simulation fails
+  }
+
   return {
     seasonCounts,
     recentCounts,
     totalDates: sortedDates.length,
     totalEnabledRecentAlerts,
+    estimatedFinalAlerts,
   };
+}
+
+async function getPlayerCareerHistoryPayload(playerId) {
+  const [s27, biosById] = await Promise.all([
+    buildSingleSeasonDataset("2026-27", false),
+    getPlayerBiosMap(false),
+  ]);
+  return getPlayerCareerProfile(playerId, s27, biosById);
+}
+
+async function getTeamCareerHistoryPayload(teamIdOrAbbr) {
+  const s27 = await buildSingleSeasonDataset("2026-27", false);
+  return getTeamCareerHistory(teamIdOrAbbr, s27);
+}
+
+async function getCareerLeadersPayload(scope = "regular") {
+  const [s27, biosById] = await Promise.all([
+    buildSingleSeasonDataset("2026-27", false),
+    getPlayerBiosMap(false),
+  ]);
+  return getCareerLeadersResponse(scope, s27, biosById);
+}
+
+async function getInjuriesReportPayload(forceRefresh = false) {
+  const [s27, biosById] = await Promise.all([
+    buildSingleSeasonDataset("2026-27", false),
+    getPlayerBiosMap(false),
+  ]);
+  return buildInjuriesRotationPayload({
+    s27,
+    biosById,
+    cachedFetchJson,
+    forceRefresh,
+  });
+}
+
+async function getContractsPayload(forceRefresh = false) {
+  const [s27, biosById] = await Promise.all([
+    buildSingleSeasonDataset("2026-27", false),
+    getPlayerBiosMap(false),
+  ]);
+  return buildLeagueContractsPayload({
+    s27,
+    biosById,
+    cachedFetchJson,
+    forceRefresh,
+  });
+}
+
+async function getDraftHistoryPayload(forceRefresh = false) {
+  const s27 = await buildSingleSeasonDataset("2026-27", false);
+  const playersList =
+    s27?.playersById instanceof Map
+      ? Array.from(s27.playersById.values())
+      : Array.isArray(s27?.players)
+      ? s27.players
+      : [];
+  return buildDraftHistoryPayload({
+    players: playersList,
+    forceRefresh,
+  });
+}
+
+async function getFutureDraftPicksPayload(forceRefresh = false) {
+  return buildFutureDraftPicksPayload({ forceRefresh });
 }
 
 export {
@@ -3636,17 +4254,33 @@ export {
   getBootstrapPayload,
   getBootstrapWireBuffers,
   getBootstrapWirePayload,
+  getCareerLeadersPayload,
+  getContractsPayload,
+  getDraftHistoryPayload,
+  getFutureDraftPicksPayload,
   getFantasyEspnSyncPayload,
   getFullLeagueMemory,
   getGameDayPayload,
   getGamedayThresholdsConfig,
   updateGamedayThresholdsConfig,
   resetGamedayThresholdsConfigDefaults,
+  DEFAULT_AUTO_STREAKS_CONFIG_VALUES,
+  getAutoStreaksConfig,
+  updateAutoStreaksConfig,
+  resetAutoStreaksConfigDefaults,
+  getExperienceMetricsConfig,
+  updateExperienceMetricsConfig,
+  resetExperienceMetricsConfigDefaults,
+  DEFAULT_SIDEBAR_MENU_CONFIG_VALUES,
+  getSidebarMenuConfig,
+  updateSidebarMenuConfig,
+  resetSidebarMenuConfigDefaults,
   getWebFeatureFlags,
   updateWebFeatureFlags,
   getInspectorKpiDefaultsConfig,
   updateInspectorKpiDefaultsConfig,
   resetInspectorKpiDefaultsConfig,
+  getInjuriesReportPayload,
   getMilestoneNotificationsConfig,
   updateMilestoneNotificationsConfig,
   resetMilestoneNotificationsConfigDefaults,
@@ -3654,10 +4288,12 @@ export {
   getMilestoneNotificationsSeasonCounts,
   getMilestonesPayload,
   getPlayerBiosMap,
+  getPlayerCareerHistoryPayload,
   getPlayerInspectorDossier,
   getSeasonAwardsPayload,
   getScoreboardDeltaPayload,
   getSinglePlayerSummary,
+  getTeamCareerHistoryPayload,
   getTeamRoster,
   scoutingEngine,
   searchLeaguePlayers,

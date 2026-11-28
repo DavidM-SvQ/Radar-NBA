@@ -13,7 +13,8 @@
     "lint": "tsx scripts/verify-radarnba-integrity.ts && tsx scripts/create-radarnba-backup.ts && tsc --noEmit",
     "verify:integrity": "tsx scripts/verify-radarnba-integrity.ts",
     "backup:code": "tsx scripts/create-radarnba-backup.ts",
-    "sync:nba": "tsx scripts/sync-nba-snapshot.ts"
+    "sync:nba": "tsx scripts/sync-nba-snapshot.ts",
+    "sync:career": "tsx scripts/sync-career-history.ts"
   },
   "dependencies": {
     "@google/genai": "^3.0.0",

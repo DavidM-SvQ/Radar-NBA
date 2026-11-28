@@ -39,6 +39,7 @@ import {
 import { EntityBadge, PlayerAvatar } from './NbaVisuals';
 import { ExportImageButton } from './ExportImageButton';
 import { buildTableSnapshotBlob } from '../utils/exportImageCard';
+import { useExperienceMetrics } from '../context/ExperienceMetricsContext';
 
 interface AnomalyRadarViewProps {
   signals: AnomalySignal[];
@@ -858,6 +859,18 @@ export function AnomalyRadarView({
   onConsumeInitialAxis,
   onNavigateStreaks,
 }: AnomalyRadarViewProps) {
+  const { isMetricAllowed } = useExperienceMetrics();
+
+  const allowedSignals = useMemo(
+    () => signals.filter((s) => isMetricAllowed(s.metricKey)),
+    [signals, isMetricAllowed]
+  );
+
+  const allowedBreakouts = useMemo(
+    () => trendBreakouts.filter((b) => isMetricAllowed(b.metricKey)),
+    [trendBreakouts, isMetricAllowed]
+  );
+
   const [directionFilter, setDirectionFilter] = useState<
     'all' | 'positive' | 'negative'
   >('all');
@@ -873,7 +886,14 @@ export function AnomalyRadarView({
     'all' | Exclude<AnomalyCategory, 'team_shift'>
   >('all');
   const [teamMetricFilter, setTeamMetricFilter] = useState<
-    'all' | 'netRtg' | 'offRtg' | 'defRtg' | 'pace'
+    | 'all'
+    | 'pointsFor'
+    | 'pointsAgainst'
+    | 'differential'
+    | 'netRtg'
+    | 'offRtg'
+    | 'defRtg'
+    | 'pace'
   >('all');
   const [query, setQuery] = useState('');
   const [unifiedFilters, setUnifiedFilters] = useState<UnifiedTableFiltersState>(
@@ -893,10 +913,31 @@ export function AnomalyRadarView({
   }, [initialBreakoutAxis, onConsumeInitialAxis]);
 
   useEffect(() => {
-    if (experienceMode === 'simple' && playerCategoryFilter === 'advanced_shift') {
-      setPlayerCategoryFilter('all');
+    if (
+      teamMetricFilter !== 'all' &&
+      !isMetricAllowed(teamMetricFilter)
+    ) {
+      setTeamMetricFilter('all');
     }
-  }, [experienceMode, playerCategoryFilter]);
+  }, [teamMetricFilter, isMetricAllowed]);
+
+  useEffect(() => {
+    if (experienceMode === 'simple') {
+      if (
+        playerCategoryFilter === 'advanced_shift' &&
+        !isMetricAllowed('gameScore')
+      ) {
+        setPlayerCategoryFilter('all');
+      }
+      if (
+        playerCategoryFilter === 'shooting_variance' &&
+        !isMetricAllowed('tsPct') &&
+        !isMetricAllowed('efgPct')
+      ) {
+        setPlayerCategoryFilter('all');
+      }
+    }
+  }, [experienceMode, playerCategoryFilter, isMetricAllowed]);
 
   const handleBreakoutSort = (field: BreakoutSortField) => {
     if (breakoutSortField === field) {
@@ -912,7 +953,7 @@ export function AnomalyRadarView({
     useMemo(() => {
       const q = normalizeSearchText(query.trim());
 
-      const basePool = trendBreakouts.filter((b) => {
+      const basePool = allowedBreakouts.filter((b) => {
         const wKey = `player:${b.playerId}`;
         if (onlyWatchlist && !watchlistIds.has(wKey)) return false;
         if (directionFilter !== 'all' && b.direction !== directionFilter) {
@@ -937,7 +978,25 @@ export function AnomalyRadarView({
         return true;
       });
 
-      const axisMap = BREAKOUT_AXES_META.map((meta) => {
+      const visibleAxesMeta = BREAKOUT_AXES_META.filter((meta) => {
+        if (experienceMode === 'advanced') return true;
+        if (meta.id === 'efficiency') {
+          return (
+            isMetricAllowed('tsPct') ||
+            isMetricAllowed('efgPct') ||
+            isMetricAllowed('gameScore')
+          );
+        }
+        if (meta.id === 'exterior') {
+          return isMetricAllowed('fg3m') || isMetricAllowed('fg3Pct');
+        }
+        if (meta.id === 'minutes_usage') {
+          return isMetricAllowed('minutes') || isMetricAllowed('usgEst') || isMetricAllowed('fga');
+        }
+        return true;
+      });
+
+      const axisMap = visibleAxesMeta.map((meta) => {
         const items = basePool.filter((b) => b.axis === meta.id);
         const pos = items.filter((b) => b.direction === 'positive').length;
         const neg = items.filter((b) => b.direction === 'negative').length;
@@ -995,7 +1054,9 @@ export function AnomalyRadarView({
         totalScopedBreakouts: basePool.length,
       };
     }, [
-      trendBreakouts,
+      allowedBreakouts,
+      experienceMode,
+      isMetricAllowed,
       onlyWatchlist,
       watchlistIds,
       directionFilter,
@@ -1014,7 +1075,7 @@ export function AnomalyRadarView({
     const pRows: AnomalySignal[] = [];
     const tRows: AnomalySignal[] = [];
 
-    for (const s of signals) {
+    for (const s of allowedSignals) {
       const wKey = `${s.entityType}:${s.entityId}`;
       if (onlyWatchlist && !watchlistIds.has(wKey)) continue;
       if (onlyWithActiveStreak && !s.activeStreakLabel) continue;
@@ -1059,7 +1120,7 @@ export function AnomalyRadarView({
 
     return { playerSignals: pRows, teamSignals: tRows };
   }, [
-    signals,
+    allowedSignals,
     watchlistIds,
     onlyWatchlist,
     onlyWithActiveStreak,
@@ -1072,17 +1133,17 @@ export function AnomalyRadarView({
   ]);
 
   const statsSummary = useMemo(() => {
-    const allPlayers = signals.filter((s) => s.entityType === 'player');
-    const allTeams = signals.filter((s) => s.entityType === 'team');
-    const surges = signals.filter((s) => isAnomalyPositive(s)).length;
-    const slumps = signals.filter((s) => !isAnomalyPositive(s)).length;
-    const posBreakouts = trendBreakouts.filter(
+    const allPlayers = allowedSignals.filter((s) => s.entityType === 'player');
+    const allTeams = allowedSignals.filter((s) => s.entityType === 'team');
+    const surges = allowedSignals.filter((s) => isAnomalyPositive(s)).length;
+    const slumps = allowedSignals.filter((s) => !isAnomalyPositive(s)).length;
+    const posBreakouts = allowedBreakouts.filter(
       (b) => b.direction === 'positive'
     ).length;
-    const negBreakouts = trendBreakouts.filter(
+    const negBreakouts = allowedBreakouts.filter(
       (b) => b.direction === 'negative'
     ).length;
-    const topSignal = signals[0];
+    const topSignal = allowedSignals[0];
     return {
       playerCount: allPlayers.length,
       teamCount: allTeams.length,
@@ -1092,50 +1153,85 @@ export function AnomalyRadarView({
       negBreakouts,
       topSignal,
     };
-  }, [signals, trendBreakouts]);
+  }, [allowedSignals, allowedBreakouts]);
 
   const playerCategories: Array<{
     id: 'all' | Exclude<AnomalyCategory, 'team_shift'>;
     label: string;
-  }> =
-    experienceMode === 'simple'
-      ? [
-          { id: 'all', label: 'Todas' },
-          { id: 'surge', label: 'En subida' },
-          { id: 'slump', label: 'En bache' },
-          { id: 'exterior_shift', label: 'Triples y 3P%' },
-          { id: 'role_shift', label: 'Minutos y tiros' },
-          { id: 'shooting_variance', label: 'Eficiencia tiro' },
-        ]
-      : [
-          { id: 'all', label: 'Todas' },
-          { id: 'surge', label: 'Explosiones' },
-          { id: 'slump', label: 'Bajones' },
-          { id: 'exterior_shift', label: 'Tiro Exterior 3P' },
-          { id: 'role_shift', label: 'Minutos y Uso USG%' },
-          { id: 'shooting_variance', label: 'Eficiencia TS%' },
-          { id: 'advanced_shift', label: 'Impacto GmSc' },
-        ];
+  }> = useMemo(() => {
+    const list: Array<{
+      id: 'all' | Exclude<AnomalyCategory, 'team_shift'>;
+      label: string;
+    }> = [
+      { id: 'all', label: 'Todas' },
+      { id: 'surge', label: experienceMode === 'simple' ? 'En subida' : 'Explosiones' },
+      { id: 'slump', label: experienceMode === 'simple' ? 'En bache' : 'Bajones' },
+    ];
+    if (isMetricAllowed('fg3m') || isMetricAllowed('fg3Pct')) {
+      list.push({
+        id: 'exterior_shift',
+        label: experienceMode === 'simple' ? 'Triples y 3P%' : 'Tiro Exterior 3P',
+      });
+    }
+    if (isMetricAllowed('minutes') || isMetricAllowed('usgEst') || isMetricAllowed('fga')) {
+      list.push({
+        id: 'role_shift',
+        label:
+          experienceMode === 'simple'
+            ? isMetricAllowed('usgEst')
+              ? 'Minutos y Uso'
+              : 'Minutos y tiros'
+            : 'Minutos y Uso USG%',
+      });
+    }
+    if (isMetricAllowed('tsPct') || isMetricAllowed('efgPct')) {
+      list.push({
+        id: 'shooting_variance',
+        label: experienceMode === 'simple' ? 'Eficiencia tiro' : 'Eficiencia TS%',
+      });
+    }
+    if (isMetricAllowed('gameScore')) {
+      list.push({ id: 'advanced_shift', label: 'Impacto GmSc' });
+    }
+    return list;
+  }, [experienceMode, isMetricAllowed]);
 
   const teamCategories: Array<{
-    id: 'all' | 'netRtg' | 'offRtg' | 'defRtg' | 'pace';
+    id:
+      | 'all'
+      | 'pointsFor'
+      | 'pointsAgainst'
+      | 'differential'
+      | 'netRtg'
+      | 'offRtg'
+      | 'defRtg'
+      | 'pace';
     label: string;
-  }> =
-    experienceMode === 'simple'
-      ? [
-          { id: 'all', label: 'Todas' },
-          { id: 'netRtg', label: 'Dominio general' },
-          { id: 'offRtg', label: 'Ataque' },
-          { id: 'defRtg', label: 'Defensa' },
-          { id: 'pace', label: 'Velocidad' },
-        ]
-      : [
-          { id: 'all', label: 'Todas' },
-          { id: 'netRtg', label: 'Net Rating' },
-          { id: 'offRtg', label: 'Ataque (OffRtg)' },
-          { id: 'defRtg', label: 'Defensa (DefRtg)' },
-          { id: 'pace', label: 'Ritmo (Pace)' },
-        ];
+  }> = useMemo(() => {
+    const candidates: Array<{
+      id:
+        | 'pointsFor'
+        | 'pointsAgainst'
+        | 'differential'
+        | 'netRtg'
+        | 'offRtg'
+        | 'defRtg'
+        | 'pace';
+      label: string;
+    }> = [
+      { id: 'pointsFor', label: 'Puntos anotados' },
+      { id: 'pointsAgainst', label: 'Puntos recibidos' },
+      { id: 'differential', label: 'Margen (+/-)' },
+      { id: 'netRtg', label: 'Net Rating' },
+      { id: 'offRtg', label: 'Ataque (OffRtg)' },
+      { id: 'defRtg', label: 'Defensa (DefRtg)' },
+      { id: 'pace', label: 'Ritmo (Pace)' },
+    ];
+    return [
+      { id: 'all' as const, label: 'Todas' },
+      ...candidates.filter((c) => isMetricAllowed(c.id)),
+    ];
+  }, [isMetricAllowed]);
 
   const topHuman = statsSummary.topSignal
     ? describeZScoreHuman(

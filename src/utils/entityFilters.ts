@@ -692,39 +692,46 @@ export function getFilterMetricValue(
   switch (metricId) {
     // 1. Básicas & Caja / Balance
     case 'pts': {
-      if (isTeam) return numVal(p.ptsAvg ?? p.avgPointsFor ?? p.ppg ?? p.pts ?? meanOf((g) => g.pointsFor));
-      return numVal(p.ptsBase ?? p.points ?? meanOf((g) => g.points));
+      if (isTeam) return numVal(p.ptsAvg ?? p.avgPointsFor ?? p.ppg ?? p.pts ?? bp.avgPointsFor ?? meanOf((g) => g.pointsFor));
+      return numVal(p.ptsBase ?? p.points ?? bp.ptsBase ?? meanOf((g) => g.points));
     }
     case 'reb': {
-      if (isTeam) return numVal(p.rebAvg ?? p.rebPerGame ?? p.reb ?? meanOf((g) => g.reb));
-      return numVal(p.rebBase ?? p.rebounds ?? meanOf((g) => g.rebounds));
+      if (isTeam) return numVal(p.rebAvg ?? p.rebPerGame ?? p.reb ?? bp.rebPerGame ?? meanOf((g) => g.reb));
+      return numVal(p.rebBase ?? p.rebounds ?? bp.rebBase ?? meanOf((g) => g.rebounds));
     }
     case 'oreb': {
       if (isTeam) return numVal(p.orebAvg ?? p.oreb ?? meanOf((g) => g.oreb));
-      return numVal(p.orebBase ?? p.oreb ?? meanOf((g) => g.oreb));
+      return numVal(p.orebBase ?? p.oreb ?? bp.orebBase ?? meanOf((g) => g.oreb));
     }
     case 'dreb': {
       if (isTeam) return numVal(p.drebAvg ?? p.dreb ?? meanOf((g) => g.dreb));
-      return numVal(p.drebBase ?? p.dreb ?? meanOf((g) => g.dreb));
+      return numVal(p.drebBase ?? p.dreb ?? bp.drebBase ?? meanOf((g) => g.dreb));
     }
     case 'ast': {
-      if (isTeam) return numVal(p.astAvg ?? p.astPerGame ?? p.ast ?? meanOf((g) => g.ast));
-      return numVal(p.astBase ?? p.assists ?? meanOf((g) => g.assists));
+      if (isTeam) return numVal(p.astAvg ?? p.astPerGame ?? p.ast ?? bp.astPerGame ?? meanOf((g) => g.ast));
+      return numVal(p.astBase ?? p.assists ?? bp.astBase ?? meanOf((g) => g.assists));
     }
     case 'stl': {
       if (isTeam) return numVal(p.stlAvg ?? p.stl ?? meanOf((g) => g.stl));
-      return numVal(p.stlBase ?? p.steals ?? meanOf((g) => g.steals));
+      return numVal(p.stlBase ?? p.steals ?? bp.stlBase ?? meanOf((g) => g.steals));
     }
     case 'blk': {
       if (isTeam) return numVal(p.blkAvg ?? p.blk ?? meanOf((g) => g.blk));
-      return numVal(p.blkBase ?? p.blocks ?? meanOf((g) => g.blocks));
+      return numVal(p.blkBase ?? p.blocks ?? bp.blkBase ?? meanOf((g) => g.blocks));
     }
     case 'stocks': {
       const sVal = p.stocksBase ?? (p.stlBase !== undefined && p.blkBase !== undefined ? p.stlBase + p.blkBase : (p.stl !== undefined && p.blk !== undefined ? p.stl + p.blk : null));
-      return numVal(sVal ?? meanOf((g) => g.stocks ?? (g.steals + g.blocks)));
+      return numVal(sVal ?? meanOf((g) => g.stocks ?? ((g.steals ?? g.stl ?? 0) + (g.blocks ?? g.blk ?? 0))));
     }
     case 'fgPct': {
-      return numVal(p.fgPct ?? adv.fgPct);
+      const direct = numVal(p.fgPct ?? bp.fgPct ?? adv.fgPct);
+      if (direct !== null) return direct;
+      if (games.length > 0) {
+        const fga = games.reduce((acc, g) => acc + (Number(g.fga) || 0), 0);
+        const fgm = games.reduce((acc, g) => acc + (Number(g.fgm) || 0), 0);
+        if (fga > 0) return Math.round((fgm / fga) * 1000) / 10;
+      }
+      return null;
     }
     case 'fgm': {
       if (isTeam) return numVal(p.fgmAvg ?? p.fgm ?? meanOf((g) => g.fgm));
@@ -735,7 +742,14 @@ export function getFilterMetricValue(
       return numVal(p.fgaBase ?? p.fga ?? meanOf((g) => g.fga));
     }
     case 'fg3Pct': {
-      return numVal(p.fg3Pct ?? adv.fg3Pct);
+      const direct = numVal(p.fg3Pct ?? bp.fg3Pct ?? adv.fg3Pct);
+      if (direct !== null) return direct;
+      if (games.length > 0) {
+        const fg3a = games.reduce((acc, g) => acc + (Number(g.fg3a) || 0), 0);
+        const fg3m = games.reduce((acc, g) => acc + (Number(g.fg3m) || 0), 0);
+        if (fg3a > 0) return Math.round((fg3m / fg3a) * 1000) / 10;
+      }
+      return null;
     }
     case 'fg3m': {
       if (isTeam) return numVal(p.fg3mAvg ?? p.fg3m ?? meanOf((g) => g.fg3m));
@@ -746,7 +760,14 @@ export function getFilterMetricValue(
       return numVal(p.fg3aBase ?? p.fg3a ?? meanOf((g) => g.fg3a));
     }
     case 'ftPct': {
-      return numVal(p.ftPct ?? adv.ftPct);
+      const direct = numVal(p.ftPct ?? bp.ftPct ?? adv.ftPct);
+      if (direct !== null) return direct;
+      if (games.length > 0) {
+        const fta = games.reduce((acc, g) => acc + (Number(g.fta) || 0), 0);
+        const ftm = games.reduce((acc, g) => acc + (Number(g.ftm) || 0), 0);
+        if (fta > 0) return Math.round((ftm / fta) * 1000) / 10;
+      }
+      return null;
     }
     case 'ftm': {
       if (isTeam) return numVal(p.ftmAvg ?? p.ftm ?? meanOf((g) => g.ftm));
@@ -789,10 +810,27 @@ export function getFilterMetricValue(
       return numVal(p.pace ?? adv.pace ?? p.advFourFactors?.pace);
     }
     case 'tsPct': {
-      return numVal(p.tsPct ?? p.calcTs ?? adv.tsPct ?? p.advFourFactors?.tsPct);
+      const direct = numVal(p.tsPct ?? p.calcTs ?? bp.tsPct ?? adv.tsPct ?? p.advFourFactors?.tsPct);
+      if (direct !== null) return direct;
+      if (games.length > 0) {
+        const pts = games.reduce((acc, g) => acc + (Number(g.points ?? g.pointsFor) || 0), 0);
+        const fga = games.reduce((acc, g) => acc + (Number(g.fga) || 0), 0);
+        const fta = games.reduce((acc, g) => acc + (Number(g.fta) || 0), 0);
+        const denom = 2 * (fga + 0.44 * fta);
+        if (denom > 0) return Math.round((pts / denom) * 1000) / 10;
+      }
+      return null;
     }
     case 'efgPct': {
-      return numVal(p.efgPct ?? p.calcEfg ?? adv.efgPct ?? p.advFourFactors?.efgPct);
+      const direct = numVal(p.efgPct ?? p.calcEfg ?? bp.efgPct ?? adv.efgPct ?? p.advFourFactors?.efgPct);
+      if (direct !== null) return direct;
+      if (games.length > 0) {
+        const fga = games.reduce((acc, g) => acc + (Number(g.fga) || 0), 0);
+        const fgm = games.reduce((acc, g) => acc + (Number(g.fgm) || 0), 0);
+        const fg3m = games.reduce((acc, g) => acc + (Number(g.fg3m) || 0), 0);
+        if (fga > 0) return Math.round(((fgm + 0.5 * fg3m) / fga) * 1000) / 10;
+      }
+      return null;
     }
     case 'usgPct': {
       return numVal(p.usgPct ?? p.usgAvg ?? adv.usgPct ?? p.advFourFactors?.usgPct ?? meanOf((g) => g.usgEst));
@@ -1197,10 +1235,40 @@ export function getFilterMetricValue(
       return numVal(p.advViolations?.kickedBall ?? p.kickedBall);
     }
     case 'dd2': {
-      return numVal(p.dd2 ?? p.advViolations?.dd2);
+      const direct = numVal(p.dd2 ?? p.advViolations?.dd2);
+      if (direct !== null) return direct;
+      if (!isTeam && games.length > 0) {
+        let count = 0;
+        for (const g of games) {
+          let cats = 0;
+          if ((Number(g.points) || 0) >= 10) cats++;
+          if ((Number(g.rebounds) || 0) >= 10) cats++;
+          if ((Number(g.assists) || 0) >= 10) cats++;
+          if ((Number(g.steals) || 0) >= 10) cats++;
+          if ((Number(g.blocks) || 0) >= 10) cats++;
+          if (cats >= 2) count++;
+        }
+        return count;
+      }
+      return null;
     }
     case 'td3': {
-      return numVal(p.td3 ?? p.advViolations?.td3);
+      const direct = numVal(p.td3 ?? p.advViolations?.td3);
+      if (direct !== null) return direct;
+      if (!isTeam && games.length > 0) {
+        let count = 0;
+        for (const g of games) {
+          let cats = 0;
+          if ((Number(g.points) || 0) >= 10) cats++;
+          if ((Number(g.rebounds) || 0) >= 10) cats++;
+          if ((Number(g.assists) || 0) >= 10) cats++;
+          if ((Number(g.steals) || 0) >= 10) cats++;
+          if ((Number(g.blocks) || 0) >= 10) cats++;
+          if (cats >= 3) count++;
+        }
+        return count;
+      }
+      return null;
     }
     case 'fantasyPts': {
       return numVal(p.fantasyPts ?? p.advViolations?.nbaFantasyPts);
@@ -1246,8 +1314,11 @@ export function matchesPlayerUnifiedFilters(
   filters: UnifiedTableFiltersState,
   lookup?: PlayerLookupContext
 ): boolean {
-  const pid = String(candidate.id || candidate.playerId || candidate.entityId || '').trim();
-  const basePlayer = pid && lookup ? lookup.playerById.get(pid) : undefined;
+  const basePlayer = lookup
+    ? (candidate.playerId ? lookup.playerById.get(String(candidate.playerId).trim()) : undefined) ||
+      (candidate.entityId ? lookup.playerById.get(String(candidate.entityId).trim()) : undefined) ||
+      (candidate.id ? lookup.playerById.get(String(candidate.id).trim()) : undefined)
+    : undefined;
 
   const teamAbbr = String(
     candidate.teamAbbr || basePlayer?.teamAbbr || ''
@@ -1558,10 +1629,15 @@ export function matchesEntityUnifiedFilters(
     ) {
       return false;
     }
+    const abbr = String(candidate.abbreviation || candidate.teamAbbr || candidate.entityId || '')
+      .toUpperCase()
+      .trim();
+    const baseTeam = abbr && lookup ? lookup.teamByAbbr.get(abbr) : undefined;
     return matchesTeamUnifiedFilters(
       {
-        abbreviation: candidate.abbreviation || candidate.teamAbbr || candidate.entityId,
-        conference: candidate.conference,
+        ...(baseTeam || {}),
+        abbreviation: abbr || baseTeam?.abbreviation,
+        conference: candidate.conference || baseTeam?.conference,
       },
       filters
     );

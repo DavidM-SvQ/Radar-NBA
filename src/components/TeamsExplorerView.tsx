@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Search, Sliders, Star } from 'lucide-react';
 import type {
   ExperienceMode,
+  InjuriesRotationPayload,
   NbaAdvancedCategory,
   NbaClutchEntry,
   NbaDefenseHustleEntry,
@@ -50,6 +51,9 @@ import {
   buildTableSnapshotBlob,
   type TableSnapshotCell,
 } from '../utils/exportImageCard';
+import { useThemeStyle } from '../context/ThemeStyleContext';
+import { buildInjuriesLookupIndex } from '../utils/injuriesClient';
+import { useExperienceMetrics } from '../context/ExperienceMetricsContext';
 
 interface TeamsExplorerViewProps {
   teams: TeamSummary[];
@@ -63,6 +67,7 @@ interface TeamsExplorerViewProps {
   onToggleWatchlist: (entityKey: string) => void;
   onInspectEntity: (entityType: 'player' | 'team', entityId: string) => void;
   showHeroicBadges?: boolean;
+  injuriesData?: InjuriesRotationPayload | null;
 }
 
 type TeamTableView =
@@ -578,7 +583,14 @@ export function TeamsExplorerView({
   onToggleWatchlist,
   onInspectEntity,
   showHeroicBadges = false,
+  injuriesData = null,
 }: TeamsExplorerViewProps) {
+  const { isV3 } = useThemeStyle();
+  const injuriesIndex = useMemo(
+    () => buildInjuriesLookupIndex(injuriesData),
+    [injuriesData]
+  );
+  const [onlyKeyInjuries, setOnlyKeyInjuries] = useState(false);
   const [viewMode, setViewMode] = useState<TeamTableView>('basic');
   const [statMode, setStatMode] = useState<StatScaleMode>(loadTeamStatMode);
   const [visibleColsByLayer, setVisibleColsByLayer] = useState<Record<TeamTableView, string[]>>(loadSavedTeamCols);
@@ -1082,6 +1094,12 @@ export function TeamsExplorerView({
       .filter((t) => {
         if (onlyWatchlist && !watchlistIds.has(`team:${t.id}`)) return false;
         if (!matchesTeamUnifiedFilters(t, unifiedFilters)) return false;
+        if (onlyKeyInjuries) {
+          const teamInj = injuriesIndex.byTeamAbbr.get(t.abbreviation.toUpperCase());
+          if (!teamInj || (teamInj.outOrIrCount === 0 && teamInj.vacatedMinutes < 20)) {
+            return false;
+          }
+        }
         if (q) {
           const hay = normalizeSearchText(`${t.name} ${t.abbreviation} ${t.conference}`);
           if (!hay.includes(q)) return false;
@@ -1127,15 +1145,37 @@ export function TeamsExplorerView({
         }
         return b.winPct - a.winPct;
       });
-  }, [enrichedTeams, onlyWatchlist, watchlistIds, unifiedFilters, query, sortKey, sortAsc, activeSortColDef]);
+  }, [enrichedTeams, onlyWatchlist, watchlistIds, unifiedFilters, query, sortKey, sortAsc, activeSortColDef, onlyKeyInjuries, injuriesIndex]);
+
+  const v3ColMax = useMemo(() => {
+    let avgPointsFor = 1;
+    let absWindowDiff = 1;
+    let winPct = 0.01;
+    for (const t of filtered) {
+      if (t.avgPointsFor > avgPointsFor) avgPointsFor = t.avgPointsFor;
+      if (Math.abs(t.windowDiff) > absWindowDiff) absWindowDiff = Math.abs(t.windowDiff);
+      if (t.winPct > winPct) winPct = t.winPct;
+    }
+    return { avgPointsFor, absWindowDiff, winPct };
+  }, [filtered]);
+
+  const { isMetricAllowed } = useExperienceMetrics();
+  const allowPaceSimple = isMetricAllowed('pace');
 
   const summary = useMemo(() => {
     if (enrichedTeams.length === 0) return null;
-    const bestNet = [...enrichedTeams].sort((a, b) => b.netRtg - a.netRtg)[0];
-    const bestDef = [...enrichedTeams].sort((a, b) => a.defRtg - b.defRtg)[0];
+    const bestNet =
+      experienceMode === 'simple'
+        ? [...enrichedTeams].sort((a, b) => b.differential - a.differential)[0]
+        : [...enrichedTeams].sort((a, b) => b.netRtg - a.netRtg)[0];
+    const bestDef =
+      experienceMode === 'simple'
+        ? [...enrichedTeams].sort((a, b) => a.avgPointsAgainst - b.avgPointsAgainst)[0]
+        : [...enrichedTeams].sort((a, b) => a.defRtg - b.defRtg)[0];
+    const bestOff = [...enrichedTeams].sort((a, b) => b.avgPointsFor - a.avgPointsFor)[0];
     const fastest = [...enrichedTeams].sort((a, b) => b.pace - a.pace)[0];
-    return { bestNet, bestDef, fastest };
-  }, [enrichedTeams]);
+    return { bestNet, bestDef, bestOff, fastest };
+  }, [enrichedTeams, experienceMode]);
 
   const handleModeSwitch = (mode: TeamTableView) => {
     setViewMode(mode);
@@ -1471,31 +1511,63 @@ export function TeamsExplorerView({
           </div>
         </div>
         <div className="p-3.5 sm:p-4">
-          <div className="flex items-center justify-between gap-1 text-xs text-slate-400">
-            <span className="truncate">
-              {experienceMode === 'simple' ? 'Ritmo más rápido' : 'Mayor Pace real'}
-            </span>
-            <MetricInfoTooltip helpKey="paceSimple" align="right" />
-          </div>
-          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
-            {summary?.fastest && (
-              <TeamLogo
-                abbr={summary.fastest.abbreviation}
-                teamId={summary.fastest.id}
-                logoUrl={summary.fastest.logoUrl}
-                size="sm"
-                framed
-              />
-            )}
-            <div className="min-w-0">
-              <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
-                {summary?.fastest?.name || '—'}
-              </p>
-              <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-slate-300 truncate">
-                {summary?.fastest ? `${summary.fastest.pace.toFixed(1)} pos / partido` : '—'}
-              </p>
-            </div>
-          </div>
+          {experienceMode === 'simple' && !allowPaceSimple ? (
+            <>
+              <div className="flex items-center justify-between gap-1 text-xs text-slate-400">
+                <span className="truncate">Mejor ataque (PTS)</span>
+                <MetricInfoTooltip helpKey="ptsBase" align="right" />
+              </div>
+              <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+                {summary?.bestOff && (
+                  <TeamLogo
+                    abbr={summary.bestOff.abbreviation}
+                    teamId={summary.bestOff.id}
+                    logoUrl={summary.bestOff.logoUrl}
+                    size="sm"
+                    framed
+                  />
+                )}
+                <div className="min-w-0">
+                  <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                    {summary?.bestOff?.name || '—'}
+                  </p>
+                  <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-sky-400 truncate">
+                    {summary?.bestOff
+                      ? `Anota ${summary.bestOff.avgPointsFor.toFixed(statMode === 'totals' ? 0 : 1)} PTS`
+                      : '—'}
+                  </p>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-between gap-1 text-xs text-slate-400">
+                <span className="truncate">
+                  {experienceMode === 'simple' ? 'Ritmo más rápido' : 'Mayor Pace real'}
+                </span>
+                <MetricInfoTooltip helpKey="paceSimple" align="right" />
+              </div>
+              <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+                {summary?.fastest && (
+                  <TeamLogo
+                    abbr={summary.fastest.abbreviation}
+                    teamId={summary.fastest.id}
+                    logoUrl={summary.fastest.logoUrl}
+                    size="sm"
+                    framed
+                  />
+                )}
+                <div className="min-w-0">
+                  <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                    {summary?.fastest?.name || '—'}
+                  </p>
+                  <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-slate-300 truncate">
+                    {summary?.fastest ? `${summary.fastest.pace.toFixed(1)} pos / partido` : '—'}
+                  </p>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -1579,6 +1651,19 @@ export function TeamsExplorerView({
             <span className="text-[11px] font-mono text-slate-400">
               {filtered.length} de {enrichedTeams.length} franquicias visibles
             </span>
+            {injuriesData && injuriesData.teams.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setOnlyKeyInjuries((prev) => !prev)}
+                className={`min-h-[34px] px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors whitespace-nowrap ${
+                  onlyKeyInjuries
+                    ? 'bg-rose-500/20 border-rose-500/40 text-rose-200 font-semibold'
+                    : 'bg-[#0B1120] border-[#1E293B] text-slate-300 hover:text-white hover:border-slate-600'
+                }`}
+              >
+                Solo bajas clave
+              </button>
+            )}
             <div
               className="inline-flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs"
               role="group"
@@ -1662,6 +1747,7 @@ export function TeamsExplorerView({
               {filtered.map((t) => {
                 const wKey = `team:${t.id}`;
                 const watched = watchlistIds.has(wKey);
+                const teamInj = injuriesIndex.byTeamAbbr.get(t.abbreviation.toUpperCase());
                 const topMobileCols = activeLayerColumns.slice(0, 4);
 
                 return (
@@ -1702,6 +1788,17 @@ export function TeamsExplorerView({
                           <p className="text-xs text-slate-400 truncate">
                             {t.abbreviation} · Conf. {t.conference} · {t.wins}-{t.losses} (
                             {(t.winPct * 100).toFixed(0)}%)
+                            {teamInj && teamInj.totalInjured > 0 && (
+                              <span className="text-rose-300 font-medium">
+                                {' · '}
+                                {teamInj.outOrIrCount > 0
+                                  ? `${teamInj.outOrIrCount} Out/IR`
+                                  : `${teamInj.totalInjured} duda`}
+                                {teamInj.vacatedMinutes >= 15
+                                  ? ` (-${teamInj.vacatedMinutes.toFixed(0)}m)`
+                                  : ''}
+                              </span>
+                            )}
                           </p>
                         </div>
                       </div>
@@ -1980,8 +2077,38 @@ export function TeamsExplorerView({
                               </span>
                             )}
                           </div>
-                          <div className="text-xs text-slate-400 whitespace-nowrap">
-                            {t.abbreviation} · Conf. {t.conference} · Últ.10: {t.lastTenRecord}
+                          <div className="text-xs text-slate-400 whitespace-nowrap flex items-center gap-1.5">
+                            <span>
+                              {t.abbreviation} · Conf. {t.conference} · Últ.10: {t.lastTenRecord}
+                            </span>
+                            {(() => {
+                              const teamInj = injuriesIndex.byTeamAbbr.get(
+                                t.abbreviation.toUpperCase()
+                              );
+                              if (!teamInj || teamInj.totalInjured === 0) return null;
+                              const tip = teamInj.injuries
+                                .slice(0, 5)
+                                .map((x) => `${x.name} (${x.shortTag}: ${x.detailEs})`)
+                                .join(' | ');
+                              return (
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <span
+                                    title={`Parte médico ${t.abbreviation}: ${tip}`}
+                                    className={`font-mono text-[11px] font-semibold ${
+                                      teamInj.outOrIrCount > 0 ? 'text-rose-300' : 'text-amber-300'
+                                    }`}
+                                  >
+                                    {teamInj.outOrIrCount > 0
+                                      ? `${teamInj.outOrIrCount} Out/IR`
+                                      : `${teamInj.totalInjured} duda`}
+                                    {teamInj.vacatedMinutes >= 12
+                                      ? ` (-${teamInj.vacatedMinutes.toFixed(0)}m)`
+                                      : ''}
+                                  </span>
+                                </>
+                              );
+                            })()}
                           </div>
                         </div>
                       </div>
@@ -1994,6 +2121,16 @@ export function TeamsExplorerView({
                             t.winPct * 100,
                             benchmarks.team.winPct
                           )}`}
+                          style={
+                            isV3
+                              ? (() => {
+                                  const pct = Math.min(100, Math.max(0, Math.round((t.winPct / v3ColMax.winPct) * 100)));
+                                  return {
+                                    backgroundImage: `linear-gradient(to left, rgba(249, 115, 22, 0.12) ${pct}%, transparent ${pct}%)`,
+                                  };
+                                })()
+                              : undefined
+                          }
                         >
                           <span className="font-semibold text-slate-100">
                             {t.wins}-{t.losses}
@@ -2007,6 +2144,16 @@ export function TeamsExplorerView({
                             t.avgPointsFor,
                             (statMode === 'totals' ? dynamicTotalsBenchmarks.avgPointsFor : undefined) || benchmarks.team.avgPointsFor
                           )}`}
+                          style={
+                            isV3
+                              ? (() => {
+                                  const pct = Math.min(100, Math.max(0, Math.round((t.avgPointsFor / v3ColMax.avgPointsFor) * 100)));
+                                  return {
+                                    backgroundImage: `linear-gradient(to left, rgba(56, 189, 248, 0.12) ${pct}%, transparent ${pct}%)`,
+                                  };
+                                })()
+                              : undefined
+                          }
                         >
                           <div className="font-mono tabular-nums text-slate-100">
                             {t.avgPointsFor.toFixed(statMode === 'totals' ? 0 : 1)}
@@ -2028,7 +2175,23 @@ export function TeamsExplorerView({
                             {defEval.tierLabel}
                           </div>
                         </td>
-                        <td className="py-2.5 px-2.5 text-right font-mono tabular-nums whitespace-nowrap">
+                        <td
+                          className="py-2.5 px-2.5 text-right font-mono tabular-nums whitespace-nowrap"
+                          style={
+                            isV3
+                              ? (() => {
+                                  const pct = Math.min(100, Math.max(0, Math.round((Math.abs(t.windowDiff) / v3ColMax.absWindowDiff) * 100)));
+                                  const color =
+                                    t.windowDiff >= 0
+                                      ? 'rgba(16, 185, 129, 0.13)'
+                                      : 'rgba(244, 63, 94, 0.13)';
+                                  return {
+                                    backgroundImage: `linear-gradient(to left, ${color} ${pct}%, transparent ${pct}%)`,
+                                  };
+                                })()
+                              : undefined
+                          }
+                        >
                           <span
                             className={
                               t.windowDiff >= 0

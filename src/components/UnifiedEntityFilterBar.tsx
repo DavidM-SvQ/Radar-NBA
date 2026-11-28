@@ -14,6 +14,7 @@ import {
   type UnifiedTableFiltersState,
 } from '../utils/entityFilters';
 import type { NbaConferenceEs, NbaDivisionEs } from '../utils/teamLogos';
+import { useExperienceMetrics } from '../context/ExperienceMetricsContext';
 
 export interface UnifiedEntityFilterBarProps {
   filters: UnifiedTableFiltersState;
@@ -42,6 +43,7 @@ export const UnifiedEntityFilterBar: React.FC<UnifiedEntityFilterBarProps> = ({
   defaultExpanded = false,
   className = '',
 }) => {
+  const { isMetricAllowed } = useExperienceMetrics();
   const [isExpanded, setIsExpanded] = useState<boolean>(defaultExpanded);
 
   const options = useMemo(
@@ -457,7 +459,11 @@ export const UnifiedEntityFilterBar: React.FC<UnifiedEntityFilterBarProps> = ({
               >
                 <option value="all">Cualquier métrica (sin filtro)</option>
                 {FILTERABLE_METRIC_CATEGORIES.map((cat) => {
-                  const available = cat.metrics.filter((m) => !isPlayerOnlyDisabled || m.scope !== 'player');
+                  const available = cat.metrics.filter(
+                    (m) =>
+                      (!isPlayerOnlyDisabled || m.scope !== 'player') &&
+                      isMetricAllowed(m.id)
+                  );
                   if (available.length === 0) return null;
                   return (
                     <optgroup key={cat.id} label={getStatLayerCategoryLabel(cat.id, entityScope)} className="bg-[#0B1120] text-orange-400 font-semibold">
@@ -559,7 +565,11 @@ export const UnifiedEntityFilterBar: React.FC<UnifiedEntityFilterBarProps> = ({
               >
                 <option value="all">Cualquier métrica (sin filtro)</option>
                 {FILTERABLE_METRIC_CATEGORIES.map((cat) => {
-                  const available = cat.metrics.filter((m) => !isPlayerOnlyDisabled || m.scope !== 'player');
+                  const available = cat.metrics.filter(
+                    (m) =>
+                      (!isPlayerOnlyDisabled || m.scope !== 'player') &&
+                      isMetricAllowed(m.id)
+                  );
                   if (available.length === 0) return null;
                   return (
                     <optgroup key={cat.id} label={getStatLayerCategoryLabel(cat.id, entityScope)} className="bg-[#0B1120] text-blue-400 font-semibold">

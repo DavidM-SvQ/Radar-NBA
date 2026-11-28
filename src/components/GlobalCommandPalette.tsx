@@ -8,6 +8,7 @@ import {
   Compass,
   CornerDownLeft,
   Flame,
+  HeartPulse,
   Loader2,
   Lock,
   Search,
@@ -133,6 +134,13 @@ const SECTION_COMMANDS: Array<{
     subtitle: 'Marcadores NBA, quinteto ideal de la noche e informe de partido',
     keywords: 'partidos jornada calendario resultados marcadores anoche scouting',
     icon: CalendarDays,
+  },
+  {
+    sectionId: 'injuries',
+    label: 'Parte de Lesiones',
+    subtitle: 'Bajas oficiales (Out, Dud, GTD, DTD), minutos vacantes y beneficiarios de rotación',
+    keywords: 'lesiones bajas parte medico enfermeria out doubtful questionable rotacion fantasy minutos',
+    icon: HeartPulse,
   },
   {
     sectionId: 'anomalies',

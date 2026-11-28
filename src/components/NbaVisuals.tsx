@@ -167,7 +167,7 @@ export const TeamLogo: React.FC<TeamLogoProps> = ({
   className = '',
   title,
 }) => {
-  const { isV2 } = useThemeStyle();
+  const { isV2, isV3 } = useThemeStyle();
   const meta = useMemo(() => resolveTeamMeta(abbr, teamId), [abbr, teamId]);
 
   const candidates = useMemo(() => {
@@ -194,10 +194,13 @@ export const TeamLogo: React.FC<TeamLogoProps> = ({
   const fallbackLabel = (meta?.canonical || abbr || 'NBA').trim().slice(0, 3).toUpperCase();
 
   const v2FramedStyle =
-    isV2 && framed && meta && accentTone === 'default'
+    (isV2 || isV3) && framed && meta && accentTone === 'default'
       ? {
-          borderColor: `${meta.primaryHex}66`,
-          background: `radial-gradient(circle at 30% 25%, ${meta.primaryHex}26, #070C17 75%)`,
+          borderColor: `${meta.primaryHex}${isV3 ? '80' : '66'}`,
+          background: `radial-gradient(circle at 30% 25%, ${meta.primaryHex}${
+            isV3 ? '30' : '26'
+          }, #070C17 75%)`,
+          boxShadow: isV3 ? `0 0 0 1px ${meta.primaryHex}18` : undefined,
         }
       : undefined;
 
@@ -281,7 +284,7 @@ export const PlayerAvatar: React.FC<PlayerAvatarProps> = ({
   accentTone = 'default',
   className = '',
 }) => {
-  const { isV2 } = useThemeStyle();
+  const { isV2, isV3 } = useThemeStyle();
   const teamMeta = useMemo(() => resolveTeamMeta(teamAbbr, null), [teamAbbr]);
 
   const candidates = useMemo(() => {
@@ -311,10 +314,13 @@ export const PlayerAvatar: React.FC<PlayerAvatarProps> = ({
   const initials = useMemo(() => getInitials(name), [name]);
 
   const v2AvatarStyle =
-    isV2 && teamMeta && accentTone === 'default'
+    (isV2 || isV3) && teamMeta && accentTone === 'default'
       ? {
-          borderColor: `${teamMeta.primaryHex}66`,
-          background: `radial-gradient(circle at 50% 20%, ${teamMeta.primaryHex}33, #070C17 78%)`,
+          borderColor: `${teamMeta.primaryHex}${isV3 ? '80' : '66'}`,
+          background: `radial-gradient(circle at 50% 20%, ${teamMeta.primaryHex}${
+            isV3 ? '3D' : '33'
+          }, #070C17 78%)`,
+          boxShadow: isV3 ? `0 0 0 1px ${teamMeta.primaryHex}1A` : undefined,
         }
       : undefined;
 

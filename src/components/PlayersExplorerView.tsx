@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Plus, Search, Sliders, Star, Users } from 'lucide-react';
 import type {
   ExperienceMode,
+  InjuriesRotationPayload,
   NbaAdvancedCategory,
   NbaClutchEntry,
   NbaDefenseHustleEntry,
@@ -50,6 +51,10 @@ import {
   type TableSnapshotCell,
 } from '../utils/exportImageCard';
 import { LayerColumnCustomizer } from './LayerColumnCustomizer';
+import { useThemeStyle } from '../context/ThemeStyleContext';
+import { buildInjuriesLookupIndex, findPlayerInjury } from '../utils/injuriesClient';
+import { InjuryStatusBadge } from './InjuryStatusBadge';
+import { useExperienceMetrics } from '../context/ExperienceMetricsContext';
 
 interface PlayersExplorerViewProps {
   players: PlayerSummary[];
@@ -70,6 +75,7 @@ interface PlayersExplorerViewProps {
   onAddExternalPlayer: (item: SearchPlayerResult) => Promise<void>;
   addingPlayerId: string | null;
   showHeroicBadges?: boolean;
+  injuriesData?: InjuriesRotationPayload | null;
 }
 
 type TableViewMode =
@@ -595,7 +601,14 @@ export function PlayersExplorerView({
   onAddExternalPlayer,
   addingPlayerId,
   showHeroicBadges = false,
+  injuriesData = null,
 }: PlayersExplorerViewProps) {
+  const { isV3 } = useThemeStyle();
+  const injuriesIndex = useMemo(
+    () => buildInjuriesLookupIndex(injuriesData),
+    [injuriesData]
+  );
+  const [availabilityFilter, setAvailabilityFilter] = useState<'all' | 'injured' | 'hide_out'>('all');
   const [viewMode, setViewMode] = useState<TableViewMode>('basic');
   const [statMode, setStatMode] = useState<StatScaleMode>(loadPlayerStatMode);
   const [visibleColsByLayer, setVisibleColsByLayer] = useState<Record<TableViewMode, string[]>>(loadSavedPlayerCols);
@@ -1149,6 +1162,19 @@ export function PlayersExplorerView({
       .filter((r) => {
         if (onlyWatchlist && !watchlistIds.has(`player:${r.id}`)) return false;
         if (!matchesPlayerUnifiedFilters(r, unifiedFilters, entityLookup)) return false;
+        if (availabilityFilter !== 'all') {
+          const inj = findPlayerInjury(injuriesIndex, r.id, r.name);
+          if (availabilityFilter === 'injured' && !inj) return false;
+          if (
+            availabilityFilter === 'hide_out' &&
+            inj &&
+            (inj.statusCode === 'out' ||
+              inj.statusCode === 'ir' ||
+              inj.statusCode === 'suspended')
+          ) {
+            return false;
+          }
+        }
         if (q) {
           const hay = normalizeSearchText(
             `${r.name} ${r.teamAbbr} ${r.teamName} ${r.position} ${r.country || ''}`
@@ -1184,7 +1210,19 @@ export function PlayersExplorerView({
         }
         return b.ptsBase - a.ptsBase;
       });
-  }, [rows, onlyWatchlist, watchlistIds, unifiedFilters, entityLookup, query, sortKey, sortAsc, activeSortColDef]);
+  }, [rows, onlyWatchlist, watchlistIds, unifiedFilters, entityLookup, query, sortKey, sortAsc, activeSortColDef, availabilityFilter, injuriesIndex]);
+
+  const v3ColMax = useMemo(() => {
+    let ptsBase = 1;
+    let ptsWin = 1;
+    let tsPct = 65;
+    for (const r of filtered) {
+      if (r.ptsBase > ptsBase) ptsBase = r.ptsBase;
+      if (r.ptsWin > ptsWin) ptsWin = r.ptsWin;
+      if (r.tsPct > tsPct) tsPct = r.tsPct;
+    }
+    return { ptsBase, ptsWin, tsPct };
+  }, [filtered]);
 
   const existingIds = useMemo(() => new Set(players.map((p) => p.id)), [players]);
   const unaddedRemote = useMemo(
@@ -1192,14 +1230,21 @@ export function PlayersExplorerView({
     [remoteResults, existingIds]
   );
 
+  const { isMetricAllowed } = useExperienceMetrics();
+  const allowTsSimple = isMetricAllowed('tsPct');
+  const allowUsgSimple = isMetricAllowed('usgEst');
+  const allowPieSimple = isMetricAllowed('pie');
+
   const summary = useMemo(() => {
     if (rows.length === 0) return null;
     const qualified = rows.filter((r) => (r.games.length > 0 ? r.minBase / (statMode === 'totals' ? r.games.length : 1) >= 20 : false));
     const pool = qualified.length > 0 ? qualified : rows;
     const topScorer = [...pool].sort((a, b) => b.ptsBase - a.ptsBase)[0];
+    const topRebounder = [...pool].sort((a, b) => b.rebBase - a.rebBase)[0];
+    const topAssister = [...pool].sort((a, b) => b.astBase - a.astBase)[0];
     const topUsage = [...pool].sort((a, b) => b.usgPct - a.usgPct)[0];
     const topPie = [...pool].sort((a, b) => b.pie - a.pie)[0];
-    return { topScorer, topUsage, topPie };
+    return { topScorer, topRebounder, topAssister, topUsage, topPie };
   }, [rows, statMode]);
 
   const handleBuildPlayersSnapshot = async () => {
@@ -1350,7 +1395,9 @@ export function PlayersExplorerView({
           { id: 'ptsWin', label: `Últ. ${windowSize} PJ` },
           { id: 'rebBase', label: 'Rebotes' },
           { id: 'astBase', label: 'Asistencias' },
-          { id: 'tsPct', label: 'Acierto TS%' },
+          allowTsSimple
+            ? { id: 'tsPct', label: 'Acierto TS%' }
+            : { id: 'fgPct', label: '% Tiros (TC)' },
           { id: 'minBase', label: 'Minutos' },
         ]
       : activeLayerColumns.slice(0, 7).map((col) => ({
@@ -1424,7 +1471,9 @@ export function PlayersExplorerView({
               </p>
               <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-orange-400 truncate">
                 {summary?.topScorer
-                  ? `${summary.topScorer.ptsBase.toFixed(statMode === 'totals' ? 0 : 1)} PTS${statMode === 'totals' ? ' tot.' : '/PJ'} · ${summary.topScorer.tsPct.toFixed(1)}% TS`
+                  ? allowTsSimple
+                    ? `${summary.topScorer.ptsBase.toFixed(statMode === 'totals' ? 0 : 1)} PTS${statMode === 'totals' ? ' tot.' : '/PJ'} · ${summary.topScorer.tsPct.toFixed(1)}% TS`
+                    : `${summary.topScorer.ptsBase.toFixed(statMode === 'totals' ? 0 : 1)} PTS${statMode === 'totals' ? ' tot.' : '/PJ'} · ${summary.topScorer.fgPct.toFixed(1)}% TC`
                   : '—'}
               </p>
             </div>
@@ -1432,69 +1481,135 @@ export function PlayersExplorerView({
         </div>
 
         <div className="p-3.5 sm:p-4">
-          <div className="flex items-center justify-between gap-1 text-xs text-slate-400">
-            <span className="truncate">
-              {experienceMode === 'simple' ? 'Más jugadas asume' : 'Mayor Uso (USG%)'}
-            </span>
-            <MetricInfoTooltip helpKey="usgPct" />
-          </div>
-          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
-            {summary?.topUsage && (
-              <PlayerAvatar
-                playerId={summary.topUsage.id}
-                name={summary.topUsage.name}
-                headshotUrl={summary.topUsage.headshotUrl}
-                teamAbbr={summary.topUsage.teamAbbr}
-                showTeamBadge
-                size="sm"
-              />
-            )}
-            <div className="min-w-0">
-              <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
-                {summary?.topUsage?.name || '—'}
-              </p>
-              <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-emerald-400 truncate">
-                {summary?.topUsage
-                  ? experienceMode === 'simple'
-                    ? `${summary.topUsage.usgPct.toFixed(1)}% ataques`
-                    : `${summary.topUsage.usgPct.toFixed(1)}% USG · ${summary.topUsage.gmSc.toFixed(1)} GmSc`
-                  : '—'}
-              </p>
-            </div>
-          </div>
+          {experienceMode === 'simple' && !allowUsgSimple ? (
+            <>
+              <div className="flex items-center justify-between gap-1 text-xs text-slate-400">
+                <span className="truncate">Líder en Rebotes</span>
+                <MetricInfoTooltip helpKey="rebBase" />
+              </div>
+              <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+                {summary?.topRebounder && (
+                  <PlayerAvatar
+                    playerId={summary.topRebounder.id}
+                    name={summary.topRebounder.name}
+                    headshotUrl={summary.topRebounder.headshotUrl}
+                    teamAbbr={summary.topRebounder.teamAbbr}
+                    showTeamBadge
+                    size="sm"
+                  />
+                )}
+                <div className="min-w-0">
+                  <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                    {summary?.topRebounder?.name || '—'}
+                  </p>
+                  <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-emerald-400 truncate">
+                    {summary?.topRebounder
+                      ? `${summary.topRebounder.rebBase.toFixed(statMode === 'totals' ? 0 : 1)} REB${statMode === 'totals' ? ' tot.' : '/PJ'}`
+                      : '—'}
+                  </p>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-between gap-1 text-xs text-slate-400">
+                <span className="truncate">
+                  {experienceMode === 'simple' ? 'Más jugadas asume' : 'Mayor Uso (USG%)'}
+                </span>
+                <MetricInfoTooltip helpKey="usgPct" />
+              </div>
+              <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+                {summary?.topUsage && (
+                  <PlayerAvatar
+                    playerId={summary.topUsage.id}
+                    name={summary.topUsage.name}
+                    headshotUrl={summary.topUsage.headshotUrl}
+                    teamAbbr={summary.topUsage.teamAbbr}
+                    showTeamBadge
+                    size="sm"
+                  />
+                )}
+                <div className="min-w-0">
+                  <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                    {summary?.topUsage?.name || '—'}
+                  </p>
+                  <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-emerald-400 truncate">
+                    {summary?.topUsage
+                      ? experienceMode === 'simple'
+                        ? `${summary.topUsage.usgPct.toFixed(1)}% ataques`
+                        : `${summary.topUsage.usgPct.toFixed(1)}% USG · ${summary.topUsage.gmSc.toFixed(1)} GmSc`
+                      : '—'}
+                  </p>
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="p-3.5 sm:p-4">
-          <div className="flex items-center justify-between gap-1 text-xs text-slate-400">
-            <span className="truncate">
-              {experienceMode === 'simple' ? 'Impacto total' : 'Mayor Impacto (PIE)'}
-            </span>
-            <MetricInfoTooltip helpKey="pie" align="right" />
-          </div>
-          <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
-            {summary?.topPie && (
-              <PlayerAvatar
-                playerId={summary.topPie.id}
-                name={summary.topPie.name}
-                headshotUrl={summary.topPie.headshotUrl}
-                teamAbbr={summary.topPie.teamAbbr}
-                showTeamBadge
-                size="sm"
-              />
-            )}
-            <div className="min-w-0">
-              <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
-                {summary?.topPie?.name || '—'}
-              </p>
-              <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-slate-300 truncate">
-                {summary?.topPie
-                  ? experienceMode === 'simple'
-                    ? `Impacto ${summary.topPie.pie.toFixed(1)}% PIE`
-                    : `${summary.topPie.pie.toFixed(1)}% PIE · Net ${formatSigned(summary.topPie.netRtg)}`
-                  : '—'}
-              </p>
-            </div>
-          </div>
+          {experienceMode === 'simple' && !allowPieSimple ? (
+            <>
+              <div className="flex items-center justify-between gap-1 text-xs text-slate-400">
+                <span className="truncate">Líder en Asistencias</span>
+                <MetricInfoTooltip helpKey="astBase" align="right" />
+              </div>
+              <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+                {summary?.topAssister && (
+                  <PlayerAvatar
+                    playerId={summary.topAssister.id}
+                    name={summary.topAssister.name}
+                    headshotUrl={summary.topAssister.headshotUrl}
+                    teamAbbr={summary.topAssister.teamAbbr}
+                    showTeamBadge
+                    size="sm"
+                  />
+                )}
+                <div className="min-w-0">
+                  <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                    {summary?.topAssister?.name || '—'}
+                  </p>
+                  <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-slate-300 truncate">
+                    {summary?.topAssister
+                      ? `${summary.topAssister.astBase.toFixed(statMode === 'totals' ? 0 : 1)} AST${statMode === 'totals' ? ' tot.' : '/PJ'}`
+                      : '—'}
+                  </p>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-between gap-1 text-xs text-slate-400">
+                <span className="truncate">
+                  {experienceMode === 'simple' ? 'Impacto total' : 'Mayor Impacto (PIE)'}
+                </span>
+                <MetricInfoTooltip helpKey="pie" align="right" />
+              </div>
+              <div className="mt-1.5 flex items-center gap-2.5 min-w-0">
+                {summary?.topPie && (
+                  <PlayerAvatar
+                    playerId={summary.topPie.id}
+                    name={summary.topPie.name}
+                    headshotUrl={summary.topPie.headshotUrl}
+                    teamAbbr={summary.topPie.teamAbbr}
+                    showTeamBadge
+                    size="sm"
+                  />
+                )}
+                <div className="min-w-0">
+                  <p className="text-base sm:text-lg font-semibold text-slate-100 truncate leading-tight">
+                    {summary?.topPie?.name || '—'}
+                  </p>
+                  <p className="mt-0.5 text-[11px] sm:text-xs font-mono tabular-nums text-slate-300 truncate">
+                    {summary?.topPie
+                      ? experienceMode === 'simple'
+                        ? `Impacto ${summary.topPie.pie.toFixed(1)}% PIE`
+                        : `${summary.topPie.pie.toFixed(1)}% PIE · Net ${formatSigned(summary.topPie.netRtg)}`
+                      : '—'}
+                  </p>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -1595,6 +1710,48 @@ export function PlayersExplorerView({
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            {injuriesData && injuriesData.entries.length > 0 && (
+              <div
+                className="inline-flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs"
+                role="group"
+                aria-label="Disponibilidad médica"
+              >
+                <button
+                  type="button"
+                  onClick={() => setAvailabilityFilter('all')}
+                  className={`min-h-[28px] px-2 py-1 rounded-md font-medium transition-colors whitespace-nowrap ${
+                    availabilityFilter === 'all'
+                      ? 'bg-[#182338] text-slate-100 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Todos
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAvailabilityFilter('hide_out')}
+                  className={`min-h-[28px] px-2 py-1 rounded-md font-medium transition-colors whitespace-nowrap ${
+                    availabilityFilter === 'hide_out'
+                      ? 'bg-emerald-500/20 text-emerald-300 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Sin Out/IR
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAvailabilityFilter('injured')}
+                  className={`min-h-[28px] px-2 py-1 rounded-md font-medium transition-colors whitespace-nowrap ${
+                    availabilityFilter === 'injured'
+                      ? 'bg-rose-500/20 text-rose-300 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  En parte ({injuriesData.summary.totalReported})
+                </button>
+              </div>
+            )}
+
             <div
               className="inline-flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg text-xs"
               role="group"
@@ -1727,6 +1884,7 @@ export function PlayersExplorerView({
                 {mobileVisiblePlayers.map((p) => {
                   const wKey = `player:${p.id}`;
                   const watched = watchlistIds.has(wKey);
+                  const playerInj = findPlayerInjury(injuriesIndex, p.id, p.name);
                   const roleHint = qualifyUsageRole(p.usgPct);
                   const formHint = qualifyRecentDelta(p.pctDelta);
                   const topMobileCols = activeLayerColumns.slice(0, 4);
@@ -1768,6 +1926,7 @@ export function PlayersExplorerView({
                           <div className="min-w-0">
                             <div className="font-semibold text-sm text-slate-100 truncate flex items-center gap-1.5">
                               <span className="truncate">{p.name}</span>
+                              {playerInj && <InjuryStatusBadge injury={playerInj} compact />}
                               {showHeroicBadges && p.buzzerBeaters > 0 && (
                                 <span
                                   title={`${p.buzzerBeaters} Buzzer Beater(s) oficiales (0.0s)`}
@@ -1922,7 +2081,11 @@ export function PlayersExplorerView({
                         </th>
                         <SH label="Rebotes" k="rebBase" />
                         <SH label="Asistencias" k="astBase" />
-                        <SH label="Acierto Real" k="tsPct" />
+                        {allowTsSimple ? (
+                          <SH label="Acierto Real" k="tsPct" />
+                        ) : (
+                          <SH label="% Tiros (TC)" k="fgPct" />
+                        )}
                         <SH
                           label="Nivel anotador vs Media NBA"
                           k="ptsVsNba"
@@ -1953,6 +2116,7 @@ export function PlayersExplorerView({
                   {filtered.map((p) => {
                     const wKey = `player:${p.id}`;
                     const watched = watchlistIds.has(wKey);
+                    const playerInj = findPlayerInjury(injuriesIndex, p.id, p.name);
                     const roleHint = qualifyUsageRole(p.usgPct);
                     const formHint = qualifyRecentDelta(p.pctDelta);
                     const tsEval = evaluateVsLeague(p.tsPct, benchmarks.player.tsPct);
@@ -1996,6 +2160,7 @@ export function PlayersExplorerView({
                             <div>
                               <div className="font-medium text-slate-100 whitespace-nowrap flex items-center gap-1.5">
                                 <span>{p.name}</span>
+                                {playerInj && <InjuryStatusBadge injury={playerInj} compact />}
                                 {showHeroicBadges && p.buzzerBeaters > 0 && (
                                   <span
                                     title={`${p.buzzerBeaters} Buzzer Beater(s) oficiales (0.0s)`}
@@ -2029,10 +2194,40 @@ export function PlayersExplorerView({
                             <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-300 whitespace-nowrap">
                               {p.minBase.toFixed(1)}
                             </td>
-                            <td className="py-2.5 px-2.5 text-right font-mono tabular-nums font-semibold text-slate-100 whitespace-nowrap">
+                            <td
+                              className="py-2.5 px-2.5 text-right font-mono tabular-nums font-semibold text-slate-100 whitespace-nowrap"
+                              style={
+                                isV3
+                                  ? (() => {
+                                      const pct = Math.min(100, Math.max(0, Math.round((p.ptsBase / v3ColMax.ptsBase) * 100)));
+                                      return {
+                                        backgroundImage: `linear-gradient(to left, rgba(249, 115, 22, 0.13) ${pct}%, transparent ${pct}%)`,
+                                      };
+                                    })()
+                                  : undefined
+                              }
+                            >
                               {p.ptsBase.toFixed(statMode === 'totals' ? 0 : 1)}
                             </td>
-                            <td className="py-2.5 px-2.5 text-right whitespace-nowrap">
+                            <td
+                              className="py-2.5 px-2.5 text-right whitespace-nowrap"
+                              style={
+                                isV3
+                                  ? (() => {
+                                      const pct = Math.min(100, Math.max(0, Math.round((p.ptsWin / v3ColMax.ptsWin) * 100)));
+                                      const color =
+                                        p.pctDelta >= 4
+                                          ? 'rgba(16, 185, 129, 0.13)'
+                                          : p.pctDelta <= -4
+                                          ? 'rgba(244, 63, 94, 0.13)'
+                                          : 'rgba(148, 163, 184, 0.10)';
+                                      return {
+                                        backgroundImage: `linear-gradient(to left, ${color} ${pct}%, transparent ${pct}%)`,
+                                      };
+                                    })()
+                                  : undefined
+                              }
+                            >
                               <div className="font-mono tabular-nums font-semibold text-slate-100">
                                 {p.ptsWin.toFixed(statMode === 'totals' ? 0 : 1)}
                               </div>
@@ -2060,13 +2255,39 @@ export function PlayersExplorerView({
                             <td className="py-2.5 px-2.5 text-right font-mono tabular-nums text-slate-200 whitespace-nowrap">
                               {p.astBase.toFixed(statMode === 'totals' ? 0 : 1)}
                             </td>
-                            <td className="py-2.5 px-2.5 text-right whitespace-nowrap">
-                              <div className="font-mono tabular-nums text-slate-100">
-                                {p.tsPct.toFixed(1)}%
-                              </div>
-                              <div className={`text-[11px] ${tsEval.textClass}`}>
-                                {tsEval.tierLabel}
-                              </div>
+                            <td
+                              className="py-2.5 px-2.5 text-right whitespace-nowrap"
+                              style={
+                                isV3 && allowTsSimple
+                                  ? (() => {
+                                      const span = Math.max(25, v3ColMax.tsPct - 40);
+                                      const pct = Math.min(100, Math.max(0, Math.round(((p.tsPct - 40) / span) * 100)));
+                                      return {
+                                        backgroundImage: `linear-gradient(to left, rgba(16, 185, 129, 0.12) ${pct}%, transparent ${pct}%)`,
+                                      };
+                                    })()
+                                  : undefined
+                              }
+                            >
+                              {allowTsSimple ? (
+                                <>
+                                  <div className="font-mono tabular-nums text-slate-100">
+                                    {p.tsPct.toFixed(1)}%
+                                  </div>
+                                  <div className={`text-[11px] ${tsEval.textClass}`}>
+                                    {tsEval.tierLabel}
+                                  </div>
+                                </>
+                              ) : (
+                                <>
+                                  <div className="font-mono tabular-nums text-slate-100">
+                                    {p.fgPct.toFixed(1)}%
+                                  </div>
+                                  <div className="text-[11px] text-slate-400">
+                                    3P {p.fg3Pct.toFixed(0)}%
+                                  </div>
+                                </>
+                              )}
                             </td>
                             <td className="py-2.5 pl-3 pr-4">
                               <NbaComparisonBar

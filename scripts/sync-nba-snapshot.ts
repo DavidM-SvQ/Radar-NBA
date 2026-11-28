@@ -15,9 +15,12 @@ async function main() {
   const mbCompressed = (result.bytesCompressed / (1024 * 1024)).toFixed(2);
   const mbRaw = (result.bytesUncompressed / (1024 * 1024)).toFixed(2);
 
-  console.log(`[RadarNBA Sync] Snapshot guardado con éxito en ${elapsedSec}s:`);
-  console.log(`  - Archivo: ${result.filePath}`);
-  console.log(`  - Tamaño: ${mbCompressed} MB comprimido (${mbRaw} MB JSON bruto)`);
+  console.log(`[RadarNBA Sync] Snapshots modulares guardados con éxito en ${elapsedSec}s:`);
+  console.log(`  - Temporada activa (2026-27): ${result.filePath}`);
+  if ((result as any).biosFilePath) {
+    console.log(`  - Fichas biográficas (Micro-Snapshot): ${(result as any).biosFilePath}`);
+  }
+  console.log(`  - Tamaño reescrito hoy: ${mbCompressed} MB comprimido (${mbRaw} MB JSON bruto)`);
   console.log(`  - Fuente activa: ${result.lastSyncedSource}`);
   console.log(`  - Fichas biográficas NBA: ${result.biosCount}`);
   console.log(
@@ -29,9 +32,15 @@ async function main() {
   if (result.advancedSnapshot) {
     const advKbGz = Math.round(result.advancedSnapshot.bytesCompressed / 1024);
     const advKbJson = Math.round(result.advancedSnapshot.bytesUncompressed / 1024);
-    console.log(`[RadarNBA Sync] Snapshot Avanzado Diario (100% Offline-Safe) guardado con éxito:`);
-    console.log(`  - Archivo: ${result.advancedSnapshot.filePath}`);
-    console.log(`  - Tamaño: ${advKbGz} KB gzip (${advKbJson} KB JSON)`);
+    console.log(`[RadarNBA Sync] Snapshots Avanzados + Micro-Snapshot Heroic Shots guardados con éxito:`);
+    console.log(`  - Archivo completo (con Lineups): ${result.advancedSnapshot.filePath}`);
+    if ((result.advancedSnapshot as any).coreFilePath) {
+      console.log(`  - Archivo Core ligero (8 capas + On/Off + Benchmarks): ${(result.advancedSnapshot as any).coreFilePath}`);
+    }
+    if ((result.advancedSnapshot as any).heroicShotsFilePath) {
+      console.log(`  - Micro-Snapshot Buzzer Beaters & Game Winners: ${(result.advancedSnapshot as any).heroicShotsFilePath}`);
+    }
+    console.log(`  - Tamaño total avanzado: ${advKbGz} KB gzip (${advKbJson} KB JSON)`);
     console.log(`  - Jugadores / Equipos Zonas: ${result.advancedSnapshot.itemsCount.playerShotZones} / ${result.advancedSnapshot.itemsCount.teamShotZones}`);
     console.log(`  - Jugadores / Equipos Clutch: ${result.advancedSnapshot.itemsCount.playerClutch} / ${result.advancedSnapshot.itemsCount.teamClutch}`);
     console.log(`  - Jugadores / Equipos Defensa & Hustle: ${result.advancedSnapshot.itemsCount.playerDefenseHustle} / ${result.advancedSnapshot.itemsCount.teamDefenseHustle}`);

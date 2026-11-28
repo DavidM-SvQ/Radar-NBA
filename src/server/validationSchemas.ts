@@ -63,18 +63,66 @@ const gamedayThresholdsBodySchema = z.strictObject({
   slumpMinutesCutDelta: z.coerce.number().min(2).max(25),
 });
 const webFeatureFlagsBodySchema = z.strictObject({
-  showHeroicBadges: z.boolean({ error: "El estado de insignias debe ser booleano." }),
+  showHeroicBadges: z.boolean({ error: "El estado de insignias debe ser booleano." }).optional(),
+  themeStyle: z.enum(["v3_broadcast", "v2_editorial", "classic"], { error: "Estilo visual no válido (permitidos: v3_broadcast, v2_editorial, classic)." }).optional(),
+  defaultSeasonMode: z.enum(["2027", "2026", "2025", "2024"], { error: "Temporada por defecto no válida." }).optional(),
+  defaultPlayerMatchWindow: z.coerce.number().int().min(3).max(82).optional(),
+  minZScore: z.coerce.number().min(0.5).max(3.0).optional(),
+  minPctDelta: z.coerce.number().int().min(5).max(50).optional(),
+  minMinutes: z.coerce.number().int().min(5).max(35).optional(),
+}).refine(
+  (data) =>
+    data.showHeroicBadges !== undefined ||
+    data.themeStyle !== undefined ||
+    data.defaultSeasonMode !== undefined ||
+    data.defaultPlayerMatchWindow !== undefined ||
+    data.minZScore !== undefined ||
+    data.minPctDelta !== undefined ||
+    data.minMinutes !== undefined,
+  { message: "Debes especificar al menos un ajuste de configuración web." }
+);
+const experienceMetricsConfigBodySchema = z.strictObject({
+  simpleMetricIds: z
+    .array(z.string().trim().min(1).max(64))
+    .min(1, "Debe haber al menos una estadística activa en Modo Sencillo.")
+    .max(150, "Demasiadas métricas en Modo Sencillo."),
+});
+const sidebarMenuConfigBodySchema = z.strictObject({
+  groups: z
+    .array(
+      z.strictObject({
+        id: z.string().trim().min(1).max(32),
+        label: z.string().trim().min(1, "El nombre del bloque es obligatorio.").max(48),
+        itemIds: z.array(z.string().trim().min(1).max(32)).max(32),
+      })
+    )
+    .min(1, "Debe existir al menos un bloque en el menú lateral.")
+    .max(8, "Máximo 8 bloques permitidos en el menú lateral."),
+  hiddenIds: z.array(z.string().trim().min(1).max(32)).max(32).optional(),
 });
 const milestoneNotificationsBodySchema = z.strictObject({
   enabled: z.boolean(),
   lookbackDays: z.coerce.number().int().min(1).max(14),
   maxNotifications: z.coerce.number().int().min(5).max(100),
+  minSeverity: z.enum(["all", "high", "epic"]).optional(),
+  dedupePlayerGame: z.boolean().optional(),
 
   scoringMilestoneEnabled: z.boolean(),
   scoringThreshold: z.coerce.number().int().min(20).max(80),
   seasonHighPtsEnabled: z.boolean(),
-  seasonHighMinPts: z.coerce.number().int().min(15).max(60),
-  seasonHighMinGames: z.coerce.number().int().min(2).max(20),
+  seasonHighMinGames: z.coerce.number().int().min(2).max(30),
+  seasonHighMinPts: z.coerce.number().int().min(15).max(65),
+  seasonHighMinReb: z.coerce.number().int().min(8).max(30).optional(),
+  seasonHighMinAst: z.coerce.number().int().min(6).max(25).optional(),
+  seasonHighMin3pm: z.coerce.number().int().min(4).max(16).optional(),
+  seasonHighMinStlBlk: z.coerce.number().int().min(3).max(10).optional(),
+  careerHighEnabled: z.boolean().optional(),
+  careerHighMinGames: z.coerce.number().int().min(5).max(150).optional(),
+  careerHighMinPts: z.coerce.number().int().min(15).max(65).optional(),
+  careerHighMinReb: z.coerce.number().int().min(8).max(30).optional(),
+  careerHighMinAst: z.coerce.number().int().min(6).max(25).optional(),
+  careerHighMin3pm: z.coerce.number().int().min(4).max(16).optional(),
+  careerHighMinStlBlk: z.coerce.number().int().min(3).max(10).optional(),
   threePointExplosionEnabled: z.boolean(),
   threePointThreshold: z.coerce.number().int().min(4).max(16),
   assistExplosionEnabled: z.boolean(),
@@ -146,6 +194,47 @@ const kpiKeyStringSchema = z.string().trim().min(1, "La clave del KPI no puede e
 const inspectorKpiDefaultsBodySchema = z.strictObject({
   playerDefaultKpiKeys: z.array(kpiKeyStringSchema).min(1, "Debe haber al menos 1 KPI para jugador.").max(80, "Máximo 80 KPIs por defecto."),
   teamDefaultKpiKeys: z.array(kpiKeyStringSchema).min(1, "Debe haber al menos 1 KPI para equipo.").max(80, "Máximo 80 KPIs por defecto."),
+});
+const autoStreakRuleSchema = z.strictObject({
+  id: z.string().trim().min(1, "ID de regla requerido.").max(64, "ID de regla demasiado largo.").regex(/^[a-zA-Z0-9_-]+$/, "Formato de ID de regla no válido.").refine((v) => !FORBIDDEN_PROTOTYPE_KEYS.has(v.toLowerCase()), "ID de regla reservado."),
+  entityType: z.enum(["player", "team"], { error: "Tipo de entidad no válido (player o team)." }),
+  metricId: z.string().trim().min(1, "Métrica requerida.").max(48, "Métrica demasiado larga.").regex(/^[a-zA-Z0-9_]+$/, "Formato de métrica no válido."),
+  category: z.enum(["milestones", "scoring", "rebounding", "playmaking", "defense", "shooting", "combos", "efficiency", "slumps", "team"]),
+  metricLabel: z.string().trim().min(1).max(48).transform(stripControlChars),
+  label: z.string().trim().min(1, "La etiqueta de la regla es obligatoria.").max(96, "La etiqueta no puede superar 96 caracteres.").transform(stripControlChars),
+  operator: z.enum(["gte", "gt", "lte", "lt"], { error: "Operador no válido." }),
+  threshold: z.coerce.number({ error: "El umbral debe ser numérico." }).finite("El umbral debe ser un número finito.").min(-100).max(500),
+  minGamesOverride: z.union([z.null(), z.coerce.number().int().min(2).max(25)]).optional(),
+  minMinutes: z.union([z.null(), z.coerce.number().min(0).max(48)]).optional(),
+  minAttempts: z.union([z.null(), z.coerce.number().int().min(0).max(40)]).optional(),
+  groupSingle: z.union([z.null(), z.string().trim().max(32).regex(/^[a-zA-Z0-9_-]*$/)]).optional(),
+  breakoutAxis: z.union([z.null(), z.enum(["exterior", "minutes_usage", "efficiency"])]).optional(),
+  unit: z.string().max(16).transform(stripControlChars).optional(),
+  isPositive: z.boolean(),
+  enabled: z.boolean(),
+  isCustom: z.boolean().optional(),
+});
+const autoStreaksConfigBodySchema = z.strictObject({
+  minStreakGames: z.coerce.number({ error: "Los partidos seguidos deben ser numéricos." }).int("Debe ser un número entero.").min(2, "Mínimo 2 partidos seguidos.").max(25, "Máximo 25 partidos seguidos."),
+  rules: z.array(autoStreakRuleSchema).min(1, "Debe haber al menos 1 regla configurada.").max(200, "Máximo 200 reglas simultáneas."),
+});
+const editorialConfigBodySchema = z.strictObject({
+  gameChronicleVersion: z.enum(["v1_classic", "v2_tactical"]).optional().default("v2_tactical"),
+  dailyChronicleVersion: z.enum(["v1_classic"]).optional().default("v1_classic"),
+  lengthProfile: z.enum(["concise", "standard", "deep"]),
+  tacticalFocus: z.enum(["balanced", "tactical_chalkboard", "narrative_storytelling", "advanced_metrics"]),
+  customStyleDirectives: z.string().max(900, "Las directrices personalizadas no pueden superar 900 caracteres.").transform(stripControlChars),
+  extraForbiddenCliches: z.array(
+    z.string().trim().min(1, "La expresión prohibida no puede estar vacía.").max(60, "Máximo 60 caracteres por expresión.").transform(stripControlChars)
+  ).max(30, "Máximo 30 expresiones prohibidas adicionales."),
+  applyToGameChronicles: z.boolean(),
+  applyToDailyChronicles: z.boolean(),
+  invalidateCacheOnSave: z.boolean().optional().default(false),
+});
+const purgeChronicleCacheBodySchema = z.strictObject({
+  scope: z.enum(["all", "date", "game"]),
+  date: isoDateSchema.optional(),
+  eventId: z.string().trim().regex(/^[0-9]{6,14}$/, "ID de partido no válido.").optional(),
 });
 const safeRivalKeySchema = z.string().trim().min(1).max(40).regex(/^[a-zA-Z0-9_-]+$/, "Clave de equipo rival no válida.").refine((k) => !FORBIDDEN_PROTOTYPE_KEYS.has(k.toLowerCase()), "Clave reservada.");
 const safeGameCorrectionKeySchema = z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_:-]+$/, "Clave de corrección no válida.").refine((k) => !FORBIDDEN_PROTOTYPE_KEYS.has(k.toLowerCase()), "Clave reservada.");
@@ -250,6 +339,9 @@ const advancedHeroicShotsQuerySchema = z.strictObject({
   refresh: booleanQueryFlagSchema,
   v: z.string().max(32).optional(),
 });
+const historyLeadersQuerySchema = z.strictObject({
+  scope: z.enum(["regular", "playoffs"], { error: "Ámbito histórico no válido (permitidos: regular, playoffs)." }).optional().default("regular"),
+});
 export {
   ADMIN_SECURITY_BOUNDS,
   adminLoginBodySchema,
@@ -262,6 +354,7 @@ export {
   gamedayQuerySchema,
   gamedayThresholdsBodySchema,
   getValidated,
+  historyLeadersQuerySchema,
   isoDateSchema,
   manualFantasyStateBodySchema,
   playerParamsSchema,
@@ -278,7 +371,12 @@ export {
   advancedEntityQuerySchema,
   advancedHeroicShotsQuerySchema,
   webFeatureFlagsBodySchema,
+  experienceMetricsConfigBodySchema,
+  sidebarMenuConfigBodySchema,
   inspectorKpiDefaultsBodySchema,
-  milestoneNotificationsBodySchema
+  autoStreaksConfigBodySchema,
+  milestoneNotificationsBodySchema,
+  editorialConfigBodySchema,
+  purgeChronicleCacheBodySchema
 };
 

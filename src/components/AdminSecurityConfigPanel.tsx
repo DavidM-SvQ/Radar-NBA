@@ -26,7 +26,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { useThemeStyle } from '../context/ThemeStyleContext';
+import { useThemeStyle, type ThemeStyle } from '../context/ThemeStyleContext';
 import type {
   AdminSecurityConfig,
   AdminSecurityConfigValues,
@@ -134,9 +134,59 @@ export function AdminSecurityConfigPanel({
   const [expanded, setExpanded] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
-  const [savingHeroicFlag, setSavingHeroicFlag] = useState<boolean>(false);
+  const [savingWebConfig, setSavingWebConfig] = useState<boolean>(false);
   const [savingKpis, setSavingKpis] = useState<boolean>(false);
   const [clearingCounters, setClearingCounters] = useState<boolean>(false);
+
+  const normalizeSingleSeason = (raw?: SeasonMode | string): '2027' | '2026' | '2025' | '2024' => {
+    const first = String(raw || '2027').split(/[,+]/)[0]?.trim();
+    if (first === '2026' || first === '2025' || first === '2024') return first;
+    return '2027';
+  };
+
+  const [savedWebConfig, setSavedWebConfig] = useState<{
+    themeStyle: ThemeStyle;
+    showHeroicBadges: boolean;
+    defaultSeasonMode: '2027' | '2026' | '2025' | '2024';
+    defaultPlayerMatchWindow: number;
+    minZScore: number;
+    minPctDelta: number;
+    minMinutes: number;
+    updatedAt: number;
+  }>(() => ({
+    themeStyle,
+    showHeroicBadges: Boolean(showHeroicBadges),
+    defaultSeasonMode: normalizeSingleSeason(seasonMode),
+    defaultPlayerMatchWindow: settings?.defaultPlayerMatchWindow ?? 18,
+    minZScore: settings?.minZScore ?? 1.2,
+    minPctDelta: settings?.minPctDelta ?? 16,
+    minMinutes: settings?.minMinutes ?? 22,
+    updatedAt: 0,
+  }));
+
+  const [draftThemeStyle, setDraftThemeStyle] = useState<ThemeStyle>(themeStyle);
+  const [draftShowHeroicBadges, setDraftShowHeroicBadges] = useState<boolean>(
+    Boolean(showHeroicBadges)
+  );
+  const [draftSeasonMode, setDraftSeasonMode] = useState<'2027' | '2026' | '2025' | '2024'>(() =>
+    normalizeSingleSeason(seasonMode)
+  );
+  const [draftPlayerMatchWindow, setDraftPlayerMatchWindow] = useState<number>(
+    settings?.defaultPlayerMatchWindow ?? 18
+  );
+  const [draftMinZScore, setDraftMinZScore] = useState<number>(
+    settings?.minZScore ?? 1.2
+  );
+  const [draftMinPctDelta, setDraftMinPctDelta] = useState<number>(
+    settings?.minPctDelta ?? 16
+  );
+  const [draftMinMinutes, setDraftMinMinutes] = useState<number>(
+    settings?.minMinutes ?? 22
+  );
+  const [webConfigFeedback, setWebConfigFeedback] = useState<{
+    kind: 'success' | 'error';
+    text: string;
+  } | null>(null);
 
   const [kpiTab, setKpiTab] = useState<'player' | 'team'>('player');
   const [kpiSearch, setKpiSearch] = useState<string>('');
@@ -223,7 +273,46 @@ export function AdminSecurityConfigPanel({
       return;
     }
     if (flagsRes.ok && flagsRes.flags) {
-      onHeroicBadgesChange?.(Boolean(flagsRes.flags.showHeroicBadges));
+      const f = flagsRes.flags;
+      const resolvedTheme: ThemeStyle =
+        f.themeStyle === 'classic' ||
+        f.themeStyle === 'v2_editorial' ||
+        f.themeStyle === 'v3_broadcast'
+          ? f.themeStyle
+          : 'v3_broadcast';
+      const resolvedBadges = Boolean(f.showHeroicBadges);
+      const resolvedSeason = normalizeSingleSeason(f.defaultSeasonMode ?? seasonMode);
+      const resolvedMatchWindow =
+        typeof f.defaultPlayerMatchWindow === 'number'
+          ? f.defaultPlayerMatchWindow
+          : settings?.defaultPlayerMatchWindow ?? 18;
+      const resolvedMinZ =
+        typeof f.minZScore === 'number' ? f.minZScore : settings?.minZScore ?? 1.2;
+      const resolvedMinPct =
+        typeof f.minPctDelta === 'number' ? f.minPctDelta : settings?.minPctDelta ?? 16;
+      const resolvedMinMins =
+        typeof f.minMinutes === 'number' ? f.minMinutes : settings?.minMinutes ?? 22;
+
+      setSavedWebConfig({
+        themeStyle: resolvedTheme,
+        showHeroicBadges: resolvedBadges,
+        defaultSeasonMode: resolvedSeason,
+        defaultPlayerMatchWindow: resolvedMatchWindow,
+        minZScore: resolvedMinZ,
+        minPctDelta: resolvedMinPct,
+        minMinutes: resolvedMinMins,
+        updatedAt: f.updatedAt ?? 0,
+      });
+      setDraftThemeStyle(resolvedTheme);
+      setDraftShowHeroicBadges(resolvedBadges);
+      setDraftSeasonMode(resolvedSeason);
+      setDraftPlayerMatchWindow(resolvedMatchWindow);
+      setDraftMinZScore(resolvedMinZ);
+      setDraftMinPctDelta(resolvedMinPct);
+      setDraftMinMinutes(resolvedMinMins);
+
+      onHeroicBadgesChange?.(resolvedBadges);
+      setThemeStyle(resolvedTheme);
     }
     if (kpisRes.ok && kpisRes.config) {
       setSavedKpisConfig(kpisRes.config);
@@ -232,7 +321,7 @@ export function AdminSecurityConfigPanel({
       onInspectorDefaultKpisChange?.(kpisRes.config);
     }
     void loadTelemetry();
-  }, [onLockSession, loadTelemetry, onHeroicBadgesChange, onInspectorDefaultKpisChange]);
+  }, [onLockSession, loadTelemetry, onHeroicBadgesChange, onInspectorDefaultKpisChange, setThemeStyle]);
 
   useEffect(() => {
     void loadConfig();
@@ -390,33 +479,121 @@ export function AdminSecurityConfigPanel({
     }
   };
 
-  const handleToggleHeroicBadges = async () => {
-    if (savingHeroicFlag) return;
-    const prevVal = Boolean(showHeroicBadges);
-    const nextVal = !prevVal;
-    setSavingHeroicFlag(true);
-    setFeedback(null);
-    onHeroicBadgesChange?.(nextVal);
-    const res = await updateAdminWebFeatureFlags({ showHeroicBadges: nextVal });
-    setSavingHeroicFlag(false);
+  const webConfigDirty = useMemo(() => {
+    return (
+      draftThemeStyle !== savedWebConfig.themeStyle ||
+      draftShowHeroicBadges !== savedWebConfig.showHeroicBadges ||
+      draftSeasonMode !== savedWebConfig.defaultSeasonMode ||
+      draftPlayerMatchWindow !== savedWebConfig.defaultPlayerMatchWindow ||
+      Math.abs(draftMinZScore - savedWebConfig.minZScore) > 0.001 ||
+      draftMinPctDelta !== savedWebConfig.minPctDelta ||
+      draftMinMinutes !== savedWebConfig.minMinutes
+    );
+  }, [
+    draftThemeStyle,
+    draftShowHeroicBadges,
+    draftSeasonMode,
+    draftPlayerMatchWindow,
+    draftMinZScore,
+    draftMinPctDelta,
+    draftMinMinutes,
+    savedWebConfig,
+  ]);
+
+  const handleDiscardWebConfig = () => {
+    setDraftThemeStyle(savedWebConfig.themeStyle);
+    setDraftShowHeroicBadges(savedWebConfig.showHeroicBadges);
+    setDraftSeasonMode(savedWebConfig.defaultSeasonMode);
+    setDraftPlayerMatchWindow(savedWebConfig.defaultPlayerMatchWindow);
+    setDraftMinZScore(savedWebConfig.minZScore);
+    setDraftMinPctDelta(savedWebConfig.minPctDelta);
+    setDraftMinMinutes(savedWebConfig.minMinutes);
+    setWebConfigFeedback(null);
+  };
+
+  const handleSaveWebConfig = async () => {
+    if (savingWebConfig) return;
+    setSavingWebConfig(true);
+    setWebConfigFeedback(null);
+
+    const payload = {
+      themeStyle: draftThemeStyle,
+      showHeroicBadges: draftShowHeroicBadges,
+      defaultSeasonMode: draftSeasonMode,
+      defaultPlayerMatchWindow: draftPlayerMatchWindow,
+      minZScore: draftMinZScore,
+      minPctDelta: draftMinPctDelta,
+      minMinutes: draftMinMinutes,
+    };
+
+    const res = await updateAdminWebFeatureFlags(payload);
+    setSavingWebConfig(false);
+
     if (res.unauthorized) {
-      onHeroicBadgesChange?.(prevVal);
       onLockSession();
       return;
     }
+
     if (res.ok && res.flags) {
-      onHeroicBadgesChange?.(Boolean(res.flags.showHeroicBadges));
-      setFeedback({
+      const f = res.flags;
+      const savedTheme: ThemeStyle =
+        f.themeStyle === 'classic' ||
+        f.themeStyle === 'v2_editorial' ||
+        f.themeStyle === 'v3_broadcast'
+          ? f.themeStyle
+          : draftThemeStyle;
+      const savedBadges = Boolean(f.showHeroicBadges);
+      const savedSeason = normalizeSingleSeason(f.defaultSeasonMode ?? draftSeasonMode);
+      const savedWindow = f.defaultPlayerMatchWindow ?? draftPlayerMatchWindow;
+      const savedZ = f.minZScore ?? draftMinZScore;
+      const savedPct = f.minPctDelta ?? draftMinPctDelta;
+      const savedMins = f.minMinutes ?? draftMinMinutes;
+
+      setSavedWebConfig({
+        themeStyle: savedTheme,
+        showHeroicBadges: savedBadges,
+        defaultSeasonMode: savedSeason,
+        defaultPlayerMatchWindow: savedWindow,
+        minZScore: savedZ,
+        minPctDelta: savedPct,
+        minMinutes: savedMins,
+        updatedAt: f.updatedAt ?? Date.now(),
+      });
+      setDraftThemeStyle(savedTheme);
+      setDraftShowHeroicBadges(savedBadges);
+      setDraftSeasonMode(savedSeason);
+      setDraftPlayerMatchWindow(savedWindow);
+      setDraftMinZScore(savedZ);
+      setDraftMinPctDelta(savedPct);
+      setDraftMinMinutes(savedMins);
+
+      // Apply live across the entire web immediately
+      setThemeStyle(savedTheme);
+      onHeroicBadgesChange?.(savedBadges);
+      onSeasonModeChange?.(savedSeason);
+      onSettingsChange?.((prev) => ({
+        ...prev,
+        defaultPlayerMatchWindow: savedWindow,
+        minZScore: savedZ,
+        minPctDelta: savedPct,
+        minMinutes: savedMins,
+      }));
+
+      const styleName =
+        savedTheme === 'v3_broadcast'
+          ? 'Broadcast 3.0'
+          : savedTheme === 'v2_editorial'
+          ? 'Modo Pro 2.0'
+          : 'Modo Clásico v1';
+
+      setWebConfigFeedback({
         kind: 'success',
-        text: res.flags.showHeroicBadges
-          ? 'Insignias ⚡ Buzzer Beater y 🎯 Game Winner activadas en toda la web.'
-          : 'Insignias ⚡ Buzzer Beater y 🎯 Game Winner desactivadas en la web pública.',
+        text: `Configuración guardada y aplicada en toda la web (${styleName} · Temp. ${savedSeason} · ${savedWindow} PJ · Z ${savedZ}σ · Δ ${savedPct}% · ${savedMins} min).`,
       });
     } else {
-      onHeroicBadgesChange?.(prevVal);
-      setFeedback({
+      setWebConfigFeedback({
         kind: 'error',
-        text: res.error || 'No se pudo actualizar el estado de las insignias BB/GW.',
+        text: res.error || 'No se pudo guardar la configuración de la web en el servidor.',
       });
     }
   };
@@ -658,52 +835,173 @@ export function AdminSecurityConfigPanel({
             <>
               {/* Row 00: Web Config - Default Season, Sensitivity & Deltas */}
               <div className="p-4 sm:p-5 space-y-4 bg-[#0B1120]/40">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1E293B] pb-3">
-                  <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-[#1E293B] pb-3">
+                  <div className="flex items-center gap-2 min-w-0">
                     <CalendarDays className="w-4 h-4 text-orange-400 shrink-0" />
                     <h3 className="text-xs sm:text-sm font-bold text-slate-100 uppercase tracking-wider">
-                      00. Configuración de la Web: Muestra de Años, Sensibilidad y Deltas
+                      00. Configuración de la Web: Estilo, Años, Sensibilidad y Deltas
                     </h3>
                   </div>
-                  <span className="text-[11px] font-mono text-orange-400 font-medium">
-                    Sincronizado en tiempo real
-                  </span>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {webConfigDirty ? (
+                      <>
+                        <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[11px] font-semibold">
+                          Cambios sin guardar
+                        </span>
+                        <button
+                          type="button"
+                          disabled={savingWebConfig}
+                          onClick={handleDiscardWebConfig}
+                          className="min-h-[34px] px-2.5 py-1 rounded-lg text-xs font-medium bg-[#131C2E] hover:bg-[#182338] text-slate-300 border border-[#1E293B] transition-colors disabled:opacity-50"
+                        >
+                          Descartar
+                        </button>
+                      </>
+                    ) : (
+                      <span className="text-[11px] font-mono text-emerald-400 font-medium">
+                        {savedWebConfig.updatedAt > 0
+                          ? formatUpdatedTimestamp(savedWebConfig.updatedAt)
+                          : 'Sincronizado con el servidor'}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      disabled={savingWebConfig}
+                      onClick={() => void handleSaveWebConfig()}
+                      className={`min-h-[36px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-60 whitespace-nowrap ${
+                        webConfigDirty
+                          ? 'bg-orange-500 hover:bg-orange-400 text-slate-950 shadow-md shadow-orange-500/20'
+                          : 'bg-[#131C2E] hover:bg-[#1E293B] text-slate-200 border border-orange-500/40'
+                      }`}
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      <span>
+                        {savingWebConfig
+                          ? 'Guardando...'
+                          : webConfigDirty
+                          ? 'Guardar y aplicar'
+                          : 'Aplicar y guardar'}
+                      </span>
+                    </button>
+                  </div>
                 </div>
 
-                {/* Visual Style Switcher: Editorial Pro 2.0 vs Clásico v1 */}
+                {webConfigFeedback && (
+                  <div
+                    role="status"
+                    className={`rounded-lg px-3.5 py-2.5 text-xs border flex items-center justify-between gap-3 ${
+                      webConfigFeedback.kind === 'success'
+                        ? 'bg-emerald-500/10 border-emerald-500/35 text-emerald-200'
+                        : 'bg-rose-500/10 border-rose-500/35 text-rose-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      {webConfigFeedback.kind === 'success' ? (
+                        <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                      ) : (
+                        <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                      )}
+                      <span className="font-medium">{webConfigFeedback.text}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setWebConfigFeedback(null)}
+                      className="text-slate-400 hover:text-slate-200 p-1 shrink-0"
+                      aria-label="Cerrar aviso"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+
+                {/* Visual Style Switcher: Broadcast 3.0 vs Editorial Pro 2.0 vs Clásico v1 */}
                 <div className="bg-[#0B1120] border border-[#1E293B] rounded-lg p-3.5 space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <Palette className="w-4 h-4 text-amber-400 shrink-0" />
                       <div>
                         <p className="text-xs font-semibold text-slate-100">
-                          Estilo Visual de la Plataforma (Modo Dual)
+                          Estilo Visual Global de la Web (Solo Admin)
                         </p>
                         <p className="text-[11px] text-slate-400">
-                          Alterna al instante entre el rediseño Editorial Deportivo 2.0 y el formato Clásico original v1 sin perder ninguna función.
+                          Elige el diseño global y pulsa «Guardar y aplicar» para fijarlo en el servidor para todos los usuarios.
                         </p>
                       </div>
                     </div>
                     <span className="text-[11px] font-mono text-amber-300 font-medium">
-                      {themeStyle === 'v2_editorial' ? 'Pro 2.0 activo' : 'Clásico v1 activo'}
+                      {draftThemeStyle !== savedWebConfig.themeStyle
+                        ? `Seleccionado (sin guardar): ${
+                            draftThemeStyle === 'v3_broadcast'
+                              ? 'Broadcast 3.0'
+                              : draftThemeStyle === 'v2_editorial'
+                              ? 'Pro 2.0'
+                              : 'Clásico v1'
+                          }`
+                        : savedWebConfig.themeStyle === 'v3_broadcast'
+                        ? 'Broadcast 3.0 guardado y activo'
+                        : savedWebConfig.themeStyle === 'v2_editorial'
+                        ? 'Pro 2.0 guardado y activo'
+                        : 'Clásico v1 guardado y activo'}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
                     <button
                       type="button"
-                      onClick={() => setThemeStyle('v2_editorial')}
-                      className={`text-left p-3 rounded-lg border transition-all flex flex-col justify-between gap-2.5 ${
-                        themeStyle === 'v2_editorial'
+                      disabled={savingWebConfig}
+                      onClick={() => {
+                        setDraftThemeStyle('v3_broadcast');
+                        setWebConfigFeedback(null);
+                      }}
+                      className={`text-left p-3 rounded-lg border transition-all flex flex-col justify-between gap-2.5 disabled:opacity-60 ${
+                        draftThemeStyle === 'v3_broadcast'
+                          ? 'bg-[#0D1A2F] border-sky-400/75 shadow-md ring-1 ring-sky-400/35'
+                          : 'bg-[#131C2E]/60 hover:bg-[#131C2E] border-[#1E293B]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-xs font-bold text-slate-100 truncate">
+                            Broadcast 3.0 — Nuevo
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-400/30 text-[9px] font-bold uppercase tracking-wider shrink-0">
+                            3.0
+                          </span>
+                        </div>
+                        {draftThemeStyle === 'v3_broadcast' && (
+                          <Check className="w-4 h-4 text-sky-400 shrink-0" />
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-300 leading-relaxed">
+                        Sidebar agrupado colapsable, cinta superior de marcadores, diseño 60-30-10 más aireado, atmósfera cromática de franquicia y micro-barras en tablas.
+                      </p>
+                      <div className="flex items-center gap-1.5 pt-0.5" aria-hidden="true">
+                        <span className="w-4 h-4 rounded bg-[#060A13] border border-slate-700" title="Lienzo #060A13" />
+                        <span className="w-4 h-4 rounded bg-[#0D1526] border border-slate-600" title="Superficie #0D1526" />
+                        <span className="w-4 h-4 rounded bg-[#F59E0B]" title="Oro Broadcast" />
+                        <span className="w-4 h-4 rounded bg-[#38BDF8]" title="Cian NBA" />
+                        <span className="w-4 h-4 rounded bg-[#34D399]" title="Esmeralda" />
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={savingWebConfig}
+                      onClick={() => {
+                        setDraftThemeStyle('v2_editorial');
+                        setWebConfigFeedback(null);
+                      }}
+                      className={`text-left p-3 rounded-lg border transition-all flex flex-col justify-between gap-2.5 disabled:opacity-60 ${
+                        draftThemeStyle === 'v2_editorial'
                           ? 'bg-[#142138] border-amber-400/70 shadow-md ring-1 ring-amber-400/30'
                           : 'bg-[#131C2E]/60 hover:bg-[#131C2E] border-[#1E293B]'
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-bold text-slate-100">
-                          Modo Pro 2.0 — Editorial Deportivo Ilustrado
+                          Modo Pro 2.0 — Editorial Deportivo
                         </span>
-                        {themeStyle === 'v2_editorial' && (
+                        {draftThemeStyle === 'v2_editorial' && (
                           <Check className="w-4 h-4 text-amber-400 shrink-0" />
                         )}
                       </div>
@@ -722,18 +1020,22 @@ export function AdminSecurityConfigPanel({
 
                     <button
                       type="button"
-                      onClick={() => setThemeStyle('classic')}
-                      className={`text-left p-3 rounded-lg border transition-all flex flex-col justify-between gap-2.5 ${
-                        themeStyle === 'classic'
+                      disabled={savingWebConfig}
+                      onClick={() => {
+                        setDraftThemeStyle('classic');
+                        setWebConfigFeedback(null);
+                      }}
+                      className={`text-left p-3 rounded-lg border transition-all flex flex-col justify-between gap-2.5 disabled:opacity-60 ${
+                        draftThemeStyle === 'classic'
                           ? 'bg-[#182338] border-orange-400/70 shadow-md ring-1 ring-orange-400/30'
                           : 'bg-[#131C2E]/60 hover:bg-[#131C2E] border-[#1E293B]'
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-bold text-slate-100">
-                          Modo Clásico — RadarNBA v1 Original
+                          Modo Clásico — RadarNBA v1
                         </span>
-                        {themeStyle === 'classic' && (
+                        {draftThemeStyle === 'classic' && (
                           <Check className="w-4 h-4 text-orange-400 shrink-0" />
                         )}
                       </div>
@@ -762,17 +1064,20 @@ export function AdminSecurityConfigPanel({
 
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
                       {[
-                        { id: '2027', label: '2026-27 (Actual)' },
-                        { id: '2026', label: '2025-26' },
-                        { id: '2025', label: '2024-25' },
-                        { id: '2024', label: '2023-24' },
+                        { id: '2027' as const, label: '2026-27 (Actual)' },
+                        { id: '2026' as const, label: '2025-26' },
+                        { id: '2025' as const, label: '2024-25' },
+                        { id: '2024' as const, label: '2023-24' },
                       ].map((opt) => (
                         <button
                           key={opt.id}
                           type="button"
-                          onClick={() => onSeasonModeChange?.(opt.id as SeasonMode)}
+                          onClick={() => {
+                            setDraftSeasonMode(opt.id);
+                            setWebConfigFeedback(null);
+                          }}
                           className={`min-h-[36px] px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all border text-center ${
-                            seasonMode === opt.id
+                            draftSeasonMode === opt.id
                               ? 'bg-orange-500 text-slate-950 border-orange-400 shadow-md font-bold'
                               : 'bg-[#131C2E] hover:bg-[#182338] text-slate-300 border-[#1E293B]'
                           }`}
@@ -804,33 +1109,23 @@ export function AdminSecurityConfigPanel({
                           <div className="flex items-center gap-1">
                             <button
                               type="button"
-                              onClick={() =>
-                                onSettingsChange((prev) => ({
-                                  ...prev,
-                                  defaultPlayerMatchWindow: Math.max(
-                                    3,
-                                    (prev.defaultPlayerMatchWindow || 18) - 1
-                                  ),
-                                }))
-                              }
+                              onClick={() => {
+                                setDraftPlayerMatchWindow((prev) => Math.max(3, prev - 1));
+                                setWebConfigFeedback(null);
+                              }}
                               className="w-7 h-7 rounded bg-[#131C2E] text-slate-300 hover:text-white border border-[#1E293B] flex items-center justify-center text-xs font-bold"
                             >
                               -
                             </button>
                             <span className="flex-1 text-center font-mono text-xs font-bold text-orange-400">
-                              {settings.defaultPlayerMatchWindow || 18} PJ
+                              {draftPlayerMatchWindow} PJ
                             </span>
                             <button
                               type="button"
-                              onClick={() =>
-                                onSettingsChange((prev) => ({
-                                  ...prev,
-                                  defaultPlayerMatchWindow: Math.min(
-                                    82,
-                                    (prev.defaultPlayerMatchWindow || 18) + 1
-                                  ),
-                                }))
-                              }
+                              onClick={() => {
+                                setDraftPlayerMatchWindow((prev) => Math.min(82, prev + 1));
+                                setWebConfigFeedback(null);
+                              }}
                               className="w-7 h-7 rounded bg-[#131C2E] text-slate-300 hover:text-white border border-[#1E293B] flex items-center justify-center text-xs font-bold"
                             >
                               +
@@ -846,27 +1141,27 @@ export function AdminSecurityConfigPanel({
                           <div className="flex items-center gap-1">
                             <button
                               type="button"
-                              onClick={() =>
-                                onSettingsChange((prev) => ({
-                                  ...prev,
-                                  minZScore: Math.max(0.5, Math.round((prev.minZScore - 0.1) * 10) / 10),
-                                }))
-                              }
+                              onClick={() => {
+                                setDraftMinZScore((prev) =>
+                                  Math.max(0.5, Math.round((prev - 0.1) * 10) / 10)
+                                );
+                                setWebConfigFeedback(null);
+                              }}
                               className="w-7 h-7 rounded bg-[#131C2E] text-slate-300 hover:text-white border border-[#1E293B] flex items-center justify-center text-xs font-bold"
                             >
                               -
                             </button>
                             <span className="flex-1 text-center font-mono text-xs font-bold text-orange-400">
-                              {settings.minZScore} σ
+                              {draftMinZScore} σ
                             </span>
                             <button
                               type="button"
-                              onClick={() =>
-                                onSettingsChange((prev) => ({
-                                  ...prev,
-                                  minZScore: Math.min(3.0, Math.round((prev.minZScore + 0.1) * 10) / 10),
-                                }))
-                              }
+                              onClick={() => {
+                                setDraftMinZScore((prev) =>
+                                  Math.min(3.0, Math.round((prev + 0.1) * 10) / 10)
+                                );
+                                setWebConfigFeedback(null);
+                              }}
                               className="w-7 h-7 rounded bg-[#131C2E] text-slate-300 hover:text-white border border-[#1E293B] flex items-center justify-center text-xs font-bold"
                             >
                               +
@@ -882,27 +1177,23 @@ export function AdminSecurityConfigPanel({
                           <div className="flex items-center gap-1">
                             <button
                               type="button"
-                              onClick={() =>
-                                onSettingsChange((prev) => ({
-                                  ...prev,
-                                  minPctDelta: Math.max(5, prev.minPctDelta - 1),
-                                }))
-                              }
+                              onClick={() => {
+                                setDraftMinPctDelta((prev) => Math.max(5, prev - 1));
+                                setWebConfigFeedback(null);
+                              }}
                               className="w-7 h-7 rounded bg-[#131C2E] text-slate-300 hover:text-white border border-[#1E293B] flex items-center justify-center text-xs font-bold"
                             >
                               -
                             </button>
                             <span className="flex-1 text-center font-mono text-xs font-bold text-orange-400">
-                              {settings.minPctDelta}%
+                              {draftMinPctDelta}%
                             </span>
                             <button
                               type="button"
-                              onClick={() =>
-                                onSettingsChange((prev) => ({
-                                  ...prev,
-                                  minPctDelta: Math.min(50, prev.minPctDelta + 1),
-                                }))
-                              }
+                              onClick={() => {
+                                setDraftMinPctDelta((prev) => Math.min(50, prev + 1));
+                                setWebConfigFeedback(null);
+                              }}
                               className="w-7 h-7 rounded bg-[#131C2E] text-slate-300 hover:text-white border border-[#1E293B] flex items-center justify-center text-xs font-bold"
                             >
                               +
@@ -918,27 +1209,23 @@ export function AdminSecurityConfigPanel({
                           <div className="flex items-center gap-1">
                             <button
                               type="button"
-                              onClick={() =>
-                                onSettingsChange((prev) => ({
-                                  ...prev,
-                                  minMinutes: Math.max(5, prev.minMinutes - 1),
-                                }))
-                              }
+                              onClick={() => {
+                                setDraftMinMinutes((prev) => Math.max(5, prev - 1));
+                                setWebConfigFeedback(null);
+                              }}
                               className="w-7 h-7 rounded bg-[#131C2E] text-slate-300 hover:text-white border border-[#1E293B] flex items-center justify-center text-xs font-bold"
                             >
                               -
                             </button>
                             <span className="flex-1 text-center font-mono text-xs font-bold text-orange-400">
-                              {settings.minMinutes} m
+                              {draftMinMinutes} m
                             </span>
                             <button
                               type="button"
-                              onClick={() =>
-                                onSettingsChange((prev) => ({
-                                  ...prev,
-                                  minMinutes: Math.min(35, prev.minMinutes + 1),
-                                }))
-                              }
+                              onClick={() => {
+                                setDraftMinMinutes((prev) => Math.min(35, prev + 1));
+                                setWebConfigFeedback(null);
+                              }}
                               className="w-7 h-7 rounded bg-[#131C2E] text-slate-300 hover:text-white border border-[#1E293B] flex items-center justify-center text-xs font-bold"
                             >
                               +
@@ -960,12 +1247,12 @@ export function AdminSecurityConfigPanel({
                       </span>
                       <span
                         className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
-                          showHeroicBadges
+                          draftShowHeroicBadges
                             ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
                             : 'bg-slate-800 text-slate-400 border-slate-700'
                         }`}
                       >
-                        {showHeroicBadges ? 'ACTIVADAS' : 'DESACTIVADAS'}
+                        {draftShowHeroicBadges ? 'ACTIVADAS' : 'DESACTIVADAS'}
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-400">
@@ -976,30 +1263,67 @@ export function AdminSecurityConfigPanel({
                   <button
                     type="button"
                     role="switch"
-                    aria-checked={Boolean(showHeroicBadges)}
-                    disabled={savingHeroicFlag}
-                    onClick={() => void handleToggleHeroicBadges()}
+                    aria-checked={draftShowHeroicBadges}
+                    disabled={savingWebConfig}
+                    onClick={() => {
+                      setDraftShowHeroicBadges((prev) => !prev);
+                      setWebConfigFeedback(null);
+                    }}
                     className={`min-h-[38px] px-3.5 py-1.5 rounded-lg text-xs font-semibold border inline-flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 disabled:opacity-60 ${
-                      showHeroicBadges
+                      draftShowHeroicBadges
                         ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 border-emerald-500/40'
                         : 'bg-[#131C2E] hover:bg-[#182338] text-slate-200 border-[#283548]'
                     }`}
                   >
                     <span
                       className={`w-7 h-4 rounded-full p-0.5 transition-colors flex items-center ${
-                        showHeroicBadges ? 'bg-emerald-500 justify-end' : 'bg-slate-700 justify-start'
+                        draftShowHeroicBadges ? 'bg-emerald-500 justify-end' : 'bg-slate-700 justify-start'
                       }`}
                     >
                       <span className="w-3 h-3 rounded-full bg-white shadow-sm" />
                     </span>
                     <span>
-                      {savingHeroicFlag
-                        ? 'Guardando...'
-                        : showHeroicBadges
-                        ? 'Desactivar insignias'
-                        : 'Activar insignias'}
+                      {draftShowHeroicBadges ? 'Activadas' : 'Desactivadas'}
                     </span>
                   </button>
+                </div>
+
+                {/* Bottom Action Bar for Section 00 */}
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                  <p className="text-[11px] text-slate-400">
+                    {webConfigDirty
+                      ? 'Tienes ajustes pendientes en esta sección. Pulsa «Guardar y aplicar configuración» para guardarlos en el servidor.'
+                      : 'Todos los ajustes de estilo, temporada, sensibilidad e insignias están aplicados y guardados.'}
+                  </p>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {webConfigDirty && (
+                      <button
+                        type="button"
+                        disabled={savingWebConfig}
+                        onClick={handleDiscardWebConfig}
+                        className="min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-medium bg-[#131C2E] hover:bg-[#182338] text-slate-300 border border-[#1E293B] transition-colors disabled:opacity-50"
+                      >
+                        Descartar cambios
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={savingWebConfig}
+                      onClick={() => void handleSaveWebConfig()}
+                      className={`min-h-[38px] inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-60 whitespace-nowrap ${
+                        webConfigDirty
+                          ? 'bg-orange-500 hover:bg-orange-400 text-slate-950 shadow-md shadow-orange-500/20'
+                          : 'bg-[#131C2E] hover:bg-[#1E293B] text-slate-100 border border-orange-500/40'
+                      }`}
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      <span>
+                        {savingWebConfig
+                          ? 'Guardando configuración...'
+                          : 'Guardar y aplicar configuración'}
+                      </span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Public Feature: Default Inspector KPIs & Order (Jugador / Equipo) */}
@@ -1386,7 +1710,7 @@ export function AdminSecurityConfigPanel({
                         key: 'espn_api',
                         name: 'ESPN API Fallback',
                         domain: 'site.api.espn.com',
-                        desc: 'Marcadores en vivo, rotaciones y lesiones de plantilla',
+                        desc: 'Marcadores en vivo, partes de lesiones y respaldo de plantillas/contratos (principal de contratos: fanspo.com)',
                       },
                     ].map((prov) => {
                       const metric = circuits ? circuits[prov.key] : null;

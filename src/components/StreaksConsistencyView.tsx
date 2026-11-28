@@ -1,4 +1,4 @@
-import { Suspense, lazy, useDeferredValue, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
   LineChart,
@@ -57,6 +57,7 @@ import {
   matchesPlayerUnifiedFilters,
   type UnifiedTableFiltersState,
 } from '../utils/entityFilters';
+import { useExperienceMetrics } from '../context/ExperienceMetricsContext';
 
 const PlayerStreakHistoryChart = lazy(() =>
   import('./PlayerStreakHistoryChart').then((m) => ({
@@ -205,7 +206,15 @@ const BREAKOUT_STREAK_PRESETS: Array<{
 
 
 
+const AUTO_METRIC_HELP_KEY_MAP = new Map(
+  STREAK_METRIC_OPTIONS.map((m) => [m.id, m.helpKey])
+);
+
 function resolveAutoStreakHelpKey(st: StreakEntry): string {
+  if (st.ruleMetricId) {
+    const direct = AUTO_METRIC_HELP_KEY_MAP.get(st.ruleMetricId);
+    if (direct) return direct;
+  }
   const lbl = `${st.metricLabel} ${st.thresholdLabel}`.toLowerCase();
   if (lbl.includes('pérdidas') || lbl.includes('to')) return 'toRatio';
   if (lbl.includes('faltas')) return 'consecutiveStreak';
@@ -322,18 +331,46 @@ export function StreaksConsistencyView({
   totalLeaguePlayersAvailable = 0,
   onLoadAllPlayers,
 }: StreaksConsistencyViewProps) {
+  const { isMetricAllowed } = useExperienceMetrics();
+
+  const allowedMetricOptions = useMemo(() => {
+    const filtered = STREAK_METRIC_OPTIONS.filter((m) => isMetricAllowed(m.id));
+    return filtered.length > 0 ? filtered : [STREAK_METRIC_OPTIONS[0]];
+  }, [isMetricAllowed]);
+
+  const allowedStreaks = useMemo(
+    () => streaks.filter((s) => isMetricAllowed(s.ruleMetricId ?? s.id)),
+    [streaks, isMetricAllowed]
+  );
+
+  const allowedBreakoutPresets = useMemo(
+    () => BREAKOUT_STREAK_PRESETS.filter((p) => isMetricAllowed(p.metricId)),
+    [isMetricAllowed]
+  );
+
+  const allowedQuickChips = useMemo(
+    () => QUICK_RATIO_CHIPS.filter((id) => isMetricAllowed(id)),
+    [isMetricAllowed]
+  );
+
   const [subTab, setSubTab] = useState<SubTab>('streaks');
   const [streakEvalMode, setStreakEvalMode] =
     useState<StreakEvalMode>('auto');
   const [streakSpanMode, setStreakSpanMode] = useState<StreakSpanMode>('active');
   const [useSecondaryCondition, setUseSecondaryCondition] = useState<boolean>(false);
-  const [secondaryMetricId, setSecondaryMetricId] = useState<string>('points');
-  const [secondaryOperator, setSecondaryOperator] = useState<ThresholdOperator>('gt');
-  const [secondaryThresholdValue, setSecondaryThresholdValue] = useState<number>(20);
+  const [secondaryMetricId, setSecondaryMetricId] = useState<string>('rebounds');
+  const [secondaryOperator, setSecondaryOperator] = useState<ThresholdOperator>('gte');
+  const [secondaryThresholdValue, setSecondaryThresholdValue] = useState<number>(8);
 
-  const [selectedMetricId, setSelectedMetricId] = useState<string>('tsPct');
-  const [operator, setOperator] = useState<ThresholdOperator>('gt');
-  const [thresholdValue, setThresholdValue] = useState<number>(60);
+  const [selectedMetricId, setSelectedMetricId] = useState<string>(() =>
+    experienceMode === 'simple' ? 'points' : 'tsPct'
+  );
+  const [operator, setOperator] = useState<ThresholdOperator>(() =>
+    experienceMode === 'simple' ? 'gte' : 'gt'
+  );
+  const [thresholdValue, setThresholdValue] = useState<number>(() =>
+    experienceMode === 'simple' ? 20 : 60
+  );
   const [minConsecutive, setMinConsecutive] = useState<number>(() =>
     Math.max(1, Math.min(15, minStreakGames))
   );
@@ -368,18 +405,44 @@ export function StreaksConsistencyView({
     useState<StreakChartPreloadRequest | null>(null);
   const chartSectionRef = useRef<HTMLDivElement | null>(null);
 
+  useEffect(() => {
+    if (!allowedMetricOptions.some((m) => m.id === selectedMetricId)) {
+      const fallback = allowedMetricOptions[0];
+      setSelectedMetricId(fallback.id);
+      setThresholdValue(fallback.defaultThreshold);
+      if (fallback.defaultOperator) setOperator(fallback.defaultOperator);
+    }
+    if (!allowedMetricOptions.some((m) => m.id === secondaryMetricId)) {
+      const fallback2 = allowedMetricOptions[1] ?? allowedMetricOptions[0];
+      setSecondaryMetricId(fallback2.id);
+      setSecondaryThresholdValue(fallback2.defaultThreshold);
+      if (fallback2.defaultOperator) setSecondaryOperator(fallback2.defaultOperator);
+    }
+  }, [allowedMetricOptions, selectedMetricId, secondaryMetricId]);
+
+  const hasEfficiencyAutoStreaks = useMemo(
+    () => allowedStreaks.some((s) => s.breakoutAxis === 'efficiency'),
+    [allowedStreaks]
+  );
+
+  useEffect(() => {
+    if (autoAxisFilter === 'efficiency' && !hasEfficiencyAutoStreaks) {
+      setAutoAxisFilter('all');
+    }
+  }, [autoAxisFilter, hasEfficiencyAutoStreaks]);
+
   const activeMetric = useMemo(
     () =>
-      STREAK_METRIC_OPTIONS.find((m) => m.id === selectedMetricId) ||
-      STREAK_METRIC_OPTIONS[0],
-    [selectedMetricId]
+      allowedMetricOptions.find((m) => m.id === selectedMetricId) ||
+      allowedMetricOptions[0],
+    [allowedMetricOptions, selectedMetricId]
   );
 
   const secondaryMetric = useMemo(
     () =>
-      STREAK_METRIC_OPTIONS.find((m) => m.id === secondaryMetricId) ||
-      STREAK_METRIC_OPTIONS[0],
-    [secondaryMetricId]
+      allowedMetricOptions.find((m) => m.id === secondaryMetricId) ||
+      allowedMetricOptions[0],
+    [allowedMetricOptions, secondaryMetricId]
   );
 
   const openPlayerChartWithRules = (
@@ -698,7 +761,7 @@ export function StreaksConsistencyView({
 
   const filteredStreaks = useMemo(() => {
     const q = normalizeSearchText(deferredQuery);
-    return streaks
+    return allowedStreaks
       .filter((s) => {
         const wKey = `${s.entityType}:${s.entityId}`;
         if (onlyWatchlist && !watchlistIds.has(wKey)) return false;
@@ -763,7 +826,7 @@ export function StreaksConsistencyView({
         return b.windowAvgDuringStreak - a.windowAvgDuringStreak;
       });
   }, [
-    streaks,
+    allowedStreaks,
     watchlistIds,
     onlyWatchlist,
     streakFilter,
@@ -841,6 +904,9 @@ export function StreaksConsistencyView({
     deferredQuery,
     consSort,
     consAsc,
+    unifiedActive,
+    unifiedFilters,
+    entityLookup,
   ]);
 
   const topCustomRow = customEvaluatedRows[0];
@@ -1421,7 +1487,7 @@ export function StreaksConsistencyView({
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                Tabla rachas activas ({streaks.length})
+                Tabla rachas activas ({allowedStreaks.length})
               </button>
               <button
                 type="button"
@@ -1433,7 +1499,7 @@ export function StreaksConsistencyView({
                 }`}
               >
                 <SlidersHorizontal className="w-3.5 h-3.5 text-orange-400" />
-                <span>Buscador a medida ({STREAK_METRIC_OPTIONS.length} métricas)</span>
+                <span>Buscador a medida ({allowedMetricOptions.length} métricas)</span>
               </button>
             </div>
           )}
@@ -1473,8 +1539,13 @@ export function StreaksConsistencyView({
               [
                 { id: 'all', label: 'Todos los ejes' },
                 { id: 'exterior', label: 'Tiro Exterior' },
-                { id: 'minutes_usage', label: 'Minutos y Uso' },
-                { id: 'efficiency', label: 'Eficiencia' },
+                {
+                  id: 'minutes_usage',
+                  label: experienceMode === 'simple' ? 'Minutos' : 'Minutos y Uso',
+                },
+                ...(hasEfficiencyAutoStreaks
+                  ? [{ id: 'efficiency' as const, label: 'Eficiencia' }]
+                  : []),
                 { id: 'counting', label: 'Puntos / Reb / Ast' },
               ] as const
             ).map((opt) => (
@@ -1645,17 +1716,19 @@ export function StreaksConsistencyView({
                     onChange={(e) => handleSelectSecondaryMetric(e.target.value)}
                     className="w-full px-3 py-1.5 text-xs bg-[#131C2E] border border-[#1E293B] rounded-lg text-slate-100 focus:outline-none focus:border-orange-500"
                   >
-                    {STREAK_METRIC_GROUPS.map((grp) => (
-                      <optgroup key={grp.id} label={grp.label}>
-                        {STREAK_METRIC_OPTIONS.filter(
-                          (m) => m.group === grp.id
-                        ).map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.label}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
+                    {STREAK_METRIC_GROUPS.map((grp) => {
+                      const opts = allowedMetricOptions.filter((m) => m.group === grp.id);
+                      if (opts.length === 0) return null;
+                      return (
+                        <optgroup key={grp.id} label={grp.label}>
+                          {opts.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      );
+                    })}
                   </select>
                 </div>
                 <div className="lg:col-span-7 flex items-center gap-2.5 sm:gap-3">
@@ -1714,7 +1787,7 @@ export function StreaksConsistencyView({
               Rupturas en 1 clic:
             </span>
             <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar sm:flex-wrap max-w-full">
-              {BREAKOUT_STREAK_PRESETS.map((preset) => {
+              {allowedBreakoutPresets.map((preset) => {
                 const isActive =
                   selectedMetricId === preset.metricId &&
                   operator === preset.operator &&
@@ -1749,8 +1822,8 @@ export function StreaksConsistencyView({
                 Accesos directos:
               </span>
               <div className="flex items-center gap-1 overflow-x-auto no-scrollbar sm:flex-wrap">
-                {QUICK_RATIO_CHIPS.map((chipId) => {
-                  const opt = STREAK_METRIC_OPTIONS.find(
+                {allowedQuickChips.map((chipId) => {
+                  const opt = allowedMetricOptions.find(
                     (m) => m.id === chipId
                   );
                   if (!opt) return null;
@@ -1811,7 +1884,7 @@ export function StreaksConsistencyView({
               <div className="flex items-center justify-between gap-2 text-xs text-slate-300">
                 <span className="inline-flex items-center gap-1.5 font-medium">
                   <span>
-                    Ratio o estadística a evaluar ({STREAK_METRIC_OPTIONS.length})
+                    Ratio o estadística a evaluar ({allowedMetricOptions.length})
                   </span>
                   <MetricInfoTooltip
                     helpKey={activeMetric.helpKey}
@@ -1827,17 +1900,19 @@ export function StreaksConsistencyView({
                 onChange={(e) => handleSelectMetric(e.target.value)}
                 className="w-full px-3 py-2 text-xs bg-[#0B1120] border border-[#1E293B] rounded-lg text-slate-100 focus:outline-none focus:border-orange-500 transition-colors"
               >
-                {STREAK_METRIC_GROUPS.map((grp) => (
-                  <optgroup key={grp.id} label={grp.label}>
-                    {STREAK_METRIC_OPTIONS.filter(
-                      (m) => m.group === grp.id
-                    ).map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
+                {STREAK_METRIC_GROUPS.map((grp) => {
+                  const opts = allowedMetricOptions.filter((m) => m.group === grp.id);
+                  if (opts.length === 0) return null;
+                  return (
+                    <optgroup key={grp.id} label={grp.label}>
+                      {opts.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
               </select>
             </div>
 
@@ -2498,7 +2573,7 @@ export function StreaksConsistencyView({
                 partidos seguidos con la combinación de filtros actual.
               </p>
               <p className="mt-1 text-xs text-slate-400">
-                Baja el corte de &ldquo;Partidos seguidos en racha&rdquo; en los filtros superiores o usa el &ldquo;Buscador a medida ({STREAK_METRIC_OPTIONS.length} métricas)&rdquo;.
+                Baja el corte de &ldquo;Partidos seguidos en racha&rdquo; en los filtros superiores o usa el &ldquo;Buscador a medida ({allowedMetricOptions.length} métricas)&rdquo;.
               </p>
             </div>
           ) : (

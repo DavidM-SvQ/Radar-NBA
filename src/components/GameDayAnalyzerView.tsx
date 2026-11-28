@@ -27,9 +27,11 @@ import type {
   GameDayMatchupCard,
   GameDayPayload,
   GameDayPlayerLine,
+  InjuriesRotationPayload,
   PlayerSummary,
   TeamSummary,
 } from '../types/nba';
+import { buildInjuriesLookupIndex } from '../utils/injuriesClient';
 import { formatSigned } from '../utils/analytics';
 import {
   renderEditorialParagraphs,
@@ -49,6 +51,32 @@ import {
 } from '../utils/tableSort';
 import { PlayerAvatar, TeamLogo, getTeamBrandColors } from './NbaVisuals';
 import { useThemeStyle } from '../context/ThemeStyleContext';
+import { useExperienceMetrics } from '../context/ExperienceMetricsContext';
+
+function inferGameDayStreakMetricKey(st: any): string {
+  const direct = st?.metricKey || st?.ruleMetricId;
+  if (typeof direct === 'string' && direct.trim()) return direct;
+  const hay = `${st?.id || ''} ${st?.thresholdLabel || ''} ${st?.unit || ''}`.toLowerCase();
+  if (hay.includes('ts%') || hay.includes('true shooting')) return 'tsPct';
+  if (hay.includes('efg')) return 'efgPct';
+  if (hay.includes('gmsc') || hay.includes('game score')) return 'gameScore';
+  if (hay.includes('usg') || hay.includes('uso')) return 'usgEst';
+  if (hay.includes('pra')) return 'pra';
+  if (hay.includes('stocks')) return 'stocks';
+  if (hay.includes('ast/to')) return 'astTo';
+  if (hay.includes('doble-doble') || hay.includes('dd2')) return 'doubleDouble';
+  if (hay.includes('triple-doble') || hay.includes('td3')) return 'tripleDouble';
+  if (hay.includes('3p%') || hay.includes('triple%')) return 'fg3Pct';
+  if (hay.includes('3pm') || hay.includes('triple')) return 'fg3m';
+  if (hay.includes('oreb') || hay.includes('reb. of')) return 'oreb';
+  if (hay.includes('reb')) return 'rebounds';
+  if (hay.includes('ast') || hay.includes('asist')) return 'assists';
+  if (hay.includes('stl') || hay.includes('robo')) return 'steals';
+  if (hay.includes('blk') || hay.includes('tap')) return 'blocks';
+  if (hay.includes('tov') || hay.includes('pérd')) return 'turnovers';
+  if (hay.includes('min')) return 'minutes';
+  return 'points';
+}
 
 interface GameDayAnalyzerViewProps {
   players?: PlayerSummary[];
@@ -62,6 +90,7 @@ interface GameDayAnalyzerViewProps {
   onChangeDateParam?: (date: string, mode: 'push' | 'replace') => void;
   selectedReportEventIdProp?: string | null;
   onChangeReportEventId?: (eventId: string | null) => void;
+  injuriesData?: InjuriesRotationPayload | null;
 }
 
 const SHORT_WEEKDAYS_ES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
@@ -113,8 +142,13 @@ export function GameDayAnalyzerView({
   onChangeDateParam,
   selectedReportEventIdProp,
   onChangeReportEventId,
+  injuriesData = null,
 }: GameDayAnalyzerViewProps) {
-  const { isV2 } = useThemeStyle();
+  const { isV2, isV3 } = useThemeStyle();
+  const injuriesIndex = useMemo(
+    () => buildInjuriesLookupIndex(injuriesData),
+    [injuriesData]
+  );
   const [selectedDate, setSelectedDate] = useState<string>(
     () => selectedDateParam || ''
   );
@@ -424,14 +458,47 @@ export function GameDayAnalyzerView({
     });
   }, [data, matchupFilter, watchlistIds]);
 
-  const filteredStreaks = useMemo(() => {
+  const { isMetricAllowed } = useExperienceMetrics();
+  const allowGmSc = isMetricAllowed('gameScore');
+  const allowTsPct = isMetricAllowed('tsPct');
+  const allowUsg = isMetricAllowed('usgEst');
+
+  const allowedExplosions = useMemo(() => {
     if (!data) return [];
-    return data.streakShifts.filter((s) => {
+    return data.explosions.filter((item: any) =>
+      !item.triggerMetricKey ? true : isMetricAllowed(item.triggerMetricKey)
+    );
+  }, [data, isMetricAllowed]);
+
+  const allowedSlumps = useMemo(() => {
+    if (!data) return [];
+    return data.slumps.filter((item: any) =>
+      !item.triggerMetricKey ? true : isMetricAllowed(item.triggerMetricKey)
+    );
+  }, [data, isMetricAllowed]);
+
+  const allowedRoleShifts = useMemo(() => {
+    if (!data) return [];
+    if (allowUsg) return data.roleShifts;
+    return data.roleShifts.filter(
+      (r: any) => Math.abs(Number(r.minutesDelta || 0)) >= 5.0 || Number(r.fga || 0) >= Number(r.fgaAvg || 0) + 3
+    );
+  }, [data, allowUsg]);
+
+  const allowedStreakShifts = useMemo(() => {
+    if (!data) return [];
+    return data.streakShifts.filter((s: any) =>
+      isMetricAllowed(inferGameDayStreakMetricKey(s))
+    );
+  }, [data, isMetricAllowed]);
+
+  const filteredStreaks = useMemo(() => {
+    return allowedStreakShifts.filter((s: any) => {
       if (streakFilter === 'broken' && s.status !== 'broken') return false;
       if (streakFilter === 'extended' && s.status !== 'extended') return false;
       return true;
     });
-  }, [data, streakFilter]);
+  }, [allowedStreakShifts, streakFilter]);
 
   const chronicleHighlightEntities = useMemo(() => {
     if (!data) return [];
@@ -526,9 +593,9 @@ export function GameDayAnalyzerView({
   const activeDateFormatted = formatCalendarChipDate(data.selectedDate);
   const ptsDiffVsLeague =
     data.pulse.avgTotalPoints - data.pulse.leagueAvgTotalPoints;
-  const brokenCount = data.streakShifts.filter((s) => s.status === 'broken').length;
-  const extendedCount = data.streakShifts.filter(
-    (s) => s.status === 'extended'
+  const brokenCount = allowedStreakShifts.filter((s: any) => s.status === 'broken').length;
+  const extendedCount = allowedStreakShifts.filter(
+    (s: any) => s.status === 'extended'
   ).length;
 
   const showGamesBlock =
@@ -825,6 +892,34 @@ export function GameDayAnalyzerView({
                             </span>
                           </>
                         )}
+                        {(() => {
+                          const teamInj = injuriesIndex.byTeamAbbr.get(
+                            side.abbr.toUpperCase()
+                          );
+                          if (!teamInj || teamInj.totalInjured === 0) return null;
+                          const tip = teamInj.injuries
+                            .slice(0, 5)
+                            .map((x) => `${x.name} (${x.shortTag}: ${x.detailEs})`)
+                            .join(' | ');
+                          const summaryTxt =
+                            teamInj.outOrIrCount > 0
+                              ? `${teamInj.outOrIrCount} Out/IR`
+                              : `${teamInj.totalInjured} en parte`;
+                          return (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span
+                                title={`Parte médico actual ${side.abbr}: ${tip}`}
+                                className="font-sans text-rose-300/90"
+                              >
+                                Parte: {summaryTxt}
+                                {teamInj.vacatedMinutes >= 15
+                                  ? ` (-${teamInj.vacatedMinutes.toFixed(0)}m)`
+                                  : ''}
+                              </span>
+                            </>
+                          );
+                        })()}
                         {experienceMode === 'advanced' && (
                           <>
                             <span aria-hidden="true">·</span>
@@ -1566,11 +1661,11 @@ export function GameDayAnalyzerView({
                         }
                       >
                         <div
-                          className={
+                          className={`${
                             idx === 0
                               ? 'lg:col-span-8 space-y-2.5'
                               : 'space-y-2.5'
-                          }
+                          }${isV3 ? ' v3-editorial-prose' : ''}`}
                         >
                           <p className="text-[11px] font-medium text-orange-400 tracking-wide">
                             0{idx + 1} · {sec.kicker || 'Tema de Apertura'}
@@ -1644,7 +1739,7 @@ export function GameDayAnalyzerView({
                       id="chron-sec-pizarras"
                       className="pt-6 border-t border-[#1E293B] grid grid-cols-1 lg:grid-cols-12 gap-6 items-start"
                     >
-                      <div className="lg:col-span-8 space-y-2.5">
+                      <div className={`lg:col-span-8 space-y-2.5${isV3 ? ' v3-editorial-prose' : ''}`}>
                         <p className="text-[11px] font-medium text-orange-400 tracking-wide">
                           0{ch.dynamicSections.length + 1} · Lectura Táctica Colectiva
                         </p>
@@ -1707,7 +1802,7 @@ export function GameDayAnalyzerView({
                       id="chron-sec-hitos"
                       className="pt-6 border-t border-[#1E293B] grid grid-cols-1 lg:grid-cols-12 gap-6 items-start"
                     >
-                      <div className="lg:col-span-8 space-y-2.5">
+                      <div className={`lg:col-span-8 space-y-2.5${isV3 ? ' v3-editorial-prose' : ''}`}>
                         <p className="text-[11px] font-medium text-orange-400 tracking-wide">
                           0{ch.dynamicSections.length + 2} · Récords, Explosiones y Rachas
                         </p>
@@ -1814,7 +1909,7 @@ export function GameDayAnalyzerView({
                       id="chron-sec-espanoles"
                       className="pt-6 border-t border-[#1E293B] grid grid-cols-1 lg:grid-cols-12 gap-6 items-start"
                     >
-                      <div className="lg:col-span-8 space-y-2.5">
+                      <div className={`lg:col-span-8 space-y-2.5${isV3 ? ' v3-editorial-prose' : ''}`}>
                         <p className="text-[11px] font-medium text-orange-400 tracking-wide">
                           0{ch.dynamicSections.length + 3} · Seguimiento Especial
                         </p>
@@ -2046,7 +2141,12 @@ export function GameDayAnalyzerView({
                         {p.points}P · {p.rebounds}R · {p.assists}A
                       </p>
                       <p className="mt-0.5 text-[11px] text-slate-300 truncate">
-                        GmSc {p.gameScore.toFixed(1)} · {p.tsPct.toFixed(0)}% TS ·{' '}
+                        {allowGmSc ? `GmSc ${p.gameScore.toFixed(1)} · ` : ''}
+                        {allowTsPct
+                          ? `${p.tsPct.toFixed(0)}% TS · `
+                          : p.fga > 0
+                          ? `${Math.round((p.fgm / p.fga) * 100)}% TC · `
+                          : ''}
                         {p.plusMinus >= 0 ? `+${p.plusMinus}` : p.plusMinus}
                       </p>
                       <p className="mt-0.5 text-[11px] text-emerald-400 truncate">
@@ -2149,7 +2249,7 @@ export function GameDayAnalyzerView({
                     : 'text-slate-300'
                 }`}
               >
-                Explosiones ({data.explosions.length})
+                Explosiones ({allowedExplosions.length})
               </button>
               <button
                 type="button"
@@ -2160,7 +2260,7 @@ export function GameDayAnalyzerView({
                     : 'text-slate-300'
                 }`}
               >
-                Batacazos ({data.slumps.length})
+                Batacazos ({allowedSlumps.length})
               </button>
             </div>
           </div>
@@ -2181,17 +2281,17 @@ export function GameDayAnalyzerView({
                   <MetricInfoTooltip helpKey="gamedayExplosions" align="left" />
                 </div>
                 <span className="text-xs font-mono tabular-nums text-slate-400 shrink-0">
-                  {data.explosions.length} casos
+                  {allowedExplosions.length} casos
                 </span>
               </div>
 
               <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-y-auto max-h-[500px] xl:max-h-[620px] flex-1 divide-y divide-[#1E293B]">
-                {data.explosions.length === 0 ? (
+                {allowedExplosions.length === 0 ? (
                   <div className="p-6 text-center text-xs text-slate-400">
                     Ningún jugador superó el umbral de explosión atípica en esta jornada.
                   </div>
                 ) : (
-                  data.explosions.map((item) => (
+                  allowedExplosions.map((item) => (
                     <div
                       key={item.playerId}
                       onClick={() => onInspectEntity('player', item.playerId)}
@@ -2247,7 +2347,7 @@ export function GameDayAnalyzerView({
                             </span>
                           )}
                         </div>
-                        {item.gameScore !== undefined && (
+                        {allowGmSc && item.gameScore !== undefined && (
                           <div className="text-[11px] text-slate-400 shrink-0 font-sans whitespace-nowrap">
                             GmSc <span className="font-semibold font-mono text-slate-200">{item.gameScore.toFixed(1)}</span>
                           </div>
@@ -2274,17 +2374,17 @@ export function GameDayAnalyzerView({
                   <MetricInfoTooltip helpKey="gamedaySlumps" align="left" />
                 </div>
                 <span className="text-xs font-mono tabular-nums text-slate-400 shrink-0">
-                  {data.slumps.length} casos
+                  {allowedSlumps.length} casos
                 </span>
               </div>
 
               <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-y-auto max-h-[500px] xl:max-h-[620px] flex-1 divide-y divide-[#1E293B]">
-                {data.slumps.length === 0 ? (
+                {allowedSlumps.length === 0 ? (
                   <div className="p-6 text-center text-xs text-slate-400">
                     Los titulares principales cumplieron con su suelo estadístico en esta fecha.
                   </div>
                 ) : (
-                  data.slumps.map((item) => (
+                  allowedSlumps.map((item) => (
                     <div
                       key={item.playerId}
                       onClick={() => onInspectEntity('player', item.playerId)}
@@ -2340,7 +2440,7 @@ export function GameDayAnalyzerView({
                             </span>
                           )}
                         </div>
-                        {item.gameScore !== undefined && (
+                        {allowGmSc && item.gameScore !== undefined && (
                           <div className="text-[11px] text-slate-400 shrink-0 font-sans whitespace-nowrap">
                             GmSc <span className="font-semibold font-mono text-slate-200">{item.gameScore.toFixed(1)}</span>
                           </div>
@@ -2370,20 +2470,22 @@ export function GameDayAnalyzerView({
                   <MetricInfoTooltip helpKey="gamedayRoleShift" align="left" />
                 </div>
                 <span className="text-xs font-mono tabular-nums text-slate-400 shrink-0">
-                  {data.roleShifts.length} alertas
+                  {allowedRoleShifts.length} alertas
                 </span>
               </div>
 
               <div className="bg-[#131C2E] border border-[#1E293B] rounded-xl sm:rounded-lg overflow-hidden flex-1 flex flex-col">
-                {data.roleShifts.length === 0 ? (
+                {allowedRoleShifts.length === 0 ? (
                   <div className="p-8 text-center text-xs text-slate-400">
-                    Sin saltos bruscos de minutos (+6.5 MIN) ni uso ofensivo (+6% USG) en esta jornada.
+                    {allowUsg
+                      ? 'Sin saltos bruscos de minutos (+6.5 MIN) ni uso ofensivo (+6% USG) en esta jornada.'
+                      : 'Sin saltos bruscos de minutos ni volumen de tiros en esta jornada.'}
                   </div>
                 ) : (
                   <>
                     {/* Mobile list */}
                     <div className="sm:hidden divide-y divide-[#1E293B] max-h-[720px] overflow-y-auto">
-                      {data.roleShifts.map((r) => (
+                      {allowedRoleShifts.map((r) => (
                       <div
                         key={r.playerId}
                         onClick={() => onInspectEntity('player', r.playerId)}
@@ -2482,7 +2584,7 @@ export function GameDayAnalyzerView({
                       </thead>
                       <tbody className="divide-y divide-[#1E293B] text-sm">
                         {sortRows(
-                          data.roleShifts,
+                          allowedRoleShifts,
                           (r) => {
                             switch (roleSortKey) {
                               case 'name':
@@ -2561,9 +2663,11 @@ export function GameDayAnalyzerView({
                               <div className="font-semibold text-xs sm:text-sm text-slate-100 whitespace-nowrap">
                                 {r.points}P · {r.rebounds}R · {r.assists}A
                               </div>
-                              <div className="text-[11px] text-slate-400 whitespace-nowrap">
-                                GmSc {r.gameScore.toFixed(1)}
-                              </div>
+                              {allowGmSc && (
+                                <div className="text-[11px] text-slate-400 whitespace-nowrap">
+                                  GmSc {r.gameScore.toFixed(1)}
+                                </div>
+                              )}
                             </td>
                           </tr>
                         ))}
@@ -2591,7 +2695,7 @@ export function GameDayAnalyzerView({
                   [
                     {
                       id: 'all',
-                      label: `Todas (${data.streakShifts.length})`,
+                      label: `Todas (${allowedStreakShifts.length})`,
                     },
                     { id: 'broken', label: `Rotas (${brokenCount})` },
                     { id: 'extended', label: `Vivas (${extendedCount})` },

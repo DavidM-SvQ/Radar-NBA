@@ -1172,6 +1172,58 @@ export const STREAK_METRIC_OPTIONS: StreakMetricOption[] = [
 export function resolveAutoStreakPreload(
   st: StreakEntry
 ): StreakChartPreloadMetricRule {
+  if (st.ruleMetricId && typeof st.ruleThreshold === 'number') {
+    const minMin = st.ruleMinMinutes && st.ruleMinMinutes > 0 ? st.ruleMinMinutes : null;
+    const minAtt = st.ruleMinAttempts && st.ruleMinAttempts > 0 ? st.ruleMinAttempts : null;
+    const metricId = st.ruleMetricId;
+    let customQualifies: ((g: PlayerGameLog) => boolean) | undefined;
+    let customQualifiesLabel: string | undefined;
+
+    if (minMin || minAtt) {
+      const attLabel =
+        metricId === 'fg3Pct' || metricId === 'fg3m'
+          ? '3PA'
+          : metricId === 'ftPct' || metricId === 'ftm'
+          ? 'TLI'
+          : metricId === 'fg2Pct' || metricId === 'fg2m'
+          ? 'T2I'
+          : 'TCI';
+      const labels: string[] = [];
+      if (minMin) labels.push(`≥${minMin} MIN`);
+      if (minAtt) labels.push(`≥${minAtt} ${attLabel}`);
+      customQualifiesLabel = labels.join(' · ');
+      customQualifies = (g: PlayerGameLog) => {
+        if (minMin && g.minutes < minMin) return false;
+        if (minAtt) {
+          if (metricId === 'fg3Pct' || metricId === 'fg3m') {
+            if (g.fg3a < minAtt) return false;
+          } else if (metricId === 'ftPct' || metricId === 'ftm') {
+            if (g.fta < minAtt) return false;
+          } else if (metricId === 'fg2Pct' || metricId === 'fg2m') {
+            if (g.fga - g.fg3a < minAtt) return false;
+          } else {
+            if (g.fga < minAtt) return false;
+          }
+        }
+        return true;
+      };
+    }
+
+    return {
+      metricId,
+      operator: st.ruleOperator || 'gte',
+      threshold: st.ruleThreshold,
+      isPositive: st.isPositive,
+      customQualifies,
+      customQualifiesLabel,
+    };
+  }
+  if (st.id.endsWith('-dd2')) {
+    return { metricId: 'doubleDouble', operator: 'gte', threshold: 1, isPositive: true };
+  }
+  if (st.id.endsWith('-td3')) {
+    return { metricId: 'tripleDouble', operator: 'gte', threshold: 1, isPositive: true };
+  }
   if (st.id.endsWith('-pts40')) {
     return { metricId: 'points', operator: 'gte', threshold: 40, isPositive: true };
   }

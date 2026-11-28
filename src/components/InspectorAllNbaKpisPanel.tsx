@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Check,
+  Crown,
   Database,
   Plus,
   RotateCcw,
@@ -32,6 +33,8 @@ import {
 import { stdDev } from '../utils/analytics';
 import { evaluateReferenceComparison } from '../utils/playerInspectorAnalytics';
 import { MetricInfoTooltip } from './MetricUiHelpers';
+import type { CareerHighKpiBadge } from './CareerHistoryPanel';
+import { useExperienceMetrics } from '../context/ExperienceMetricsContext';
 
 interface InspectorAllNbaKpisPanelProps {
   entityType: 'player' | 'team';
@@ -57,6 +60,8 @@ interface InspectorAllNbaKpisPanelProps {
   referenceMode?: 'nba' | 'own';
   ownBaselineGames?: PlayerGameLog[];
   ownBaselineShortLabel?: string;
+  careerHighKpis?: Record<string, CareerHighKpiBadge>;
+  onOpenCareerTab?: () => void;
 }
 
 export function InspectorAllNbaKpisPanel({
@@ -83,10 +88,18 @@ export function InspectorAllNbaKpisPanel({
   referenceMode = 'nba',
   ownBaselineGames = [],
   ownBaselineShortLabel = 'Datos propios',
+  careerHighKpis,
+  onOpenCareerTab,
 }: InspectorAllNbaKpisPanelProps) {
+  const { isMetricAllowed } = useExperienceMetrics();
   const [internalOpen, setInternalOpen] = useState(false);
   const [selectedLayer, setSelectedLayer] = useState<'all' | NbaKpiLayerId>('all');
   const [searchQuery, setSearchQuery] = useState('');
+
+  const activeCareerHighList = useMemo(
+    () => Object.values(careerHighKpis || {}),
+    [careerHighKpis]
+  );
 
   const isOpen = externalOpen !== undefined ? externalOpen : internalOpen;
   const setIsOpen = (val: boolean) => {
@@ -102,9 +115,9 @@ export function InspectorAllNbaKpisPanel({
   const scopedCatalog = useMemo<InspectorNbaKpiDef[]>(
     () =>
       NBA_ALL_KPIS_CATALOG.filter(
-        (k) => k.scope === 'both' || k.scope === entityType
+        (k) => (k.scope === 'both' || k.scope === entityType) && isMetricAllowed(k.key)
       ),
-    [entityType]
+    [entityType, isMetricAllowed]
   );
 
   const activeSet = useMemo(() => new Set(activeKeys), [activeKeys]);
@@ -115,13 +128,20 @@ export function InspectorAllNbaKpisPanel({
     for (const key of activeKeys) {
       if (seen.has(key)) continue;
       const def = NBA_ALL_KPIS_MAP[key];
-      if (def && (def.scope === 'both' || def.scope === entityType)) {
+      if (
+        def &&
+        (def.scope === 'both' || def.scope === entityType) &&
+        isMetricAllowed(def.key)
+      ) {
         seen.add(key);
         ordered.push(def);
       }
     }
+    if (ordered.length === 0 && scopedCatalog.length > 0) {
+      return scopedCatalog.slice(0, 8);
+    }
     return ordered;
-  }, [activeKeys, entityType]);
+  }, [activeKeys, entityType, isMetricAllowed, scopedCatalog]);
 
   const layerShortMap = useMemo(
     () =>
@@ -566,6 +586,43 @@ export function InspectorAllNbaKpisPanel({
         </div>
       )}
 
+      {/* Active Career High / Franchise Record Pace Banner */}
+      {activeCareerHighList.length > 0 && (
+        <div className="bg-amber-500/10 border border-amber-500/35 rounded-lg px-3.5 py-2 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            <span className="inline-flex items-center gap-1.5 text-xs font-bold text-amber-300 whitespace-nowrap">
+              <Crown className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span>
+                {entityType === 'player'
+                  ? 'En ritmo de Career High (2026-27):'
+                  : 'En ritmo de Récord Histórico (2026-27):'}
+              </span>
+            </span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {activeCareerHighList.map((ch) => (
+                <span
+                  key={ch.key}
+                  title={ch.tooltip}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#0B1120]/90 border border-amber-500/35 text-[11px] font-mono tabular-nums text-amber-200"
+                >
+                  <strong className="text-amber-300">{ch.shortLabel}</strong>
+                  <span>{ch.currentFormatted}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+          {onOpenCareerTab && (
+            <button
+              type="button"
+              onClick={onOpenCareerTab}
+              className="text-[11px] font-semibold text-amber-300 hover:text-amber-200 underline underline-offset-2 whitespace-nowrap shrink-0"
+            >
+              {entityType === 'player' ? 'Ver Trayectoria & Highs →' : 'Ver Historia Franquicia →'}
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Active KPIs Grid with NBA Mean + Deviation Bar (and Own Baseline or Team Percentile) on every card */}
       {entityType === 'player' && sampleGames && sampleGames.length === 0 ? (
         <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-6 text-center text-xs text-slate-400">
@@ -634,6 +691,10 @@ export function InspectorAllNbaKpisPanel({
             );
 
             const pctBadge = entityType === 'team' ? teamPercentileMap[def.key] : undefined;
+            const chBadge =
+              statScale === 'per_game' || !meta.scalable
+                ? careerHighKpis?.[def.key]
+                : undefined;
 
             const valTone =
               disp.tone === 'positive'
@@ -647,7 +708,11 @@ export function InspectorAllNbaKpisPanel({
             return (
               <div
                 key={def.key}
-                className="p-3.5 border-b border-r border-[#1E293B] flex flex-col justify-between gap-2 hover:bg-[#182338]/40 transition-colors"
+                className={`p-3.5 border-b border-r border-[#1E293B] flex flex-col justify-between gap-2 transition-colors ${
+                  chBadge
+                    ? 'bg-amber-500/[0.06] ring-1 ring-inset ring-amber-500/30 hover:bg-amber-500/[0.11]'
+                    : 'hover:bg-[#182338]/40'
+                }`}
               >
                 <div className="flex items-start justify-between gap-1.5">
                   <span className="inline-flex items-center gap-1 text-[11px] text-slate-400 min-w-0">
@@ -685,6 +750,19 @@ export function InspectorAllNbaKpisPanel({
                     )}
                   </div>
                 </div>
+
+                {chBadge && (
+                  <span
+                    title={chBadge.tooltip}
+                    className="inline-flex items-center gap-1 self-start px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/40 text-[10px] font-semibold text-amber-300 -mt-0.5"
+                  >
+                    <Crown className="w-2.5 h-2.5 text-amber-400 shrink-0" />
+                    <span>{chBadge.badgeText} 26-27</span>
+                    <span className="text-amber-200/75 font-mono font-normal">
+                      (ant. {chBadge.prevBestFormatted})
+                    </span>
+                  </span>
+                )}
 
                 {disp.subtext && (
                   <p className="text-[10px] text-slate-400 font-mono truncate -mt-1">

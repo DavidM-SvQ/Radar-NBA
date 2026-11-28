@@ -3,16 +3,22 @@ import {
   ArrowLeftRight,
   Check,
   ChevronDown,
+  History,
+  Loader2,
   Plus,
   Search,
   Sliders,
 } from 'lucide-react';
 import type {
+  CareerScope,
+  ComparisonMetricRow,
   ExperienceMode,
+  PlayerCareerProfile,
   PlayerSummary,
   RangePreset,
   RangeSelection,
   SearchPlayerResult,
+  TeamCareerHistory,
   TeamSummary,
 } from '../types/nba';
 import {
@@ -21,6 +27,7 @@ import {
   formatShortDate,
   formatSigned,
   normalizeSearchText,
+  round1,
   sliceGamesByRange,
 } from '../utils/analytics';
 import {
@@ -38,6 +45,7 @@ import {
 import { EntityBadge, MiniSparkline, PlayerAvatar, TeamLogo } from './NbaVisuals';
 import { ExportImageButton } from './ExportImageButton';
 import { buildComparisonSnapshotBlob } from '../utils/exportImageCard';
+import { useExperienceMetrics } from '../context/ExperienceMetricsContext';
 
 interface RangeComparatorViewProps {
   players: PlayerSummary[];
@@ -98,6 +106,335 @@ const SIMPLE_ROW_LABELS: Record<string, string> = {
   tovPct: '% de jugadas con pérdida',
 };
 
+const compPlayerCareerCache = new Map<string, PlayerCareerProfile>();
+const compTeamCareerCache = new Map<string, TeamCareerHistory>();
+
+interface ResolvedHistoricalPlayerSide {
+  label: string;
+  gp: number;
+  pts: number;
+  min: number;
+  reb: number;
+  oreb: number;
+  ast: number;
+  stocks: number;
+  fga: number;
+  fgPct: number;
+  fg3m: number;
+  fg3Pct: number;
+  fta: number;
+  ftPct: number;
+  tov: number;
+  tsPct: number;
+  efgPct: number;
+  gmSc: number;
+  astTo: number;
+  pra: number;
+}
+
+function resolveHistoricalPlayerSide(
+  profile: PlayerCareerProfile,
+  scope: CareerScope,
+  selector: string
+): ResolvedHistoricalPlayerSide | null {
+  const bucket = scope === 'playoffs' ? profile.playoffs : profile.regular;
+  if (!bucket || bucket.totals.gp <= 0) return null;
+
+  if (selector === '__CAREER_AVG__') {
+    const a = bucket.averages;
+    const t = bucket.totals;
+    const gp = Math.max(1, t.gp);
+    return {
+      label: `Media de Carrera (${t.seasonsCount} temp.)`,
+      gp: t.gp,
+      pts: a.ptsPg,
+      min: a.minPg,
+      reb: a.rebPg,
+      oreb: t.oreb / gp,
+      ast: a.astPg,
+      stocks: a.stlPg + a.blkPg,
+      fga: t.fga / gp,
+      fgPct: a.fgPct,
+      fg3m: t.fg3m / gp,
+      fg3Pct: a.fg3Pct,
+      fta: t.fta / gp,
+      ftPct: a.ftPct,
+      tov: a.tovPg,
+      tsPct: a.tsPct,
+      efgPct: a.efgPct,
+      gmSc: a.gmScPg,
+      astTo: t.tov > 0 ? t.ast / t.tov : a.astPg,
+      pra: a.ptsPg + a.rebPg + a.astPg,
+    };
+  }
+
+  const season =
+    selector === '__PEAK__'
+      ? bucket.peakSeason || bucket.seasons[bucket.seasons.length - 1]
+      : bucket.seasons.find((s) => s.season === selector) ||
+        bucket.seasons[bucket.seasons.length - 1];
+
+  if (!season || season.gp <= 0) return null;
+  const gp = Math.max(1, season.gp);
+  return {
+    label:
+      selector === '__PEAK__'
+        ? `Peak ${season.season} (${season.teamAbbr})`
+        : `${season.season} (${season.teamAbbr})`,
+    gp: season.gp,
+    pts: season.ptsPg,
+    min: season.minPg,
+    reb: season.rebPg,
+    oreb: season.oreb / gp,
+    ast: season.astPg,
+    stocks: season.stlPg + season.blkPg,
+    fga: season.fga / gp,
+    fgPct: season.fgPct,
+    fg3m: season.fg3m / gp,
+    fg3Pct: season.fg3Pct,
+    fta: season.fta / gp,
+    ftPct: season.ftPct,
+    tov: season.tovPg,
+    tsPct: season.tsPct,
+    efgPct: season.efgPct,
+    gmSc: season.gmScPg,
+    astTo: season.tov > 0 ? season.ast / season.tov : season.astPg,
+    pra: season.ptsPg + season.rebPg + season.astPg,
+  };
+}
+
+function buildHistoricalPlayerComparison(
+  profile: PlayerCareerProfile,
+  scope: CareerScope,
+  keyA: string,
+  keyB: string
+) {
+  const bucket = scope === 'playoffs' ? profile.playoffs : profile.regular;
+  const sideA = resolveHistoricalPlayerSide(profile, scope, keyA);
+  const sideB = resolveHistoricalPlayerSide(profile, scope, keyB);
+  if (!bucket || !sideA || !sideB) return null;
+
+  const defs: Array<{
+    key: keyof ResolvedHistoricalPlayerSide;
+    label: string;
+    unit: string;
+    group: 'basic' | 'advanced';
+    inverseGood?: boolean;
+  }> = [
+    { key: 'pts', label: 'Puntos por partido', unit: 'PTS', group: 'basic' },
+    { key: 'min', label: 'Minutos en pista', unit: 'MIN', group: 'basic' },
+    { key: 'reb', label: 'Rebotes totales', unit: 'REB', group: 'basic' },
+    { key: 'oreb', label: 'Rebotes ofensivos', unit: 'OR', group: 'basic' },
+    { key: 'ast', label: 'Asistencias', unit: 'AST', group: 'basic' },
+    { key: 'stocks', label: 'Robos + Tapones (Stocks)', unit: 'STK', group: 'basic' },
+    { key: 'fga', label: 'Tiros de campo intentados', unit: 'TCI', group: 'basic' },
+    { key: 'fgPct', label: 'Acierto en tiros de campo', unit: '%', group: 'basic' },
+    { key: 'fg3m', label: 'Triples anotados', unit: '3PM', group: 'basic' },
+    { key: 'fg3Pct', label: 'Porcentaje en triples', unit: '%', group: 'basic' },
+    { key: 'fta', label: 'Tiros libres intentados', unit: 'TLI', group: 'basic' },
+    { key: 'ftPct', label: 'Porcentaje en tiros libres', unit: '%', group: 'basic' },
+    {
+      key: 'tov',
+      label: 'Pérdidas de balón',
+      unit: 'PER',
+      group: 'basic',
+      inverseGood: true,
+    },
+    { key: 'tsPct', label: 'Tiro Verdadero (TS%)', unit: '%', group: 'advanced' },
+    { key: 'efgPct', label: 'Tiro de Campo Efectivo (eFG%)', unit: '%', group: 'advanced' },
+    { key: 'gmSc', label: 'Valoración Game Score (GmSc)', unit: 'GmSc', group: 'advanced' },
+    { key: 'astTo', label: 'Ratio Asistencias / Pérdida', unit: 'A/P', group: 'advanced' },
+    { key: 'pra', label: 'Producción combinada (PRA)', unit: 'PRA', group: 'advanced' },
+  ];
+
+  const rows: ComparisonMetricRow[] = defs.map((d) => {
+    const rawA = Number(sideA[d.key] || 0);
+    const rawB = Number(sideB[d.key] || 0);
+    const valA = round1(rawA);
+    const valB = round1(rawB);
+    const absDiff = round1(valA - valB);
+    const denom = Math.abs(rawB);
+    const pctDiff = round1(denom > 0 ? ((rawA - rawB) / denom) * 100 : 0);
+    return {
+      key: String(d.key),
+      label: d.label,
+      unit: d.unit,
+      group: d.group,
+      rangeAValue: valA,
+      rangeBValue: valB,
+      absDiff,
+      pctDiff,
+      inverseGood: d.inverseGood,
+    };
+  });
+
+  const insights: string[] = [];
+  const dPts = round1(sideA.pts - sideB.pts);
+  const dTs = round1(sideA.tsPct - sideB.tsPct);
+  const dAst = round1(sideA.ast - sideB.ast);
+  const dReb = round1(sideA.reb - sideB.reb);
+  insights.push(
+    `En ${sideA.label} (${sideA.gp} PJ) anota ${sideA.pts.toFixed(1)} PTS (${formatSigned(
+      dPts,
+      1
+    )} frente a ${sideB.label}) con ${sideA.tsPct.toFixed(1)}% TS (${formatSigned(dTs, 1)} pts).`
+  );
+  if (Math.abs(dAst) >= 0.8 || Math.abs(dReb) >= 0.8) {
+    insights.push(
+      `Producción periférica: ${sideA.reb.toFixed(1)} REB (${formatSigned(
+        dReb,
+        1
+      )}) y ${sideA.ast.toFixed(1)} AST (${formatSigned(dAst, 1)}) · GmSc ${sideA.gmSc.toFixed(1)}.`
+    );
+  }
+  const plainInsights = computePlainComparisonInsights('player', rows);
+  const ptsRow = rows.find((r) => r.key === 'pts');
+  const scopeTag = scope === 'playoffs' ? 'Playoffs' : 'Temporada Regular';
+
+  return {
+    name: profile.name,
+    subtitle: `${profile.currentTeamAbbr} · Histórico ${scopeTag} (${bucket.totals.seasonsCount} temp. · ${bucket.totals.gp} PJ)`,
+    id: profile.playerId,
+    countA: sideA.gp,
+    countB: sideB.gp,
+    spanA: sideA.label,
+    spanB: sideB.label,
+    trendSeries: bucket.seasons.map((s) => s.ptsPg),
+    trendRefValue: ptsRow?.rangeBValue,
+    trendLabel: 'Evolución histórica PTS/PJ vs Referencia B',
+    trendSignedZero: false,
+    rows,
+    insights,
+    plainInsights,
+  };
+}
+
+function buildHistoricalTeamComparison(
+  history: TeamCareerHistory,
+  scope: CareerScope,
+  keyA: string,
+  keyB: string
+) {
+  const pool =
+    scope === 'playoffs' ? history.playoffSeasons : history.regularSeasons;
+  if (pool.length === 0) return null;
+
+  const resolveSide = (selector: string) => {
+    if (selector === '__FRANCHISE_AVG__') {
+      const n = pool.length;
+      const totW = pool.reduce((a, s) => a + (scope === 'playoffs' ? s.poWins : s.wins), 0);
+      const totL = pool.reduce((a, s) => a + (scope === 'playoffs' ? s.poLosses : s.losses), 0);
+      const gp = Math.max(1, totW + totL);
+      return {
+        label: `Promedio Histórico (${n} temp.)`,
+        gp,
+        winPct: (totW / gp) * 100,
+        pf: pool.reduce((a, s) => a + s.ptsPg, 0) / n,
+        reb: pool.reduce((a, s) => a + s.rebPg, 0) / n,
+        ast: pool.reduce((a, s) => a + s.astPg, 0) / n,
+        fgPct: pool.reduce((a, s) => a + s.fgPct, 0) / n,
+        fg3Pct: pool.reduce((a, s) => a + s.fg3Pct, 0) / n,
+        ftPct: pool.reduce((a, s) => a + s.ftPct, 0) / n,
+        poWins: pool.reduce((a, s) => a + s.poWins, 0) / n,
+      };
+    }
+
+    const best =
+      scope === 'playoffs'
+        ? [...pool].sort((a, b) => b.poWins - a.poWins || b.winPct - a.winPct)[0]
+        : history.bestSeason || [...pool].sort((a, b) => b.winPct - a.winPct)[0];
+
+    const s =
+      selector === '__BEST__'
+        ? best
+        : pool.find((x) => x.season === selector) || pool[pool.length - 1];
+
+    const w = scope === 'playoffs' ? s.poWins : s.wins;
+    const l = scope === 'playoffs' ? s.poLosses : s.losses;
+    const gp = Math.max(1, w + l);
+    return {
+      label:
+        selector === '__BEST__'
+          ? `Mejor Curso ${s.season} (${w}-${l})`
+          : `${s.season} (${w}-${l})`,
+      gp,
+      winPct: (w / gp) * 100,
+      pf: s.ptsPg,
+      reb: s.rebPg,
+      ast: s.astPg,
+      fgPct: s.fgPct,
+      fg3Pct: s.fg3Pct,
+      ftPct: s.ftPct,
+      poWins: s.poWins,
+    };
+  };
+
+  const sideA = resolveSide(keyA);
+  const sideB = resolveSide(keyB);
+
+  const defs: Array<{
+    key: keyof typeof sideA;
+    label: string;
+    unit: string;
+    group: 'basic' | 'advanced';
+  }> = [
+    { key: 'winPct', label: 'Porcentaje de victorias (%V)', unit: '%', group: 'basic' },
+    { key: 'pf', label: 'Puntos anotados por partido (Temp.)', unit: 'PTS', group: 'basic' },
+    { key: 'reb', label: 'Rebotes por partido', unit: 'REB', group: 'basic' },
+    { key: 'ast', label: 'Asistencias por partido', unit: 'AST', group: 'basic' },
+    { key: 'fgPct', label: 'Porcentaje de tiros de campo', unit: '%', group: 'advanced' },
+    { key: 'fg3Pct', label: 'Porcentaje en triples', unit: '%', group: 'advanced' },
+    { key: 'ftPct', label: 'Porcentaje en tiros libres', unit: '%', group: 'advanced' },
+    { key: 'poWins', label: 'Victorias en Playoffs ese curso', unit: 'V', group: 'advanced' },
+  ];
+
+  const rows: ComparisonMetricRow[] = defs.map((d) => {
+    const rawA = Number(sideA[d.key] || 0);
+    const rawB = Number(sideB[d.key] || 0);
+    const valA = round1(rawA);
+    const valB = round1(rawB);
+    const absDiff = round1(valA - valB);
+    const denom = Math.abs(rawB);
+    const pctDiff = round1(denom > 0 ? ((rawA - rawB) / denom) * 100 : 0);
+    return {
+      key: String(d.key),
+      label: d.label,
+      unit: d.unit,
+      group: d.group,
+      rangeAValue: valA,
+      rangeBValue: valB,
+      absDiff,
+      pctDiff,
+    };
+  });
+
+  const insights: string[] = [
+    `${history.teamName} en ${sideA.label} alcanza un ${sideA.winPct.toFixed(1)}% de victorias (${formatSigned(
+      sideA.winPct - sideB.winPct,
+      1
+    )} pts respecto a ${sideB.label}) con ${sideA.pf.toFixed(1)} PTS/PJ.`,
+  ];
+  const plainInsights = computePlainComparisonInsights('team', rows);
+  const scopeTag = scope === 'playoffs' ? 'Playoffs' : 'Temporada Regular';
+
+  return {
+    name: history.teamName,
+    subtitle: `${history.teamAbbr} · Historia ${history.startYear}–${history.endYear} (${scopeTag} · ${history.championships} anillos)`,
+    id: history.teamId,
+    countA: sideA.gp,
+    countB: sideB.gp,
+    spanA: sideA.label,
+    spanB: sideB.label,
+    trendSeries: pool.slice(-20).map((s) => round1(s.winPct * 100)),
+    trendRefValue: round1(sideB.winPct),
+    trendLabel: '% Victorias últimos cursos históricos vs Referencia B',
+    trendSignedZero: false,
+    rows,
+    insights,
+    plainInsights,
+  };
+}
+
 export function RangeComparatorView({
   players,
   teams,
@@ -110,6 +447,7 @@ export function RangeComparatorView({
   onInspectEntity,
   onAddExternalPlayer,
 }: RangeComparatorViewProps) {
+  const { isMetricAllowed } = useExperienceMetrics();
   const [entityType, setEntityType] = useState<'player' | 'team'>(initialEntityType);
   const [selectedId, setSelectedId] = useState<string>(() => {
     if (initialEntityId) return initialEntityId;
@@ -122,6 +460,14 @@ export function RangeComparatorView({
   const [remotePlayers, setRemotePlayers] = useState<SearchPlayerResult[]>([]);
   const [searchingRemote, setSearchingRemote] = useState(false);
   const [importingId, setImportingId] = useState<string | null>(null);
+  const [compViewMode, setCompViewMode] = useState<'slices' | 'historical'>('slices');
+  const [histScope, setHistScope] = useState<CareerScope>('regular');
+  const [histSeasonA, setHistSeasonA] = useState<string>('');
+  const [histSeasonB, setHistSeasonB] = useState<string>('__CAREER_AVG__');
+  const [playerHistory, setPlayerHistory] = useState<PlayerCareerProfile | null>(null);
+  const [teamHistory, setTeamHistory] = useState<TeamCareerHistory | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
   const [metricLayer, setMetricLayer] = useState<'all' | 'basic' | 'advanced'>(
     experienceMode === 'simple' ? 'basic' : 'all'
   );
@@ -283,7 +629,143 @@ export function RangeComparatorView({
     endDate: '',
   });
 
+  // Lazy-load historical profile when Temporadas Históricas mode is active
+  useEffect(() => {
+    if (compViewMode !== 'historical') return;
+    let cancelled = false;
+
+    if (entityType === 'player' && activePlayer) {
+      const hit = compPlayerCareerCache.get(activePlayer.id);
+      if (hit) {
+        setPlayerHistory(hit);
+        setLoadingHistory(false);
+        return;
+      }
+      setLoadingHistory(true);
+      fetch(`/api/nba/history/player/${encodeURIComponent(activePlayer.id)}`)
+        .then((r) => (r.ok ? (r.json() as Promise<PlayerCareerProfile>) : null))
+        .then((json) => {
+          if (cancelled) return;
+          if (json) compPlayerCareerCache.set(activePlayer.id, json);
+          setPlayerHistory(json);
+        })
+        .catch(() => {
+          if (!cancelled) setPlayerHistory(null);
+        })
+        .finally(() => {
+          if (!cancelled) setLoadingHistory(false);
+        });
+    } else if (entityType === 'team' && activeTeam) {
+      const key = activeTeam.abbreviation;
+      const hit = compTeamCareerCache.get(key);
+      if (hit) {
+        setTeamHistory(hit);
+        setLoadingHistory(false);
+        return;
+      }
+      setLoadingHistory(true);
+      fetch(`/api/nba/history/team/${encodeURIComponent(key)}`)
+        .then((r) => (r.ok ? (r.json() as Promise<TeamCareerHistory>) : null))
+        .then((json) => {
+          if (cancelled) return;
+          if (json) compTeamCareerCache.set(key, json);
+          setTeamHistory(json);
+        })
+        .catch(() => {
+          if (!cancelled) setTeamHistory(null);
+        })
+        .finally(() => {
+          if (!cancelled) setLoadingHistory(false);
+        });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [compViewMode, entityType, activePlayer, activeTeam]);
+
+  // Keep selected historical seasons valid when switching entity or scope
+  const historicalSeasonOptions = useMemo(() => {
+    if (entityType === 'player' && playerHistory) {
+      const bucket = histScope === 'playoffs' ? playerHistory.playoffs : playerHistory.regular;
+      const seasons = [...(bucket?.seasons || [])].reverse();
+      return {
+        special: [
+          { value: '__PEAK__', label: '★ Mejor Temporada (Peak)' },
+          { value: '__CAREER_AVG__', label: 'Ø Media de Carrera Completa' },
+        ],
+        seasons: seasons.map((s) => ({
+          value: s.season,
+          label: `${s.season} · ${s.teamAbbr} · ${s.gp} PJ · ${s.ptsPg.toFixed(1)} PTS / ${s.rebPg.toFixed(1)} REB / ${s.astPg.toFixed(1)} AST`,
+        })),
+      };
+    }
+    if (entityType === 'team' && teamHistory) {
+      const pool =
+        histScope === 'playoffs'
+          ? teamHistory.playoffSeasons
+          : teamHistory.regularSeasons;
+      const seasons = [...pool].reverse();
+      return {
+        special: [
+          { value: '__BEST__', label: '★ Mejor Temporada Histórica' },
+          { value: '__FRANCHISE_AVG__', label: 'Ø Promedio Histórico Franquicia' },
+        ],
+        seasons: seasons.map((s) => ({
+          value: s.season,
+          label:
+            histScope === 'playoffs'
+              ? `${s.season} · PO ${s.poWins}-${s.poLosses}${s.finalsAppearance === 'LEAGUE CHAMPION' ? ' · Campeón ★' : ''}`
+              : `${s.season} · ${s.wins}-${s.losses} (${(s.winPct * 100).toFixed(1)}%)${s.finalsAppearance === 'LEAGUE CHAMPION' ? ' · Campeón ★' : ''}`,
+        })),
+      };
+    }
+    return { special: [], seasons: [] };
+  }, [entityType, playerHistory, teamHistory, histScope]);
+
+  useEffect(() => {
+    if (compViewMode !== 'historical') return;
+    const validValues = new Set([
+      ...historicalSeasonOptions.special.map((o) => o.value),
+      ...historicalSeasonOptions.seasons.map((o) => o.value),
+    ]);
+    if (validValues.size === 0) return;
+
+    const latestSeason = historicalSeasonOptions.seasons[0]?.value || '';
+    const defaultB =
+      entityType === 'player'
+        ? historicalSeasonOptions.seasons[1]?.value || '__CAREER_AVG__'
+        : historicalSeasonOptions.seasons[1]?.value || '__FRANCHISE_AVG__';
+
+    if (!histSeasonA || !validValues.has(histSeasonA)) {
+      setHistSeasonA(latestSeason || historicalSeasonOptions.special[0]?.value || '');
+    }
+    if (!histSeasonB || !validValues.has(histSeasonB)) {
+      setHistSeasonB(defaultB);
+    }
+  }, [compViewMode, entityType, historicalSeasonOptions, histSeasonA, histSeasonB]);
+
   const comparison = useMemo(() => {
+    if (compViewMode === 'historical') {
+      if (entityType === 'player' && playerHistory) {
+        return buildHistoricalPlayerComparison(
+          playerHistory,
+          histScope,
+          histSeasonA || '__PEAK__',
+          histSeasonB || '__CAREER_AVG__'
+        );
+      }
+      if (entityType === 'team' && teamHistory) {
+        return buildHistoricalTeamComparison(
+          teamHistory,
+          histScope,
+          histSeasonA || '__BEST__',
+          histSeasonB || '__FRANCHISE_AVG__'
+        );
+      }
+      return null;
+    }
+
     if (entityType === 'player' && activePlayer) {
       const sliceA = sliceGamesByRange(activePlayer.games, rangeA);
       const sliceB = sliceGamesByRange(activePlayer.games, rangeB);
@@ -353,7 +835,19 @@ export function RangeComparatorView({
     }
 
     return null;
-  }, [entityType, activePlayer, activeTeam, rangeA, rangeB]);
+  }, [
+    compViewMode,
+    entityType,
+    activePlayer,
+    activeTeam,
+    rangeA,
+    rangeB,
+    playerHistory,
+    teamHistory,
+    histScope,
+    histSeasonA,
+    histSeasonB,
+  ]);
 
   const getRowBenchmark = (key: string): MetricBenchmark | undefined => {
     if (entityType === 'player') {
@@ -411,6 +905,11 @@ export function RangeComparatorView({
   };
 
   const swapRanges = () => {
+    if (compViewMode === 'historical') {
+      setHistSeasonA(histSeasonB);
+      setHistSeasonB(histSeasonA);
+      return;
+    }
     setRangeA(rangeB);
     setRangeB(rangeA);
   };
@@ -420,11 +919,22 @@ export function RangeComparatorView({
       ? comparison?.plainInsights || []
       : comparison?.insights || [];
 
+  const allowedComparisonRows = useMemo(
+    () => (comparison?.rows || []).filter((r) => isMetricAllowed(r.key)),
+    [comparison, isMetricAllowed]
+  );
+
+  useEffect(() => {
+    if (experienceMode === 'simple') {
+      setMetricLayer('all');
+    }
+  }, [experienceMode]);
+
   const handleBuildRangeSnapshot = async () => {
     if (!comparison) {
       throw new Error('Sin comparativa activa');
     }
-    const visibleLayerRows = comparison.rows.filter(
+    const visibleLayerRows = allowedComparisonRows.filter(
       (r) => metricLayer === 'all' || r.group === metricLayer
     );
     const subjectTeamAbbr =
@@ -451,6 +961,12 @@ export function RangeComparatorView({
       categoryTag: 'COMPARADOR DE TRAMOS TEMPORALES',
       title: `${comparison.name} — Evolución entre Tramos`,
       subtitle: comparison.subtitle,
+      editorialVerdictLabel: 'VEREDICTO EDITORIAL · EVOLUCIÓN ENTRE TRAMOS',
+      editorialVerdictTone:
+        winsA > winsB ? 'positive' : winsB > winsA ? 'warning' : 'accent',
+      editorialVerdict:
+        [activeTakeaways[0], activeTakeaways[1]].filter(Boolean).join(' · ') ||
+        `${comparison.name}: Tramo A (${comparison.countA} PJ) mejora en ${winsA} de ${visibleLayerRows.length} métricas respecto a Tramo B (${comparison.countB} PJ).`,
       verdictLabel: 'LECTURA CLAVE DEL CAMBIO DE TRAMO',
       verdictPrimary:
         activeTakeaways[0] ||
@@ -640,6 +1156,33 @@ export function RangeComparatorView({
                 }`}
               >
                 Comparar Equipo
+              </button>
+            </div>
+
+            {/* Mode Switcher: Tramos 2026-27 vs Temporadas Históricas */}
+            <div className="flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg self-start shrink-0">
+              <button
+                type="button"
+                onClick={() => setCompViewMode('slices')}
+                className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  compViewMode === 'slices'
+                    ? 'bg-sky-500/20 text-sky-300 font-semibold'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Tramos 2026-27
+              </button>
+              <button
+                type="button"
+                onClick={() => setCompViewMode('historical')}
+                className={`min-h-[28px] inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  compViewMode === 'historical'
+                    ? 'bg-orange-500/20 text-orange-300 font-semibold'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <History className="w-3.5 h-3.5" />
+                <span>Temporadas Históricas</span>
               </button>
             </div>
 
@@ -881,10 +1424,114 @@ export function RangeComparatorView({
             className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#0B1120] hover:bg-[#182338] border border-[#1E293B] rounded-lg text-slate-200 transition-colors whitespace-nowrap shrink-0 self-start lg:self-auto"
           >
             <ArrowLeftRight className="w-3.5 h-3.5 text-orange-400" />
-            <span>Intercambiar Tramo A y Tramo B</span>
+            <span>
+              {compViewMode === 'historical'
+                ? 'Intercambiar Temporada A y B'
+                : 'Intercambiar Tramo A y Tramo B'}
+            </span>
           </button>
         </div>
 
+        {compViewMode === 'historical' ? (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs text-slate-300">
+                <History className="w-4 h-4 text-orange-400" />
+                <span>
+                  Enfrenta cualquier curso de la carrera (o su Peak / Media histórica)
+                </span>
+              </div>
+              <div className="flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg">
+                {(
+                  [
+                    { id: 'regular', label: 'Temporada Regular' },
+                    { id: 'playoffs', label: 'Playoffs' },
+                  ] as const
+                ).map((sc) => (
+                  <button
+                    key={sc.id}
+                    type="button"
+                    onClick={() => setHistScope(sc.id)}
+                    className={`min-h-[26px] px-2.5 py-0.5 text-xs font-medium rounded-md transition-colors ${
+                      histScope === sc.id
+                        ? 'bg-orange-500 text-slate-950 font-semibold'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {sc.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {loadingHistory ? (
+              <div className="py-5 flex items-center justify-center gap-2 text-xs text-slate-300 bg-[#0B1120] border border-[#1E293B] rounded-lg">
+                <Loader2 className="w-4 h-4 text-orange-400 animate-spin" />
+                <span>Cargando temporadas históricas NBA...</span>
+              </div>
+            ) : historicalSeasonOptions.seasons.length === 0 ? (
+              <div className="py-5 px-4 text-center text-xs text-amber-300 bg-[#0B1120] border border-[#1E293B] rounded-lg">
+                No hay partidos registrados en{' '}
+                {histScope === 'playoffs' ? 'Playoffs' : 'Temporada Regular'} para esta selección.
+                Prueba cambiando el conmutador a Temporada Regular.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="block text-xs font-medium text-orange-400">
+                    Temporada A (Curso foco — ej. 2026-27 o año concreto)
+                  </label>
+                  <select
+                    value={histSeasonA}
+                    onChange={(e) => setHistSeasonA(e.target.value)}
+                    className="w-full h-9 px-3 text-xs font-mono bg-[#0B1120] border border-[#1E293B] rounded-md text-slate-100 focus:outline-none focus:border-orange-500"
+                  >
+                    <optgroup label="Referencias agregadas">
+                      {historicalSeasonOptions.special.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Temporadas NBA">
+                      {historicalSeasonOptions.seasons.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-xs font-medium text-slate-300">
+                    Temporada B (Base histórica — ej. Media de Carrera, Peak u otro año)
+                  </label>
+                  <select
+                    value={histSeasonB}
+                    onChange={(e) => setHistSeasonB(e.target.value)}
+                    className="w-full h-9 px-3 text-xs font-mono bg-[#0B1120] border border-[#1E293B] rounded-md text-slate-100 focus:outline-none focus:border-orange-500"
+                  >
+                    <optgroup label="Referencias agregadas">
+                      {historicalSeasonOptions.special.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Temporadas NBA">
+                      {historicalSeasonOptions.seasons.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  </select>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Tramo A */}
           <div className="space-y-2">
@@ -1000,6 +1647,7 @@ export function RangeComparatorView({
             )}
           </div>
         </div>
+        )}
 
         {/* Automated Takeaways */}
         {comparison && activeTakeaways.length > 0 && (
@@ -1020,59 +1668,59 @@ export function RangeComparatorView({
 
       {/* Row 3: Homogeneous Comparison Table with Basic / Advanced Layer Filter */}
       <div className="bg-[#131C2E] border border-[#1E293B] rounded-lg overflow-hidden">
-        {comparison && comparison.rows.length > 0 && (
+        {comparison && allowedComparisonRows.length > 0 && (
           <div className="px-4 py-3 border-b border-[#1E293B] bg-[#0F172A]/40 flex flex-wrap items-center justify-between gap-3">
             {experienceMode === 'simple' ? (
               <span className="text-xs text-slate-300">
-                Mostrando estadísticas fáciles de leer con referencia frente a la{' '}
+                Mostrando{' '}
+                <strong className="text-slate-100 font-mono tabular-nums">
+                  {allowedComparisonRows.length}
+                </strong>{' '}
+                estadísticas básicas activas en Modo Sencillo frente a la{' '}
                 <strong className="text-slate-100">Media de la NBA</strong>.
               </span>
             ) : (
               <span className="text-xs text-slate-400">
                 Capas estadísticas comparadas:{' '}
                 <strong className="text-slate-200 font-mono tabular-nums">
-                  {comparison.rows.length}
+                  {allowedComparisonRows.length}
                 </strong>{' '}
-                métricas ({comparison.rows.filter((r) => r.group === 'basic').length} básicas ·{' '}
-                {comparison.rows.filter((r) => r.group === 'advanced').length} avanzadas y 4 factores)
+                métricas ({allowedComparisonRows.filter((r) => r.group === 'basic').length} básicas ·{' '}
+                {allowedComparisonRows.filter((r) => r.group === 'advanced').length} avanzadas y 4 factores)
               </span>
             )}
 
             <div className="flex flex-wrap items-center gap-2 max-w-full">
-              <div className="flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
-                {(
-                  [
-                    {
-                      id: 'basic',
-                      label:
-                        experienceMode === 'simple'
-                          ? `Esenciales (${comparison.rows.filter((r) => r.group === 'basic').length})`
-                          : `1. Básicas (${comparison.rows.filter((r) => r.group === 'basic').length})`,
-                    },
-                    {
-                      id: 'advanced',
-                      label:
-                        experienceMode === 'simple'
-                          ? `Avanzadas (${comparison.rows.filter((r) => r.group === 'advanced').length})`
-                          : `2. Avanzadas y 4 Factores (${comparison.rows.filter((r) => r.group === 'advanced').length})`,
-                    },
-                    { id: 'all', label: `Todas (${comparison.rows.length})` },
-                  ] as const
-                ).map((tab) => (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => setMetricLayer(tab.id)}
-                    className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                      metricLayer === tab.id
-                        ? 'bg-orange-500 text-slate-950 font-semibold'
-                        : 'text-slate-300 hover:text-white'
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
+              {experienceMode === 'advanced' && (
+                <div className="flex items-center gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg overflow-x-auto no-scrollbar max-w-full">
+                  {(
+                    [
+                      {
+                        id: 'basic',
+                        label: `1. Básicas (${allowedComparisonRows.filter((r) => r.group === 'basic').length})`,
+                      },
+                      {
+                        id: 'advanced',
+                        label: `2. Avanzadas y 4 Factores (${allowedComparisonRows.filter((r) => r.group === 'advanced').length})`,
+                      },
+                      { id: 'all', label: `Todas (${allowedComparisonRows.length})` },
+                    ] as const
+                  ).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setMetricLayer(tab.id)}
+                      className={`min-h-[28px] px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                        metricLayer === tab.id
+                          ? 'bg-orange-500 text-slate-950 font-semibold'
+                          : 'text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              )}
 
               {experienceMode === 'simple' && (
                 <button
@@ -1108,7 +1756,7 @@ export function RangeComparatorView({
           <>
             {/* Mobile Head-to-Head Comparison Cards (< md) */}
             <div className="md:hidden divide-y divide-[#1E293B]">
-              {comparison.rows
+              {allowedComparisonRows
                 .filter((r) => metricLayer === 'all' || r.group === metricLayer)
                 .map((r) => {
                   const isGood = r.inverseGood ? r.absDiff <= 0 : r.absDiff >= 0;
@@ -1310,7 +1958,7 @@ export function RangeComparatorView({
                 </thead>
                 <tbody className="divide-y divide-[#1E293B] text-xs lg:text-sm">
                   {(() => {
-                    const baseRows = comparison.rows.filter(
+                    const baseRows = allowedComparisonRows.filter(
                       (r) => metricLayer === 'all' || r.group === metricLayer
                     );
                     const displayRows = !compSortKey

@@ -1,5 +1,6 @@
 import type {
   AnomalySignal,
+  AutoStreaksConfigValues,
   ComparisonMetricRow,
   ConsistencyEntry,
   PlayerGameLog,
@@ -14,6 +15,7 @@ import type {
   WindowComparisonStrip,
   WindowSize,
 } from '../types/nba';
+import { detectConfigurableActiveStreaks } from './autoStreaksEngine';
 
 export function mean(values: number[]): number {
   if (values.length === 0) return 0;
@@ -1354,6 +1356,138 @@ export function detectAnomalies(
         activeStreakCount: teamStreak ? teamStreak.count : 0,
       });
     }
+
+    // E) Basic Team Scoring (Puntos a favor / partido — Modo Sencillo)
+    const ptsForSeries = games.map((g) => g.pointsFor);
+    const basePtsFor = mean(ptsForSeries);
+    const sdPtsFor = Math.max(stdDev(ptsForSeries), 7.0);
+    const winPtsFor = mean(winGames.map((g) => g.pointsFor));
+    const ptsForDelta = winPtsFor - basePtsFor;
+    const ptsForZ = ptsForDelta / sdPtsFor;
+    const ptsForPct = (ptsForDelta / Math.max(90, basePtsFor)) * 100;
+
+    if (
+      Math.abs(ptsForDelta) >= Math.max(5.5, minPctDelta * 0.34) &&
+      Math.abs(ptsForZ) >= minZScore * 0.65
+    ) {
+      signals.push({
+        id: `team-${team.id}-pointsFor`,
+        entityType: 'team',
+        entityId: team.id,
+        entityName: team.name,
+        subtitle,
+        teamAbbr: team.abbreviation,
+        category: 'team_shift',
+        categoryLabel:
+          ptsForDelta > 0 ? 'Disparo anotador (Equipo)' : 'Sequía anotadora (Equipo)',
+        metricKey: 'pointsFor',
+        metricLabel: 'Puntos anotados / partido',
+        baselineAvg: round1(basePtsFor),
+        windowAvg: round1(winPtsFor),
+        absDelta: round1(ptsForDelta),
+        pctDelta: round1(ptsForPct),
+        zScore: round1(ptsForZ),
+        sampleGames: effWinSize,
+        baselineGames: games.length,
+        sustainabilityLabel:
+          ptsForDelta > 0 ? 'Ritmo anotador al alza' : 'Descenso de puntos propios',
+        sustainabilityTone: ptsForDelta > 0 ? 'solid' : 'negative',
+        contextNote: takeaways[0] || '',
+        takeaways,
+        windows: buildWindowStrip(games, (arr) => mean(arr.map((g) => g.pointsFor))),
+        activeStreakLabel: teamStreak ? teamStreak.streakLabel : null,
+        activeStreakCount: teamStreak ? teamStreak.count : 0,
+      });
+    }
+
+    // F) Basic Team Defense (Puntos recibidos / partido — lower is better — Modo Sencillo)
+    const ptsAgSeries = games.map((g) => g.pointsAgainst);
+    const basePtsAg = mean(ptsAgSeries);
+    const sdPtsAg = Math.max(stdDev(ptsAgSeries), 7.0);
+    const winPtsAg = mean(winGames.map((g) => g.pointsAgainst));
+    const ptsAgDelta = winPtsAg - basePtsAg;
+    const ptsAgZ = ptsAgDelta / sdPtsAg;
+    const ptsAgPct = (ptsAgDelta / Math.max(90, basePtsAg)) * 100;
+
+    if (
+      Math.abs(ptsAgDelta) >= Math.max(5.5, minPctDelta * 0.34) &&
+      Math.abs(ptsAgZ) >= minZScore * 0.65
+    ) {
+      signals.push({
+        id: `team-${team.id}-pointsAgainst`,
+        entityType: 'team',
+        entityId: team.id,
+        entityName: team.name,
+        subtitle,
+        teamAbbr: team.abbreviation,
+        category: 'team_shift',
+        categoryLabel:
+          ptsAgDelta < 0
+            ? 'Muro defensivo (Pts recibidos ↓)'
+            : 'Sangría defensiva (Pts recibidos ↑)',
+        metricKey: 'pointsAgainst',
+        metricLabel: 'Puntos recibidos / partido',
+        baselineAvg: round1(basePtsAg),
+        windowAvg: round1(winPtsAg),
+        absDelta: round1(ptsAgDelta),
+        pctDelta: round1(ptsAgPct),
+        zScore: round1(ptsAgZ),
+        sampleGames: effWinSize,
+        baselineGames: games.length,
+        sustainabilityLabel:
+          ptsAgDelta < 0 ? 'Encajando muchos menos puntos' : 'Concediendo demasiados puntos',
+        sustainabilityTone: ptsAgDelta < 0 ? 'solid' : 'negative',
+        contextNote: takeaways[0] || '',
+        takeaways,
+        windows: buildWindowStrip(games, (arr) => mean(arr.map((g) => g.pointsAgainst))),
+        activeStreakLabel: teamStreak ? teamStreak.streakLabel : null,
+        activeStreakCount: teamStreak ? teamStreak.count : 0,
+      });
+    }
+
+    // G) Basic Team Margin (Diferencial de puntos — Modo Sencillo)
+    const diffSeries = games.map((g) => g.differential);
+    const baseDiff = mean(diffSeries);
+    const sdDiff = Math.max(stdDev(diffSeries), 7.5);
+    const winDiff = mean(winGames.map((g) => g.differential));
+    const diffDelta = winDiff - baseDiff;
+    const diffZ = diffDelta / sdDiff;
+    const pseudoDiffPct = (diffDelta / Math.max(8, Math.abs(baseDiff) + 6)) * 100;
+
+    if (
+      Math.abs(diffDelta) >= Math.max(5.2, minPctDelta * 0.34) &&
+      (Math.abs(diffZ) >= minZScore * 0.64 ||
+        Math.abs(pseudoDiffPct) >= minPctDelta * 1.35)
+    ) {
+      signals.push({
+        id: `team-${team.id}-differential`,
+        entityType: 'team',
+        entityId: team.id,
+        entityName: team.name,
+        subtitle,
+        teamAbbr: team.abbreviation,
+        category: 'team_shift',
+        categoryLabel:
+          diffDelta > 0 ? 'Despegue en Margen de Puntos' : 'Caída en Margen de Puntos',
+        metricKey: 'differential',
+        metricLabel: 'Margen de puntos (+/-)',
+        baselineAvg: round1(baseDiff),
+        windowAvg: round1(winDiff),
+        absDelta: round1(diffDelta),
+        pctDelta: round1(pseudoDiffPct),
+        zScore: round1(diffZ),
+        sampleGames: effWinSize,
+        baselineGames: games.length,
+        sustainabilityLabel:
+          diffDelta > 0 ? 'Victorias más amplias recientemente' : 'Bache en el marcador',
+        sustainabilityTone: diffDelta > 0 ? 'solid' : 'negative',
+        contextNote: takeaways[0] || '',
+        takeaways,
+        windows: buildWindowStrip(games, (arr) => mean(arr.map((g) => g.differential))),
+        activeStreakLabel: teamStreak ? teamStreak.streakLabel : null,
+        activeStreakCount: teamStreak ? teamStreak.count : 0,
+      });
+    }
   }
 
   return signals.sort((a, b) => Math.abs(b.zScore) - Math.abs(a.zScore));
@@ -1369,10 +1503,30 @@ export interface SeasonReferenceSlices {
 export function detectActiveStreaks(
   players: PlayerSummary[],
   teams: TeamSummary[],
+  minStreakGames = 5,
+  windowSize: WindowSize = 5,
+  seasonSlices?: SeasonReferenceSlices,
+  streaksConfig?: AutoStreaksConfigValues | null
+): StreakEntry[] {
+  return detectConfigurableActiveStreaks(
+    players,
+    teams,
+    minStreakGames,
+    windowSize,
+    seasonSlices,
+    streaksConfig
+  );
+}
+
+// Legacy reference kept only if needed internally
+function _legacyUnusedStreaksReference(
+  players: PlayerSummary[],
+  teams: TeamSummary[],
   minStreakGames: number,
   windowSize: WindowSize = 5,
   seasonSlices?: SeasonReferenceSlices
 ): StreakEntry[] {
+  void _legacyUnusedStreaksReference;
   const streaks: StreakEntry[] = [];
 
   const p27Map = new Map<string, PlayerGameLog[]>();

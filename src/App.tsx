@@ -20,12 +20,19 @@ import {
   Check,
   ChevronDown,
   Compass,
+  Database,
+  DollarSign,
+  FileText,
   Flame,
+  GraduationCap,
+  HeartPulse,
   LayoutGrid,
+  LayoutList,
   Link2,
   Lock,
   Menu,
-  Palette,
+  PanelLeftClose,
+  PanelLeftOpen,
   RefreshCw,
   Search,
   Shield,
@@ -41,11 +48,17 @@ import {
 import type {
   ActiveSection,
   AnomalySignal,
+  AutoStreaksConfig,
   AwardCategoryId,
   AwardSeasonScope,
   BootstrapPayload,
   ConsistencyEntry,
+  DraftHistoryPayload,
+  ExperienceMetricsConfig,
   ExperienceMode,
+  FutureDraftPicksPayload,
+  InjuriesRotationPayload,
+  LeagueContractsPayload,
   InspectorDefaultKpisConfig,
   MilestoneNotificationsPayload,
   MilestonesPayload,
@@ -75,11 +88,19 @@ import {
   type LeagueBenchmarks,
 } from './utils/humanize';
 import { LiveGamedayBanner } from './components/LiveGamedayBanner';
+import { BroadcastScoreboardRibbon } from './components/BroadcastScoreboardRibbon';
 import { MetricInfoTooltip } from './components/MetricUiHelpers';
 import { TeamLogo } from './components/NbaVisuals';
 import { GuidedHomeView } from './components/GuidedHomeView';
 import { NotificationCenterPopover } from './components/NotificationCenterPopover';
 import { useThemeStyle } from './context/ThemeStyleContext';
+import { ExperienceMetricsProvider } from './context/ExperienceMetricsContext';
+import { DEFAULT_EXPERIENCE_METRICS_CONFIG } from './utils/experienceMetricsCatalog';
+import {
+  DEFAULT_SIDEBAR_MENU_CONFIG,
+  readLocalSidebarMenuConfig,
+  type SidebarMenuConfig,
+} from './utils/sidebarMenuConfig';
 
 type PreloadableLazyComponent<T extends ComponentType<any>> =
   LazyExoticComponent<T> & {
@@ -112,6 +133,21 @@ function lazyWithPreload<T extends ComponentType<any>>(
 const GameDayAnalyzerView = lazyWithPreload(() =>
   import('./components/GameDayAnalyzerView').then((m) => ({
     default: m.GameDayAnalyzerView,
+  }))
+);
+const InjuriesRotationView = lazyWithPreload(() =>
+  import('./components/InjuriesRotationView').then((m) => ({
+    default: m.InjuriesRotationView,
+  }))
+);
+const ContractsHubView = lazyWithPreload(() =>
+  import('./components/ContractsHubView').then((m) => ({
+    default: m.ContractsHubView,
+  }))
+);
+const DraftHubView = lazyWithPreload(() =>
+  import('./components/DraftHubView').then((m) => ({
+    default: m.DraftHubView,
   }))
 );
 const AnomalyRadarView = lazyWithPreload(() =>
@@ -194,6 +230,31 @@ const AdminMilestoneNotificationsPanel = lazyWithPreload(() =>
     default: m.AdminMilestoneNotificationsPanel,
   }))
 );
+const AdminEditorialConfigPanel = lazyWithPreload(() =>
+  import('./components/AdminEditorialConfigPanel').then((m) => ({
+    default: m.AdminEditorialConfigPanel,
+  }))
+);
+const AdminStreaksConfigPanel = lazyWithPreload(() =>
+  import('./components/AdminStreaksConfigPanel').then((m) => ({
+    default: m.AdminStreaksConfigPanel,
+  }))
+);
+const AdminExperienceMetricsPanel = lazyWithPreload(() =>
+  import('./components/AdminExperienceMetricsPanel').then((m) => ({
+    default: m.AdminExperienceMetricsPanel,
+  }))
+);
+const AdminDataSourcesPanel = lazyWithPreload(() =>
+  import('./components/AdminDataSourcesPanel').then((m) => ({
+    default: m.AdminDataSourcesPanel,
+  }))
+);
+const AdminSidebarMenuPanel = lazyWithPreload(() =>
+  import('./components/AdminSidebarMenuPanel').then((m) => ({
+    default: m.AdminSidebarMenuPanel,
+  }))
+);
 const EntityInspectorDrawer = lazyWithPreload(() =>
   import('./components/EntityInspectorDrawer').then((m) => ({
     default: m.EntityInspectorDrawer,
@@ -211,6 +272,15 @@ function preloadSectionChunk(section: ActiveSection): void {
       break;
     case 'gameday':
       void GameDayAnalyzerView.preload();
+      break;
+    case 'injuries':
+      void InjuriesRotationView.preload();
+      break;
+    case 'contracts':
+      void ContractsHubView.preload();
+      break;
+    case 'draft':
+      void DraftHubView.preload();
       break;
     case 'anomalies':
       void AnomalyRadarView.preload();
@@ -249,6 +319,10 @@ function preloadSectionChunk(section: ActiveSection): void {
       void FantasyEspnAssistantView.preload();
       void AdminSecurityConfigPanel.preload();
       void AdminMilestoneNotificationsPanel.preload();
+      void AdminEditorialConfigPanel.preload();
+      void AdminExperienceMetricsPanel.preload();
+      void AdminDataSourcesPanel.preload();
+      void AdminSidebarMenuPanel.preload();
       break;
   }
 }
@@ -341,13 +415,31 @@ import {
 } from './utils/bootstrapWireCodec';
 import {
   CLIENT_DEFAULT_INSPECTOR_KPI_CONFIG,
+  fetchPublicAutoStreaksConfig,
+  fetchPublicExperienceMetricsConfig,
   fetchPublicInspectorKpiDefaults,
   fetchPublicMilestoneNotifications,
+  fetchPublicSidebarMenuConfig,
   fetchPublicWebFeatureFlags,
   loginAdminWithPasscode,
   logoutAdminSession,
   verifyStoredAdminSession,
 } from './utils/adminAuthClient';
+import { DEFAULT_AUTO_STREAKS_CONFIG } from './utils/autoStreaksConfig';
+import {
+  fetchInjuriesReportClient,
+  peekCachedInjuriesReportClient,
+} from './utils/injuriesClient';
+import {
+  fetchLeagueContractsClient,
+  peekCachedContractsClient,
+} from './utils/contractsClient';
+import {
+  fetchDraftHistoryClient,
+  fetchFutureDraftPicksClient,
+  peekCachedDraftHistoryClient,
+  peekCachedFutureDraftPicksClient,
+} from './utils/draftClient';
 
 const STORAGE_THRESHOLDS_KEY = 'courtpulse_nba_thresholds_v1';
 const STORAGE_WATCHLIST_KEY = 'courtpulse_nba_watchlist_v2';
@@ -360,7 +452,7 @@ const DEFAULT_THRESHOLDS: ThresholdSettings = {
   minZScore: 1.2,
   minPctDelta: 16,
   minMinutes: 22,
-  minStreakGames: 3,
+  minStreakGames: 5,
 };
 
 function loadSavedThresholds(): ThresholdSettings {
@@ -463,7 +555,7 @@ function loadSavedExperienceMode(): ExperienceMode {
 }
 
 export default function App() {
-  const { isV2, toggleThemeStyle } = useThemeStyle();
+  const { isV2, isV3, setThemeStyle } = useThemeStyle();
   const initialRoute = useMemo(
     () =>
       parseRouteFromSearch(
@@ -482,6 +574,45 @@ export default function App() {
   );
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [temporalSampleOpen, setTemporalSampleOpen] = useState(false);
+  const [v3SidebarCollapsed, setV3SidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('radarnba_v3_sidebar_collapsed') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [v3ScoreboardOpen, setV3ScoreboardOpen] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem('radarnba_v3_scoreboard_open');
+      return stored === null ? true : stored === '1';
+    } catch {
+      return true;
+    }
+  });
+
+  const handleToggleV3Sidebar = useCallback(() => {
+    setV3SidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('radarnba_v3_sidebar_collapsed', next ? '1' : '0');
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }, []);
+
+  const handleToggleV3Scoreboard = useCallback(() => {
+    setV3ScoreboardOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('radarnba_v3_scoreboard_open', next ? '1' : '0');
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }, []);
   const [seasonMode, setSeasonMode] = useState<SeasonMode>(loadSavedSeasonMode);
   const [settings, setSettings] = useState<ThresholdSettings>(loadSavedThresholds);
   const [watchlistIds, setWatchlistIds] = useState<Set<string>>(loadSavedWatchlist);
@@ -523,6 +654,60 @@ export default function App() {
   const [allPlayersLoaded, setAllPlayersLoaded] = useState(false);
   const [loadingAllPlayers, setLoadingAllPlayers] = useState(false);
   const [scoreboard, setScoreboard] = useState<ScoreboardGame[]>([]);
+  const recentCompletedScoreboard = useMemo(() => {
+    const liveCompleted = scoreboard.filter((g) => Boolean(g.isCompleted));
+    if (liveCompleted.length > 0) {
+      return {
+        date: liveCompleted[0].date || '',
+        games: liveCompleted,
+      };
+    }
+
+    let latestDate = '';
+    for (const tm of teams) {
+      for (const gm of tm.games || []) {
+        const d = String(gm.date || '').slice(0, 10);
+        if (d > latestDate) latestDate = d;
+      }
+    }
+    if (!latestDate) {
+      return { date: '', games: [] as ScoreboardGame[] };
+    }
+
+    const byEventId = new Map<string, ScoreboardGame>();
+    for (const tm of teams) {
+      for (const gm of tm.games || []) {
+        const d = String(gm.date || '').slice(0, 10);
+        if (d !== latestDate) continue;
+        const eid =
+          gm.eventId ||
+          `${d}-${[tm.abbreviation, gm.opponentAbbr].sort().join('-')}`;
+        if (byEventId.has(eid)) continue;
+        const awayAbbr = gm.isHome ? gm.opponentAbbr : tm.abbreviation;
+        const homeAbbr = gm.isHome ? tm.abbreviation : gm.opponentAbbr;
+        const awayScore = gm.isHome ? gm.pointsAgainst : gm.pointsFor;
+        const homeScore = gm.isHome ? gm.pointsFor : gm.pointsAgainst;
+        byEventId.set(eid, {
+          id: eid,
+          date: latestDate,
+          statusText: 'Final',
+          isLive: false,
+          isCompleted: true,
+          awayAbbr,
+          awayName: awayAbbr,
+          awayScore,
+          homeAbbr,
+          homeName: homeAbbr,
+          homeScore,
+        });
+      }
+    }
+
+    return {
+      date: latestDate,
+      games: Array.from(byEventId.values()),
+    };
+  }, [scoreboard, teams]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -531,6 +716,27 @@ export default function App() {
   const [milestonesData, setMilestonesData] = useState<MilestonesPayload | null>(null);
   const [milestonesLoading, setMilestonesLoading] = useState(false);
   const [milestonesError, setMilestonesError] = useState<string | null>(null);
+  const [injuriesData, setInjuriesData] = useState<InjuriesRotationPayload | null>(() =>
+    peekCachedInjuriesReportClient()
+  );
+  const [injuriesLoading, setInjuriesLoading] = useState<boolean>(false);
+  const [injuriesError, setInjuriesError] = useState<string | null>(null);
+  const [contractsData, setContractsData] = useState<LeagueContractsPayload | null>(() =>
+    peekCachedContractsClient()
+  );
+  const [contractsLoading, setContractsLoading] = useState<boolean>(false);
+  const [contractsError, setContractsError] = useState<string | null>(null);
+  const [draftData, setDraftData] = useState<DraftHistoryPayload | null>(() =>
+    peekCachedDraftHistoryClient()
+  );
+  const [draftLoading, setDraftLoading] = useState<boolean>(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [futurePicksData, setFuturePicksData] = useState<FutureDraftPicksPayload | null>(() =>
+    peekCachedFutureDraftPicksClient()
+  );
+  const [futurePicksLoading, setFuturePicksLoading] = useState<boolean>(false);
+  const [futurePicksError, setFuturePicksError] = useState<string | null>(null);
+  const [preselectTradeTeamAbbr, setPreselectTradeTeamAbbr] = useState<string | null>(null);
   const [awardsByScope, setAwardsByScope] = useState<
     Record<AwardSeasonScope, SeasonAwardsPayload | null>
   >({
@@ -553,8 +759,24 @@ export default function App() {
   const dailyChronicleWarmTimerRef = useRef<number | null>(null);
   const [milestoneNotifications, setMilestoneNotifications] =
     useState<MilestoneNotificationsPayload | null>(null);
+  const [autoStreaksConfig, setAutoStreaksConfig] = useState<AutoStreaksConfig>(
+    DEFAULT_AUTO_STREAKS_CONFIG
+  );
+  const [experienceMetricsConfig, setExperienceMetricsConfig] =
+    useState<ExperienceMetricsConfig>(DEFAULT_EXPERIENCE_METRICS_CONFIG);
+  const [sidebarMenuConfig, setSidebarMenuConfig] = useState<SidebarMenuConfig>(
+    () => readLocalSidebarMenuConfig() || DEFAULT_SIDEBAR_MENU_CONFIG
+  );
   const [adminZoneSection, setAdminZoneSection] = useState<
-    'fantasy' | 'thresholds' | 'notifications' | 'web_config'
+    | 'fantasy'
+    | 'thresholds'
+    | 'streaks'
+    | 'experience_metrics'
+    | 'sidebar_menu'
+    | 'notifications'
+    | 'editorial'
+    | 'data_sources'
+    | 'web_config'
   >('fantasy');
   const [passcodeAttempt, setPasscodeAttempt] = useState('');
   const [passcodeErrorMsg, setPasscodeErrorMsg] = useState<string | null>(null);
@@ -646,6 +868,18 @@ export default function App() {
     return subscribeBootstrapSlicesClient(() => {
       setSeasonSliceTick((t) => t + 1);
     });
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void fetchPublicAutoStreaksConfig().then((cfg) => {
+      if (active && cfg) {
+        setAutoStreaksConfig(cfg);
+      }
+    });
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -925,6 +1159,110 @@ export default function App() {
     }
   }, []);
 
+  const fetchInjuriesReport = useCallback(async (isManualRefresh = false) => {
+    setInjuriesError(null);
+    if (!isManualRefresh) {
+      const cached = peekCachedInjuriesReportClient();
+      if (cached) {
+        setInjuriesData(cached);
+        return;
+      }
+      setInjuriesLoading(true);
+    } else {
+      setInjuriesLoading(true);
+    }
+    try {
+      const payload = await fetchInjuriesReportClient(isManualRefresh);
+      setInjuriesData(payload);
+    } catch (err) {
+      setInjuriesError(
+        err instanceof Error
+          ? err.message
+          : 'No se pudo obtener el parte diario de lesiones NBA.'
+      );
+    } finally {
+      setInjuriesLoading(false);
+    }
+  }, []);
+
+  const fetchContractsReport = useCallback(async (isManualRefresh = false) => {
+    setContractsError(null);
+    if (!isManualRefresh) {
+      const cached = peekCachedContractsClient();
+      if (cached) {
+        setContractsData(cached);
+        return;
+      }
+      setContractsLoading(true);
+    } else {
+      setContractsLoading(true);
+    }
+    try {
+      const payload = await fetchLeagueContractsClient(isManualRefresh);
+      setContractsData(payload);
+    } catch (err) {
+      setContractsError(
+        err instanceof Error
+          ? err.message
+          : 'No se pudieron obtener las nóminas y contratos de la NBA.'
+      );
+    } finally {
+      setContractsLoading(false);
+    }
+  }, []);
+
+  const fetchDraftHistory = useCallback(async (isManualRefresh = false) => {
+    setDraftError(null);
+    if (!isManualRefresh) {
+      const cached = peekCachedDraftHistoryClient();
+      if (cached) {
+        setDraftData(cached);
+        return;
+      }
+      setDraftLoading(true);
+    } else {
+      setDraftLoading(true);
+    }
+    try {
+      const payload = await fetchDraftHistoryClient(isManualRefresh);
+      setDraftData(payload);
+    } catch (err) {
+      setDraftError(
+        err instanceof Error
+          ? err.message
+          : 'No se pudo cargar el archivo histórico del Draft NBA.'
+      );
+    } finally {
+      setDraftLoading(false);
+    }
+  }, []);
+
+  const fetchFutureDraftPicks = useCallback(async (isManualRefresh = false) => {
+    setFuturePicksError(null);
+    if (!isManualRefresh) {
+      const cached = peekCachedFutureDraftPicksClient();
+      if (cached) {
+        setFuturePicksData(cached);
+        return;
+      }
+      setFuturePicksLoading(true);
+    } else {
+      setFuturePicksLoading(true);
+    }
+    try {
+      const payload = await fetchFutureDraftPicksClient(isManualRefresh);
+      setFuturePicksData(payload);
+    } catch (err) {
+      setFuturePicksError(
+        err instanceof Error
+          ? err.message
+          : 'No se pudo cargar el inventario de rondas futuras 2027–2033.'
+      );
+    } finally {
+      setFuturePicksLoading(false);
+    }
+  }, []);
+
   const fetchAwards = useCallback(
     async (scope: AwardSeasonScope, isManualRefresh = false) => {
       if (isManualRefresh) {
@@ -980,6 +1318,50 @@ export default function App() {
     void fetchPublicWebFeatureFlags().then((flags) => {
       if (!cancelled) {
         setShowHeroicBadges(Boolean(flags.showHeroicBadges));
+        if (
+          flags.themeStyle === 'classic' ||
+          flags.themeStyle === 'v2_editorial' ||
+          flags.themeStyle === 'v3_broadcast'
+        ) {
+          setThemeStyle(flags.themeStyle);
+        }
+        if (flags.updatedAt > 0) {
+          if (
+            flags.defaultSeasonMode === '2027' ||
+            flags.defaultSeasonMode === '2026' ||
+            flags.defaultSeasonMode === '2025' ||
+            flags.defaultSeasonMode === '2024'
+          ) {
+            setSeasonMode(flags.defaultSeasonMode);
+          }
+          setSettings((prev) => ({
+            ...prev,
+            defaultPlayerMatchWindow:
+              typeof flags.defaultPlayerMatchWindow === 'number'
+                ? flags.defaultPlayerMatchWindow
+                : prev.defaultPlayerMatchWindow,
+            minZScore:
+              typeof flags.minZScore === 'number' ? flags.minZScore : prev.minZScore,
+            minPctDelta:
+              typeof flags.minPctDelta === 'number'
+                ? flags.minPctDelta
+                : prev.minPctDelta,
+            minMinutes:
+              typeof flags.minMinutes === 'number'
+                ? flags.minMinutes
+                : prev.minMinutes,
+          }));
+        }
+      }
+    });
+    void fetchPublicExperienceMetricsConfig().then((cfg) => {
+      if (!cancelled) {
+        setExperienceMetricsConfig(cfg);
+      }
+    });
+    void fetchPublicSidebarMenuConfig().then((cfg) => {
+      if (!cancelled) {
+        setSidebarMenuConfig(cfg);
       }
     });
     void fetchPublicInspectorKpiDefaults().then((cfg) => {
@@ -992,16 +1374,36 @@ export default function App() {
         setMilestoneNotifications(payload);
       }
     });
+    void fetchInjuriesReport(false);
+    void fetchContractsReport(false);
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [setThemeStyle, fetchInjuriesReport, fetchContractsReport]);
 
   useEffect(() => {
     if (activeSection !== 'milestones') return;
     if (milestonesData) return;
     void fetchMilestones(false);
   }, [activeSection, milestonesData, fetchMilestones]);
+
+  useEffect(() => {
+    if (activeSection !== 'contracts') return;
+    if (contractsData) return;
+    void fetchContractsReport(false);
+  }, [activeSection, contractsData, fetchContractsReport]);
+
+  useEffect(() => {
+    if (activeSection !== 'draft') return;
+    if (draftData) return;
+    void fetchDraftHistory(false);
+  }, [activeSection, draftData, fetchDraftHistory]);
+
+  useEffect(() => {
+    if (activeSection !== 'draft' && activeSection !== 'contracts') return;
+    if (futurePicksData) return;
+    void fetchFutureDraftPicks(false);
+  }, [activeSection, futurePicksData, fetchFutureDraftPicks]);
 
   useEffect(() => {
     return () => {
@@ -1057,7 +1459,7 @@ export default function App() {
   const isRefreshIrrelevantView =
     activeSection === 'glossary' ||
     (activeSection === 'awards' && awardsSeasonScope === '2026') ||
-    (!['gameday', 'milestones', 'fantasy_espn', 'awards', 'glossary'].includes(
+    (!['gameday', 'injuries', 'contracts', 'milestones', 'fantasy_espn', 'awards', 'glossary'].includes(
       activeSection
     ) &&
       ['2026', '2025', '2024'].includes(seasonMode));
@@ -1075,6 +1477,8 @@ export default function App() {
     }, 30_000);
 
     void fetchBootstrap(seasonMode, true, allPlayersLoaded);
+    void fetchInjuriesReport(true);
+    void fetchContractsReport(true);
     if (activeSection === 'milestones' || milestonesData) {
       void fetchMilestones(true);
     }
@@ -1090,6 +1494,7 @@ export default function App() {
     isRefreshIrrelevantView,
     refreshCooldownActive,
     fetchBootstrap,
+    fetchInjuriesReport,
     fetchMilestones,
     fetchAwards,
     refreshMilestoneNotifications,
@@ -1572,14 +1977,15 @@ export default function App() {
       detectActiveStreaks(
         players,
         teams,
-        deferredSettings.minStreakGames,
+        autoStreaksConfig.minStreakGames,
         deferredSettings.windowSize,
-        seasonReferenceSlices
+        seasonReferenceSlices,
+        autoStreaksConfig
       ),
     [
       players,
       teams,
-      deferredSettings.minStreakGames,
+      autoStreaksConfig,
       deferredSettings.windowSize,
       seasonReferenceSlices,
     ]
@@ -1640,6 +2046,24 @@ export default function App() {
       id: 'gameday',
       label: 'Analizador de Jornadas',
       icon: CalendarDays,
+    },
+    {
+      id: 'injuries',
+      label: 'Parte de Lesiones',
+      count: injuriesData?.summary.outOrIrCount,
+      icon: HeartPulse,
+    },
+    {
+      id: 'contracts',
+      label: 'Contratos y Trade Machine',
+      count: contractsData?.summary.totalTeams,
+      icon: DollarSign,
+    },
+    {
+      id: 'draft',
+      label: 'Draft NBA',
+      count: draftData?.summary.totalClasses,
+      icon: GraduationCap,
     },
     {
       id: 'anomalies',
@@ -1717,150 +2141,433 @@ export default function App() {
       ? { id: 'fantasy_espn' as const, label: 'Zona Privada · Admin', icon: Shield }
       : navItems.find((n) => n.id === activeSection) || navItems[0];
 
+  const v3NavGroups = useMemo(() => {
+    const byId = new Map(navItems.map((n) => [n.id, n]));
+    const hiddenSet = new Set<string>(sidebarMenuConfig.hiddenIds || []);
+    return sidebarMenuConfig.groups
+      .map((group) => ({
+        id: group.id,
+        label: group.label,
+        items: group.itemIds
+          .filter((id) => id === 'home' || !hiddenSet.has(id))
+          .map((id) => byId.get(id))
+          .filter((item): item is (typeof navItems)[number] => Boolean(item)),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [navItems, sidebarMenuConfig]);
+
+  const orderedVisibleNavItems = useMemo(
+    () => v3NavGroups.flatMap((g) => g.items),
+    [v3NavGroups]
+  );
+
+  const activeGroupLabel = useMemo(() => {
+    if (activeSection === 'fantasy_espn') return 'Sistema';
+    const found = v3NavGroups.find((g) =>
+      g.items.some((item) => item.id === activeSection)
+    );
+    return found?.label || 'RadarNBA';
+  }, [activeSection, v3NavGroups]);
+
+  const liveScoreboardGames = useMemo(
+    () => scoreboard.filter((g) => Boolean(g.isLive)),
+    [scoreboard]
+  );
+
   return (
-    <div className="min-h-screen bg-[#0B1120] text-slate-100 flex">
-      {/* Desktop Sidebar (256px homogeneous navigation) */}
-      <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 bg-[#0F172A] border-r border-[#1E293B] z-30">
-        <div className="h-14 px-5 flex items-center border-b border-[#1E293B]">
-          <span className="font-display text-base font-bold tracking-tight text-slate-100 whitespace-nowrap">
-            {isV2 ? (
-              <>
-                Radar<span className="text-amber-400">NBA</span>
-              </>
-            ) : (
-              'RadarNBA'
-            )}
-          </span>
-        </div>
-
-        {/* Global Detail Level Switcher in Sidebar */}
-        <div className="px-3 py-3 border-b border-[#1E293B] space-y-1.5">
-          <div className="px-1 flex items-center justify-between gap-2">
-            <p className="text-[11px] font-medium text-slate-400">Nivel de detalle</p>
-            {activeSection !== 'glossary' && (
-              <button
-                type="button"
-                onClick={() => handleNavigateSection('glossary')}
-                className="text-[11px] text-orange-400 hover:text-orange-300 font-medium transition-colors whitespace-nowrap"
-              >
-                Guía →
-              </button>
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg">
-            <button
-              type="button"
-              onClick={() => handleChangeExperienceMode('simple')}
-              className={`py-1.5 px-2 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-                experienceMode === 'simple'
-                  ? 'bg-orange-500 text-slate-950 font-semibold'
-                  : 'text-slate-300 hover:text-white'
-              }`}
-            >
-              Sencillo
-            </button>
-            <button
-              type="button"
-              onClick={() => handleChangeExperienceMode('advanced')}
-              className={`py-1.5 px-2 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-                experienceMode === 'advanced'
-                  ? 'bg-orange-500 text-slate-950 font-semibold'
-                  : 'text-slate-300 hover:text-white'
-              }`}
-            >
-              Avanzado
-            </button>
-          </div>
-        </div>
-
-        <nav className="flex-1 px-3 py-3 space-y-1 overflow-y-auto">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const active = activeSection === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onMouseEnter={() => preloadSectionChunk(item.id)}
-                onFocus={() => preloadSectionChunk(item.id)}
-                onClick={() => handleNavigateSection(item.id)}
-                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
-                  active
-                    ? 'bg-orange-500 text-slate-950 font-semibold'
-                    : 'text-slate-300 hover:text-white hover:bg-[#131C2E]'
-                }`}
-              >
-                <span className="flex items-center gap-2.5 truncate">
-                  <Icon className="w-4 h-4 shrink-0" />
-                  <span className="truncate">{item.label}</span>
+    <ExperienceMetricsProvider
+      experienceMode={experienceMode}
+      config={experienceMetricsConfig}
+    >
+      <div className="min-h-screen bg-[#0B1120] text-slate-100 flex">
+      {/* Desktop Sidebar */}
+      {isV3 ? (
+        <aside
+          className={`hidden lg:flex lg:flex-col lg:fixed lg:inset-y-0 bg-[#080E1C] border-r border-slate-400/10 z-30 transition-[width] duration-200 ease-out ${
+            v3SidebarCollapsed ? 'lg:w-[72px]' : 'lg:w-64'
+          }`}
+        >
+          {/* Brand + Collapse Toggle */}
+          <div
+            className={`h-14 flex items-center border-b border-slate-400/10 shrink-0 ${
+              v3SidebarCollapsed ? 'justify-center px-2' : 'justify-between px-4'
+            }`}
+          >
+            {!v3SidebarCollapsed ? (
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="font-display text-base font-bold tracking-tight text-slate-100 whitespace-nowrap">
+                  Radar<span className="text-amber-400">NBA</span>
                 </span>
-                {typeof item.count === 'number' && !loading && (
-                  <span
-                    className={`font-mono tabular-nums text-xs ${
-                      active ? 'text-slate-950/80' : 'text-slate-400'
-                    }`}
-                  >
-                    {item.count}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </nav>
+                <span className="px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-400/25 text-[9px] font-mono font-bold uppercase tracking-wider shrink-0">
+                  3.0
+                </span>
+              </div>
+            ) : null}
 
-        {/* Recent / Live Scoreboard Compact Panel in Sidebar Bottom */}
-        <div className="p-4 border-t border-[#1E293B] space-y-2.5">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span className="font-medium text-slate-300">Marcadores recientes</span>
             <button
               type="button"
-              onClick={() => handleNavigateSection('gameday')}
-              className="text-orange-400 hover:text-orange-300 font-medium transition-colors whitespace-nowrap"
+              onClick={handleToggleV3Sidebar}
+              aria-label={
+                v3SidebarCollapsed
+                  ? 'Expandir barra lateral'
+                  : 'Contraer barra lateral'
+              }
+              title={
+                v3SidebarCollapsed
+                  ? 'Expandir barra lateral'
+                  : 'Contraer barra lateral'
+              }
+              className="w-8 h-8 inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-white hover:bg-[#14213A] transition-colors shrink-0"
             >
-              Analizar →
+              {v3SidebarCollapsed ? (
+                <PanelLeftOpen className="w-4 h-4 text-sky-400" />
+              ) : (
+                <PanelLeftClose className="w-4 h-4" />
+              )}
             </button>
           </div>
-          {scoreboard.length === 0 ? (
-            <p className="text-xs text-slate-500">Sin partidos recientes en agenda.</p>
-          ) : (
-            <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
-              {scoreboard.slice(0, 5).map((g) => (
-                <div
-                  key={g.id}
-                  className="flex items-center justify-between text-xs py-1 border-b border-[#1E293B]/60 last:border-b-0"
+
+          {/* Detail Level Switcher */}
+          {!v3SidebarCollapsed ? (
+            <div className="px-3 py-3 border-b border-slate-400/10 space-y-1.5 shrink-0">
+              <div className="px-1 flex items-center justify-between gap-2">
+                <p className="text-[11px] font-medium text-slate-400">
+                  Nivel de detalle
+                </p>
+                {activeSection !== 'glossary' && (
+                  <button
+                    type="button"
+                    onClick={() => handleNavigateSection('glossary')}
+                    className="text-[11px] text-amber-400 hover:text-amber-300 font-medium transition-colors whitespace-nowrap"
+                  >
+                    Guía →
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-1 p-1 bg-[#060A13] border border-slate-400/10 rounded-lg">
+                <button
+                  type="button"
+                  onClick={() => handleChangeExperienceMode('simple')}
+                  className={`py-1.5 px-2 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                    experienceMode === 'simple'
+                      ? 'bg-orange-500 text-slate-950 font-semibold'
+                      : 'text-slate-300 hover:text-white'
+                  }`}
                 >
-                  <span className="inline-flex items-center gap-1.5 text-slate-300 font-medium whitespace-nowrap">
-                    <TeamLogo abbr={g.awayAbbr} size="xs" />
-                    <span>{g.awayAbbr}</span>
-                    <span className="text-slate-500">@</span>
-                    <TeamLogo abbr={g.homeAbbr} size="xs" />
-                    <span>{g.homeAbbr}</span>
-                  </span>
-                  <span className="font-mono tabular-nums text-slate-400 whitespace-nowrap">
-                    {g.isCompleted || g.isLive
-                      ? `${g.awayScore}-${g.homeScore}`
-                      : g.statusText}
-                  </span>
-                </div>
-              ))}
+                  Sencillo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleChangeExperienceMode('advanced')}
+                  className={`py-1.5 px-2 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                    experienceMode === 'advanced'
+                      ? 'bg-orange-500 text-slate-950 font-semibold'
+                      : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  Avanzado
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="px-2 py-2.5 border-b border-slate-400/10 flex justify-center shrink-0">
+              <button
+                type="button"
+                onClick={() =>
+                  handleChangeExperienceMode(
+                    experienceMode === 'simple' ? 'advanced' : 'simple'
+                  )
+                }
+                title={`Nivel actual: ${
+                  experienceMode === 'simple' ? 'Sencillo' : 'Avanzado'
+                } (pulsa para cambiar)`}
+                className="w-11 h-8 rounded-lg bg-[#0D1526] border border-slate-400/15 hover:border-amber-400/50 text-[10px] font-mono font-bold text-amber-300 transition-colors"
+              >
+                {experienceMode === 'simple' ? 'SENC' : 'AVZ'}
+              </button>
             </div>
           )}
-        </div>
 
-        {/* Discreet Admin Footer Button */}
-        <div className="px-4 py-2 border-t border-[#1E293B] bg-[#0B1120]/70 flex items-center justify-between text-[11px] text-slate-500 shrink-0">
-          <span>RadarNBA</span>
-          <button
-            type="button"
-            onClick={() => handleNavigateSection('fantasy_espn')}
-            className="inline-flex items-center gap-1 text-slate-500 hover:text-orange-400 font-mono transition-colors"
-            title="Zona Admin / Privada"
+          {/* Grouped Navigation */}
+          <nav
+            aria-label="Navegación principal"
+            className={`flex-1 overflow-y-auto ${
+              v3SidebarCollapsed ? 'px-2 py-3 space-y-3' : 'px-3 py-3 space-y-4'
+            }`}
           >
-            <Lock className="w-3 h-3" />
-            <span>Admin</span>
-          </button>
-        </div>
-      </aside>
+            {v3NavGroups.map((group, gIdx) => (
+              <div
+                key={group.id}
+                className={
+                  v3SidebarCollapsed && gIdx > 0
+                    ? 'pt-2.5 border-t border-slate-400/10 space-y-1'
+                    : 'space-y-1'
+                }
+              >
+                {!v3SidebarCollapsed && (
+                  <p className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-[0.11em] text-slate-500">
+                    {group.label}
+                  </p>
+                )}
+
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  const active = activeSection === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      title={
+                        v3SidebarCollapsed
+                          ? `${group.label} · ${item.label}${
+                              typeof item.count === 'number' && !loading
+                                ? ` (${item.count})`
+                                : ''
+                            }`
+                          : undefined
+                      }
+                      aria-label={item.label}
+                      onMouseEnter={() => preloadSectionChunk(item.id)}
+                      onFocus={() => preloadSectionChunk(item.id)}
+                      onClick={() => handleNavigateSection(item.id)}
+                      className={`group relative w-full flex items-center rounded-lg text-[13px] font-medium transition-all whitespace-nowrap ${
+                        v3SidebarCollapsed
+                          ? 'justify-center px-0 py-2.5'
+                          : 'justify-between px-2.5 py-2'
+                      } ${
+                        active
+                          ? 'bg-gradient-to-r from-amber-500/18 via-amber-500/10 to-transparent text-amber-300 font-semibold border border-amber-400/30 shadow-sm'
+                          : 'text-slate-300 hover:text-white hover:bg-[#14213A]/85 border border-transparent'
+                      }`}
+                    >
+                      {active && (
+                        <span
+                          aria-hidden="true"
+                          className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-amber-400"
+                        />
+                      )}
+                      <span
+                        className={`flex items-center min-w-0 ${
+                          v3SidebarCollapsed ? 'justify-center' : 'gap-2.5'
+                        }`}
+                      >
+                        <Icon
+                          className={`w-4 h-4 shrink-0 ${
+                            active
+                              ? 'text-amber-400'
+                              : 'text-slate-400 group-hover:text-slate-200'
+                          }`}
+                        />
+                        {!v3SidebarCollapsed && (
+                          <span className="truncate">{item.label}</span>
+                        )}
+                      </span>
+                      {!v3SidebarCollapsed &&
+                        typeof item.count === 'number' &&
+                        !loading && (
+                          <span
+                            className={`font-mono tabular-nums text-[11px] px-1.5 py-0.5 rounded ${
+                              active
+                                ? 'bg-amber-400/15 text-amber-200'
+                                : 'text-slate-400'
+                            }`}
+                          >
+                            {item.count}
+                          </span>
+                        )}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </nav>
+
+          {/* Clean Discreet Admin Footer */}
+          <div
+            className={`border-t border-slate-400/10 bg-[#060A13]/75 flex items-center text-[11px] text-slate-500 shrink-0 ${
+              v3SidebarCollapsed ? 'justify-center py-2.5 px-2' : 'justify-between px-4 py-2.5'
+            }`}
+          >
+            {!v3SidebarCollapsed && (
+              <span className="font-medium text-slate-400">Broadcast 3.0</span>
+            )}
+            <button
+              type="button"
+              onClick={() => handleNavigateSection('fantasy_espn')}
+              className="inline-flex items-center gap-1 text-slate-400 hover:text-amber-300 font-mono transition-colors"
+              title="Zona Admin / Privada"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              {!v3SidebarCollapsed && <span>Admin</span>}
+            </button>
+          </div>
+        </aside>
+      ) : (
+        <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 bg-[#0F172A] border-r border-[#1E293B] z-30">
+          <div className="h-14 px-5 flex items-center border-b border-[#1E293B]">
+            <span className="font-display text-base font-bold tracking-tight text-slate-100 whitespace-nowrap">
+              {isV2 ? (
+                <>
+                  Radar<span className="text-amber-400">NBA</span>
+                </>
+              ) : (
+                'RadarNBA'
+              )}
+            </span>
+          </div>
+
+          {/* Global Detail Level Switcher in Sidebar */}
+          <div className="px-3 py-3 border-b border-[#1E293B] space-y-1.5">
+            <div className="px-1 flex items-center justify-between gap-2">
+              <p className="text-[11px] font-medium text-slate-400">Nivel de detalle</p>
+              {activeSection !== 'glossary' && (
+                <button
+                  type="button"
+                  onClick={() => handleNavigateSection('glossary')}
+                  className="text-[11px] text-orange-400 hover:text-orange-300 font-medium transition-colors whitespace-nowrap"
+                >
+                  Guía →
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-1 p-1 bg-[#0B1120] border border-[#1E293B] rounded-lg">
+              <button
+                type="button"
+                onClick={() => handleChangeExperienceMode('simple')}
+                className={`py-1.5 px-2 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                  experienceMode === 'simple'
+                    ? 'bg-orange-500 text-slate-950 font-semibold'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                Sencillo
+              </button>
+              <button
+                type="button"
+                onClick={() => handleChangeExperienceMode('advanced')}
+                className={`py-1.5 px-2 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                  experienceMode === 'advanced'
+                    ? 'bg-orange-500 text-slate-950 font-semibold'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                Avanzado
+              </button>
+            </div>
+          </div>
+
+          <nav className="flex-1 px-3 py-3 space-y-1 overflow-y-auto">
+            {orderedVisibleNavItems.map((item) => {
+              const Icon = item.icon;
+              const active = activeSection === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onMouseEnter={() => preloadSectionChunk(item.id)}
+                  onFocus={() => preloadSectionChunk(item.id)}
+                  onClick={() => handleNavigateSection(item.id)}
+                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+                    active
+                      ? 'bg-orange-500 text-slate-950 font-semibold'
+                      : 'text-slate-300 hover:text-white hover:bg-[#131C2E]'
+                  }`}
+                >
+                  <span className="flex items-center gap-2.5 truncate">
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <span className="truncate">{item.label}</span>
+                  </span>
+                  {typeof item.count === 'number' && !loading && (
+                    <span
+                      className={`font-mono tabular-nums text-xs ${
+                        active ? 'text-slate-950/80' : 'text-slate-400'
+                      }`}
+                    >
+                      {item.count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* Recent Completed Scoreboard Compact Panel in Sidebar Bottom */}
+          <div className="p-4 border-t border-[#1E293B] space-y-2.5">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span className="font-medium text-slate-300 truncate">
+                Marcadores recientes
+                {recentCompletedScoreboard.date ? (
+                  <span className="ml-1.5 font-mono text-[10px] text-slate-400">
+                    · {recentCompletedScoreboard.date.slice(5).split('-').reverse().join('/')}
+                  </span>
+                ) : null}
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  recentCompletedScoreboard.date
+                    ? handleOpenGamedayDate(recentCompletedScoreboard.date)
+                    : handleNavigateSection('gameday')
+                }
+                className="text-orange-400 hover:text-orange-300 font-medium transition-colors whitespace-nowrap shrink-0"
+              >
+                Analizar →
+              </button>
+            </div>
+            {recentCompletedScoreboard.games.length === 0 ? (
+              <p className="text-xs text-slate-500">Sin partidos finalizados recientes.</p>
+            ) : (
+              <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                {recentCompletedScoreboard.games.slice(0, 6).map((g) => {
+                  const awayWon = g.awayScore > g.homeScore;
+                  const homeWon = g.homeScore > g.awayScore;
+                  return (
+                    <button
+                      key={g.id}
+                      type="button"
+                      onClick={() =>
+                        g.date
+                          ? handleOpenGamedayDate(g.date)
+                          : handleNavigateSection('gameday')
+                      }
+                      className="w-full flex items-center justify-between text-xs py-1 border-b border-[#1E293B]/60 last:border-b-0 hover:text-orange-300 transition-colors text-left"
+                    >
+                      <span className="inline-flex items-center gap-1.5 text-slate-300 font-medium whitespace-nowrap">
+                        <TeamLogo abbr={g.awayAbbr} size="xs" />
+                        <span className={awayWon ? 'text-slate-100 font-semibold' : 'text-slate-400'}>
+                          {g.awayAbbr}
+                        </span>
+                        <span className="text-slate-500">@</span>
+                        <TeamLogo abbr={g.homeAbbr} size="xs" />
+                        <span className={homeWon ? 'text-slate-100 font-semibold' : 'text-slate-400'}>
+                          {g.homeAbbr}
+                        </span>
+                      </span>
+                      <span className="font-mono tabular-nums text-slate-300 whitespace-nowrap">
+                        {g.awayScore}-{g.homeScore}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Discreet Admin Footer Button */}
+          <div className="px-4 py-2 border-t border-[#1E293B] bg-[#0B1120]/70 flex items-center justify-between text-[11px] text-slate-500 shrink-0">
+            <span>RadarNBA</span>
+            <button
+              type="button"
+              onClick={() => handleNavigateSection('fantasy_espn')}
+              className="inline-flex items-center gap-1 text-slate-500 hover:text-orange-400 font-mono transition-colors"
+              title="Zona Admin / Privada"
+            >
+              <Lock className="w-3 h-3" />
+              <span>Admin</span>
+            </button>
+          </div>
+        </aside>
+      )}
 
       {/* Mobile Navigation Drawer */}
       {mobileMenuOpen && (
@@ -1873,7 +2580,7 @@ export default function App() {
           <div className="relative z-10 w-72 max-w-[85vw] bg-[#0F172A] border-r border-[#1E293B] h-[100dvh] max-h-[100dvh] flex flex-col pb-safe">
             <div className="h-14 px-4 flex items-center justify-between border-b border-[#1E293B] shrink-0">
               <span className="font-display text-base font-bold text-slate-100 whitespace-nowrap">
-                {isV2 ? (
+                {isV2 || isV3 ? (
                   <>
                     Radar<span className="text-amber-400">NBA</span>
                   </>
@@ -1920,69 +2627,134 @@ export default function App() {
               </div>
             </div>
             <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-              {navItems.map((item) => {
-                const Icon = item.icon;
-                const active = activeSection === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onMouseEnter={() => preloadSectionChunk(item.id)}
-                    onFocus={() => preloadSectionChunk(item.id)}
-                    onClick={() => handleNavigateSection(item.id)}
-                    className={`w-full min-h-[44px] flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                      active
-                        ? 'bg-orange-500 text-slate-950 font-semibold'
-                        : 'text-slate-300 hover:bg-[#131C2E] active:bg-[#182338]'
-                    }`}
-                  >
-                    <span className="flex items-center gap-2.5 truncate">
-                      <Icon className="w-4 h-4 shrink-0" />
-                      <span className="truncate">{item.label}</span>
-                    </span>
-                    {typeof item.count === 'number' && !loading && (
-                      <span
-                        className={`font-mono tabular-nums text-xs ${
-                          active ? 'text-slate-950/80' : 'text-slate-400'
-                        }`}
-                      >
-                        {item.count}
+              {isV3 ? (
+                <div className="space-y-3.5">
+                  {v3NavGroups.map((group) => (
+                    <div key={group.id} className="space-y-1">
+                      <p className="px-2.5 text-[10px] font-semibold uppercase tracking-[0.11em] text-slate-500">
+                        {group.label}
+                      </p>
+                      {group.items.map((item) => {
+                        const Icon = item.icon;
+                        const active = activeSection === item.id;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onMouseEnter={() => preloadSectionChunk(item.id)}
+                            onFocus={() => preloadSectionChunk(item.id)}
+                            onClick={() => handleNavigateSection(item.id)}
+                            className={`w-full min-h-[42px] flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                              active
+                                ? 'bg-amber-500/15 border border-amber-400/35 text-amber-300 font-semibold'
+                                : 'text-slate-300 hover:bg-[#131C2E] active:bg-[#182338]'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2.5 truncate">
+                              <Icon className="w-4 h-4 shrink-0" />
+                              <span className="truncate">{item.label}</span>
+                            </span>
+                            {typeof item.count === 'number' && !loading && (
+                              <span
+                                className={`font-mono tabular-nums text-xs ${
+                                  active ? 'text-amber-200' : 'text-slate-400'
+                                }`}
+                              >
+                                {item.count}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                orderedVisibleNavItems.map((item) => {
+                  const Icon = item.icon;
+                  const active = activeSection === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onMouseEnter={() => preloadSectionChunk(item.id)}
+                      onFocus={() => preloadSectionChunk(item.id)}
+                      onClick={() => handleNavigateSection(item.id)}
+                      className={`w-full min-h-[44px] flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                        active
+                          ? 'bg-orange-500 text-slate-950 font-semibold'
+                          : 'text-slate-300 hover:bg-[#131C2E] active:bg-[#182338]'
+                      }`}
+                    >
+                      <span className="flex items-center gap-2.5 truncate">
+                        <Icon className="w-4 h-4 shrink-0" />
+                        <span className="truncate">{item.label}</span>
                       </span>
-                    )}
-                  </button>
-                );
-              })}
+                      {typeof item.count === 'number' && !loading && (
+                        <span
+                          className={`font-mono tabular-nums text-xs ${
+                            active ? 'text-slate-950/80' : 'text-slate-400'
+                          }`}
+                        >
+                          {item.count}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })
+              )}
             </nav>
 
             {/* Mobile Scoreboard Summary inside Drawer */}
             <div className="p-3.5 border-t border-[#1E293B] space-y-2 shrink-0 bg-[#0B1120]/40">
               <div className="flex items-center justify-between text-xs text-slate-400">
-                <span className="font-medium text-slate-300">Marcadores recientes</span>
-                <span className="font-mono tabular-nums">{scoreboard.length} PJ</span>
+                <span className="font-medium text-slate-300">
+                  Marcadores recientes
+                  {recentCompletedScoreboard.date ? (
+                    <span className="ml-1.5 font-mono text-[10px] text-slate-400">
+                      · {recentCompletedScoreboard.date.slice(5).split('-').reverse().join('/')}
+                    </span>
+                  ) : null}
+                </span>
+                <span className="font-mono tabular-nums">
+                  {recentCompletedScoreboard.games.length} PJ
+                </span>
               </div>
-              {scoreboard.length === 0 ? (
-                <p className="text-xs text-slate-500">Sin partidos recientes en agenda.</p>
+              {recentCompletedScoreboard.games.length === 0 ? (
+                <p className="text-xs text-slate-500">Sin partidos finalizados recientes.</p>
               ) : (
                 <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
-                  {scoreboard.slice(0, 5).map((g) => (
-                    <div
-                      key={g.id}
-                      className="flex items-center justify-between text-xs py-1 border-b border-[#1E293B]/60 last:border-b-0"
-                    >
-                      <span className="inline-flex items-center gap-1.5 text-slate-300 font-medium whitespace-nowrap">
-                        <TeamLogo abbr={g.awayAbbr} size="xs" />
-                        <span>{g.awayAbbr}</span>
-                        <span className="text-slate-500">@</span>
-                        <TeamLogo abbr={g.homeAbbr} size="xs" />
-                        <span>{g.homeAbbr}</span>
-                      </span>
-                      <span className="font-mono tabular-nums text-slate-400 whitespace-nowrap">
-                        {g.isCompleted || g.isLive
-                          ? `${g.awayScore}-${g.homeScore}`
-                          : g.statusText}
-                      </span>
-                    </div>
-                  ))}
+                  {recentCompletedScoreboard.games.slice(0, 6).map((g) => {
+                    const awayWon = g.awayScore > g.homeScore;
+                    const homeWon = g.homeScore > g.awayScore;
+                    return (
+                      <button
+                        key={g.id}
+                        type="button"
+                        onClick={() =>
+                          g.date
+                            ? handleOpenGamedayDate(g.date)
+                            : handleNavigateSection('gameday')
+                        }
+                        className="w-full flex items-center justify-between text-xs py-1 border-b border-[#1E293B]/60 last:border-b-0 hover:text-orange-300 transition-colors text-left"
+                      >
+                        <span className="inline-flex items-center gap-1.5 text-slate-300 font-medium whitespace-nowrap">
+                          <TeamLogo abbr={g.awayAbbr} size="xs" />
+                          <span className={awayWon ? 'text-slate-100 font-semibold' : 'text-slate-400'}>
+                            {g.awayAbbr}
+                          </span>
+                          <span className="text-slate-500">@</span>
+                          <TeamLogo abbr={g.homeAbbr} size="xs" />
+                          <span className={homeWon ? 'text-slate-100 font-semibold' : 'text-slate-400'}>
+                            {g.homeAbbr}
+                          </span>
+                        </span>
+                        <span className="font-mono tabular-nums text-slate-300 whitespace-nowrap">
+                          {g.awayScore}-{g.homeScore}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -2005,7 +2777,15 @@ export default function App() {
       )}
 
       {/* Main Content Workspace */}
-      <div className="flex-1 lg:pl-64 min-w-0 flex flex-col">
+      <div
+        className={`flex-1 min-w-0 flex flex-col ${
+          isV3
+            ? `transition-[padding] duration-200 ease-out ${
+                v3SidebarCollapsed ? 'lg:pl-[72px]' : 'lg:pl-64'
+              }`
+            : 'lg:pl-64'
+        }`}
+      >
         {/* Strict Single-Row Contextual Top Header (48px on mobile + 56px bottom nav <= 13% viewport cap) */}
         <header className="sticky top-0 z-20 h-12 lg:h-14 bg-[#0B1120]/95 backdrop-blur-md border-b border-[#1E293B] px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-6">
           <div className="flex items-center gap-1.5 sm:gap-3 min-w-0">
@@ -2019,7 +2799,7 @@ export default function App() {
             </button>
             <div className="flex items-center gap-2 text-sm truncate">
               <span className="text-slate-400 hidden sm:inline whitespace-nowrap">
-                RadarNBA
+                {isV3 ? activeGroupLabel : 'RadarNBA'}
               </span>
               <span className="text-slate-600 hidden sm:inline">/</span>
               <h1 className="font-display font-semibold text-slate-100 truncate text-sm sm:text-base">
@@ -2099,35 +2879,6 @@ export default function App() {
 
             <button
               type="button"
-              onClick={toggleThemeStyle}
-              aria-label={
-                isV2
-                  ? 'Cambiar a Estilo Clásico (v1)'
-                  : 'Cambiar a Estilo Pro 2.0 (Editorial Deportivo)'
-              }
-              title={
-                isV2
-                  ? 'Estilo activo: Pro 2.0 Editorial. Pulsa para volver al Clásico v1.'
-                  : 'Estilo activo: Clásico v1. Pulsa para activar Pro 2.0 Editorial.'
-              }
-              className={`inline-flex items-center justify-center gap-1.5 min-w-[38px] min-h-[36px] sm:min-w-0 px-2.5 sm:px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
-                isV2
-                  ? 'bg-amber-500/15 hover:bg-amber-500/25 border-amber-500/40 text-amber-300'
-                  : 'bg-[#131C2E] hover:bg-[#182338] border-[#1E293B] text-slate-300 hover:text-white'
-              }`}
-            >
-              <Palette
-                className={`w-3.5 h-3.5 shrink-0 ${
-                  isV2 ? 'text-amber-400' : 'text-slate-400'
-                }`}
-              />
-              <span className="hidden sm:inline">
-                {isV2 ? 'v2 Pro' : 'Clásico'}
-              </span>
-            </button>
-
-            <button
-              type="button"
               onClick={() => void handleCopyShareUrl()}
               aria-label="Copiar enlace directo de esta vista"
               title="Copiar enlace directo de esta vista"
@@ -2190,14 +2941,38 @@ export default function App() {
           </div>
         </header>
 
-        {/* Workspace Body */}
-        <main className="flex-1 min-w-0 overflow-x-clip px-3 sm:px-6 pt-3.5 sm:pt-5 pb-24 lg:pb-6 max-w-[1440px] w-full mx-auto space-y-4 sm:space-y-5">
-          {/* Top Live Gameday Banner (shown only when NBA games are live; zero background polling) */}
-          <LiveGamedayBanner
-            scoreboard={scoreboard}
-            activeSection={activeSection}
+        {/* Collapsible Top Scoreboard Ribbon (exclusively in Broadcast 3.0) */}
+        {isV3 && (
+          <BroadcastScoreboardRibbon
+            liveGames={liveScoreboardGames}
+            recentGames={recentCompletedScoreboard.games}
+            recentDate={recentCompletedScoreboard.date}
+            isOpen={v3ScoreboardOpen}
+            onToggleOpen={handleToggleV3Scoreboard}
+            onOpenDate={(d) =>
+              d ? handleOpenGamedayDate(d) : handleNavigateSection('gameday')
+            }
             onOpenGameday={() => handleNavigateSection('gameday')}
           />
+        )}
+
+        {/* Workspace Body */}
+        <main
+          key={isV3 ? `v3-${activeSection}` : 'default-main'}
+          className={`flex-1 min-w-0 overflow-x-clip max-w-[1440px] w-full mx-auto ${
+            isV3
+              ? 'v3-main-reveal px-4 sm:px-7 pt-4 sm:pt-6 pb-24 lg:pb-8 space-y-5 sm:space-y-6'
+              : 'px-3 sm:px-6 pt-3.5 sm:pt-5 pb-24 lg:pb-6 space-y-4 sm:space-y-5'
+          }`}
+        >
+          {/* Top Live Gameday Banner (shown in v1/v2 or if Broadcast 3.0 ribbon is collapsed during live games) */}
+          {(!isV3 || !v3ScoreboardOpen) && (
+            <LiveGamedayBanner
+              scoreboard={scoreboard}
+              activeSection={activeSection}
+              onOpenGameday={() => handleNavigateSection('gameday')}
+            />
+          )}
 
           {/* Homogeneous Global "Muestra temporal:" Container (collapsed by default across all viewports) */}
           {activeSection !== 'milestones' &&
@@ -2742,6 +3517,44 @@ export default function App() {
                         </button>
                         <button
                           type="button"
+                          onClick={() => setAdminZoneSection('streaks')}
+                          className={`px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-1.5 ${
+                            adminZoneSection === 'streaks'
+                              ? 'bg-orange-500 text-slate-950 shadow-sm'
+                              : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
+                          }`}
+                        >
+                          <Flame className="w-3.5 h-3.5 shrink-0" />
+                          <span>Rachas Automáticas ({autoStreaksConfig.minStreakGames}+ PJ)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAdminZoneSection('experience_metrics')}
+                          className={`px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-1.5 ${
+                            adminZoneSection === 'experience_metrics'
+                              ? 'bg-orange-500 text-slate-950 shadow-sm'
+                              : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
+                          }`}
+                        >
+                          <LayoutGrid className="w-3.5 h-3.5 shrink-0" />
+                          <span>
+                            Modo Sencillo / Avanzado ({experienceMetricsConfig.simpleMetricIds.length})
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAdminZoneSection('sidebar_menu')}
+                          className={`px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-1.5 ${
+                            adminZoneSection === 'sidebar_menu'
+                              ? 'bg-orange-500 text-slate-950 shadow-sm'
+                              : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
+                          }`}
+                        >
+                          <LayoutList className="w-3.5 h-3.5 shrink-0" />
+                          <span>Menú Lateral ({sidebarMenuConfig.groups.length})</span>
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => setAdminZoneSection('notifications')}
                           className={`px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-1.5 ${
                             adminZoneSection === 'notifications'
@@ -2751,6 +3564,30 @@ export default function App() {
                         >
                           <Bell className="w-3.5 h-3.5 shrink-0" />
                           <span>Notificaciones de Hitos</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAdminZoneSection('editorial')}
+                          className={`px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-1.5 ${
+                            adminZoneSection === 'editorial'
+                              ? 'bg-orange-500 text-slate-950 shadow-sm'
+                              : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
+                          }`}
+                        >
+                          <FileText className="w-3.5 h-3.5 shrink-0" />
+                          <span>Crónicas & Estilo IA</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAdminZoneSection('data_sources')}
+                          className={`px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-1.5 ${
+                            adminZoneSection === 'data_sources'
+                              ? 'bg-orange-500 text-slate-950 shadow-sm'
+                              : 'text-slate-300 hover:text-white hover:bg-[#1E293B]'
+                          }`}
+                        >
+                          <Database className="w-3.5 h-3.5 shrink-0" />
+                          <span>Fuentes de Datos</span>
                         </button>
                         <button
                           type="button"
@@ -2790,9 +3627,31 @@ export default function App() {
                         onInspectEntity={handleInspectEntity}
                         initialTab={fantasyTab}
                         onTabChange={handleFantasyTabChange}
+                        injuriesData={injuriesData}
                       />
                     ) : adminZoneSection === 'thresholds' ? (
                       <AdminGamedayThresholdsPanel
+                        onLockSession={handleLockAdminSession}
+                      />
+                    ) : adminZoneSection === 'streaks' ? (
+                      <AdminStreaksConfigPanel
+                        players={players}
+                        teams={teams}
+                        seasonReferenceSlices={seasonReferenceSlices}
+                        currentConfig={autoStreaksConfig}
+                        onConfigSaved={(saved) => setAutoStreaksConfig(saved)}
+                        onLockSession={handleLockAdminSession}
+                      />
+                    ) : adminZoneSection === 'experience_metrics' ? (
+                      <AdminExperienceMetricsPanel
+                        currentConfig={experienceMetricsConfig}
+                        onConfigSaved={(saved) => setExperienceMetricsConfig(saved)}
+                        onLockSession={handleLockAdminSession}
+                      />
+                    ) : adminZoneSection === 'sidebar_menu' ? (
+                      <AdminSidebarMenuPanel
+                        currentConfig={sidebarMenuConfig}
+                        onConfigSaved={(saved) => setSidebarMenuConfig(saved)}
                         onLockSession={handleLockAdminSession}
                       />
                     ) : adminZoneSection === 'notifications' ? (
@@ -2800,6 +3659,12 @@ export default function App() {
                         onLockSession={handleLockAdminSession}
                         onConfigSaved={() => void refreshMilestoneNotifications(true)}
                       />
+                    ) : adminZoneSection === 'editorial' ? (
+                      <AdminEditorialConfigPanel
+                        onLockSession={handleLockAdminSession}
+                      />
+                    ) : adminZoneSection === 'data_sources' ? (
+                      <AdminDataSourcesPanel />
                     ) : (
                       <AdminSecurityConfigPanel
                         onLockSession={handleLockAdminSession}
@@ -2829,6 +3694,47 @@ export default function App() {
                 onChangeDateParam={handleGamedayDateChange}
                 selectedReportEventIdProp={gamedayReportId}
                 onChangeReportEventId={handleGamedayReportChange}
+                injuriesData={injuriesData}
+              />
+            ) : activeSection === 'injuries' ? (
+              <InjuriesRotationView
+                injuriesData={injuriesData}
+                loading={injuriesLoading && !injuriesData}
+                errorMsg={injuriesError}
+                watchlistIds={watchlistIds}
+                onlyWatchlist={onlyWatchlist}
+                onToggleWatchlist={handleToggleWatchlist}
+                onInspectEntity={handleInspectEntity}
+                onNavigateSection={handleNavigateSection}
+                onRefresh={() => void fetchInjuriesReport(true)}
+              />
+            ) : activeSection === 'contracts' ? (
+              <ContractsHubView
+                contractsData={contractsData}
+                futurePicksData={futurePicksData}
+                loading={contractsLoading && !contractsData}
+                errorMsg={contractsError}
+                preselectTradeTeamAbbr={preselectTradeTeamAbbr}
+                onClearPreselectTradeTeam={() => setPreselectTradeTeamAbbr(null)}
+                onInspectEntity={handleInspectEntity}
+                onNavigateSection={handleNavigateSection}
+                onRefresh={() => void fetchContractsReport(true)}
+              />
+            ) : activeSection === 'draft' ? (
+              <DraftHubView
+                draftData={draftData}
+                loading={draftLoading && !draftData}
+                errorMsg={draftError}
+                futurePicksData={futurePicksData}
+                futurePicksLoading={futurePicksLoading && !futurePicksData}
+                futurePicksError={futurePicksError}
+                onInspectEntity={handleInspectEntity}
+                onRefresh={() => void fetchDraftHistory(true)}
+                onRefreshFuturePicks={() => void fetchFutureDraftPicks(true)}
+                onOpenTradeMachine={(teamAbbr) => {
+                  setPreselectTradeTeamAbbr(teamAbbr);
+                  handleNavigateSection('contracts');
+                }}
               />
             ) : activeSection === 'awards' ? (
               <SeasonAwardsView
@@ -2895,6 +3801,7 @@ export default function App() {
                     onToggleWatchlist={handleToggleWatchlist}
                     onInspectEntity={handleInspectEntity}
                     onNavigateSection={handleNavigateSection}
+                    injuriesData={injuriesData}
                   />
                 )}
 
@@ -2954,7 +3861,7 @@ export default function App() {
                     onlyWatchlist={onlyWatchlist}
                     onToggleWatchlist={handleToggleWatchlist}
                     onInspectEntity={handleInspectEntity}
-                    minStreakGames={settings.minStreakGames}
+                    minStreakGames={autoStreaksConfig.minStreakGames}
                     allPlayersLoaded={allPlayersLoaded}
                     loadingAllPlayers={loadingAllPlayers}
                     totalLeaguePlayersAvailable={totalLeaguePlayersAvailable}
@@ -3016,6 +3923,7 @@ export default function App() {
                     onToggleWatchlist={handleToggleWatchlist}
                     onInspectEntity={handleInspectEntity}
                     showHeroicBadges={showHeroicBadges}
+                    injuriesData={injuriesData}
                   />
                 )}
 
@@ -3039,6 +3947,7 @@ export default function App() {
                     onAddExternalPlayer={handleAddExternalPlayer}
                     addingPlayerId={addingPlayerId}
                     showHeroicBadges={showHeroicBadges}
+                    injuriesData={injuriesData}
                   />
                 )}
 
@@ -3047,6 +3956,7 @@ export default function App() {
                     teams={teams}
                     seasonToken={selectedSeasonTokens[0] || '2027'}
                     onInspectEntity={handleInspectEntity}
+                    injuriesData={injuriesData}
                   />
                 )}
               </>
@@ -3109,6 +4019,7 @@ export default function App() {
           {(() => {
             const isSecondaryActive =
               mobileMenuOpen ||
+              activeSection === 'injuries' ||
               activeSection === 'streaks' ||
               activeSection === 'duel' ||
               activeSection === 'comparator' ||
@@ -3116,6 +4027,8 @@ export default function App() {
               activeSection === 'milestones' ||
               activeSection === 'heroic' ||
               activeSection === 'teams' ||
+              activeSection === 'lineups' ||
+              activeSection === 'scatter' ||
               activeSection === 'fantasy_espn' ||
               activeSection === 'glossary';
             return (
@@ -3168,6 +4081,7 @@ export default function App() {
             showHeroicBadges={showHeroicBadges}
             defaultPlayerKpiKeys={inspectorDefaultKpis.playerDefaultKpiKeys}
             defaultTeamKpiKeys={inspectorDefaultKpis.teamDefaultKpiKeys}
+            injuriesData={injuriesData}
           />
         </Suspense>
       )}
@@ -3197,6 +4111,7 @@ export default function App() {
           />
         </Suspense>
       )}
-    </div>
+      </div>
+    </ExperienceMetricsProvider>
   );
 }

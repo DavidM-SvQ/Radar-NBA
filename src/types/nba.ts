@@ -11,6 +11,9 @@ export type ActiveSection =
   | 'teams'
   | 'players'
   | 'lineups'
+  | 'injuries'
+  | 'contracts'
+  | 'draft'
   | 'scatter'
   | 'fantasy_espn'
   | 'glossary';
@@ -98,8 +101,37 @@ export interface GamedayThresholdsConfig extends GamedayThresholdsConfigValues {
   updatedAt: number;
 }
 
+export type WebThemeStyle = 'v3_broadcast' | 'v2_editorial' | 'classic';
+
 export interface WebFeatureFlags {
   showHeroicBadges: boolean;
+  themeStyle?: WebThemeStyle;
+  defaultSeasonMode?: '2027' | '2026' | '2025' | '2024';
+  defaultPlayerMatchWindow?: number;
+  minZScore?: number;
+  minPctDelta?: number;
+  minMinutes?: number;
+  updatedAt: number;
+}
+
+export type ExperienceMetricCategoryId =
+  | 'scoring_basic'
+  | 'shooting_vol'
+  | 'rebounding_playmaking'
+  | 'defense_discipline'
+  | 'milestones_classic'
+  | 'team_basic'
+  | 'combos_advanced'
+  | 'efficiency_advanced'
+  | 'ratings_impact'
+  | 'per36_ratios'
+  | 'hustle_zones';
+
+export interface ExperienceMetricsConfigValues {
+  simpleMetricIds: string[];
+}
+
+export interface ExperienceMetricsConfig extends ExperienceMetricsConfigValues {
   updatedAt: number;
 }
 
@@ -472,6 +504,49 @@ export interface AnomalySignal {
   activeStreakCount?: number;
 }
 
+export type AutoStreakRuleOperator = 'gte' | 'gt' | 'lte' | 'lt';
+
+export type AutoStreakRuleCategory =
+  | 'milestones'
+  | 'scoring'
+  | 'rebounding'
+  | 'playmaking'
+  | 'defense'
+  | 'shooting'
+  | 'combos'
+  | 'efficiency'
+  | 'slumps'
+  | 'team';
+
+export interface AutoStreakRuleConfig {
+  id: string;
+  entityType: 'player' | 'team';
+  metricId: string;
+  category: AutoStreakRuleCategory;
+  metricLabel: string;
+  label: string;
+  operator: AutoStreakRuleOperator;
+  threshold: number;
+  minGamesOverride?: number | null;
+  minMinutes?: number | null;
+  minAttempts?: number | null;
+  groupSingle?: string | null;
+  breakoutAxis?: TrendBreakoutAxis | null;
+  unit?: string;
+  isPositive: boolean;
+  enabled: boolean;
+  isCustom?: boolean;
+}
+
+export interface AutoStreaksConfigValues {
+  minStreakGames: number;
+  rules: AutoStreakRuleConfig[];
+}
+
+export interface AutoStreaksConfig extends AutoStreaksConfigValues {
+  updatedAt: number;
+}
+
 export interface StreakEntry {
   id: string;
   entityType: 'player' | 'team';
@@ -495,6 +570,12 @@ export interface StreakEntry {
   windowAvgRef?: number;
   windowDeltaVsSeason?: number;
   unit?: string;
+  ruleId?: string;
+  ruleMetricId?: string;
+  ruleOperator?: AutoStreakRuleOperator;
+  ruleThreshold?: number;
+  ruleMinMinutes?: number | null;
+  ruleMinAttempts?: number | null;
 }
 
 export interface ConsistencyEntry {
@@ -932,14 +1013,57 @@ export interface GameReportTeamSide {
   [key: string]: any;
 }
 
+export interface GameTeamTacticalMetrics {
+  abbr: string;
+  efgPct: number;
+  tovPct: number;
+  orebPct: number;
+  ftRate: number;
+  astPct: number;
+  paintSharePct: number | null;
+  threePointRatePct: number;
+  ptsPaint: number | null;
+  ptsFastBreak: number | null;
+  ptsOffTov: number | null;
+  ptsSecondChance: number | null;
+}
+
+export interface GameTacticalProfile {
+  away: GameTeamTacticalMetrics;
+  home: GameTeamTacticalMetrics;
+  decisiveFactorLabel: string;
+  decisiveFactorSummary: string;
+  closingLineupAway: string[];
+  closingLineupHome: string[];
+  defensiveDuels: string[];
+}
+
+export interface GameTacticalKey {
+  title: string;
+  summary: string;
+}
+
+export interface GamePostgameQuote {
+  speaker: string;
+  teamAbbr?: string;
+  quoteEs: string;
+  sourceTitle?: string;
+}
+
 export interface GameNarrativePayload {
   eventId: string;
   generatedAt: string;
   engineMode: string;
+  chronicleVersion?: 'v1_classic' | 'v2_tactical';
+  groundingUsed?: boolean;
   pressHeadline: string;
   pressLead: string;
+  tacticalKeys?: GameTacticalKey[];
   gameFlowSection: string;
   chalkboardSection: string;
+  defensiveMatchupsSection?: string;
+  tacticalProfile?: GameTacticalProfile;
+  postgameQuotes?: GamePostgameQuote[];
   dynamicSpotlight: {
     kicker?: string;
     title: string;
@@ -1734,17 +1858,32 @@ export interface NbaPlayerDossierAdvancedResponse {
   leagueBenchmarks?: Record<string, NbaAdvancedBenchmarkStat>;
 }
 
+export type MilestoneNotificationMinSeverity = 'all' | 'high' | 'epic';
+
 export interface MilestoneNotificationsConfigValues {
   enabled: boolean;
   lookbackDays: number;
   maxNotifications: number;
+  minSeverity: MilestoneNotificationMinSeverity;
+  dedupePlayerGame: boolean;
 
-  // Grupo 1: Actuaciones de Partido (11)
+  // Grupo 1: Actuaciones de Partido (12)
   scoringMilestoneEnabled: boolean;
   scoringThreshold: number;
+  careerHighEnabled: boolean;
+  careerHighMinGames: number;
+  careerHighMinPts: number;
+  careerHighMinReb: number;
+  careerHighMinAst: number;
+  careerHighMin3pm: number;
+  careerHighMinStlBlk: number;
   seasonHighPtsEnabled: boolean;
-  seasonHighMinPts: number;
   seasonHighMinGames: number;
+  seasonHighMinPts: number;
+  seasonHighMinReb: number;
+  seasonHighMinAst: number;
+  seasonHighMin3pm: number;
+  seasonHighMinStlBlk: number;
   threePointExplosionEnabled: boolean;
   threePointThreshold: number;
   assistExplosionEnabled: boolean;
@@ -1822,6 +1961,7 @@ export interface MilestoneNotificationsConfig extends MilestoneNotificationsConf
 }
 
 export type MilestoneNotificationCategory =
+  | 'record'
   | 'scoring'
   | 'triple_double'
   | 'heroic'
@@ -1830,6 +1970,15 @@ export type MilestoneNotificationCategory =
   | 'imminent'
   | 'defense'
   | 'team';
+
+export interface MilestoneGroupedSubItem {
+  id: string;
+  category: MilestoneNotificationCategory;
+  severity: 'epic' | 'high' | 'info';
+  title: string;
+  detail: string;
+  badgeText: string;
+}
 
 export interface MilestoneNotificationItem {
   id: string;
@@ -1846,6 +1995,8 @@ export interface MilestoneNotificationItem {
   eventId?: string;
   opponentAbbr?: string;
   isImminent?: boolean;
+  mergedCount?: number;
+  mergedItems?: MilestoneGroupedSubItem[];
 }
 
 export interface MilestoneNotificationsPayload {
@@ -1857,6 +2008,8 @@ export interface MilestoneNotificationsPayload {
     total: number;
     epicCount: number;
     imminentCount: number;
+    totalBeforeCap?: number;
+    consolidatedCount?: number;
   };
 }
 
@@ -1865,4 +2018,675 @@ export interface MilestoneNotificationCountsPreview {
   recentCounts: Record<string, number>;
   totalDates: number;
   totalEnabledRecentAlerts: number;
+  estimatedFinalAlerts?: number;
 }
+
+// ---------------------------------------------------------------------------
+// Fase 6: Histórico Integral NBA, Career Highs y Trayectorias
+// ---------------------------------------------------------------------------
+
+export type CareerScope = 'regular' | 'playoffs';
+
+export interface CareerSeasonLine {
+  season: string; // e.g. '2025-26'
+  teamAbbr: string; // e.g. 'LAL' or 'DAL/LAL'
+  gp: number;
+  wins: number;
+  losses: number;
+  min: number; // total minutes
+  pts: number; // total points
+  reb: number;
+  oreb: number;
+  dreb: number;
+  ast: number;
+  stl: number;
+  blk: number;
+  tov: number;
+  pf: number;
+  fgm: number;
+  fga: number;
+  fg3m: number;
+  fg3a: number;
+  ftm: number;
+  fta: number;
+  plusMinus: number;
+  dd2: number;
+  td3: number;
+  // Derived per-game & shooting splits
+  minPg: number;
+  ptsPg: number;
+  rebPg: number;
+  astPg: number;
+  stlPg: number;
+  blkPg: number;
+  tovPg: number;
+  fgPct: number;
+  fg3Pct: number;
+  ftPct: number;
+  tsPct: number;
+  efgPct: number;
+  gmScPg: number;
+}
+
+export interface CareerTotals {
+  seasonsCount: number;
+  gp: number;
+  wins: number;
+  losses: number;
+  min: number;
+  pts: number;
+  reb: number;
+  oreb: number;
+  dreb: number;
+  ast: number;
+  stl: number;
+  blk: number;
+  tov: number;
+  fgm: number;
+  fga: number;
+  fg3m: number;
+  fg3a: number;
+  ftm: number;
+  fta: number;
+  dd2: number;
+  td3: number;
+}
+
+export interface CareerAverages {
+  minPg: number;
+  ptsPg: number;
+  rebPg: number;
+  astPg: number;
+  stlPg: number;
+  blkPg: number;
+  tovPg: number;
+  fgPct: number;
+  fg3Pct: number;
+  ftPct: number;
+  tsPct: number;
+  efgPct: number;
+  gmScPg: number;
+  winPct: number;
+}
+
+export interface CareerHighEntry {
+  value: number;
+  date: string; // YYYY-MM-DD
+  season: string; // e.g. '2023-24'
+  teamAbbr: string;
+  opponentAbbr: string;
+  result?: 'W' | 'L' | '';
+  isCurrentSeason?: boolean;
+}
+
+export interface PlayerCareerHighs {
+  pts: CareerHighEntry | null;
+  reb: CareerHighEntry | null;
+  ast: CareerHighEntry | null;
+  fg3m: CareerHighEntry | null;
+  stl: CareerHighEntry | null;
+  blk: CareerHighEntry | null;
+  min: CareerHighEntry | null;
+  fgm: CareerHighEntry | null;
+  ftm: CareerHighEntry | null;
+  pra: CareerHighEntry | null;
+  gameScore: CareerHighEntry | null;
+}
+
+export interface PlayerCareerBucket {
+  seasons: CareerSeasonLine[];
+  totals: CareerTotals;
+  averages: CareerAverages;
+  peakSeason: CareerSeasonLine | null;
+  careerHighs: PlayerCareerHighs;
+}
+
+export interface PlayerCareerProfile {
+  playerId: string;
+  name: string;
+  currentTeamAbbr: string;
+  position: string;
+  headshotUrl?: string;
+  rookieSeason: string;
+  latestSeason: string;
+  seasonsPlayed: number;
+  generatedAt: string;
+  regular: PlayerCareerBucket;
+  playoffs: PlayerCareerBucket;
+}
+
+export interface TeamHistoricalSeason {
+  season: string;
+  gp: number;
+  wins: number;
+  losses: number;
+  winPct: number;
+  confRank: number | null;
+  divRank: number | null;
+  poWins: number;
+  poLosses: number;
+  finalsAppearance: string; // 'LEAGUE CHAMPION' | 'FINALS APPEARANCE' | 'N/A' | ''
+  ptsPg: number;
+  rebPg: number;
+  astPg: number;
+  stlPg: number;
+  blkPg: number;
+  fgPct: number;
+  fg3Pct: number;
+  ftPct: number;
+  ptsTotal: number;
+}
+
+export interface TeamCareerHistory {
+  teamId: string;
+  teamAbbr: string;
+  teamName: string;
+  startYear: string;
+  endYear: string;
+  totalYears: number;
+  allTimeGames: number;
+  allTimeWins: number;
+  allTimeLosses: number;
+  allTimeWinPct: number;
+  playoffAppearances: number;
+  divTitles: number;
+  confTitles: number;
+  championships: number;
+  bestSeason: TeamHistoricalSeason | null;
+  regularSeasons: TeamHistoricalSeason[];
+  playoffSeasons: TeamHistoricalSeason[];
+  generatedAt: string;
+}
+
+export interface CareerLeaderEntry {
+  playerId: string;
+  name: string;
+  teamAbbr: string;
+  position: string;
+  headshotUrl?: string;
+  rookieSeason: string;
+  seasonsCount: number;
+  gp: number;
+  // Totals
+  pts: number;
+  reb: number;
+  ast: number;
+  fg3m: number;
+  stl: number;
+  blk: number;
+  min: number;
+  dd2: number;
+  td3: number;
+  // Averages
+  ptsPg: number;
+  rebPg: number;
+  astPg: number;
+  fg3mPg: number;
+  stlPg: number;
+  blkPg: number;
+  minPg: number;
+  fgPct: number;
+  fg3Pct: number;
+  ftPct: number;
+  tsPct: number;
+  gmScPg: number;
+  // Career highs
+  highPts: CareerHighEntry | null;
+  highReb: CareerHighEntry | null;
+  highAst: CareerHighEntry | null;
+  high3pm: CareerHighEntry | null;
+  highStl: CareerHighEntry | null;
+  highBlk: CareerHighEntry | null;
+  highPra: CareerHighEntry | null;
+  highGmSc: CareerHighEntry | null;
+}
+
+export interface ImminentCareerMilestone {
+  playerId: string;
+  name: string;
+  teamAbbr: string;
+  position: string;
+  headshotUrl?: string;
+  metricKey: 'pts' | 'reb' | 'ast' | 'fg3m' | 'stl' | 'blk' | 'gp';
+  metricLabel: string;
+  currentValue: number;
+  targetValue: number;
+  remaining: number;
+  progressPct: number;
+  estGamesToReach: number | null;
+}
+
+export interface CareerLeadersResponse {
+  scope: CareerScope;
+  generatedAt: string;
+  totalPlayers: number;
+  leaders: CareerLeaderEntry[];
+  imminentMilestones: ImminentCareerMilestone[];
+}
+
+// ---------------------------------------------------------------------------
+// Phase 12: Lesiones y Bajas con Impacto en Rotaciones
+// ---------------------------------------------------------------------------
+
+export type InjuryStatusCode =
+  | 'out'
+  | 'ir'
+  | 'suspended'
+  | 'doubtful'
+  | 'questionable'
+  | 'dtd'
+  | 'probable';
+
+export type InjuryAbsenceTier = 'long_term' | 'punctual' | 'b2b_rest';
+
+export interface InjuryPlayerReportItem {
+  id: string;
+  playerId: string | null;
+  name: string;
+  nameNorm: string;
+  teamId: string | null;
+  teamAbbr: string;
+  teamName: string;
+  conference: 'East' | 'West';
+  position: string;
+  headshotUrl?: string;
+  statusCode: InjuryStatusCode;
+  statusRaw: string;
+  statusLabelEs: string;
+  shortTag: string;
+  absenceTier: InjuryAbsenceTier;
+  absenceProbability: number;
+  detailEs: string;
+  returnDate?: string | null;
+  gamesPlayed: number;
+  minutesPg: number;
+  pointsPg: number;
+  reboundsPg: number;
+  assistsPg: number;
+  usgPct: number;
+  fantasyPtsPg: number;
+  isKeyRotation: boolean;
+  isStarter: boolean;
+  impactWeight: number;
+}
+
+export interface RotationBeneficiaryItem {
+  playerId: string;
+  name: string;
+  teamId: string;
+  teamAbbr: string;
+  teamName: string;
+  position: string;
+  headshotUrl?: string;
+  baseMinutesPg: number;
+  basePointsPg: number;
+  baseReboundsPg: number;
+  baseAssistsPg: number;
+  baseUsgPct: number;
+  baseFantasyPtsPg: number;
+  projectedMinDelta: number;
+  projectedUsgDelta: number;
+  projectedPtsDelta: number;
+  projectedFptsDelta: number;
+  roleShiftLabel: string;
+  triggeredBy: Array<{
+    playerId: string | null;
+    name: string;
+    statusCode: InjuryStatusCode;
+    shortTag: string;
+  }>;
+  empiricalGamesWithout: number;
+  empiricalMinDelta: number | null;
+  empiricalPtsDelta: number | null;
+  empiricalFptsDelta: number | null;
+}
+
+export interface TeamInjuryRotationImpact {
+  teamId: string;
+  teamAbbr: string;
+  teamName: string;
+  conference: 'East' | 'West';
+  logoUrl?: string;
+  wins: number;
+  losses: number;
+  totalInjured: number;
+  outOrIrCount: number;
+  doubtfulCount: number;
+  questionableOrDtdCount: number;
+  probableCount: number;
+  keyStartersAffected: number;
+  vacatedMinutes: number;
+  vacatedPoints: number;
+  vacatedRebounds: number;
+  vacatedAssists: number;
+  vacatedUsage: number;
+  vacatedFantasyPts: number;
+  impactScore: number;
+  impactTier: 'critico' | 'alto' | 'moderado' | 'leve';
+  injuries: InjuryPlayerReportItem[];
+  beneficiaries: RotationBeneficiaryItem[];
+}
+
+export interface InjuriesRotationPayload {
+  generatedAt: string;
+  source: 'espn_live' | 'disk_cache' | 'fallback_empty';
+  summary: {
+    totalReported: number;
+    outOrIrCount: number;
+    doubtfulCount: number;
+    questionableOrDtdCount: number;
+    probableCount: number;
+    teamsAffected: number;
+    totalVacatedMinutes: number;
+    mostImpactedTeamAbbr: string | null;
+  };
+  entries: InjuryPlayerReportItem[];
+  teams: TeamInjuryRotationImpact[];
+  topBeneficiaries: RotationBeneficiaryItem[];
+}
+
+// ---------------------------------------------------------------------------
+// Phase 16: Contratos NBA, Límites Salariales / Aprons y Trade Machine
+// ---------------------------------------------------------------------------
+
+export type CbaTeamTier =
+  | 'under_floor'
+  | 'under_cap'
+  | 'over_cap'
+  | 'luxury_tax'
+  | 'first_apron'
+  | 'second_apron';
+
+export type ContractOptionCode = 'GTD' | 'PO' | 'TO' | 'TWO_WAY';
+
+export type ContractDataQuality =
+  | 'official_espn'
+  | 'estimated_minimum'
+  | 'estimated_two_way';
+
+export type ContractEfficiencyTier =
+  | 'ganga'
+  | 'alto_valor'
+  | 'acorde'
+  | 'sobrecoste'
+  | 'muestra_baja';
+
+export interface CbaSeasonThresholds {
+  seasonLabel: string;
+  salaryFloor: number;
+  salaryCap: number;
+  luxuryTax: number;
+  firstApron: number;
+  secondApron: number;
+  nonTaxpayerMle: number;
+  roomMle: number;
+  taxpayerMle: number;
+  biAnnualException: number;
+  rookieMinimum: number;
+  veteranMinimum: number;
+  twoWaySalary: number;
+}
+
+export interface PlayerContractYearSlot {
+  season: '2026-27' | '2027-28' | '2028-29' | '2029-30';
+  salary: number | null;
+  option: ContractOptionCode | null;
+  isProjected: boolean;
+}
+
+export interface PlayerContractRecord {
+  id: string;
+  playerId: string | null;
+  espnId: string | null;
+  name: string;
+  nameNorm: string;
+  teamId: string;
+  teamAbbr: string;
+  teamName: string;
+  conference: 'East' | 'West';
+  position: string;
+  age: number | null;
+  experienceYears: number | null;
+  headshotUrl?: string;
+  salary: number;
+  capPct: number;
+  incomingTradeValue: number;
+  outgoingTradeValue: number;
+  yearsRemaining: number;
+  yearlySalaries: PlayerContractYearSlot[];
+  optionType: ContractOptionCode;
+  isTwoWay: boolean;
+  countsAgainstCap: boolean;
+  tradeKickerPct: number;
+  tradeRestriction: boolean;
+  poisonPill: boolean;
+  baseYearCompensation: boolean;
+  minimumSalaryException: boolean;
+  dataQuality: ContractDataQuality;
+  // Pure 2026-27 basketball metrics (no Fantasy)
+  gamesPlayed: number;
+  minutesPg: number;
+  pointsPg: number;
+  reboundsPg: number;
+  assistsPg: number;
+  usgPct: number;
+  tsPct: number;
+  sportingImpactScore: number;
+  valuePerMillion: number;
+  efficiencyTier: ContractEfficiencyTier;
+}
+
+export interface TeamCapExceptionItem {
+  code: 'room_mle' | 'non_tax_mle' | 'taxpayer_mle' | 'bae' | 'min_only';
+  labelEs: string;
+  amount: number;
+  noteEs: string;
+}
+
+export interface TeamCapSheet {
+  teamId: string;
+  teamAbbr: string;
+  teamName: string;
+  conference: 'East' | 'West';
+  division: string;
+  logoUrl?: string;
+  wins: number;
+  losses: number;
+  activePayroll: number;
+  capPct: number;
+  capSpace: number;
+  overCapBy: number;
+  distanceToFloor: number;
+  distanceToTax: number;
+  distanceToFirstApron: number;
+  distanceToSecondApron: number;
+  cbaTier: CbaTeamTier;
+  rosterCount: number;
+  standardContractsCount: number;
+  twoWayCount: number;
+  officialContractsCount: number;
+  estimatedContractsCount: number;
+  expiringCount: number;
+  restrictedTradeCount: number;
+  topContractPlayerId: string | null;
+  topContractPlayerName: string | null;
+  topContractSalary: number;
+  futurePayroll: {
+    '2026-27': number;
+    '2027-28': number;
+    '2028-29': number;
+    '2029-30': number;
+  };
+  availableExceptions: TeamCapExceptionItem[];
+  players: PlayerContractRecord[];
+}
+
+export interface LeagueContractsPayload {
+  generatedAt: string;
+  source: 'espn_live' | 'disk_cache' | 'fallback_estimated';
+  thresholds: CbaSeasonThresholds;
+  summary: {
+    totalTeams: number;
+    totalPlayers: number;
+    officialContractsCount: number;
+    estimatedContractsCount: number;
+    twoWayCount: number;
+    avgTeamPayroll: number;
+    highestPayrollTeamAbbr: string | null;
+    lowestPayrollTeamAbbr: string | null;
+    tierCounts: Record<CbaTeamTier, number>;
+  };
+  teams: TeamCapSheet[];
+}
+
+export type DraftPickTier = 'lottery' | 'first_round' | 'second_round';
+
+export interface DraftPickRecord {
+  id: string;
+  year: number;
+  round: number;
+  roundPick: number;
+  overall: number;
+  tier: DraftPickTier;
+  playerName: string;
+  playerId: string | null;
+  espnId: string | null;
+  headshotUrl?: string;
+  position: string;
+  height: string;
+  weight: string;
+  origin: string;
+  draftedByTeamAbbr: string;
+  draftedByTeamName: string;
+  draftedByLogoUrl?: string;
+  traded: boolean;
+  tradeNote: string;
+  // Cross-joined live 2026-27 & career stats
+  isActive2027: boolean;
+  currentTeamAbbr: string | null;
+  season27Gp: number | null;
+  season27MinPg: number | null;
+  season27PtsPg: number | null;
+  season27RebPg: number | null;
+  season27AstPg: number | null;
+  careerSeasons: number | null;
+  careerGp: number | null;
+  careerPtsTotal: number | null;
+  careerPpg: number | null;
+  careerRpg: number | null;
+  careerApg: number | null;
+  careerStlPg: number | null;
+  careerBlkPg: number | null;
+  careerGmScPg: number | null;
+  careerPeakPpg: number | null;
+  careerPeakGmSc: number | null;
+  careerPlayoffGp: number | null;
+}
+
+export interface DraftClassSummary {
+  year: number;
+  displayName: string;
+  pickCount: number;
+  lotteryCount: number;
+  firstRoundCount: number;
+  secondRoundCount: number;
+  activeIn2027Count: number;
+  trackedCareerCount: number;
+  numberOnePickName: string;
+  numberOneTeamAbbr: string;
+  numberOnePlayerId: string | null;
+  topActiveScorerName: string | null;
+  topActiveScorerPpg: number | null;
+  picks: DraftPickRecord[];
+}
+
+export interface DraftHistoryPayload {
+  generatedAt: string;
+  source: 'espn_live' | 'disk_cache';
+  minYear: number;
+  maxYear: number;
+  availableYears: number[];
+  summary: {
+    totalClasses: number;
+    totalPicks: number;
+    activeIn2027Count: number;
+    trackedCareerCount: number;
+    lotteryPicksCount: number;
+    secondRoundActiveCount: number;
+  };
+  classes: DraftClassSummary[];
+}
+
+export type FutureDraftPickCategory =
+  | 'own'
+  | 'incoming'
+  | 'swap_favorable'
+  | 'swap_encumbered'
+  | 'outgoing';
+
+export interface FutureDraftPickItem {
+  id: string;
+  teamAbbr: string;
+  year: number;
+  round: 1 | 2;
+  category: FutureDraftPickCategory;
+  isControlled: boolean;
+  isSwap: boolean;
+  isProtected: boolean;
+  protectionLabelEs: string | null;
+  fromText: string;
+  toText: string;
+  summaryEs: string;
+  originTeams?: string[];
+  originLabelEs?: string;
+  explanationEs?: string;
+  tradeTrailEs?: string | null;
+  clauseEs?: string | null;
+  detailsEn: string;
+  stepienLocked: boolean;
+  tradable: boolean;
+  shortTradeLabel: string;
+}
+
+export interface TeamFutureDraftInventory {
+  teamAbbr: string;
+  teamName: string;
+  controlledFirsts: number;
+  tradableFirsts: number;
+  stepienLockedFirsts: number;
+  controlledSeconds: number;
+  incomingFirsts: number;
+  incomingSeconds: number;
+  outgoingFirsts: number;
+  outgoingSeconds: number;
+  favorableSwaps: number;
+  encumberedSwaps: number;
+  draftCapitalScore: number;
+  firstsByYear: Record<number, number>;
+  secondsByYear: Record<number, number>;
+  stepienLockedYears: number[];
+  picks: FutureDraftPickItem[];
+}
+
+export interface FutureDraftPicksPayload {
+  generatedAt: string;
+  source: 'fanspo_live' | 'disk_cache';
+  years: number[];
+  summary: {
+    teamsCount: number;
+    totalControlledFirsts: number;
+    totalTradableFirsts: number;
+    totalControlledSeconds: number;
+    totalStepienLocks: number;
+    topFirstsTeamAbbr: string;
+    topFirstsCount: number;
+    topCapitalTeamAbbr: string;
+    topCapitalScore: number;
+  };
+  teams: TeamFutureDraftInventory[];
+}
+
+
+
+
+
