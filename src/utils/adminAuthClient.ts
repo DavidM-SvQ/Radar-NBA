@@ -1900,7 +1900,7 @@ export async function previewAdminMilestoneNotificationsCounts(
 }
 
 export type GameChronicleVersion = 'v1_classic' | 'v2_tactical';
-export type DailyChronicleVersion = 'v1_classic';
+export type DailyChronicleVersion = 'v1_classic' | 'v2_tactical';
 export type EditorialLengthProfile = 'concise' | 'standard' | 'deep';
 export type EditorialTacticalFocus =
   | 'balanced'
@@ -1961,7 +1961,7 @@ export interface AdminPurgeChronicleCacheResponse {
 
 export const DEFAULT_EDITORIAL_CONFIG_VALUES: EditorialConfigValues = {
   gameChronicleVersion: 'v2_tactical',
-  dailyChronicleVersion: 'v1_classic',
+  dailyChronicleVersion: 'v2_tactical',
   lengthProfile: 'standard',
   tacticalFocus: 'balanced',
   customStyleDirectives: '',

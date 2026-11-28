@@ -11,7 +11,7 @@ export type EditorialTacticalFocus =
   | "advanced_metrics";
 
 export type GameChronicleVersion = "v1_classic" | "v2_tactical";
-export type DailyChronicleVersion = "v1_classic";
+export type DailyChronicleVersion = "v1_classic" | "v2_tactical";
 
 export interface EditorialConfigValues {
   gameChronicleVersion: GameChronicleVersion;
@@ -36,7 +36,7 @@ const EDITORIAL_DISK_FILE = process.env.VERCEL
 
 export const DEFAULT_EDITORIAL_CONFIG_VALUES: EditorialConfigValues = {
   gameChronicleVersion: "v2_tactical",
-  dailyChronicleVersion: "v1_classic",
+  dailyChronicleVersion: "v2_tactical",
   lengthProfile: "standard",
   tacticalFocus: "balanced",
   customStyleDirectives: "",
@@ -46,7 +46,7 @@ export const DEFAULT_EDITORIAL_CONFIG_VALUES: EditorialConfigValues = {
 };
 
 const VALID_GAME_CHRONICLE_VERSIONS = new Set<GameChronicleVersion>(["v1_classic", "v2_tactical"]);
-const VALID_DAILY_CHRONICLE_VERSIONS = new Set<DailyChronicleVersion>(["v1_classic"]);
+const VALID_DAILY_CHRONICLE_VERSIONS = new Set<DailyChronicleVersion>(["v1_classic", "v2_tactical"]);
 const VALID_LENGTH_PROFILES = new Set<EditorialLengthProfile>(["concise", "standard", "deep"]);
 const VALID_TACTICAL_FOCUSES = new Set<EditorialTacticalFocus>([
   "balanced",

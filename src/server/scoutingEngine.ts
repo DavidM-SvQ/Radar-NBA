@@ -160,6 +160,8 @@ async function purgeSharedPersistedNarrativeCache(opts: {
   const targetKeys: string[] = [];
   if (scope === "date" && opts.date) {
     targetKeys.push(
+      `gameday_chronicle_v18:v2_tactical:e${currentCfg.cacheEpoch}:${opts.date}`,
+      `gameday_chronicle_v18:v1_classic:e${currentCfg.cacheEpoch}:${opts.date}`,
       `gameday_chronicle_v18:e${currentCfg.cacheEpoch}:${opts.date}`,
       `gameday_chronicle_v17:e${currentCfg.cacheEpoch}:${opts.date}`,
       `gameday_chronicle_v16:${opts.date}`
@@ -1280,6 +1282,308 @@ function parsePostgameQuotes(raw: string): Array<{ speaker: string; teamAbbr?: s
   }
   return quotes;
 }
+function extractTacticalRecapDigest(storyText: string, maxChars = 650): string {
+  const clean = String(storyText || "").replace(/\s+/g, " ").trim();
+  if (!clean) return "";
+  if (clean.length <= maxChars) return clean;
+  const sentences = clean
+    .split(/(?<=[.!?])\s+(?=[A-Z"“])/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 20);
+  if (sentences.length === 0) return clean.slice(0, maxChars).trim();
+  const tacticalRe = /\b(defens\w*|zone|switch\w*|blitz\w*|double[- ]team\w*|guard\w*|paint|3-point\w*|three-point\w*|rebound\w*|turnover\w*|run|clutch|overtime|adjust\w*|fourth quarter|coach|said|told|matchup\w*)\b/i;
+  const picked: string[] = [];
+  const used = new Set<number>();
+  const tryAdd = (idx: number) => {
+    if (used.has(idx) || !sentences[idx]) return;
+    const candidate = sentences[idx];
+    const currentLen = picked.join(" ").length;
+    if (picked.length > 0 && currentLen + candidate.length + 1 > maxChars) return;
+    picked.push(candidate);
+    used.add(idx);
+  };
+  // Always keep lead sentence
+  tryAdd(0);
+  // Prioritize direct quotes first, then tactical/defensive sentences
+  for (let i = 1; i < sentences.length; i++) {
+    if (/["“][^"”]{12,}["”]/.test(sentences[i])) tryAdd(i);
+  }
+  for (let i = 1; i < sentences.length; i++) {
+    if (tacticalRe.test(sentences[i])) tryAdd(i);
+  }
+  for (let i = 1; i < sentences.length; i++) {
+    tryAdd(i);
+  }
+  const joined = picked.join(" ").trim();
+  return joined.length <= maxChars ? joined : `${joined.slice(0, maxChars - 1).trim()}…`;
+}
+function parseNightQuotes(
+  raw: string
+): Array<{ speaker: string; teamAbbr?: string; matchup?: string; quoteEs: string; sourceTitle?: string }> {
+  if (!raw) return [];
+  const trimmed = raw.trim();
+  if (
+    !trimmed ||
+    /^(?:ningun[ao]|no aplica|sin declaraciones|sin citas|n\/a|none)\b/i.test(trimmed)
+  ) {
+    return [];
+  }
+  const lines = trimmed
+    .split(/\n+/)
+    .map((l) => l.replace(/^[-•*\d.)\s]+/, "").trim())
+    .filter((l) => l.length > 22);
+  const quotes: Array<{ speaker: string; teamAbbr?: string; matchup?: string; quoteEs: string; sourceTitle?: string }> = [];
+  for (const line of lines) {
+    const parts = line.split("|").map((p) => p.trim());
+    if (parts.length < 3) continue;
+    const speaker = stripInlineWrapper(parts[0]);
+    const maybeTeam = stripInlineWrapper(parts[1]).toUpperCase();
+    const hasTeamAbbr = /^[A-Z]{2,4}$/.test(maybeTeam);
+    let matchup: string | undefined;
+    let quoteRaw = "";
+    let sourceRaw = "";
+    if (parts.length >= 5 && hasTeamAbbr) {
+      matchup = stripInlineWrapper(parts[2]).slice(0, 28);
+      quoteRaw = parts[3];
+      sourceRaw = parts[4] || "";
+    } else if (parts.length === 4 && hasTeamAbbr) {
+      const p2Clean = stripInlineWrapper(parts[2]);
+      if (/^[A-Z]{2,4}\s*(?:vs\.?|@|-|–)\s*[A-Z]{2,4}$/i.test(p2Clean)) {
+        matchup = p2Clean.toUpperCase();
+        quoteRaw = parts[3];
+        sourceRaw = "";
+      } else {
+        quoteRaw = parts[2];
+        sourceRaw = parts[3] || "";
+      }
+    } else {
+      quoteRaw = hasTeamAbbr ? parts[2] : parts[1];
+      sourceRaw = hasTeamAbbr ? parts[3] || "" : parts[2] || "";
+    }
+    const quoteClean = quoteRaw
+      .replace(/^[«"“'‘]+|[»"”'’]+$/g, "")
+      .replace(/\*\*/g, "")
+      .trim();
+    if (!speaker || speaker.length < 3 || /^(?:autor|jugador|nombre|protagonista|n\/a)$/i.test(speaker)) {
+      continue;
+    }
+    if (!quoteClean || quoteClean.length < 18 || /^ningun[ao]\b/i.test(quoteClean)) {
+      continue;
+    }
+    quotes.push({
+      speaker: sanitizeEditorialSpanishGrammar(speaker),
+      teamAbbr: hasTeamAbbr ? maybeTeam : undefined,
+      matchup,
+      quoteEs: sanitizeEditorialSpanishGrammar(quoteClean),
+      sourceTitle: sourceRaw ? stripInlineWrapper(sourceRaw).slice(0, 70) : undefined,
+    });
+    if (quotes.length >= 3) break;
+  }
+  return quotes;
+}
+function computeSlateTacticalRadar(gd: any, matchEnrichments: Map<string, any>) {
+  type TeamSlateRow = {
+    eventId: string;
+    matchupLabel: string;
+    teamAbbr: string;
+    teamName: string;
+    isWinner: boolean;
+    efgPct: number;
+    tovPct: number;
+    orebPct: number;
+    ftRate: number;
+    astPct: number;
+    stocks: number;
+  };
+  const rows: TeamSlateRow[] = [];
+  const perGameTacticalLines = new Map<string, string>();
+  const defensiveDuels: string[] = [];
+  const seenDuels = new Set<string>();
+
+  const buildSide = (side: any, opp: any, sideLog: any, oppLog: any, m: any): TeamSlateRow => {
+    const fga = Number(sideLog?.fga || 0);
+    const fgm = Number(sideLog?.fgm || 0);
+    const fg3m = Number(sideLog?.fg3m ?? side.fg3m ?? 0);
+    const ftm = Number(sideLog?.ftm || 0);
+    const fta = Number(sideLog?.fta || 0);
+    const tov = Number(sideLog?.tov ?? side.tov ?? 0);
+    const oreb = Number(sideLog?.oreb ?? 0);
+    const ast = Number(sideLog?.ast ?? side.ast ?? 0);
+    const stl = Number(sideLog?.stl ?? 0);
+    const blk = Number(sideLog?.blk ?? 0);
+    const oppReb = Number(oppLog?.reb ?? opp.reb ?? 0);
+    const oppOreb = Number(oppLog?.oreb ?? 0);
+    const oppDreb = Math.max(0, oppReb - oppOreb);
+
+    const efgPct =
+      typeof sideLog?.efgPct === "number" && Number.isFinite(sideLog.efgPct)
+        ? sideLog.efgPct
+        : typeof side.efgPct === "number" && Number.isFinite(side.efgPct)
+        ? side.efgPct
+        : fga > 0
+        ? ((fgm + 0.5 * fg3m) / fga) * 100
+        : 0;
+    const estPoss = fga > 0 ? fga + 0.44 * fta + tov : Math.max(80, Number(m.pace || 98));
+    const tovPct = (tov / Math.max(1, estPoss)) * 100;
+    const orebPct = oreb + oppDreb > 0 ? (oreb / (oreb + oppDreb)) * 100 : 0;
+    const ftRate = fga > 0 ? (ftm / fga) * 100 : 0;
+    const astPct = fgm > 0 ? (ast / fgm) * 100 : 0;
+
+    return {
+      eventId: String(m.eventId),
+      matchupLabel: `${m.away.abbr} ${m.away.score}-${m.home.score} ${m.home.abbr}`,
+      teamAbbr: String(side.abbr || ""),
+      teamName: String(side.name || side.shortName || side.abbr || ""),
+      isWinner: Boolean(side.isWinner),
+      efgPct: Number(efgPct.toFixed(1)),
+      tovPct: Number(tovPct.toFixed(1)),
+      orebPct: Number(orebPct.toFixed(1)),
+      ftRate: Number(ftRate.toFixed(1)),
+      astPct: Number(astPct.toFixed(1)),
+      stocks: stl + blk,
+    };
+  };
+
+  for (const m of gd.matchups || []) {
+    const enr = matchEnrichments.get(m.eventId);
+    const awayRow = buildSide(m.away, m.home, enr?.awayLog, enr?.homeLog, m);
+    const homeRow = buildSide(m.home, m.away, enr?.homeLog, enr?.awayLog, m);
+    rows.push(awayRow, homeRow);
+
+    const winRow = awayRow.isWinner ? awayRow : homeRow;
+    const loseRow = awayRow.isWinner ? homeRow : awayRow;
+    const factorScores = [
+      { label: "Eficiencia de tiro (eFG%)", score: (winRow.efgPct - loseRow.efgPct) * 0.40 },
+      { label: "Cuidado del balón (TOV%)", score: (loseRow.tovPct - winRow.tovPct) * 0.25 * 1.6 },
+      { label: "Rebote ofensivo (OREB%)", score: (winRow.orebPct - loseRow.orebPct) * 0.20 },
+      { label: "Viajes a la línea (FTr)", score: (winRow.ftRate - loseRow.ftRate) * 0.15 },
+    ].sort((a, b) => b.score - a.score);
+    const decisive = factorScores[0]?.label || "Eficiencia de tiro (eFG%)";
+    perGameTacticalLines.set(
+      m.eventId,
+      `Four Factors (${winRow.teamAbbr} vs ${loseRow.teamAbbr}): eFG ${winRow.efgPct.toFixed(1)}% vs ${loseRow.efgPct.toFixed(1)}% | TOV% ${winRow.tovPct.toFixed(1)}% vs ${loseRow.tovPct.toFixed(1)}% | OREB% ${winRow.orebPct.toFixed(1)}% vs ${loseRow.orebPct.toFixed(1)}% | ROB+TAP ${winRow.stocks} vs ${loseRow.stocks} | Factor decisivo: ${decisive}`
+    );
+
+    if (Array.isArray(enr?.pbp?.defensiveDuels)) {
+      for (const duel of enr.pbp.defensiveDuels.slice(0, 2)) {
+        const cleanDuel = String(duel || "").trim();
+        if (!cleanDuel) continue;
+        const tagged = `[${m.away.abbr} @ ${m.home.abbr}] ${cleanDuel}`;
+        if (!seenDuels.has(tagged) && defensiveDuels.length < 6) {
+          seenDuels.add(tagged);
+          defensiveDuels.push(tagged);
+        }
+      }
+    }
+  }
+
+  const extremes: Array<{
+    label: string;
+    teamAbbr: string;
+    valueDisplay: string;
+    matchupLabel: string;
+    eventId: string;
+  }> = [];
+
+  if (rows.length > 0) {
+    const bestEfg = [...rows].sort((a, b) => b.efgPct - a.efgPct)[0];
+    const bestTov = [...rows].sort((a, b) => a.tovPct - b.tovPct)[0];
+    const bestOreb = [...rows].sort((a, b) => b.orebPct - a.orebPct)[0];
+    const bestStocks = [...rows].sort((a, b) => b.stocks - a.stocks)[0];
+
+    if (bestEfg) {
+      extremes.push({
+        label: "Techo eFG%",
+        teamAbbr: bestEfg.teamAbbr,
+        valueDisplay: `${bestEfg.efgPct.toFixed(1)}%`,
+        matchupLabel: bestEfg.matchupLabel,
+        eventId: bestEfg.eventId,
+      });
+    }
+    if (bestTov) {
+      extremes.push({
+        label: "Menor TOV%",
+        teamAbbr: bestTov.teamAbbr,
+        valueDisplay: `${bestTov.tovPct.toFixed(1)}%`,
+        matchupLabel: bestTov.matchupLabel,
+        eventId: bestTov.eventId,
+      });
+    }
+    if (bestOreb && bestOreb.orebPct > 0) {
+      extremes.push({
+        label: "Dominio OREB%",
+        teamAbbr: bestOreb.teamAbbr,
+        valueDisplay: `${bestOreb.orebPct.toFixed(1)}%`,
+        matchupLabel: bestOreb.matchupLabel,
+        eventId: bestOreb.eventId,
+      });
+    }
+    if (bestStocks && bestStocks.stocks > 0) {
+      extremes.push({
+        label: "Cerrojo ROB+TAP",
+        teamAbbr: bestStocks.teamAbbr,
+        valueDisplay: `${bestStocks.stocks} STK`,
+        matchupLabel: bestStocks.matchupLabel,
+        eventId: bestStocks.eventId,
+      });
+    }
+  }
+
+  const winRows = rows.filter((r) => r.isWinner);
+  const loseRows = rows.filter((r) => !r.isWinner);
+  const avgWinEfg = winRows.length ? winRows.reduce((s, r) => s + r.efgPct, 0) / winRows.length : 0;
+  const avgLoseEfg = loseRows.length ? loseRows.reduce((s, r) => s + r.efgPct, 0) / loseRows.length : 0;
+  const avgWinTov = winRows.length ? winRows.reduce((s, r) => s + r.tovPct, 0) / winRows.length : 0;
+  const avgLoseTov = loseRows.length ? loseRows.reduce((s, r) => s + r.tovPct, 0) / loseRows.length : 0;
+
+  const bestEfgRow = [...rows].sort((a, b) => b.efgPct - a.efgPct)[0];
+  const bestStocksRow = [...rows].sort((a, b) => b.stocks - a.stocks)[0];
+  const bestOrebRow = [...rows].sort((a, b) => b.orebPct - a.orebPct)[0];
+
+  const fallbackKeys: Array<{ title: string; summary: string }> = [
+    {
+      title: "Brecha de eficacia en el tiro",
+      summary: bestEfgRow
+        ? `Los ganadores promediaron ${avgWinEfg.toFixed(1)}% eFG frente al ${avgLoseEfg.toFixed(1)}% de los perdedores, con **${bestEfgRow.teamName}** marcando el techo de la noche (${bestEfgRow.efgPct.toFixed(1)}% eFG en ${bestEfgRow.matchupLabel}).`
+        : `La eficacia efectiva en el tiro marcó la principal diferencia entre vencedores (${avgWinEfg.toFixed(1)}%) y derrotados (${avgLoseEfg.toFixed(1)}%).`,
+    },
+    {
+      title: "Actividad defensiva y cuidado de posesión",
+      summary: bestStocksRow && bestStocksRow.stocks > 0
+        ? `Los vencedores protegieron mejor el balón (${avgWinTov.toFixed(1)}% TOV frente al ${avgLoseTov.toFixed(1)}% rival), mientras **${bestStocksRow.teamName}** lideró la disrupción con ${bestStocksRow.stocks} acciones entre robos y tapones.`
+        : `La economía de posesiones inclinó la balanza: ${avgWinTov.toFixed(1)}% de pérdidas en ganadores frente al ${avgLoseTov.toFixed(1)}% en los derrotados.`,
+    },
+    {
+      title: defensiveDuels.length > 0 ? "Duelos directos y dominio en los tableros" : "Control del rebote ofensivo y ritmo",
+      summary:
+        defensiveDuels.length > 0
+          ? `El Play-by-Play registró duelos defensivos clave como ${defensiveDuels[0]}, complementados por el dominio en rebote ofensivo de **${bestOrebRow?.teamName || "los vencedores"}** (${bestOrebRow ? `${bestOrebRow.orebPct.toFixed(1)}% OREB` : `${gd.pulse.avgPace.toFixed(1)} Pace`}).`
+          : bestOrebRow && bestOrebRow.orebPct > 0
+          ? `En un ritmo medio de ${gd.pulse.avgPace.toFixed(1)} posesiones, **${bestOrebRow.teamName}** lideró el castigo en segunda oportunidad con un ${bestOrebRow.orebPct.toFixed(1)}% de rebote ofensivo (${bestOrebRow.matchupLabel}).`
+          : `La cartelera se movió a un ritmo medio de ${gd.pulse.avgPace.toFixed(1)} posesiones con ${gd.pulse.closeGamesCount} finales apretados (≤5 pts).`,
+    },
+  ];
+
+  const dossierText = [
+    `PROMEDIO FOUR FACTORS GANADORES VS PERDEDORES: eFG ${avgWinEfg.toFixed(1)}% vs ${avgLoseEfg.toFixed(1)}% | TOV% ${avgWinTov.toFixed(1)}% vs ${avgLoseTov.toFixed(1)}%`,
+    extremes.length > 0
+      ? `EXTREMOS TÁCTICOS DE LA NOCHE: ${extremes.map((e) => `${e.label}: ${e.teamAbbr} (${e.valueDisplay}, ${e.matchupLabel})`).join(" | ")}`
+      : "",
+    defensiveDuels.length > 0
+      ? `DUELOS DEFENSIVOS DIRECTOS VERIFICADOS EN PLAY-BY-PLAY: ${defensiveDuels.join(" | ")}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return {
+    keys: fallbackKeys,
+    extremes,
+    defensiveDuels,
+    perGameTacticalLines,
+    dossierText,
+  };
+}
 function computeGameTacticalProfile(report: any) {
   const computeSide = (side: any, opp: any) => {
     const t = side.totals || {};
@@ -1445,6 +1749,59 @@ function createScoutingEngine(deps) {
     } catch {
       return null;
     }
+  }
+  async function fetchSlateEspnFullRecaps(gd: any, pressCtx: any, forceRefresh = false) {
+    const matchups = Array.isArray(gd?.matchups) ? gd.matchups : [];
+    const digestsByEventId = new Map<string, { headline: string; digest: string; url: string; title: string }>();
+    const sources: Array<{ uri: string; title: string }> = [];
+    if (matchups.length === 0) return { digestsByEventId, sources, fetchedCount: 0 };
+
+    const deadlineMs = 4500;
+    const concurrency = 6;
+    let cursor = 0;
+    let timedOut = false;
+
+    const worker = async () => {
+      while (!timedOut) {
+        const idx = cursor++;
+        if (idx >= matchups.length) break;
+        const m = matchups[idx];
+        const key = `${m.away.abbr}@${m.home.abbr}`;
+        const hintId = pressCtx?.byMatchup?.get(key)?.espnEventId || "";
+        const recap = await fetchEspnFullGameRecap(hintId, gd.selectedDate, m.away.abbr, m.home.abbr, forceRefresh).catch(() => null);
+        if (recap && !timedOut) {
+          const digest = extractTacticalRecapDigest(recap.storyText, 640);
+          if (digest || recap.headline) {
+            digestsByEventId.set(m.eventId, {
+              headline: recap.headline,
+              digest,
+              url: recap.url,
+              title: recap.title,
+            });
+            if (recap.url) {
+              sources.push({ uri: recap.url, title: recap.title });
+            }
+          }
+        }
+      }
+    };
+
+    const workers = Array.from({ length: Math.min(concurrency, matchups.length) }, () => worker());
+    await Promise.race([
+      Promise.all(workers),
+      new Promise<void>((resolve) =>
+        setTimeout(() => {
+          timedOut = true;
+          resolve();
+        }, deadlineMs)
+      ),
+    ]);
+
+    return {
+      digestsByEventId,
+      sources,
+      fetchedCount: digestsByEventId.size,
+    };
   }
   function utcToEasternDateIso(utcStr) {
     if (!utcStr) return "";
@@ -3690,7 +4047,7 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
       reportInflight.delete(cacheKey);
     }
   }
-  function buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments = new Map(), tripleDoublesNight = [], dailyHeroicClinchers = [], careerHighsNight = []) {
+  function buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments = new Map(), tripleDoublesNight = [], dailyHeroicClinchers = [], careerHighsNight = [], chronicleVersion: "v1_classic" | "v2_tactical" = "v1_classic") {
     const mvp = gd.mvpOfTheNight;
     const stmt = gd.statementTeamWin;
     const topExp = gd.topExplosion;
@@ -3968,12 +4325,15 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
       };
     });
 
+    const slateRadarFallback = chronicleVersion === "v2_tactical" ? computeSlateTacticalRadar(gd, matchEnrichments) : null;
     return {
       date: gd.selectedDate,
       seasonLabel: gd.seasonLabel,
       gamesCount: gd.pulse.gamesCount,
       generatedAt: new Date().toISOString(),
       engineMode: "empirical_fallback",
+      chronicleVersion,
+      groundingUsed: false,
       missingApiKey: !getGeminiClient(),
       headline: sanitizeEditorialSpanishGrammar(headline),
       lead: sanitizeEditorialSpanishGrammar(lead),
@@ -3994,6 +4354,19 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
           ? spanishNightNotes.join(" · ")
           : "Sin participación en pista de jugadores españoles registrada en los partidos de esta fecha."
       ),
+      ...(slateRadarFallback
+        ? {
+            tacticalRadar: {
+              keys: slateRadarFallback.keys.map((k) => ({
+                title: sanitizeEditorialSpanishGrammar(k.title),
+                summary: sanitizeEditorialSpanishGrammar(k.summary),
+              })),
+              extremes: slateRadarFallback.extremes,
+              defensiveDuels: slateRadarFallback.defensiveDuels,
+            },
+            nightQuotes: [],
+          }
+        : {}),
       sources: [],
     };
   }
@@ -4030,7 +4403,9 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
     }
 
     const editorialCfg = await loadEditorialConfig(forceRefresh);
-    const cacheKey = `gameday_chronicle_v18:e${editorialCfg.cacheEpoch}:${gd.selectedDate}`;
+    const dailyVersion: "v1_classic" | "v2_tactical" =
+      editorialCfg.dailyChronicleVersion === "v1_classic" ? "v1_classic" : "v2_tactical";
+    const cacheKey = `gameday_chronicle_v18:${dailyVersion}:e${editorialCfg.cacheEpoch}:${gd.selectedDate}`;
     if (!forceRefresh) {
       const persisted = await readSharedPersistedNarrative(cacheKey);
       if (persisted) {
@@ -4154,7 +4529,8 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
       }
 
       const pbpTargets = [...marqueeEventIds].slice(0, 6).map((eid) => gd.matchups.find((m) => m.eventId === eid)).filter(Boolean);
-      if (pbpTargets.length > 0) {
+      const pbpTask = (async () => {
+        if (pbpTargets.length === 0) return;
         try {
           const pbpBatch = await Promise.race([
             Promise.all(
@@ -4177,7 +4553,20 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
         } catch {
           // Non-blocking PBP enrichment
         }
-      }
+      })();
+      const espnSlateTask =
+        dailyVersion === "v2_tactical"
+          ? fetchSlateEspnFullRecaps(gd, pressCtx, forceRefresh).catch(() => ({
+              digestsByEventId: new Map(),
+              sources: [],
+              fetchedCount: 0,
+            }))
+          : Promise.resolve({
+              digestsByEventId: new Map(),
+              sources: [],
+              fetchedCount: 0,
+            });
+      const [, espnSlateRecaps] = await Promise.all([pbpTask, espnSlateTask]);
 
       // Collect verified Buzzer Beaters & Game Winners for this gameday (snapshot + live PBP fallback)
       const heroicMapToday = new Map();
@@ -4214,7 +4603,7 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
       const dailyHeroicClinchers = Array.from(heroicMapToday.values());
 
       if (!getGeminiClient() || gd.matchups.length === 0) {
-        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments, tripleDoublesNight, dailyHeroicClinchers, careerHighsNight);
+        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments, tripleDoublesNight, dailyHeroicClinchers, careerHighsNight, dailyVersion);
         fallback.generationTimeMs = Date.now() - startTime;
         fallback.missingApiKey = !getGeminiClient();
         fallback.fallbackReason = !getGeminiClient() ? "missing_api_key" : "no_matchups";
@@ -4328,6 +4717,218 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
         dailyEditorialBlock,
       ].filter(Boolean).join("\n");
 
+      const nightVerifiedFoulOuts = [];
+      for (const enr of matchEnrichments.values()) {
+        if (Array.isArray(enr?.pbp?.foulOuts)) {
+          for (const fo of enr.pbp.foulOuts) {
+            nightVerifiedFoulOuts.push({ name: fo.playerName, foulOutPeriod: fo.periodLabel, foulOutClock: fo.clock });
+          }
+        }
+      }
+
+      if (dailyVersion === "v2_tactical") {
+        const slateRadar = computeSlateTacticalRadar(gd, matchEnrichments);
+        const v2MatchupBlocks = gd.matchups.map((m, idx) => {
+          const baseBlock = detailedMatchupBlocks[idx];
+          const fourFactorLine = slateRadar.perGameTacticalLines.get(m.eventId);
+          const enr = matchEnrichments.get(m.eventId);
+          const duelsLine =
+            Array.isArray(enr?.pbp?.defensiveDuels) && enr.pbp.defensiveDuels.length > 0
+              ? `  - Duelos defensivos PBP: ${enr.pbp.defensiveDuels.slice(0, 3).join(" | ")}`
+              : "";
+          return [baseBlock, fourFactorLine ? `  - ${fourFactorLine}` : "", duelsLine].filter(Boolean).join("\n");
+        });
+
+        const slateRecapBlocks: string[] = [];
+        for (const m of gd.matchups) {
+          const rec = espnSlateRecaps.digestsByEventId.get(m.eventId);
+          if (rec && (rec.digest || rec.headline)) {
+            slateRecapBlocks.push(
+              `[${m.away.abbr} ${m.away.score}-${m.home.score} ${m.home.abbr}] ${rec.headline ? `Titular AP/ESPN: ${rec.headline}. ` : ""}${rec.digest}`
+            );
+          }
+        }
+
+        const dedupSourcesMap = new Map<string, { uri: string; title: string }>();
+        for (const s of [
+          { uri: `https://www.nba.com/games?date=${gd.selectedDate}`, title: `NBA.com — Resultados y Actas Oficiales (${gd.selectedDate})` },
+          ...espnSlateRecaps.sources,
+          ...pressCtx.daySources,
+        ]) {
+          if (s?.uri && !dedupSourcesMap.has(s.uri)) {
+            dedupSourcesMap.set(s.uri, s);
+          }
+        }
+        const v2SeedSources = Array.from(dedupSourcesMap.values()).slice(0, 8);
+
+        const v2DayDossier = [
+          `CONTEXTO DE JORNADA NBA (MOTOR TÁCTICO HÍBRIDO v2): Fecha oficial ${gd.selectedDate} (Temporada ${gd.seasonLabel}). Combina el acta oficial de RadarNBA (máxima autoridad en cifras), los Four Factors y duelos PBP de la cartelera, las crónicas oficiales post-partido AP/ESPN de toda la noche y la búsqueda web en vivo para detectar esquemas defensivos, ajustes tácticos y declaraciones post-partido verificadas.`,
+          `FECHA DE LA JORNADA NBA: ${gd.selectedDate} (Temporada ${gd.seasonLabel})`,
+          `PULSO GLOBAL: ${gd.pulse.gamesCount} partidos disputados | Media puntos combinados: ${gd.pulse.avgTotalPoints.toFixed(1)} PTS (media liga: ${gd.pulse.leagueAvgTotalPoints.toFixed(1)}) | Finales apretados (<=5 pts): ${gd.pulse.closeGamesCount} | Palizas (>=15 pts): ${gd.pulse.blowoutsCount} | Victorias visitantes: ${gd.pulse.roadWinsCount}/${gd.pulse.gamesCount} | Ritmo medio (Pace): ${gd.pulse.avgPace.toFixed(1)}.`,
+          `CHECKLIST DE PARTIDOS OBLIGATORIOS A RESEÑAR (TOTAL: ${gd.matchups.length}, PROHIBIDO OMITIR NINGUNO): ${mandatoryMatchupsIndex}`,
+          dayHeroicBlock,
+          gd.statementTeamWin ? `GOLPE EN LA MESA COLECTIVO: ${gd.statementTeamWin.teamName} (${gd.statementTeamWin.summaryAdvanced}).` : "",
+          `<radar_tactico_four_factors_jornada>\n${slateRadar.dossierText}\n</radar_tactico_four_factors_jornada>`,
+          ``,
+          `QUINTETO IDEAL DE LA NOCHE (TOP 5 GAME SCORE):`,
+          ...gd.idealFive.map((p, i) => `${i + 1}. ${p.playerName} (${p.teamAbbr} ${p.isHome ? "vs" : "@"} ${p.opponentAbbr}, ${p.result}): ${p.points} PTS, ${p.rebounds} REB, ${p.assists} AST, ${p.stocks} ROB+TAP, ${p.fgm}/${p.fga} TC, ${p.fg3m}/${p.fg3a} T3, ${p.ftm}/${p.fta} TL, ${p.tsPct.toFixed(1)}% TS, ${p.turnovers} PER, ${Math.round(p.minutes)} MIN, ${p.plusMinus >= 0 ? `+${p.plusMinus}` : p.plusMinus} +/-, GmSc ${p.gameScore.toFixed(1)} (media ${p.ptsBaselineAvg.toFixed(1)} PTS)`),
+          ``,
+          `DESGLOSE EMPÍRICO Y FOUR FACTORS DE LOS ${gd.matchups.length} PARTIDOS:`,
+          ...v2MatchupBlocks,
+          ``,
+          slateRecapBlocks.length > 0
+            ? `<cronicas_ap_espn_cartelera_completa (${slateRecapBlocks.length}/${gd.matchups.length} partidos cubiertos)>\n${slateRecapBlocks.join("\n")}\n</cronicas_ap_espn_cartelera_completa>`
+            : pressCtx.dayNotes.length > 0
+            ? `TELETIPOS DE PRENSA (${gd.selectedDate}):\n${pressCtx.dayNotes.slice(0, 12).map((n) => `  • ${n}`).join("\n")}`
+            : "",
+          ``,
+          `EXPLOSIONES FRENTE A SU MEDIA: ${gd.explosions.length > 0 ? gd.explosions.slice(0, 6).map((e) => `${e.playerName} (${e.teamAbbr} ${e.isHome ? "vs" : "@"} ${e.opponentAbbr}, ${e.result}): ${e.points} PTS (+${e.ptsDelta.toFixed(1)} vs media ${e.ptsAvg.toFixed(1)}), ${e.fgm}/${e.fga} TC, ${e.fg3m}/${e.fg3a} T3, ${e.tsPct.toFixed(1)}% TS, ${e.rebounds} REB, ${e.assists} AST, ${e.stocks} STK en ${Math.round(e.minutes)} MIN [${e.driverTag}]`).join(" | ") : "Ninguna extrema"}`,
+          `BATACAZOS DE TITULARES: ${gd.slumps.length > 0 ? gd.slumps.slice(0, 5).map((s) => `${s.playerName} (${s.teamAbbr} vs ${s.opponentAbbr}, ${s.result}): ${s.points} PTS (${s.ptsDelta.toFixed(1)} vs media ${s.ptsAvg.toFixed(1)}), ${s.fgm}/${s.fga} TC, ${s.fg3m}/${s.fg3a} T3, ${s.tsPct.toFixed(1)}% TS, ${s.turnovers} PER en ${Math.round(s.minutes)} MIN [${s.driverTag}]`).join(" | ") : "Ninguno acusado"}`,
+          `CAMBIOS DE ROL / PICOS DE MINUTOS: ${gd.roleShifts.length > 0 ? gd.roleShifts.slice(0, 4).map((r) => `${r.playerName} (${r.teamAbbr} vs ${r.opponentAbbr}): ${r.minutes.toFixed(0)} MIN (+${r.minutesDelta.toFixed(1)} vs media ${r.minutesAvg.toFixed(0)}), ${r.usgEst.toFixed(1)}% USG, ${r.points}P/${r.rebounds}R/${r.assists}A con ${r.fga} TCI`).join(" | ") : "Rotaciones estables"}`,
+          `RACHAS DESTACADAS: ${gd.streakShifts.length > 0 ? gd.streakShifts.slice(0, 6).map((st) => `${st.playerName} (${st.teamAbbr} vs ${st.opponentAbbr}): ${st.status === "broken" ? `RACHA ROTA tras ${st.streakCount} PJ` : `PROLONGA a ${st.streakCount} PJ`} en ${st.thresholdLabel} (${st.nightValueDisplay} hoy, media racha ${st.avgDuringStreak})`).join(" | ") : "Sin rachas largas alteradas"}`,
+          `TRIPLES-DOBLES DE LA NOCHE: ${tripleDoublesNight.length > 0 ? tripleDoublesNight.join(" | ") : "Ninguno"} (Total dobles-dobles: ${totalDoubleDoubles}${doubleDoublesNight.length > 0 ? `; destacados: ${doubleDoublesNight.slice(0, 4).join(" | ")}` : ""}).`,
+          careerHighsNight.length > 0 ? `RÉCORDS PERSONALES DE CARRERA VERIFICADOS (CAREER HIGHS): ${careerHighsNight.map((s) => s.replace(/\*\*/g, "")).join(" | ")}` : "",
+          `JUGADORES ESPAÑOLES EN LA JORNADA: ${spanishNightNotes.length > 0 ? spanishNightNotes.join(" | ") : "Ningún jugador español sumó minutos en pista esta fecha."}`,
+        ].filter(Boolean).join("\n");
+
+        const v2CapitulosInstruction = totalGamesCount >= 3
+          ? `(Exactamente 3 capítulos separados por una línea con --- cubriendo el 100% de los ${totalGamesCount} partidos del CHECKLIST. Ritmo MÁS CONCISO Y ESCANEABLE que una crónica larga: párrafos directos de 3-4 líneas, cero relleno y cero repetición de lo ya dicho en RADAR_TACTICO. Formato obligatorio: "Título concreto del capítulo :: Párrafo 1\\n\\nPárrafo 2".\n- CAPÍTULO 1 (Foco Principal, 2 párrafos densos y afilados): guion del partido eje, ajuste defensivo/táctico o quiebre PBP y duelos individuales decisivos.\n- CAPÍTULO 2 (Segundo Foco, 2 párrafos ágiles): gran contraste táctico, sorpresa o segundo choque destacado de la noche explicando por qué se ganó o perdió.\n- CAPÍTULO 3 (Panorama Completo del Resto de la Cartelera — OBLIGATORIO reseñar TODOS Y CADA UNO de los ${totalGamesCount - 2} partidos restantes del CHECKLIST en 2 párrafos cohesivos): 1-2 frases precisas por partido con marcador exacto, factor táctico decisivo y protagonista con 2 cifras reales).`
+          : `(Exactamente ${totalGamesCount === 1 ? "2 capítulos sobre el único duelo disputado" : "2 capítulos concisos"} separados por una línea con --- cubriendo el 100% de los ${totalGamesCount} partidos. Formato: "Título :: Párrafo 1\\n\\nPárrafo 2". Cada párrafo de 3-4 líneas, ágil y causal, sin repetir cifras ya expuestas en RADAR_TACTICO).`;
+
+        const v2SystemInstruction = [
+          "Eres el analista táctico jefe de RadarNBA en España. Escribes la Revista Táctica Híbrida de la jornada NBA: más concisa, directa y escaneable que una crónica larga, pero con verdadera profundidad de pizarra sobre POR QUÉ ganó y perdió cada equipo, emparejamientos defensivos clave y declaraciones reales post-partido.",
+          "REGLAS INQUEBRANTABLES DE RIGOR, CONCISIÓN Y FUENTES HÍBRIDAS:",
+          "1. JERARQUÍA DE FUENTES Y CERO INVENCIÓN: (a) En marcadores, puntos, series de tiro, porcentajes, Four Factors, rebotes, pérdidas, faltas y rachas MANDA SIEMPRE el acta oficial del dossier. (b) Usa `<cronicas_ap_espn_cartelera_completa>` y tu búsqueda web en vivo sobre los partidos de esta fecha para identificar esquemas defensivos concretos (zona, cambios, ayudas, drop, blitz, emparejamientos sobre la estrella), lesiones ocurridas durante el choque y citas textuales reales post-partido. (c) Solo menciona el nombre propio de un entrenador si aparece textualmente en `<cronicas_ap_espn_cartelera_completa>` o en un resultado verificado de búsqueda web de esta jornada; en caso contrario usa 'el cuerpo técnico de [Equipo]'. Jamás inventes citas, esquemas, Career Highs ni Buzzer Beaters/Game Winners que no figuren verificados.",
+          "2. RITMO CONCISO Y ESCANEABLE (CERO REPETICIÓN): Párrafos limpios de 3 a 4 líneas máximo. Selecciona solo 2 o 3 datos decisivos por idea e intégralos con naturalidad. Si un dato ya abrió el RADAR_TACTICO, no repitas el mismo párrafo en PIZARRAS o CLAVES: aporta un ángulo nuevo en cada bloque.",
+          `3. COBERTURA INTEGRAL OBLIGATORIA: Debes reseñar TODOS Y CADA UNO de los ${totalGamesCount} partidos del CHECKLIST en CAPITULOS_DINAMICOS sin omitir ninguno. Evita tópicos gastados ("En conclusión", "Cabe destacar", "Sin lugar a dudas", "arma de destrucción masiva", "el reverso de la moneda", "dar un golpe sobre la mesa").`,
+          '4. GRAMÁTICA ESPAÑOLA Y NEGRITAS (**...**): Jamás escribas "los Los Angeles Lakers" (escribe "**Los Angeles Lakers**" o "los **Lakers**") ni "espalda con espalda" (usa "en back-to-back"). En el cuerpo usa **texto** SOLO para jugadores, equipos y UNA sola idea táctica breve por párrafo. PROHIBIDO poner ** en TITULAR, títulos de capítulo, títulos antes de || o antes de ::.',
+          "5. FORMATO EXACTO CON ESTAS 9 ETIQUETAS EN MAYÚSCULAS:",
+          "===TITULAR===",
+          "(Titular periodístico afilado de 1 sola línea con foco táctico concreto de la noche, sin # ni **).",
+          "===ENTRADILLA===",
+          "(Entradilla concisa de 2 líneas resumiendo el pulso y el titular táctico de la cartelera con negritas editoriales).",
+          "===RADAR_TACTICO===",
+          '(Exactamente 3 líneas —una por línea, sin numeración— con el formato exacto "Título táctico breve sin ** || Explicación causal concisa de 1 a 2 frases con 1-2 cifras reales o emparejamiento PBP/AP-ESPN de la noche": [1] gran tendencia colectiva o techo ofensivo/defensivo Four Factors; [2] ajuste táctico o emparejamiento defensivo estrella de la noche; [3] factor de posesión, rebote ofensivo o cierre clutch decisivo).',
+          "===CAPITULOS_DINAMICOS===",
+          v2CapitulosInstruction,
+          "===PIZARRAS===",
+          "(Epígrafe fijo Pizarras: 2 párrafos ágiles y concretos comparando los planes de partido de la noche —pintura vs triple, defensas sobre el manejador, carga del rebote ofensivo o ritmo— sin repetir los mismos partidos ya desarrollados en los Capítulos 1 y 2).",
+          "===HITOS===",
+          "(Epígrafe fijo Hitos: 2 párrafos narrativos y ágiles sobre MVP, Career Highs verificados, triples-dobles, explosiones, noches grises de titulares y rachas. Prohibido formato lista telegráfica).",
+          "===ESPANOLES===",
+          "(Epígrafe fijo Españoles: 1 párrafo conciso si jugaron españoles con minutos, serie de tiro y contexto; o 1 frase sobria y directa si ninguno sumó minutos).",
+          "===VOCES_NOCHE===",
+          '(SOLO declaraciones REALES y VERIFICADAS post-partido procedentes de `<cronicas_ap_espn_cartelera_completa>` o de tu búsqueda web en vivo de esta jornada. Entre 1 y 3 líneas con formato exacto "Nombre completo | ABBR | Cruce ej. BOS vs NYK | Cita traducida fielmente al español sin comillas externas | Medio ej. AP/ESPN". REGLA DE ORO: Si NO encuentras citas reales verificadas de esta fecha exacta, escribe ÚNICAMENTE la palabra NINGUNA. PROHIBIDO inventar o parafrasear como cita una frase que nadie pronunció).',
+          "===CLAVES===",
+          '(Epígrafe fijo Claves: exactamente 4 claves breves y escaneables, una por línea con formato "Título corto sin ** :: Explicación causal de 1-2 frases con marcador exacto y 2 cifras reales": [1] gran actuación individual; [2] clave táctica/defensiva de la noche; [3] pulso clutch o factor X; [4] tendencia transversal de la cartelera).',
+          dailyEditorialBlock,
+        ].filter(Boolean).join("\n");
+
+        try {
+          const cascadeBudgetMs = 54000;
+          const geminiCall = generateWithGeminiCascade({
+            systemInstruction: v2SystemInstruction,
+            contents: v2DayDossier,
+            seedSources: v2SeedSources,
+            budgetMs: cascadeBudgetMs,
+            enableGoogleSearch: true,
+          });
+          const cascadeTimer = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`Timeout ${cascadeBudgetMs}ms en crónica de jornada v2`)), cascadeBudgetMs + 500)
+          );
+          const { text: rawText, sources, model: modelUsed, groundingUsed } = (await Promise.race([geminiCall, cascadeTimer])) as any;
+          const safeRawText = reconcileVerifiedFoulOutTimings(rawText, nightVerifiedFoulOuts);
+          const parsed = parseDelimitedSections(safeRawText, [
+            "TITULAR",
+            "ENTRADILLA",
+            "RADAR_TACTICO",
+            "CAPITULOS_DINAMICOS",
+            "PIZARRAS",
+            "HITOS",
+            "ESPANOLES",
+            "VOCES_NOCHE",
+            "CLAVES",
+          ]);
+          const fallback = buildDeterministicDailyChronicle(
+            gd,
+            spanishNightNotes,
+            matchEnrichments,
+            tripleDoublesNight,
+            dailyHeroicClinchers,
+            careerHighsNight,
+            "v2_tactical"
+          );
+          const radarKeys = parseTacticalKeys(parsed.RADAR_TACTICO, slateRadar.keys);
+          const nightQuotes = parseNightQuotes(parsed.VOCES_NOCHE);
+          const payload = {
+            date: gd.selectedDate,
+            seasonLabel: gd.seasonLabel,
+            gamesCount: gd.pulse.gamesCount,
+            generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+            generationTimeMs: Date.now() - startTime,
+            engineMode: "gemini_search",
+            modelUsed,
+            chronicleVersion: "v2_tactical",
+            groundingUsed: Boolean(groundingUsed),
+            headline: parsed.TITULAR && parsed.TITULAR.length > 12 ? stripInlineWrapper(parsed.TITULAR) : fallback.headline,
+            lead: parsed.ENTRADILLA && parsed.ENTRADILLA.length > 25 ? parsed.ENTRADILLA : fallback.lead,
+            tacticalRadar: {
+              keys: radarKeys,
+              extremes: slateRadar.extremes,
+              defensiveDuels: slateRadar.defensiveDuels,
+            },
+            dynamicSections: parseDynamicChapters(parsed.CAPITULOS_DINAMICOS, fallback.dynamicSections),
+            pizarrasSection: parsed.PIZARRAS && parsed.PIZARRAS.length > 60 ? parsed.PIZARRAS : fallback.pizarrasSection,
+            hitosSection: parsed.HITOS && parsed.HITOS.length > 60 ? parsed.HITOS : fallback.hitosSection,
+            espanolesSection: parsed.ESPANOLES && parsed.ESPANOLES.length > 12 ? parsed.ESPANOLES : fallback.espanolesSection,
+            nightQuotes,
+            clavesList: parseClavesList(parsed.CLAVES, fallback.clavesList),
+            spanishPlayersSummary:
+              spanishNightNotes.length > 0
+                ? spanishNightNotes.join(" · ")
+                : "Sin minutos en pista de jugadores españoles en los encuentros disputados esta fecha.",
+            sources: Array.isArray(sources) ? sources.slice(0, 8) : v2SeedSources,
+          };
+          const persistTtlMs = 7 * 24 * 60 * 60 * 1e3;
+          await writeSharedPersistedNarrative(cacheKey, payload, persistTtlMs);
+          return payload;
+        } catch (err) {
+          const rawErrStr = String(err instanceof Error ? err.message : err || "timeout/offline");
+          const cleanReason = rawErrStr.replace(/[\{\}\"\:]/g, " ").replace(/\s+/g, " ").slice(0, 160);
+          const isQuota = isQuotaExhaustedError(err) || cleanReason.includes("cuota_agotada_429");
+          const isOverload = isTransientOverloadError(err) || cleanReason.includes("alta_demanda_503");
+          console.info(
+            `[RadarNBA] Activado motor determinista de jornada v2 para ${gd.selectedDate} (${
+              isQuota ? "cuota_diaria_429_agotada" : isOverload ? "alta_demanda_503" : cleanReason
+            })`
+          );
+          const fallback = buildDeterministicDailyChronicle(
+            gd,
+            spanishNightNotes,
+            matchEnrichments,
+            tripleDoublesNight,
+            dailyHeroicClinchers,
+            careerHighsNight,
+            "v2_tactical"
+          );
+          fallback.generationTimeMs = Date.now() - startTime;
+          fallback.missingApiKey = !getGeminiClient();
+          fallback.quotaExhausted = isQuota;
+          fallback.overload503 = isOverload;
+          fallback.fallbackReason = isQuota
+            ? `quota_exhausted_429 (${cleanReason})`
+            : isOverload
+            ? `overload_503 (${cleanReason})`
+            : cleanReason;
+          reportMemoryCache.set(cacheKey, {
+            expiresAt: Date.now() + (isQuota ? 5 * 60 * 1e3 : isOverload ? 30 * 1e3 : 2 * 60 * 1e3),
+            data: fallback,
+          });
+          return fallback;
+        }
+      }
+
+      // v1_classic (100% untouched classic daily chronicle engine)
       try {
         const cascadeBudgetMs = 48000;
         const geminiCall = generateWithGeminiCascade({
@@ -4340,18 +4941,10 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
           setTimeout(() => reject(new Error(`Timeout ${cascadeBudgetMs}ms en crónica de jornada`)), cascadeBudgetMs + 500)
         );
         const { text: rawText, sources, model: modelUsed } = (await Promise.race([geminiCall, cascadeTimer])) as any;
-        const nightVerifiedFoulOuts = [];
-        for (const enr of matchEnrichments.values()) {
-          if (Array.isArray(enr?.pbp?.foulOuts)) {
-            for (const fo of enr.pbp.foulOuts) {
-              nightVerifiedFoulOuts.push({ name: fo.playerName, foulOutPeriod: fo.periodLabel, foulOutClock: fo.clock });
-            }
-          }
-        }
         const safeRawText = reconcileVerifiedFoulOutTimings(sanitizeUnverifiedCoachClaims(rawText, verifiedNightPlayerNames), nightVerifiedFoulOuts);
         const parsed = parseDelimitedSections(safeRawText, ["TITULAR", "ENTRADILLA", "CAPITULOS_DINAMICOS", "PIZARRAS", "HITOS", "ESPANOLES", "CLAVES"]);
-        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments, tripleDoublesNight, dailyHeroicClinchers, careerHighsNight);
-        const payload = { date: gd.selectedDate, seasonLabel: gd.seasonLabel, gamesCount: gd.pulse.gamesCount, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), generationTimeMs: Date.now() - startTime, engineMode: "gemini_search", modelUsed, headline: parsed.TITULAR && parsed.TITULAR.length > 12 ? stripInlineWrapper(parsed.TITULAR) : fallback.headline, lead: parsed.ENTRADILLA && parsed.ENTRADILLA.length > 25 ? parsed.ENTRADILLA : fallback.lead, dynamicSections: parseDynamicChapters(parsed.CAPITULOS_DINAMICOS, fallback.dynamicSections), pizarrasSection: parsed.PIZARRAS && parsed.PIZARRAS.length > 60 ? parsed.PIZARRAS : fallback.pizarrasSection, hitosSection: parsed.HITOS && parsed.HITOS.length > 60 ? parsed.HITOS : fallback.hitosSection, espanolesSection: parsed.ESPANOLES && parsed.ESPANOLES.length > 12 ? parsed.ESPANOLES : fallback.espanolesSection, clavesList: parseClavesList(parsed.CLAVES, fallback.clavesList), spanishPlayersSummary: spanishNightNotes.length > 0 ? spanishNightNotes.join(" · ") : "Sin minutos en pista de jugadores españoles en los encuentros disputados esta fecha.", sources };
+        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments, tripleDoublesNight, dailyHeroicClinchers, careerHighsNight, "v1_classic");
+        const payload = { date: gd.selectedDate, seasonLabel: gd.seasonLabel, gamesCount: gd.pulse.gamesCount, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), generationTimeMs: Date.now() - startTime, engineMode: "gemini_search", modelUsed, chronicleVersion: "v1_classic", groundingUsed: false, headline: parsed.TITULAR && parsed.TITULAR.length > 12 ? stripInlineWrapper(parsed.TITULAR) : fallback.headline, lead: parsed.ENTRADILLA && parsed.ENTRADILLA.length > 25 ? parsed.ENTRADILLA : fallback.lead, dynamicSections: parseDynamicChapters(parsed.CAPITULOS_DINAMICOS, fallback.dynamicSections), pizarrasSection: parsed.PIZARRAS && parsed.PIZARRAS.length > 60 ? parsed.PIZARRAS : fallback.pizarrasSection, hitosSection: parsed.HITOS && parsed.HITOS.length > 60 ? parsed.HITOS : fallback.hitosSection, espanolesSection: parsed.ESPANOLES && parsed.ESPANOLES.length > 12 ? parsed.ESPANOLES : fallback.espanolesSection, clavesList: parseClavesList(parsed.CLAVES, fallback.clavesList), spanishPlayersSummary: spanishNightNotes.length > 0 ? spanishNightNotes.join(" · ") : "Sin minutos en pista de jugadores españoles en los encuentros disputados esta fecha.", sources };
         const persistTtlMs = 7 * 24 * 60 * 60 * 1e3;
         await writeSharedPersistedNarrative(cacheKey, payload, persistTtlMs);
         return payload;
@@ -4365,7 +4958,7 @@ Como Factor X emergi\xF3 ${wSecond ? `**#${wSecond.jersey} ${wSecond.name}** (${
             isQuota ? "cuota_diaria_429_agotada" : isOverload ? "alta_demanda_503" : cleanReason
           })`
         );
-        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments, tripleDoublesNight, dailyHeroicClinchers, careerHighsNight);
+        const fallback = buildDeterministicDailyChronicle(gd, spanishNightNotes, matchEnrichments, tripleDoublesNight, dailyHeroicClinchers, careerHighsNight, "v1_classic");
         fallback.generationTimeMs = Date.now() - startTime;
         fallback.missingApiKey = !getGeminiClient();
         fallback.quotaExhausted = isQuota;

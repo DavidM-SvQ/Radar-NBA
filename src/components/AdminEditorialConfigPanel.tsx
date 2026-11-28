@@ -84,14 +84,27 @@ const DAILY_VERSION_OPTIONS: {
   highlights: string[];
 }[] = [
   {
+    id: 'v2_tactical',
+    code: 'v2',
+    label: 'v2 · Revista Táctica Híbrida',
+    tag: 'Por defecto',
+    desc: 'Combina Radar Táctico de la Noche (Four Factors + duelos PBP), cobertura total AP/ESPN de toda la cartelera y búsqueda web en vivo con prosa más concisa y escaneable.',
+    highlights: [
+      'Bloque Radar Táctico (3 ejes causales + 4 extremos clicables + duelos PBP)',
+      'Crónicas AP/ESPN de toda la cartelera en paralelo + Búsqueda Web',
+      'Voces de la Noche verificadas (solo si existen citas reales) y lectura ágil',
+    ],
+  },
+  {
     id: 'v1_classic',
     code: 'v1',
     label: 'v1 · Editorial Clásica',
-    tag: 'Activa',
-    desc: 'Motor afinado de Revista de Jornada con cobertura integral de todos los partidos, Pizarras, Hitos, Españoles y 4 Claves.',
+    tag: 'Afinada intacta',
+    desc: 'Conserva exactamente el motor clásico de 7 bloques en mundo cerrado con cobertura integral de todos los partidos, Pizarras, Hitos, Españoles y 4 Claves.',
     highlights: [
-      'Intacta y protegida: la v2 táctica aplica solo a partidos individuales',
-      'Preparada para añadir futuras versiones de jornada sin perder esta base',
+      'Estructura clásica de 7 secciones sin búsqueda web ni bloques extra',
+      'Máxima velocidad y estilo editorial ya afinado',
+      'Caché independiente de v2 para alternar sin mezclar',
     ],
   },
 ];
@@ -664,19 +677,19 @@ export function AdminEditorialConfigPanel({
           <span className="text-[11px] font-mono text-slate-400">
             Partido: <strong className="text-orange-300">{draft.gameChronicleVersion === 'v2_tactical' ? 'v2 Táctica' : 'v1 Clásica'}</strong>
             {' · '}
-            Jornada: <strong className="text-sky-300">v1 Clásica</strong>
+            Jornada: <strong className="text-sky-300">{draft.dailyChronicleVersion === 'v2_tactical' ? 'v2 Táctica' : 'v1 Clásica'}</strong>
           </span>
         </div>
 
         <p className="text-xs text-slate-400 leading-relaxed">
-          Elige qué versión del motor editorial se usa por defecto al abrir una crónica. Cada versión
+          Elige qué versión del motor editorial se usa por defecto al abrir una crónica de partido o de jornada. Cada versión
           mantiene su propia caché aislada para que puedas alternar entre <strong className="text-slate-200">v1</strong> y{' '}
           <strong className="text-slate-200">v2</strong> en cualquier momento sin perder ni mezclar las crónicas ya afinadas.
         </p>
 
-        <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
-          {/* Individual Games Selector (8 cols) */}
-          <div className="xl:col-span-8 space-y-2.5">
+        <div className="space-y-5">
+          {/* Individual Games Selector */}
+          <div className="space-y-2.5">
             <div className="flex items-center justify-between gap-2">
               <p className="text-xs font-semibold text-slate-200">
                 Crónicas de Partido (Individuales)
@@ -738,15 +751,15 @@ export function AdminEditorialConfigPanel({
             </div>
           </div>
 
-          {/* Daily Chronicles Selector (4 cols) */}
-          <div className="xl:col-span-4 space-y-2.5">
+          {/* Daily Chronicles Selector */}
+          <div className="space-y-2.5 pt-4 border-t border-[#1E293B]/80">
             <div className="flex items-center justify-between gap-2">
               <p className="text-xs font-semibold text-slate-200">
                 Crónicas de Jornada (Resumen Diario)
               </p>
-              <span className="text-[11px] text-slate-400">1 versión</span>
+              <span className="text-[11px] text-slate-400">2 versiones disponibles</span>
             </div>
-            <div className="space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {DAILY_VERSION_OPTIONS.map((opt) => {
                 const active = draft.dailyChronicleVersion === opt.id;
                 return (
@@ -771,8 +784,12 @@ export function AdminEditorialConfigPanel({
                         >
                           {opt.label}
                         </span>
-                        <span className="text-[10px] font-mono font-semibold text-sky-300">
-                          {opt.tag}
+                        <span
+                          className={`text-[10px] font-mono font-semibold ${
+                            active ? 'text-sky-300' : 'text-slate-500'
+                          }`}
+                        >
+                          {active ? 'Activa' : opt.tag}
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-300 leading-relaxed">
@@ -782,7 +799,11 @@ export function AdminEditorialConfigPanel({
                     <ul className="space-y-1 border-t border-[#1E293B] pt-2.5 text-[11px] text-slate-400">
                       {opt.highlights.map((item) => (
                         <li key={item} className="flex items-start gap-1.5">
-                          <Check className="w-3 h-3 shrink-0 mt-0.5 text-sky-400" />
+                          <Check
+                            className={`w-3 h-3 shrink-0 mt-0.5 ${
+                              active ? 'text-sky-400' : 'text-slate-500'
+                            }`}
+                          />
                           <span>{item}</span>
                         </li>
                       ))}

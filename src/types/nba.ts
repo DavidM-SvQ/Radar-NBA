@@ -875,14 +875,42 @@ export interface GameDayMatchupCard {
   [key: string]: any;
 }
 
+export interface GameDayTacticalExtreme {
+  label: string;
+  teamAbbr: string;
+  valueDisplay: string;
+  matchupLabel: string;
+  eventId: string;
+}
+
+export interface GameDayTacticalRadar {
+  keys: Array<{
+    title: string;
+    summary: string;
+  }>;
+  extremes: GameDayTacticalExtreme[];
+  defensiveDuels: string[];
+}
+
+export interface GameDayNightQuote {
+  speaker: string;
+  teamAbbr?: string;
+  matchup?: string;
+  quoteEs: string;
+  sourceTitle?: string;
+}
+
 export interface GameDayChroniclePayload {
   date: string;
   seasonLabel: string;
   gamesCount: number;
   generatedAt: string;
   engineMode: string;
+  chronicleVersion?: 'v1_classic' | 'v2_tactical';
+  groundingUsed?: boolean;
   headline: string;
   lead: string;
+  tacticalRadar?: GameDayTacticalRadar;
   dynamicSections: Array<{
     kicker: string;
     title: string;
@@ -891,6 +919,7 @@ export interface GameDayChroniclePayload {
   pizarrasSection: string;
   hitosSection: string;
   espanolesSection: string;
+  nightQuotes?: GameDayNightQuote[];
   clavesList: Array<{
     title: string;
     detail: string;

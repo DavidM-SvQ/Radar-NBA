@@ -220,7 +220,7 @@ const autoStreaksConfigBodySchema = z.strictObject({
 });
 const editorialConfigBodySchema = z.strictObject({
   gameChronicleVersion: z.enum(["v1_classic", "v2_tactical"]).optional().default("v2_tactical"),
-  dailyChronicleVersion: z.enum(["v1_classic"]).optional().default("v1_classic"),
+  dailyChronicleVersion: z.enum(["v1_classic", "v2_tactical"]).optional().default("v2_tactical"),
   lengthProfile: z.enum(["concise", "standard", "deep"]),
   tacticalFocus: z.enum(["balanced", "tactical_chalkboard", "narrative_storytelling", "advanced_metrics"]),
   customStyleDirectives: z.string().max(900, "Las directrices personalizadas no pueden superar 900 caracteres.").transform(stripControlChars),

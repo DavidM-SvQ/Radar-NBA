@@ -13,7 +13,9 @@ import {
   ExternalLink,
   FileText,
   Flame,
+  MessageSquareQuote,
   RefreshCw,
+  Shield,
   Sparkles,
   Star,
   TrendingDown,
@@ -308,9 +310,33 @@ export function GameDayAnalyzerView({
     const ch = activeDate ? chronicleByDate[activeDate] : undefined;
     if (!ch) return;
 
+    const radarMd = ch.tacticalRadar
+      ? [
+          '## Radar Táctico de la Noche',
+          ...ch.tacticalRadar.keys.map((k, idx) => `${idx + 1}. **${k.title}**: ${k.summary}`),
+          ch.tacticalRadar.extremes.length > 0
+            ? `Extremos Four Factors: ${ch.tacticalRadar.extremes.map((e) => `${e.label}: ${e.teamAbbr} (${e.valueDisplay}, ${e.matchupLabel})`).join(' · ')}`
+            : '',
+          ch.tacticalRadar.defensiveDuels.length > 0
+            ? `Duelos defensivos PBP: ${ch.tacticalRadar.defensiveDuels.join(' · ')}`
+            : '',
+        ]
+          .filter(Boolean)
+          .join('\n')
+      : '';
     const dynamicMd = ch.dynamicSections
       .map((sec) => `## ${sec.title}\n${sec.body}`)
       .join('\n\n');
+    const vocesMd =
+      ch.nightQuotes && ch.nightQuotes.length > 0
+        ? [
+            '## Voces de la Noche',
+            ...ch.nightQuotes.map(
+              (q) =>
+                `> «${q.quoteEs}» — **${q.speaker}**${q.teamAbbr ? ` (${q.teamAbbr}${q.matchup ? ` · ${q.matchup}` : ''})` : ''}${q.sourceTitle ? ` · Vía ${q.sourceTitle}` : ''}`
+            ),
+          ].join('\n')
+        : '';
     const clavesMd = ch.clavesList
       .map((item, idx) => `${idx + 1}. **${item.title}**: ${item.detail}`)
       .join('\n');
@@ -319,6 +345,8 @@ export function GameDayAnalyzerView({
       `# ${ch.headline}`,
       `_${ch.lead}_`,
       '',
+      radarMd,
+      radarMd ? '' : null,
       dynamicMd,
       '',
       '## Pizarras',
@@ -329,12 +357,15 @@ export function GameDayAnalyzerView({
       '',
       '## Españoles',
       ch.espanolesSection,
+      vocesMd ? '' : null,
+      vocesMd,
       '',
       '## Claves',
       clavesMd,
     ]
-      .filter(Boolean)
-      .join('\n');
+      .filter((line): line is string => line !== null && line !== undefined && (line === '' || Boolean(line)))
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n');
 
     try {
       await navigator.clipboard.writeText(text);
@@ -1498,7 +1529,9 @@ export function GameDayAnalyzerView({
                   )
                   .slice(0, 3);
 
+                const hasNightQuotes = Boolean(ch.nightQuotes && ch.nightQuotes.length > 0);
                 const jumpAnchors = [
+                  ...(ch.tacticalRadar ? [{ id: 'chron-sec-radar', label: 'Radar Táctico' }] : []),
                   ...ch.dynamicSections.map((sec, i) => ({
                     id: `chron-dyn-${i}`,
                     label: sec.title,
@@ -1506,6 +1539,7 @@ export function GameDayAnalyzerView({
                   { id: 'chron-sec-pizarras', label: 'Pizarras' },
                   { id: 'chron-sec-hitos', label: 'Hitos' },
                   { id: 'chron-sec-espanoles', label: 'Españoles' },
+                  ...(hasNightQuotes ? [{ id: 'chron-sec-voces', label: 'Voces' }] : []),
                   { id: 'chron-sec-claves', label: 'Claves' },
                 ];
 
@@ -1525,6 +1559,16 @@ export function GameDayAnalyzerView({
                         <span className="font-mono tabular-nums">
                           {ch.gamesCount} partidos analizados
                         </span>
+                        <span aria-hidden="true">·</span>
+                        <span className="font-mono text-slate-300">
+                          {ch.chronicleVersion === 'v1_classic' ? 'v1 Clásica' : ch.tacticalRadar ? 'v2 Táctica' : 'v1 Clásica'}
+                        </span>
+                        {ch.groundingUsed && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span className="font-mono text-sky-400">AP/ESPN + Web</span>
+                          </>
+                        )}
                       </div>
 
                       {/* CHRONICLE TYPE & TIME METADATA BADGES */}
@@ -1648,6 +1692,98 @@ export function GameDayAnalyzerView({
                         ))}
                       </nav>
                     </header>
+
+                    {/* V2 TACTICAL BLOCK: RADAR TÁCTICO DE LA NOCHE */}
+                    {ch.tacticalRadar && (
+                      <section
+                        id="chron-sec-radar"
+                        className="space-y-4 border-b border-[#1E293B] pb-6"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <Shield className="w-4 h-4 text-orange-400 shrink-0" />
+                            <h4 className="font-display text-base sm:text-lg font-bold text-slate-100">
+                              Radar Táctico de la Noche
+                            </h4>
+                          </div>
+                          <span className="text-[11px] font-mono text-slate-400">
+                            Four Factors · Duelos PBP · Cartelera completa
+                          </span>
+                        </div>
+
+                        {/* 3 Concise Causal Tactical Keys */}
+                        {ch.tacticalRadar.keys.length > 0 && (
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+                            {ch.tacticalRadar.keys.slice(0, 3).map((k, kIdx) => (
+                              <div
+                                key={kIdx}
+                                className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-3.5 space-y-1.5"
+                              >
+                                <div className="flex items-baseline gap-2">
+                                  <span className="font-mono tabular-nums text-[11px] font-bold text-orange-400">
+                                    0{kIdx + 1}
+                                  </span>
+                                  <h5 className="text-xs sm:text-[13px] font-semibold text-slate-100 leading-snug">
+                                    {k.title}
+                                  </h5>
+                                </div>
+                                <p className="text-xs text-slate-300 leading-relaxed">
+                                  {renderHighlightedInline(
+                                    k.summary,
+                                    chronicleHighlightEntities
+                                  )}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* 4 Clickable Four Factors & Defensive Extremes */}
+                        {ch.tacticalRadar.extremes.length > 0 && (
+                          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+                            {ch.tacticalRadar.extremes.map((ext, eIdx) => (
+                              <button
+                                key={`${ext.eventId}-${eIdx}`}
+                                type="button"
+                                onClick={() => setSelectedReportEventId(ext.eventId)}
+                                className="text-left bg-[#0B1120] hover:bg-[#131C2E] border border-[#1E293B] hover:border-orange-500/50 rounded-lg p-3 transition-colors group"
+                              >
+                                <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400">
+                                  <span className="truncate">{ext.label}</span>
+                                  <span className="font-mono font-bold text-orange-400 group-hover:text-orange-300">
+                                    {ext.teamAbbr}
+                                  </span>
+                                </div>
+                                <div className="mt-1 flex items-baseline justify-between gap-2">
+                                  <span className="font-mono tabular-nums text-base sm:text-lg font-bold text-slate-100">
+                                    {ext.valueDisplay}
+                                  </span>
+                                  <span className="text-[10px] font-mono tabular-nums text-slate-400 truncate">
+                                    {ext.matchupLabel}
+                                  </span>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Verified Direct PBP Defensive Duels */}
+                        {ch.tacticalRadar.defensiveDuels.length > 0 && (
+                          <div className="bg-[#0B1120] border border-[#1E293B] rounded-lg p-3.5 space-y-2">
+                            <p className="text-[11px] font-mono text-slate-400">
+                              Duelos defensivos directos verificados en Play-by-Play (robos y tapones)
+                            </p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-5 gap-y-1.5 text-xs text-slate-300">
+                              {ch.tacticalRadar.defensiveDuels.map((duel, dIdx) => (
+                                <p key={dIdx} className="leading-snug tabular-nums">
+                                  {renderHighlightedInline(duel, chronicleHighlightEntities)}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </section>
+                    )}
 
                     {/* DYNAMIC CHAPTERS (1-2 AI-Curated Chapters for Tonight's Slate) */}
                     {ch.dynamicSections.map((sec, idx) => (
@@ -1957,6 +2093,67 @@ export function GameDayAnalyzerView({
                       </aside>
                     </section>
 
+                    {/* V2 TACTICAL BLOCK: VOCES DE LA NOCHE (Strictly conditional on verified quotes) */}
+                    {hasNightQuotes && ch.nightQuotes && (
+                      <section
+                        id="chron-sec-voces"
+                        className="pt-6 border-t border-[#1E293B] space-y-3.5"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <p className="text-[11px] font-medium text-orange-400 tracking-wide">
+                              0{ch.dynamicSections.length + 4} · Declaraciones Post-Partido Verificadas
+                            </p>
+                            <h4 className="font-display text-base sm:text-lg font-bold text-slate-100 flex items-center gap-2">
+                              <MessageSquareQuote className="w-4 h-4 text-orange-400 shrink-0" />
+                              <span>Voces de la Noche</span>
+                            </h4>
+                          </div>
+                        </div>
+
+                        <div
+                          className={`grid grid-cols-1 ${
+                            ch.nightQuotes.length >= 3
+                              ? 'lg:grid-cols-3'
+                              : ch.nightQuotes.length === 2
+                              ? 'md:grid-cols-2'
+                              : ''
+                          } gap-3.5`}
+                        >
+                          {ch.nightQuotes.map((q, qIdx) => (
+                            <blockquote
+                              key={qIdx}
+                              className="bg-[#131C2E] border border-[#1E293B] rounded-lg p-4 flex flex-col justify-between gap-3"
+                            >
+                              <p className="text-xs sm:text-[13px] text-slate-200 italic leading-relaxed">
+                                «{q.quoteEs}»
+                              </p>
+                              <footer className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#1E293B]/80 text-[11px]">
+                                <span className="font-semibold text-slate-100">
+                                  {q.speaker}
+                                  {q.teamAbbr ? (
+                                    <span className="font-mono text-orange-400 ml-1.5">
+                                      {q.teamAbbr}
+                                    </span>
+                                  ) : null}
+                                  {q.matchup ? (
+                                    <span className="font-mono text-slate-400 ml-1.5">
+                                      · {q.matchup}
+                                    </span>
+                                  ) : null}
+                                </span>
+                                {q.sourceTitle && (
+                                  <span className="text-slate-400">
+                                    Vía {q.sourceTitle}
+                                  </span>
+                                )}
+                              </footer>
+                            </blockquote>
+                          ))}
+                        </div>
+                      </section>
+                    )}
+
                     {/* FIXED SECTION: CLAVES (Numbered Visual Takeaway Grid) */}
                     {ch.clavesList.length > 0 && (
                       <section
@@ -1965,7 +2162,7 @@ export function GameDayAnalyzerView({
                       >
                         <div>
                           <p className="text-[11px] font-medium text-orange-400 tracking-wide">
-                            0{ch.dynamicSections.length + 4} · Síntesis Ejecutiva
+                            0{ch.dynamicSections.length + (hasNightQuotes ? 5 : 4)} · Síntesis Ejecutiva
                           </p>
                           <h4 className="font-display text-base sm:text-lg font-bold text-slate-100">
                             Claves
@@ -2005,7 +2202,7 @@ export function GameDayAnalyzerView({
                           Fuentes oficiales y referencias de actualidad NBA consultadas:
                         </p>
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
-                          {ch.sources.map((src, idx) => (
+                          {ch.sources.slice(0, 8).map((src, idx) => (
                             <a
                               key={idx}
                               href={src.uri}

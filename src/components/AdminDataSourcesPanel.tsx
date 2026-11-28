@@ -206,17 +206,17 @@ const DATA_SOURCES_CATALOG: DataSourceEntry[] = [
     id: 'editorial_chronicles',
     category: 'internal_engines',
     categoryLabel: 'Cálculo Interno',
-    moduleTitle: 'Crónicas de Jornada (v1) y Crónicas Tácticas de Partido (v1 / v2 Híbrida)',
+    moduleTitle: 'Crónicas de Jornada y Partido (v1 Clásica / v2 Táctica Híbrida)',
     sectionsFed: [
-      'Resumen del Día (Crónica de Jornada v1)',
-      'Crónica individual de partido (v1 Clásica o v2 Táctica Híbrida)',
+      'Resumen del Día (Crónica de Jornada v2 Híbrida o v1 Clásica)',
+      'Crónica individual de partido (v2 Táctica Híbrida o v1 Clásica)',
     ],
     primaryProvider: 'Servicio Editorial RadarNBA + AP/ESPN Summary + Búsqueda Web',
     primaryDomain: 'Backend RadarNBA (/api/nba/*) · site.api.espn.com',
     endpointsSummary:
-      'En Partido v2 (por defecto, seleccionable en Admin → Crónicas & Estilo IA): combina minería determinista de Four Factors (eFG%, TOV%, OREB%, FTr, AST%, perfil de tiro, quintetos de cierre y duelos defensivos de Play-by-Play), crónica post-partido completa de AP/ESPN (/apis/site/v2/sports/basketball/nba/summary) y contraste con búsqueda web en vivo para esquemas defensivos y declaraciones verificadas. Jornada permanece en su motor v1 clásico afinado.',
+      'Tanto en Partido v2 como en Jornada v2 (activas por defecto y seleccionables de forma independiente en Admin → Crónicas & Estilo IA): combinan minería determinista de Four Factors (eFG%, TOV%, OREB%, FTr, AST%, duelos defensivos de Play-by-Play y extremos de la noche), crónicas post-partido completas de AP/ESPN (/apis/site/v2/sports/basketball/nba/summary — en paralelo para toda la cartelera en Jornada) y contraste con búsqueda web en vivo para esquemas defensivos y declaraciones verificadas.',
     fallbackStrategy:
-      'Cascada automática: si la búsqueda web o la API externa falla o supera el tiempo límite, reintenta con el dossier táctico + crónica AP/ESPN y degrada limpiamente a motor determinista táctico sin inventar citas ni métricas.',
+      'Cascada automática: si la búsqueda web o la API externa falla o supera el tiempo límite, reintenta con el dossier táctico + crónicas AP/ESPN y degrada limpiamente a motor determinista táctico sin inventar citas ni métricas.',
     cachePolicy:
       'Caché persistente aislada por versión (v1_classic vs v2_tactical) y evento/fecha, purgable al instante desde Admin.',
     notes:
